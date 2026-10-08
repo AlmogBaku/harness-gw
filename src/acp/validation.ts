@@ -1,7 +1,7 @@
 import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
-import { AOS_JSONRPC_ERRORS, AOS_META_KEY } from "../../protocol/acp"
+import { HGW_JSONRPC_ERRORS, HGW_META_KEY } from "../../protocol/acp"
 import {
   ServerRequestStaleError,
   ServerTurnConflictError,
@@ -15,7 +15,7 @@ import type { PublicErrors } from "./socket"
 import type { AcpConnectionContext } from "./types"
 
 /**
- * The two things the ACP v2 SDK cannot validate for us: the `_meta.aos`
+ * The two things the ACP v2 SDK cannot validate for us: the `_meta.hgw`
  * payloads the shared contract defines, and the JSON-RPC error a proxy
  * failure travels as. An error ACP defines is the SDK's own `RequestError`;
  * only the rest take their code from `AOS_JSONRPC_ERRORS`.
@@ -24,7 +24,7 @@ import type { AcpConnectionContext } from "./types"
 type AcpMeta = { readonly [key: string]: unknown } | null | undefined
 
 /**
- * Parses `_meta.aos` with its contract schema. An absent envelope parses as an
+ * Parses `_meta.hgw` with its contract schema. An absent envelope parses as an
  * empty object, so a schema whose fields are all optional accepts a request
  * that carries no AOS metadata at all.
  */
@@ -32,7 +32,7 @@ export function parseMeta<Schema extends z.ZodType>(
   schema: Schema,
   meta: AcpMeta
 ): z.output<Schema> {
-  const parsed = schema.safeParse(meta?.[AOS_META_KEY] ?? {})
+  const parsed = schema.safeParse(meta?.[HGW_META_KEY] ?? {})
   if (!parsed.success) throw invalidParams()
   return parsed.data
 }
@@ -67,30 +67,30 @@ export function refusalError(refusal: CommandRefusal) {
 }
 
 export function turnInProgress() {
-  return new RequestError(AOS_JSONRPC_ERRORS.turnInProgress, "turn_in_progress")
+  return new RequestError(HGW_JSONRPC_ERRORS.turnInProgress, "turn_in_progress")
 }
 
 export function temporarilyUnavailable() {
   return new RequestError(
-    AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+    HGW_JSONRPC_ERRORS.temporarilyUnavailable,
     "temporarily_unavailable"
   )
 }
 
 export function staleRequest() {
-  return new RequestError(AOS_JSONRPC_ERRORS.staleRequest, "stale_request")
+  return new RequestError(HGW_JSONRPC_ERRORS.staleRequest, "stale_request")
 }
 
 function revisionConflict() {
   return new RequestError(
-    AOS_JSONRPC_ERRORS.revisionConflict,
+    HGW_JSONRPC_ERRORS.revisionConflict,
     "revision_conflict"
   )
 }
 
 function uncertainMutation() {
   return new RequestError(
-    AOS_JSONRPC_ERRORS.uncertainMutation,
+    HGW_JSONRPC_ERRORS.uncertainMutation,
     "uncertain_mutation"
   )
 }
@@ -98,7 +98,7 @@ function uncertainMutation() {
 /** `hint` says what the deployment lacks, for an operator client. */
 export function unsupported(hint?: string) {
   return new RequestError(
-    AOS_JSONRPC_ERRORS.unsupported,
+    HGW_JSONRPC_ERRORS.unsupported,
     hint === undefined ? "unsupported" : `unsupported: ${hint}`
   )
 }
@@ -117,7 +117,7 @@ const KIND_ERRORS: Readonly<Record<PublicFailure["kind"], () => RequestError>> =
 
 /**
  * Every error code a public reply carries, with the machine name it travels
- * as: the message of a public reply, and the code an `_aos/error` reports.
+ * as: the message of a public reply, and the code an `_hgw/error` reports.
  */
 const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
   (
@@ -137,7 +137,7 @@ const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
   ).map(([error, name]) => [error.code, name])
 )
 
-/** Every code an `_aos/error` notification reports a failure with. */
+/** Every code an `_hgw/error` notification reports a failure with. */
 const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
   ...PUBLIC_ERROR_NAMES.values(),
   "internal_error",
@@ -154,7 +154,7 @@ export const PUBLIC_ERRORS: PublicErrors = {
       typeof code === "number" ? PUBLIC_ERROR_NAMES.get(code) : undefined
     return name === undefined
       ? {
-          code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+          code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
           message: "temporarily_unavailable",
         }
       : { code: code as number, message: name }
@@ -200,7 +200,7 @@ export function publicCodeOf(error: unknown) {
 }
 
 /**
- * The code and message an `_aos/error` notification reports a failure with.
+ * The code and message an `_hgw/error` notification reports a failure with.
  * The proxy has no operator-facing copy: a public failure travels as its
  * machine code, and the browser owns the localized sentence.
  */

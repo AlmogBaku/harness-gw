@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { AOS_JSONRPC_ERRORS, AOS_METHODS } from "../../protocol/acp"
+import { HGW_JSONRPC_ERRORS, HGW_METHODS } from "../../protocol/acp"
 
 import { createAcpSocket, type AcpSocketOptions } from "./socket"
 import { authenticationRequired, PUBLIC_ERRORS } from "./validation"
@@ -86,7 +86,7 @@ describe("ACP WebSocket shim", () => {
   it("writes each error reply, batched or not, as its public code alone", () => {
     const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
     const unavailable = {
-      code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+      code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       message: "temporarily_unavailable",
     }
 
@@ -97,7 +97,7 @@ describe("ACP WebSocket shim", () => {
           jsonrpc: "2.0",
           id: 2,
           error: {
-            code: AOS_JSONRPC_ERRORS.unsupported,
+            code: HGW_JSONRPC_ERRORS.unsupported,
             message: "internal detail 7f3a",
             data: "internal detail 7f3a",
           },
@@ -120,7 +120,7 @@ describe("ACP WebSocket shim", () => {
           jsonrpc: "2.0",
           id: 2,
           error: {
-            code: AOS_JSONRPC_ERRORS.unsupported,
+            code: HGW_JSONRPC_ERRORS.unsupported,
             message: "unsupported",
           },
         },
@@ -136,7 +136,7 @@ describe("ACP WebSocket shim", () => {
       socket.socket.send(
         JSON.stringify({
           jsonrpc: "2.0",
-          method: AOS_METHODS.notify.error,
+          method: HGW_METHODS.notify.error,
           params,
         })
       )
@@ -148,12 +148,12 @@ describe("ACP WebSocket shim", () => {
     expect(sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
       {
         jsonrpc: "2.0",
-        method: AOS_METHODS.notify.error,
+        method: HGW_METHODS.notify.error,
         params: { sessionId: "ref", code: "not_found", message: "not_found" },
       },
       {
         jsonrpc: "2.0",
-        method: AOS_METHODS.notify.error,
+        method: HGW_METHODS.notify.error,
         params: {
           sessionId: "ref",
           code: "internal_error",
@@ -162,7 +162,7 @@ describe("ACP WebSocket shim", () => {
       },
       {
         jsonrpc: "2.0",
-        method: AOS_METHODS.notify.error,
+        method: HGW_METHODS.notify.error,
         params: { code: "internal_error", message: "internal_error" },
       },
     ])

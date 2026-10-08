@@ -5,7 +5,7 @@ import { join } from "node:path"
 
 import { stringify } from "yaml"
 
-import { AOS_ACP_OPERATOR_PATH } from "../protocol/acp"
+import { HGW_ACP_OPERATOR_PATH } from "../protocol/acp"
 
 /**
  * A real `serve` process, a real ACP peer, and a real provider socket: only a
@@ -179,7 +179,7 @@ describe("proxy shutdown under SIGTERM", () => {
     // Hold one ACP connection open, with a live SDK session behind it.
     const origin = `http://127.0.0.1:${port}`
     const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`,
+      `ws://127.0.0.1:${port}${HGW_ACP_OPERATOR_PATH}`,
       {
         headers: { Origin: origin },
       }

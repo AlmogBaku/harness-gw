@@ -1,5 +1,5 @@
 import type { Logger } from "../../lifecycle"
-import { AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
+import { HGW_ACP_OPERATOR_PATH } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
@@ -58,7 +58,7 @@ export function createOperatorAcpService({
     principalId: OPERATOR_PRINCIPAL,
     agent: createAosAcpAgent,
     agentAddress: {
-      path: AOS_ACP_OPERATOR_PATH,
+      path: HGW_ACP_OPERATOR_PATH,
       exists: async (agentId) =>
         (await catalog.agents()).agents.some(
           ({ summary }) => summary.id === agentId

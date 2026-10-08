@@ -5,10 +5,10 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
-  AOS_META_KEY,
-  AosArtifactDescriptorSchema,
-  AOS_STOP_REASONS,
-  AosSubagentSchema,
+  HGW_META_KEY,
+  HgwArtifactDescriptorSchema,
+  HGW_STOP_REASONS,
+  HgwSubagentSchema,
 } from "../../../protocol/acp"
 import {
   CompactionStatus,
@@ -93,7 +93,7 @@ type Step = { state: TranslateState; outbound: AcpOutbound[] }
 
 /** An update whose ACP fields carry every fact but the turn it belongs to. */
 function turnUpdate(context: TranslateContext, value: SessionUpdate) {
-  return update({ ...value, _meta: { [AOS_META_KEY]: turnMeta(context) } })
+  return update({ ...value, _meta: { [HGW_META_KEY]: turnMeta(context) } })
 }
 
 /** The subagent an event came from and, once seen, the call that spawned it. */
@@ -111,7 +111,7 @@ function attribution(state: TranslateState, subagentId: string | undefined) {
  * dropped rather than costing the browser the whole tool meta.
  */
 function wireSubagent(subagent: Subagent | undefined) {
-  const parsed = AosSubagentSchema.safeParse(subagent)
+  const parsed = HgwSubagentSchema.safeParse(subagent)
   return parsed.success ? { subagent: parsed.data } : {}
 }
 
@@ -169,7 +169,7 @@ function artifactStep(
 ): Step {
   // Adapters are typed, not validated: the wire contract still refuses a
   // malformed descriptor, as it refuses malformed Todos below.
-  const artifact = AosArtifactDescriptorSchema.safeParse(event.artifact)
+  const artifact = HgwArtifactDescriptorSchema.safeParse(event.artifact)
   if (!artifact.success) return { state, outbound: [] }
   // A link is message content, so it lands on the message the adapter last
   // named: the reply its MEDIA line streamed in, or the one its tool ran in.
@@ -276,8 +276,8 @@ function failedOutbound(
         : {
             state: "idle",
             stopReason: isUncertainFailure(event)
-              ? AOS_STOP_REASONS.uncertain
-              : AOS_STOP_REASONS.error,
+              ? HGW_STOP_REASONS.uncertain
+              : HGW_STOP_REASONS.error,
           },
       failure
     ),

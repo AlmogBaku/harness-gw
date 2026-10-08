@@ -6,7 +6,7 @@ import {
 import pino from "pino/browser.js"
 
 import type { LogFields, Logger } from "../lifecycle"
-import { AOS_META_KEY } from "../protocol/acp"
+import { HGW_META_KEY } from "../protocol/acp"
 
 /**
  * The ACP client's logging. A tab logs only warnings and errors until its URL
@@ -62,14 +62,14 @@ const recordOf = (value: unknown) =>
     ? (value as Json)
     : undefined
 
-/** A payload with its `_meta.aos.token` redacted, or itself without one. */
+/** A payload with its `_meta.hgw.token` redacted, or itself without one. */
 function withoutToken(payload: unknown) {
   const meta = recordOf(recordOf(payload)?._meta)
-  const aos = recordOf(meta?.[AOS_META_KEY])
+  const aos = recordOf(meta?.[HGW_META_KEY])
   if (aos?.token === undefined) return payload
   return {
     ...recordOf(payload),
-    _meta: { ...meta, [AOS_META_KEY]: { ...aos, token: REDACTED } },
+    _meta: { ...meta, [HGW_META_KEY]: { ...aos, token: REDACTED } },
   }
 }
 

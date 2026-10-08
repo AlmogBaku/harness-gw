@@ -10,12 +10,12 @@ import {
 
 import type { SessionContextResponse } from "../../protocol"
 import {
-  AOS_METHODS,
-  AOS_META_KEY,
-  AOS_STOP_REASONS,
-  AosStateMetaSchema,
-  type AosActivityNotification,
-  type AosNoticeMeta,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HGW_STOP_REASONS,
+  HgwStateMetaSchema,
+  type HgwActivityNotification,
+  type HgwNoticeMeta,
 } from "../../protocol/acp"
 import { PendingRequestKind, type PendingRequest } from "../core/events"
 import {
@@ -40,7 +40,7 @@ import {
 } from "./types"
 
 /**
- * Writes one connection's member events as ACP: `session/update` and `_aos/*`
+ * Writes one connection's member events as ACP: `session/update` and `_hgw/*`
  * notifications, and the server→client requests a paused turn asks. It builds
  * every ACP update from the event alone, and hands each reply back undecoded,
  * so it reaches neither a membership nor the runtime. The translators'
@@ -63,7 +63,7 @@ function hasMode(request: Elicitation): request is ModedElicitation {
 
 /** The vendor stop reasons that mean the turn failed rather than finished. */
 const AOS_STOP_CODES: ReadonlySet<string> = new Set(
-  Object.values(AOS_STOP_REASONS)
+  Object.values(HGW_STOP_REASONS)
 )
 
 /** How much of a provider sentence one log line carries. */
@@ -83,7 +83,7 @@ function turnFailureOf(update: SessionUpdate) {
   const stopReason = update.stopReason
   if (typeof stopReason !== "string" || !AOS_STOP_CODES.has(stopReason))
     return undefined
-  const meta = AosStateMetaSchema.safeParse(update._meta?.[AOS_META_KEY])
+  const meta = HgwStateMetaSchema.safeParse(update._meta?.[HGW_META_KEY])
   if (!meta.success) return { stopReason }
   const { turnId, code, message } = meta.data
   return {
@@ -98,7 +98,7 @@ function turnFailureOf(update: SessionUpdate) {
 
 /**
  * One `usage_update`. ACP's own fields carry the two token counts; everything
- * the provider reported about them travels in `_meta.aos`, which is what lets
+ * the provider reported about them travels in `_meta.hgw`, which is what lets
  * the composer attribute the window instead of showing one opaque total.
  */
 function usageUpdate(usage: SessionContextResponse): SessionUpdate {
@@ -108,7 +108,7 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
     size: usage.maxTokens,
     ...(usage.cost ? { cost: usage.cost } : {}),
     _meta: {
-      [AOS_META_KEY]: {
+      [HGW_META_KEY]: {
         source: usage.source,
         ...(usage.estimated ? { estimated: usage.estimated } : {}),
         ...(usage.breakdown ? { breakdown: usage.breakdown } : {}),
@@ -117,7 +117,7 @@ function usageUpdate(usage: SessionContextResponse): SessionUpdate {
   }
 }
 
-/** One Session-scoped `notice`; the provider's own status kind rides in `_meta.aos`. */
+/** One Session-scoped `notice`; the provider's own status kind rides in `_meta.hgw`. */
 function noticeUpdate({
   severity,
   title,
@@ -131,7 +131,7 @@ function noticeUpdate({
     ...(description === undefined ? {} : { description }),
     ...(kind === undefined
       ? {}
-      : { _meta: { [AOS_META_KEY]: { kind } satisfies AosNoticeMeta } }),
+      : { _meta: { [HGW_META_KEY]: { kind } satisfies HgwNoticeMeta } }),
   }
 }
 
@@ -153,7 +153,7 @@ function executionUpdate({
       ? {}
       : {
           _meta: {
-            [AOS_META_KEY]: {
+            [HGW_META_KEY]: {
               sequence,
               turnId,
               ...(state === "stopping"
@@ -172,7 +172,7 @@ function executionUpdate({
     sessionUpdate: "state_update",
     state: "idle",
     ...(state === "uncertain"
-      ? { stopReason: AOS_STOP_REASONS.uncertain }
+      ? { stopReason: HGW_STOP_REASONS.uncertain }
       : {}),
     ...meta,
   }
@@ -183,7 +183,7 @@ function sessionInfoUpdate(row: SessionRow): SessionUpdate {
     sessionUpdate: "session_info_update",
     title: row.title,
     updatedAt: row.updatedAt,
-    _meta: { [AOS_META_KEY]: sessionInfoMeta(row) },
+    _meta: { [HGW_META_KEY]: sessionInfoMeta(row) },
   }
 }
 
@@ -198,19 +198,19 @@ function commandsUpdate(capabilities: WorkspaceCapabilities): SessionUpdate {
       name,
       description: description ?? "",
     })),
-    _meta: { [AOS_META_KEY]: { capabilities } },
+    _meta: { [HGW_META_KEY]: { capabilities } },
   }
 }
 
 /** One update of an older page, tagged with the cursor that asked for it. */
 function pageUpdate(update: SessionUpdate, cursor: string): SessionUpdate {
   const meta = (update._meta ?? {}) as Record<string, unknown>
-  const aos = meta[AOS_META_KEY]
+  const aos = meta[HGW_META_KEY]
   return {
     ...update,
     _meta: {
       ...meta,
-      [AOS_META_KEY]: {
+      [HGW_META_KEY]: {
         ...(typeof aos === "object" ? aos : {}),
         historyPage: { cursor },
       },
@@ -287,7 +287,7 @@ export function createMemberEncoder({
           messageId: outbound.requestId,
           content: [{ type: "text", text: outbound.text }],
           _meta: {
-            [AOS_META_KEY]: {
+            [HGW_META_KEY]: {
               turnId: outbound.turnId,
               sequence,
               delivery: outbound.delivery,
@@ -295,7 +295,7 @@ export function createMemberEncoder({
           },
         })
       case "composer-prefill":
-        return client.notify(AOS_METHODS.notify.composerPrefill, {
+        return client.notify(HGW_METHODS.notify.composerPrefill, {
           sessionId,
           turnId: outbound.turnId,
           text: outbound.text,
@@ -458,14 +458,14 @@ export function createMemberEncoder({
     })
   }
 
-  /** A workspace event, as its `_aos/*` notification. */
+  /** A workspace event, as its `_hgw/*` notification. */
   function workspace(event: WorkspaceEvent) {
     switch (event.kind) {
       case "catalog-invalidated":
-        return client.notify(AOS_METHODS.notify.catalogInvalidated)
+        return client.notify(HGW_METHODS.notify.catalogInvalidated)
       case "activity": {
-        const activity: AosActivityNotification = event.activity
-        return client.notify(AOS_METHODS.notify.activity, activity)
+        const activity: HgwActivityNotification = event.activity
+        return client.notify(HGW_METHODS.notify.activity, activity)
       }
     }
     return unhandledKind(event)
@@ -516,7 +516,7 @@ export function createMemberEncoder({
           "acp.error"
         )
         await client
-          .notify(AOS_METHODS.notify.error, { sessionId, ...failure })
+          .notify(HGW_METHODS.notify.error, { sessionId, ...failure })
           .catch((err: unknown) =>
             logger.warn({ err, sessionId }, "acp.error.notify_failed")
           )

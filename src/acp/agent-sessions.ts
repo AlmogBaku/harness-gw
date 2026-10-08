@@ -7,9 +7,9 @@ import type {
 
 import { type Session, type SessionHistoryResponse } from "../../protocol"
 import {
-  AOS_META_KEY,
-  type AosHistoryCursor,
-  type AosSessionInfoMeta,
+  HGW_META_KEY,
+  type HgwHistoryCursor,
+  type HgwSessionInfoMeta,
 } from "../../protocol/acp"
 import type { SessionRow } from "../core/session-rows"
 import { hasOlderPage, type Membership } from "../core/channel"
@@ -30,7 +30,7 @@ import {
 } from "./validation"
 
 /**
- * The Session half of the ACP agent: the `_meta.aos` projections of a Session
+ * The Session half of the ACP agent: the `_meta.hgw` projections of a Session
  * row, and the per-connection registry of which Agent owns a Session and
  * which Sessions this connection has joined.
  */
@@ -49,8 +49,8 @@ export function normalizeFolder(folder: string) {
     : normalized
 }
 
-/** A Session row's `_meta.aos`, on a listed row and on its update alike. */
-export function sessionInfoMeta(row: SessionRow): AosSessionInfoMeta {
+/** A Session row's `_meta.hgw`, on a listed row and on its update alike. */
+export function sessionInfoMeta(row: SessionRow): HgwSessionInfoMeta {
   return {
     agentId: row.agentId,
     status: row.status,
@@ -69,7 +69,7 @@ export function sessionInfoOf(row: SessionRow, cwd: string): SessionInfo {
     cwd,
     title: row.title,
     updatedAt: row.updatedAt,
-    _meta: { [AOS_META_KEY]: sessionInfoMeta(row) },
+    _meta: { [HGW_META_KEY]: sessionInfoMeta(row) },
   }
 }
 
@@ -102,14 +102,14 @@ export function decodeHistoryCursor(cursor: string, maxOffset: number) {
 }
 
 /**
- * `_meta.aos.history` for a page just read: a cursor to the next older page,
+ * `_meta.hgw.history` for a page just read: a cursor to the next older page,
  * nothing once the page reached the start, or `truncated` when older history
  * exists that neither the runtime nor the reach serves.
  */
 export function historyCursor(
   page: SessionHistoryResponse,
   maxOffset: number
-): AosHistoryCursor {
+): HgwHistoryCursor {
   // A runtime that cannot read further back has no page to offer beyond this.
   if (page.truncated) return { truncated: true }
   if (hasOlderPage(page, maxOffset))

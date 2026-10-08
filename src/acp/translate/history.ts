@@ -2,11 +2,11 @@ import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
 import type { SessionMessage } from "../../../protocol"
 import {
-  AOS_META_KEY,
-  AOS_STOP_REASONS,
-  AosArtifactDescriptorSchema,
-  AosMessageMetaSchema,
-  type AosMessageMeta,
+  HGW_META_KEY,
+  HGW_STOP_REASONS,
+  HgwArtifactDescriptorSchema,
+  HgwMessageMetaSchema,
+  type HgwMessageMeta,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext, TranslateHistory } from "../types"
 import {
@@ -25,7 +25,7 @@ type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>
 
 const DATA_URL = /^data:([^;,]+);base64,(.+)$/u
 
-/** Replayed history has no live turn; `_meta.aos` still needs a turn identity. */
+/** Replayed history has no live turn; `_meta.hgw` still needs a turn identity. */
 const HISTORY_TURN_ID = "history"
 
 /** The `data` part name a published artifact travels under, live and stored. */
@@ -74,7 +74,7 @@ function storedArtifactOutbound(
   part: MessagePart
 ): AcpOutbound[] {
   if (part.type !== "data" || part.name !== ARTIFACT_PART_NAME) return []
-  const artifact = AosArtifactDescriptorSchema.safeParse(part.data)
+  const artifact = HgwArtifactDescriptorSchema.safeParse(part.data)
   if (!artifact.success) return []
   const sessionUpdate =
     message.role === "user" ? "user_message_chunk" : "agent_message_chunk"
@@ -137,9 +137,9 @@ function turnOpeningOutbound(message: SessionMessage): AcpOutbound[] {
   const lead = message.content[0]
   const notice =
     lead?.type === "data" && lead.name === NOTICE_PART_NAME
-      ? AosMessageMetaSchema.shape.notice.safeParse(lead.data).data
+      ? HgwMessageMetaSchema.shape.notice.safeParse(lead.data).data
       : undefined
-  const meta: AosMessageMeta = {
+  const meta: HgwMessageMeta = {
     opensTurn: true,
     ...(notice ? { notice } : {}),
   }
@@ -148,7 +148,7 @@ function turnOpeningOutbound(message: SessionMessage): AcpOutbound[] {
       sessionUpdate: "agent_message",
       messageId: message.id,
       content: [],
-      _meta: { [AOS_META_KEY]: meta },
+      _meta: { [HGW_META_KEY]: meta },
     }),
   ]
 }
@@ -166,7 +166,7 @@ function failureOutbound(
   return [
     stateOutbound(
       context,
-      { state: "idle", stopReason: AOS_STOP_REASONS.error },
+      { state: "idle", stopReason: HGW_STOP_REASONS.error },
       {
         at: message.completedAt ?? message.createdAt,
         message: message.status.error,

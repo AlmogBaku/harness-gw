@@ -31,7 +31,7 @@ function permission() {
     sessionId: "session-1",
     title: "Run the deploy script",
     options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
-    _meta: { aos: { requestId: "interrupt-1" } },
+    _meta: { hgw: { requestId: "interrupt-1" } },
   }
   const pending: AcpPendingRequest = {
     kind: "permission",
@@ -62,7 +62,7 @@ function elicitation({
       },
     },
     _meta: {
-      aos: {
+      hgw: {
         requestId,
         questions: [
           {
@@ -152,7 +152,7 @@ describe("ACP runtime interactions", () => {
     // The proxy carries the questions only here, and this contract rejects an
     // empty header, so there is nothing the composer could render.
     unreadable.pending.request._meta = {
-      aos: { requestId: "interrupt-3", questions: [{ header: "" }] },
+      hgw: { requestId: "interrupt-3", questions: [{ header: "" }] },
     }
 
     expect(() => emit(unreadable.pending)).not.toThrow()

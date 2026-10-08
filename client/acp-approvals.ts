@@ -1,9 +1,9 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
-  AOS_META_KEY,
-  AOS_PERMISSION_KIND_SESSION,
-  AosPermissionMetaSchema,
+  HGW_META_KEY,
+  HGW_PERMISSION_KIND_SESSION,
+  HgwPermissionMetaSchema,
 } from "../protocol/acp"
 
 import type { AcpConnection, AcpPendingRequest } from "./types"
@@ -78,7 +78,7 @@ function optionsOf(request: RequestPermissionRequest): AcpApprovalOption[] {
   return request.options.map(({ optionId, name, kind }) => {
     const standard = STANDARD_KINDS[kind]
     if (standard !== undefined) return { id: optionId, kind: standard }
-    return kind === AOS_PERMISSION_KIND_SESSION
+    return kind === HGW_PERMISSION_KIND_SESSION
       ? { id: optionId, kind }
       : { id: optionId, kind, label: name }
   })
@@ -150,8 +150,8 @@ export function createAcpApprovals({
   connection.subscribePendingRequests((pending) => {
     if (pending.kind !== "permission") return
     const { sessionId, request } = pending
-    const meta = AosPermissionMetaSchema.safeParse(
-      request._meta?.[AOS_META_KEY]
+    const meta = HgwPermissionMetaSchema.safeParse(
+      request._meta?.[HGW_META_KEY]
     )
     const aos = meta.success ? meta.data : undefined
     const toolCallId = guardedToolCallId(request)

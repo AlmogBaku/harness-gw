@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  AOS_META_KEY,
-  AOS_PERMISSION_KIND_SESSION,
-  AosElicitationMetaSchema,
-  AosPermissionMetaSchema,
+  HGW_META_KEY,
+  HGW_PERMISSION_KIND_SESSION,
+  HgwElicitationMetaSchema,
+  HgwPermissionMetaSchema,
 } from "../../../protocol/acp"
 import type { PendingRequest } from "../../core/events"
 import type { AcpOutbound } from "../types"
@@ -38,7 +38,7 @@ function metaOf(outbound: AcpOutbound): unknown {
   if (outbound.kind !== "request-permission" && outbound.kind !== "elicitation")
     throw new Error("not a pending request")
   const meta: unknown = outbound.request._meta
-  return isRecord(meta) ? meta[AOS_META_KEY] : undefined
+  return isRecord(meta) ? meta[HGW_META_KEY] : undefined
 }
 
 /** `AcpOutbound` narrows the elicitation mode away; read the form off the value. */
@@ -90,7 +90,7 @@ describe("pendingRequestToOutbound approvals", () => {
       {
         optionId: "session",
         name: "Allow for this session",
-        kind: AOS_PERMISSION_KIND_SESSION,
+        kind: HGW_PERMISSION_KIND_SESSION,
       },
       { optionId: "always", name: "Allow always", kind: "allow_always" },
       { optionId: "deny", name: "Deny", kind: "reject_once" },
@@ -129,7 +129,7 @@ describe("pendingRequestToOutbound approvals", () => {
 
   it("carries the request identity in parseable permission metadata", () => {
     expect(
-      AosPermissionMetaSchema.parse(metaOf(permissionOf(approval)))
+      HgwPermissionMetaSchema.parse(metaOf(permissionOf(approval)))
     ).toEqual({
       requestId: "approval-1",
       expiresAt: "2026-09-19T10:00:00.000Z",
@@ -146,7 +146,7 @@ describe("pendingRequestToOutbound approvals", () => {
 
     expect(outbound.request.title).toBe("Permission required")
     expect(outbound.request.subject).toBeUndefined()
-    expect(AosPermissionMetaSchema.parse(metaOf(outbound))).toEqual({
+    expect(HgwPermissionMetaSchema.parse(metaOf(outbound))).toEqual({
       requestId: "approval-2",
     })
   })
@@ -175,7 +175,7 @@ const located: PendingRequest = {
 
 describe("pendingRequestToOutbound questions", () => {
   it("shows every member the paths and URLs the agent wrote", () => {
-    const meta = AosElicitationMetaSchema.parse(metaOf(elicitationOf(located)))
+    const meta = HgwElicitationMetaSchema.parse(metaOf(elicitationOf(located)))
     expect(meta.questions[0]).toMatchObject({
       prompt: "Where should exports live? Not under /srv/aos/repo.",
       options: [
@@ -207,7 +207,7 @@ describe("pendingRequestToOutbound questions", () => {
 
   it("keeps the questions losslessly in parseable elicitation metadata", () => {
     expect(
-      AosElicitationMetaSchema.parse(metaOf(elicitationOf(questions)))
+      HgwElicitationMetaSchema.parse(metaOf(elicitationOf(questions)))
     ).toEqual({
       requestId: "clarify-1",
       expiresAt: "2026-09-19T10:00:00.000Z",
@@ -257,7 +257,7 @@ describe("pendingRequestToOutbound questions", () => {
       required: ["q0"],
     })
     expect(
-      AosElicitationMetaSchema.parse(metaOf(outbound)).questions[0]
+      HgwElicitationMetaSchema.parse(metaOf(outbound)).questions[0]
     ).toEqual({
       prompt: "Pick the suites",
       options: [{ label: "unit" }, { label: "e2e" }],
@@ -278,7 +278,7 @@ describe("pendingRequestToOutbound questions", () => {
         { text: description, choices: [], multiple: false, custom: true },
       ],
     })
-    const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
+    const meta = HgwElicitationMetaSchema.parse(metaOf(outbound))
 
     expect(meta.questions[0]?.header).toBeUndefined()
     expect(meta.questions[0]?.prompt).toBe(description)
@@ -298,7 +298,7 @@ describe("pendingRequestToOutbound questions", () => {
         },
       ],
     })
-    const meta = AosElicitationMetaSchema.parse(metaOf(outbound))
+    const meta = HgwElicitationMetaSchema.parse(metaOf(outbound))
 
     expect(meta.questions[0]).toEqual({
       header: "Region",
@@ -318,7 +318,7 @@ describe("pendingRequestToOutbound questions", () => {
   })
 
   it("keeps a provider's overlong label inside the header bound", () => {
-    const meta = AosElicitationMetaSchema.parse(
+    const meta = HgwElicitationMetaSchema.parse(
       metaOf(
         elicitationOf({
           requestId: "clarify-7",
@@ -339,7 +339,7 @@ describe("pendingRequestToOutbound questions", () => {
   })
 
   it("offers only the choices of a question that takes no free text", () => {
-    const meta = AosElicitationMetaSchema.parse(
+    const meta = HgwElicitationMetaSchema.parse(
       metaOf(
         elicitationOf({
           requestId: "clarify-10",
@@ -370,7 +370,7 @@ describe("pendingRequestToOutbound questions", () => {
       message: "Which branch should I use?",
     })
 
-    expect(AosElicitationMetaSchema.parse(metaOf(outbound)).questions).toEqual([
+    expect(HgwElicitationMetaSchema.parse(metaOf(outbound)).questions).toEqual([
       {
         prompt: "Which branch should I use?",
         options: [],

@@ -4,7 +4,7 @@ import {
   type Clock,
   type Logger,
 } from "../lifecycle"
-import { AOS_METHODS, type AosSessionInfoMeta } from "../protocol/acp"
+import { HGW_METHODS, type HgwSessionInfoMeta } from "../protocol/acp"
 import type {
   RuntimeInfo,
   SessionModelUpdateRequest,
@@ -16,7 +16,7 @@ import type {
   SessionActionCapabilities,
   SessionCreationOptions,
 } from "./workspace"
-import type { AosRemoteClient } from "./aos-client"
+import type { HgwRemoteClient } from "./aos-client"
 import { createAcpComposerStore } from "./acp-workspace-client-composer"
 import { createAcpSessionStore, rowOf } from "./acp-workspace-client-sessions"
 import type { AcpConnection } from "./types"
@@ -44,7 +44,7 @@ function offers(capability: RuntimeInfo["capabilities"]["sessionTitle"]) {
 
 /** What the workspace still reads over REST, delegated to the AOS client. */
 type AcpRestClient = Pick<
-  AosRemoteClient,
+  HgwRemoteClient,
   | "adoptSessionOwnership"
   | "readArtifact"
   | "runtimeInfo"
@@ -112,7 +112,7 @@ export function createAcpWorkspaceClient({
 
   function remember(
     sessionId: string,
-    info: AosSessionInfoMeta,
+    info: HgwSessionInfoMeta,
     updatedAt?: string | null
   ) {
     store.put(sessionId, info, updatedAt)
@@ -294,7 +294,7 @@ export function createAcpWorkspaceClient({
   }
 
   const leaveCatalog = connection.subscribeNotification(
-    AOS_METHODS.notify.catalogInvalidated,
+    HGW_METHODS.notify.catalogInvalidated,
     scheduleSessionRelist
   )
 
@@ -375,7 +375,7 @@ export function createAcpWorkspaceClient({
     updateAgent,
     subscribeAgentCatalog: (listener: () => void) =>
       connection.subscribeNotification(
-        AOS_METHODS.notify.catalogInvalidated,
+        HGW_METHODS.notify.catalogInvalidated,
         () => listener()
       ),
 

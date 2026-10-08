@@ -7,9 +7,9 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
-  AOS_META_KEY,
-  AOS_PERMISSION_KIND_SESSION,
-  type AosQuestion,
+  HGW_META_KEY,
+  HGW_PERMISSION_KIND_SESSION,
+  type HgwQuestion,
 } from "../../../protocol/acp"
 import {
   PendingRequestKind,
@@ -31,7 +31,7 @@ const PERMISSION_KINDS = new Map([
   ["always", { kind: "allow_always", name: "Allow always" }],
   [
     "session",
-    { kind: AOS_PERMISSION_KIND_SESSION, name: "Allow for this session" },
+    { kind: HGW_PERMISSION_KIND_SESSION, name: "Allow for this session" },
   ],
   ["deny", { kind: "reject_once", name: "Deny" }],
 ])
@@ -103,7 +103,7 @@ function permissionOutbound(request: PendingRequest): RequestOutbound {
         : {}),
       options: permissionOptions(request),
       _meta: {
-        [AOS_META_KEY]: {
+        [HGW_META_KEY]: {
           requestId: request.requestId,
           ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
           ...(request.message
@@ -125,7 +125,7 @@ function pendingQuestionsOf(request: PendingRequest): PendingQuestion[] {
  * leaves it unset rather than have the proxy invent English copy the browser
  * would show a Hebrew reader, and the browser labels that question by its place.
  */
-function questionsOf(request: PendingRequest): AosQuestion[] {
+function questionsOf(request: PendingRequest): HgwQuestion[] {
   return pendingQuestionsOf(request).map((question) => ({
     ...(question.label ? { header: question.label.slice(0, 256) } : {}),
     prompt: question.text ?? question.label ?? request.message ?? "Question",
@@ -137,16 +137,16 @@ function questionsOf(request: PendingRequest): AosQuestion[] {
 
 /**
  * A single-choice question is a string field: its choices ride in
- * `_meta.aos.questions[].options`, and it declares them as its `enum` only
+ * `_meta.hgw.questions[].options`, and it declares them as its `enum` only
  * when it takes no other answer, so the free-text answer a `custom` question
  * accepts stays valid against `requestedSchema`. A multi-select must declare
  * `items.enum`, which ACP requires of a reserved `"string"` item type and the
  * SDK rejects the whole elicitation without; the response schema does not
  * constrain values to it, so a free-text answer still travels. A question with
  * no choices stays a string field even when it takes several values;
- * `_meta.aos` keeps `multiple`.
+ * `_meta.hgw` keeps `multiple`.
  */
-function propertyOf(question: AosQuestion): ElicitationPropertySchema {
+function propertyOf(question: HgwQuestion): ElicitationPropertySchema {
   const values = question.options.map((option) => option.value ?? option.label)
   if (question.multiple && values.length > 0)
     return {
@@ -176,7 +176,7 @@ function elicitationOutbound(request: PendingRequest): RequestOutbound {
       required: questions.map((_, index) => `q${index}`),
     },
     _meta: {
-      [AOS_META_KEY]: {
+      [HGW_META_KEY]: {
         requestId: request.requestId,
         ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
         questions,

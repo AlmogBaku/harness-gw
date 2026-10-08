@@ -1,4 +1,4 @@
-import { AOS_META_KEY, AosElicitationMetaSchema } from "../protocol/acp"
+import { HGW_META_KEY, HgwElicitationMetaSchema } from "../protocol/acp"
 import type {
   RuntimeInteractionAdapter,
   RuntimeQuestion,
@@ -8,7 +8,7 @@ import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**
  * Projects ACP's elicitations onto the shared question composer, carrying the
- * lossless questions the proxy put in `_meta.aos`. One pending request per
+ * lossless questions the proxy put in `_meta.hgw`. One pending request per
  * Session, replaced by the next one the proxy sends. Permissions are tool
  * approvals instead, answered on the card of the call they guard
  * (`acp-approvals.ts`).
@@ -56,7 +56,7 @@ export function createAcpInteractions({
 
   /**
    * The composer's view of one elicitation, or `undefined` when the proxy's
-   * projection cannot be read. It carries its questions only in `_meta.aos`,
+   * projection cannot be read. It carries its questions only in `_meta.hgw`,
    * so a payload this contract rejects has nothing to render; failing here
    * instead would answer the runtime on the operator's behalf.
    * The request stays pending for the re-issue a later resume performs.
@@ -65,8 +65,8 @@ export function createAcpInteractions({
     pending: ElicitationRequest,
     sessionId: string
   ): RuntimeQuestionRequest | undefined {
-    const meta = AosElicitationMetaSchema.safeParse(
-      pending.request._meta?.[AOS_META_KEY]
+    const meta = HgwElicitationMetaSchema.safeParse(
+      pending.request._meta?.[HGW_META_KEY]
     )
     if (!meta.success) return undefined
     return {

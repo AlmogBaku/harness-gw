@@ -109,13 +109,13 @@ Treat the vocabulary as an event grammar, not a bag of JSON:
   only after the segment is complete;
 - provider progress uses structured events when it is meaningful to the UI;
 - Session Todos use a `plan-updated` event (`TurnEventKind.PlanUpdated`); the
-  ACP layer projects them as `plan_update` with `_meta.aos.todos`;
+  ACP layer projects them as `plan_update` with `_meta.hgw.todos`;
 - restored Todo activity is presentation state and is never forwarded as
   native prompt history.
 
 Carry every native fact the operator can use, and leave out one the provider
 does not report rather than guessing it. The translator maps each to a
-standard ACP field or to `_meta.aos`:
+standard ACP field or to `_meta.hgw`:
 
 - `ToolCallStarted.name` is always the canonical tool name, and live turns and
   history agree on it; `toolKind` comes from that name.
@@ -216,12 +216,12 @@ the runtime does not prove, from text or position.
 
 Questions and approvals are normalized pending requests. The ACP layer delivers
 them as `session/request_permission` or `elicitation/create` to the browser.
-The `_meta.aos` extensions on these requests are defined in
+The `_meta.hgw` extensions on these requests are defined in
 `packages/protocol/acp.ts:315-341`. The vendor permission kind `_allow_session`
 (`AOS_PERMISSION_KIND_SESSION`, `acp.ts:60`) represents Hermes' "allow for this
 session" scope; the translation lives in
 `packages/proxy/acp/translate/requests.ts`. Elicitation questions arrive in
-`_meta.aos.questions`; a multi-select question must declare `items.enum` in the
+`_meta.hgw.questions`; a multi-select question must declare `items.enum` in the
 ACP property schema (`requests.ts`) so the SDK accepts the elicitation,
 while the response schema does not constrain values to the enum.
 
@@ -582,7 +582,7 @@ streams the wrapper awaits `describe` (1.5 s budget) when an `mcp__` or bare
 and asks again with the result only for a call the start could not flag. It
 does the same for `history()`, sets the `app` flag, and advertises
 `content.mcpApps` in the Session capabilities. The ACP layer carries the flag
-as `_meta.aos.app` on `tool_call_update`, from the call's first update.
+as `_meta.hgw.app` on `tool_call_update`, from the call's first update.
 
 ### readFile
 

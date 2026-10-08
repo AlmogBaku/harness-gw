@@ -39,13 +39,13 @@ import type { StagedAttachment } from "./workspace"
 
 type Schema<T> = Pick<z.ZodType<T>, "safeParse">
 
-export type AosWorkspaceCapabilities = z.infer<
+export type HgwWorkspaceCapabilities = z.infer<
   typeof SessionWorkspaceCapabilitiesResponseSchema
 >
-export type AosModelChoices = z.infer<typeof SessionModelsResponseSchema>
-export type AosContext = z.infer<typeof SessionContextResponseSchema>
+export type HgwModelChoices = z.infer<typeof SessionModelsResponseSchema>
+export type HgwContext = z.infer<typeof SessionContextResponseSchema>
 
-export type AosClientFailure =
+export type HgwClientFailure =
   | "connection-interrupted"
   | "provider-unavailable"
   | "proxy-failure"
@@ -55,16 +55,16 @@ export type AosClientFailure =
 /** What an MCP App view is opened for: a tool call, or a published Artifact. */
 export type McpAppSubject = { toolCallId: string } | { artifactId: string }
 
-export class AosClientError extends Error {
+export class HgwClientError extends Error {
   constructor(
-    readonly kind: AosClientFailure,
+    readonly kind: HgwClientFailure,
     message = "AOS proxy request failed",
     readonly code?: string,
     /** The proxy's HTTP status, when it answered. */
     readonly status?: number
   ) {
     super(message)
-    this.name = "AosClientError"
+    this.name = "HgwClientError"
   }
 }
 
@@ -74,7 +74,7 @@ export type Fetcher = (
   init?: RequestInit
 ) => Promise<Response>
 
-export type AosRemoteClientOptions = {
+export type HgwRemoteClientOptions = {
   fetcher?: Fetcher
   basePath?: string
   authorization?: string
@@ -100,14 +100,14 @@ async function dataUrl(blob: Blob) {
   return `data:${blob.type};base64,${btoa(binary)}`
 }
 
-export class AosRemoteClient {
+export class HgwRemoteClient {
   readonly #fetch: Fetcher
   readonly #basePath: string
   readonly #authorization?: string
   readonly #origin?: string
   readonly #sessionOwners = new Map<string, string>()
 
-  constructor(options: AosRemoteClientOptions = {}) {
+  constructor(options: HgwRemoteClientOptions = {}) {
     this.#fetch = options.fetcher ?? globalThis.fetch.bind(globalThis)
     this.#basePath = options.basePath ?? "/api/aos/v1"
     this.#authorization = options.authorization
@@ -119,7 +119,7 @@ export class AosRemoteClient {
     schema: Schema<T>,
     init?: RequestInit,
     /** How this route reads an absent resource; 503 always stays an outage. */
-    notFound: AosClientFailure = "proxy-failure"
+    notFound: HgwClientFailure = "proxy-failure"
   ): Promise<T> {
     let response: Response
     try {
@@ -132,11 +132,11 @@ export class AosRemoteClient {
         headers,
       })
     } catch {
-      throw new AosClientError("connection-interrupted")
+      throw new HgwClientError("connection-interrupted")
     }
     if (!response.ok) {
       const error = await normalizedError(response)
-      throw new AosClientError(
+      throw new HgwClientError(
         response.status === 503
           ? "provider-unavailable"
           : response.status === 404
@@ -151,11 +151,11 @@ export class AosRemoteClient {
     try {
       payload = await response.json()
     } catch {
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
     }
     const parsed = schema.safeParse(payload)
     if (!parsed.success)
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
     return parsed.data
   }
 
@@ -176,7 +176,7 @@ export class AosRemoteClient {
   async deletePushSubscription(endpoint: string) {
     const request = PushUnregistrationSchema.safeParse({ endpoint })
     if (!request.success || !endpoint.trim())
-      throw new AosClientError("proxy-failure", "Invalid push subscription")
+      throw new HgwClientError("proxy-failure", "Invalid push subscription")
     await this.#write("/push/subscriptions", "DELETE", request.data)
   }
 
@@ -207,7 +207,7 @@ export class AosRemoteClient {
       ),
     })
     if (!request.success)
-      throw new AosClientError(
+      throw new HgwClientError(
         "proxy-failure",
         "Invalid attachment staging request"
       )
@@ -228,7 +228,7 @@ export class AosRemoteClient {
     signal?: AbortSignal
   ) {
     if (!artifactId.trim() || artifactId.length > 512)
-      throw new AosClientError("proxy-failure", "Invalid artifact reference")
+      throw new HgwClientError("proxy-failure", "Invalid artifact reference")
     return this.#readBlob(
       this.#sessionPath(
         sessionId,
@@ -322,13 +322,13 @@ export class AosRemoteClient {
 
   async transcribeForAgent(agentId: string, audio: Blob, signal?: AbortSignal) {
     if (!audio.size || !audio.type)
-      throw new AosClientError("proxy-failure", "Invalid audio recording")
+      throw new HgwClientError("proxy-failure", "Invalid audio recording")
     const request = SessionTranscriptionRequestSchema.safeParse({
       dataUrl: await dataUrl(audio),
       mimeType: audio.type,
     })
     if (!request.success)
-      throw new AosClientError("proxy-failure", "Invalid audio recording")
+      throw new HgwClientError("proxy-failure", "Invalid audio recording")
     const path = `/agents/${encodeURIComponent(agentId)}/audio/transcribe`
     const response = await this.#read(
       path,
@@ -350,7 +350,7 @@ export class AosRemoteClient {
   async speakForAgent(agentId: string, text: string, signal?: AbortSignal) {
     const request = SessionSpeechRequestSchema.safeParse({ text })
     if (!request.success)
-      throw new AosClientError("proxy-failure", "Invalid speech input")
+      throw new HgwClientError("proxy-failure", "Invalid speech input")
     const path = `/agents/${encodeURIComponent(agentId)}/audio/speak`
     return this.#readBlob(path, {
       method: "POST",
@@ -373,11 +373,11 @@ export class AosRemoteClient {
         body: JSON.stringify(body),
       })
     } catch {
-      throw new AosClientError("connection-interrupted")
+      throw new HgwClientError("connection-interrupted")
     }
     if (!response.ok) {
       const error = await normalizedError(response)
-      throw new AosClientError(
+      throw new HgwClientError(
         response.status === 503 ? "provider-unavailable" : "proxy-failure",
         error?.description,
         error?.code,
@@ -392,7 +392,7 @@ export class AosRemoteClient {
         ? ["tool-calls", subject.toolCallId]
         : ["artifacts", subject.artifactId]
     if (!id.trim() || id.length > 512)
-      throw new AosClientError("proxy-failure", "Invalid MCP App reference")
+      throw new HgwClientError("proxy-failure", "Invalid MCP App reference")
     return this.#sessionPath(
       sessionId,
       `/${collection}/${encodeURIComponent(id)}/app${suffix}`
@@ -407,7 +407,7 @@ export class AosRemoteClient {
     schema: Schema<T>
   ) {
     if (!request.success)
-      throw new AosClientError("proxy-failure", "Invalid MCP App request")
+      throw new HgwClientError("proxy-failure", "Invalid MCP App request")
     return this.#read(this.#mcpAppPath(sessionId, subject, suffix), schema, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -424,7 +424,7 @@ export class AosRemoteClient {
     path: string,
     init?: RequestInit,
     /** How this route reads an absent resource; 503 always stays an outage. */
-    notFound: AosClientFailure = "proxy-failure"
+    notFound: HgwClientFailure = "proxy-failure"
   ) {
     let response: Response
     try {
@@ -437,11 +437,11 @@ export class AosRemoteClient {
         headers,
       })
     } catch {
-      throw new AosClientError("connection-interrupted")
+      throw new HgwClientError("connection-interrupted")
     }
     if (!response.ok) {
       const error = await normalizedError(response)
-      throw new AosClientError(
+      throw new HgwClientError(
         response.status === 503
           ? "provider-unavailable"
           : response.status === 404
@@ -454,11 +454,11 @@ export class AosRemoteClient {
     }
     const contentType = response.headers.get("content-type")
     if (!contentType || /[\r\n]/u.test(contentType))
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
     try {
       return await response.blob()
     } catch {
-      throw new AosClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
     }
   }
 

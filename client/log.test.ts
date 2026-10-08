@@ -1,7 +1,7 @@
 import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, onTestFinished } from "vitest"
 
-import { AOS_META_KEY } from "../protocol/acp"
+import { HGW_META_KEY } from "../protocol/acp"
 
 import { harness } from "../src/acp/test-harness"
 
@@ -81,11 +81,11 @@ describe("ACP client logging", () => {
     expect(await connectAndClose(false)).toEqual([])
   })
 
-  it("redacts a token under _meta.aos wherever a frame carries one", () => {
+  it("redacts a token under _meta.hgw wherever a frame carries one", () => {
     const fields = frameFields("in", {
       jsonrpc: "2.0",
       id: 7,
-      result: { _meta: { [AOS_META_KEY]: { token: "secret-token" } } },
+      result: { _meta: { [HGW_META_KEY]: { token: "secret-token" } } },
     })
 
     expect(fields).toMatchObject({ direction: "in", requestId: 7 })

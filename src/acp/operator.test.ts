@@ -4,9 +4,9 @@ import { z } from "zod"
 
 import { type SessionHistoryResponse } from "../../protocol"
 import {
-  AOS_METHODS,
-  AOS_META_KEY,
-  AosActivityNotificationSchema,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HgwActivityNotificationSchema,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -158,7 +158,7 @@ async function harness({ history, ...options }: HarnessOptions = {}) {
       test.agent.request(methods.agent.session.prompt, {
         sessionId: CREATED,
         prompt: [{ type: "text", text }],
-        _meta: { [AOS_META_KEY]: {} },
+        _meta: { [HGW_META_KEY]: {} },
       }),
   }
 }
@@ -181,13 +181,13 @@ async function runningTurn(test: Harness, text: string) {
 /**
  * The one `elicitation/create` request the client received. An elicitation the
  * SDK rejects never arrives at all: the attachment reports the rejection as
- * `_aos/error`, so this waits for whichever came first and names it.
+ * `_hgw/error`, so this waits for whichever came first and names it.
  */
 async function askedElicitation(test: Harness) {
   const asked = await test.recorder.wait(
     (entry) =>
       entry.method === methods.client.elicitation.create ||
-      entry.method === AOS_METHODS.notify.error,
+      entry.method === HGW_METHODS.notify.error,
     "the question or the error rejecting it"
   )
   expect(asked.method).toBe(methods.client.elicitation.create)
@@ -213,8 +213,8 @@ function usageUpdates(recorder: Recorder) {
 }
 
 function unreadChanges(recorder: Recorder) {
-  return recorder.of(AOS_METHODS.notify.activity).flatMap(({ params }) => {
-    const parsed = AosActivityNotificationSchema.safeParse(params)
+  return recorder.of(HGW_METHODS.notify.activity).flatMap(({ params }) => {
+    const parsed = HgwActivityNotificationSchema.safeParse(params)
     return parsed.success && parsed.data.type === "unread-changed"
       ? [parsed.data]
       : []
@@ -294,7 +294,7 @@ function steerAccepted(recorder: Recorder) {
       messageId: z.string(),
       content: z.tuple([z.object({ text: z.string() })]),
       _meta: z.object({
-        [AOS_META_KEY]: z.object({ turnId: z.string(), delivery: z.string() }),
+        [HGW_META_KEY]: z.object({ turnId: z.string(), delivery: z.string() }),
       }),
     }),
   })
@@ -305,7 +305,7 @@ function steerAccepted(recorder: Recorder) {
     return [
       {
         sessionId,
-        ...update._meta[AOS_META_KEY],
+        ...update._meta[HGW_META_KEY],
         requestId: update.messageId,
         text: update.content[0].text,
       },
@@ -394,7 +394,7 @@ describe("operator ACP listener", () => {
     // A dropped stream is not an outcome: the run failed nowhere, the turn this
     // browser half-saw does not end in it, and the window it did not read stays
     // at the one reading the Session opened with.
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(JSON.stringify(turnUpdates(test.recorder))).not.toContain("end_turn")
     expect(usageUpdates(test.recorder)).toHaveLength(1)
     test.close()
@@ -483,7 +483,7 @@ describe("operator ACP listener", () => {
     )
     expect(unreadChanges(test.recorder)).toMatchObject([{ unread: true }])
 
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(HGW_METHODS.session.focus, { sessionId: SESSION })
     await vi.waitFor(() => expect(test.clock.pending()).toBe(1))
     test.clock.advance(500)
 
@@ -513,7 +513,7 @@ describe("operator ACP listener", () => {
       sessionId: SESSION,
       cwd: "/",
       replayFrom: { type: "start" },
-      _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
     })
 
     // The stored turn replays as its messages, each from empty content, and no
@@ -565,7 +565,7 @@ describe("operator ACP listener", () => {
       sessionId: SESSION,
       cwd: "/",
       replayFrom: { type: "start" },
-      _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
     })
     await drainedReplay(test, source)
 
@@ -598,7 +598,7 @@ describe("operator ACP listener", () => {
       sessionId: SESSION,
       cwd: "/",
       replayFrom: { type: "start" },
-      _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
     })
     await drainedReplay(test, source)
 
@@ -622,7 +622,7 @@ describe("operator ACP listener", () => {
       sessionId: SESSION,
       cwd: "/",
       _meta: {
-        [AOS_META_KEY]: { agentId: AGENT, turnId: "run-live", after: 0 },
+        [HGW_META_KEY]: { agentId: AGENT, turnId: "run-live", after: 0 },
       },
     })
     await drainedReplay(test, source)

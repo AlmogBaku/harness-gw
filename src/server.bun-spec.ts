@@ -2,7 +2,7 @@ import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { afterEach, describe, expect, it } from "bun:test"
 import { request } from "node:http"
 
-import { AOS_ACP_OPERATOR_PATH } from "../protocol/acp"
+import { HGW_ACP_OPERATOR_PATH } from "../protocol/acp"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext, ActivityFeed, ReadState } from "./acp/types"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
@@ -51,7 +51,7 @@ function acpProxy(handshakeDeadlineMs?: number) {
     app: { fetch: () => new Response("not found", { status: 404 }) },
     sockets: [
       {
-        path: AOS_ACP_OPERATOR_PATH,
+        path: HGW_ACP_OPERATOR_PATH,
         service: createAcpService({
           publicOrigin: ORIGIN,
           role: "operator",
@@ -83,7 +83,7 @@ describe("real Bun WebSocket upgrade", () => {
       app: { fetch: () => new Response("not found", { status: 404 }) },
       sockets: [
         {
-          path: AOS_ACP_OPERATOR_PATH,
+          path: HGW_ACP_OPERATOR_PATH,
           service: {
             authorizeUpgrade: async (request) =>
               request.headers.get("origin") === ORIGIN
@@ -118,14 +118,14 @@ describe("real Bun WebSocket upgrade", () => {
 
     // A plain request is no WebSocket handshake.
     const denied = await fetch(
-      `http://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`
+      `http://127.0.0.1:${port}${HGW_ACP_OPERATOR_PATH}`
     )
     expect(denied.status).toBe(400)
     expect(opened).toBe(0)
 
     const frames: unknown[] = []
     const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`,
+      `ws://127.0.0.1:${port}${HGW_ACP_OPERATOR_PATH}`,
       { headers: { Origin: ORIGIN } }
     )
     await new Promise<void>((resolve, reject) => {
@@ -152,12 +152,12 @@ describe("real Bun WebSocket upgrade", () => {
 
     // A plain request is no WebSocket handshake.
     const denied = await fetch(
-      `http://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`
+      `http://127.0.0.1:${port}${HGW_ACP_OPERATOR_PATH}`
     )
     expect(denied.status).toBe(400)
 
     const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`,
+      `ws://127.0.0.1:${port}${HGW_ACP_OPERATOR_PATH}`,
       { headers: { Origin: ORIGIN } }
     )
     const frames: unknown[] = []
@@ -200,7 +200,7 @@ describe("real Bun WebSocket upgrade", () => {
       const upgrade = request({
         hostname: "127.0.0.1",
         port,
-        path: AOS_ACP_OPERATOR_PATH,
+        path: HGW_ACP_OPERATOR_PATH,
         headers: {
           Origin: ORIGIN,
           Connection: "Upgrade",
@@ -231,7 +231,7 @@ describe("real Bun WebSocket upgrade", () => {
   it("closes a socket that never sends initialize with 4408 at the handshake deadline", async () => {
     const port = portOf(acpProxy(100))
     const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${AOS_ACP_OPERATOR_PATH}`,
+      `ws://127.0.0.1:${port}${HGW_ACP_OPERATOR_PATH}`,
       { headers: { Origin: ORIGIN } }
     )
     const code = await new Promise<number>((resolve, reject) => {

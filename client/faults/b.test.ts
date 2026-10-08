@@ -4,7 +4,7 @@ import { AGENT, harness, SESSION, sessionRow } from "../../src/acp/test-harness"
 import { providerSessionId, sessionId } from "../../src/core/ids"
 import { useFakeClock } from "../../test/support/fake-clock"
 
-import { AOS_METHODS } from "../../protocol/acp"
+import { HGW_METHODS } from "../../protocol/acp"
 
 import {
   LIVENESS_SILENCE_MS,
@@ -103,7 +103,7 @@ describe("browser connection faults", () => {
     await clock.advance(PART_GRACE_MS)
     expect(methodsOf(frames, SESSION)).toEqual([
       "session/resume",
-      AOS_METHODS.session.part,
+      HGW_METHODS.session.part,
     ])
   })
 
@@ -256,7 +256,7 @@ describe("browser connection faults", () => {
       "session/prompt",
     ])
     const prompts = frames.filter(({ method }) => method === "session/prompt")
-    expect(prompts.map((frame) => frame.params?._meta?.aos?.clientId)).toEqual([
+    expect(prompts.map((frame) => frame.params?._meta?.hgw?.clientId)).toEqual([
       "client-1",
       "client-1",
     ])
@@ -267,7 +267,7 @@ describe("browser connection faults", () => {
     const { pipe, connection } = connectBrowser(await harness())
     const frames = sentFrames()
     const probes = () =>
-      frames.filter((f) => f.method === AOS_METHODS.session.focus)
+      frames.filter((f) => f.method === HGW_METHODS.session.focus)
     connection.start()
     await connection.initialized
 
@@ -303,7 +303,7 @@ describe("browser connection faults", () => {
     const reopened = frames.findLastIndex((f) => f.method === "initialize")
     const focusFrames = frames
       .slice(reopened)
-      .filter((f) => f.method === AOS_METHODS.session.focus)
+      .filter((f) => f.method === HGW_METHODS.session.focus)
     expect(focusFrames.at(-1)?.params).toMatchObject({ sessionId: SESSION })
   })
 })

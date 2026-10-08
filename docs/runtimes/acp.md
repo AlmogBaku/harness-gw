@@ -23,11 +23,11 @@ A request to a socket path that is not a WebSocket handshake (RFC 6455 §4.2.1) 
 
 The response carries an `Acp-Connection-Id` header. One socket per browser tab
 is the current topology; there is no SharedWorker multiplexing. The browser
-sends an `initialize` request and receives capabilities in `_meta.aos`. On
+sends an `initialize` request and receives capabilities in `_meta.hgw`. On
 reconnect, send `initialize` again and then `session/resume` with
-`_meta.aos.after` set to the last sequence cursor the browser observed. When
+`_meta.hgw.after` set to the last sequence cursor the browser observed. When
 the cursor is beyond bounded replay, the same resume rebuilds the Session from
-history, as described under [Response `_meta.aos` shapes](#response-_metaaos-shapes).
+history, as described under [Response `_meta.hgw` shapes](#response-_metaaos-shapes).
 
 Reconnect uses jittered backoff starting at 250 ms, capped at 5 000 ms, and
 resetting once every resumed Session has rejoined or the link has been stable
@@ -48,7 +48,7 @@ Any other code triggers a normal reconnect.
 
 `initialize` always answers `protocolVersion: 2`, whatever the client requested; this is ACP's version-negotiation rule, not v1 support.
 
-`initialize` response `_meta.aos` (`AosInitializeMetaSchema`, `acp.ts:115-119`).
+`initialize` response `_meta.hgw` (`AosInitializeMetaSchema`, `acp.ts:115-119`).
 Its `version` is AOS's own extension version (`AOS_EXTENSION_VERSION`, now 1),
 not ACP's `protocolVersion`:
 
@@ -72,7 +72,7 @@ not ACP's `protocolVersion`:
 ```
 
 `auth/login` for the guest listener uses `methodId: "aos-invite"` (`AOS_AUTH_METHOD_INVITE`,
-`acp.ts:29`) and carries the invitation token in `_meta.aos.token`
+`acp.ts:29`) and carries the invitation token in `_meta.hgw.token`
 (`AosLoginMetaSchema`, `acp.ts`).
 
 The browser sends its compiled build id in `initialize`'s `info.version`; the
@@ -126,13 +126,13 @@ invited conversation by its reference alone; any other Session id is
 | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session/resume`                                                                                                     | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
 | `session/prompt`                                                                                                     | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown. |
-| `_aos/session/steer`                                                                                                 | Steers the invited conversation's active turn.                                                                                               |
+| `_hgw/session/steer`                                                                                                 | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                     | Stops a turn in the invited conversation only.                                                                                               |
 | `session/close`                                                                                                      | Stops the Session's active work for every member, then detaches.                                                                             |
-| `_aos/session/focus`                                                                                                 | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
-| `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_aos/session/update`, `_aos/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
+| `_hgw/session/focus`                                                                                                 | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
+| `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
 
-`session/prompt` and `_aos/session/steer` refuse, with `-32602`, text that
+`session/prompt` and `_hgw/session/steer` refuse, with `-32602`, text that
 starts with `/` (after any leading whitespace or zero-width characters) and
 text shaped like an invitation envelope. The text itself travels as written.
 
@@ -150,12 +150,12 @@ What a guest is shown:
   guest started is declined for it: with `deny`, or `cancelled` when `deny` is
   not offered. One raised in another member's turn is hidden and left for the
   operator to answer.
-- No feeds: no `usage_update`, no model readings, no `_aos/activity`, no
-  `session_info_update`, and no `_aos/catalog_invalidated`.
+- No feeds: no `usage_update`, no model readings, no `_hgw/activity`, no
+  `session_info_update`, and no `_hgw/catalog_invalidated`.
 
 Guest errors carry only a public code (`PUBLIC_ERRORS`,
 `packages/proxy/acp/validation.ts`): an error reply keeps its JSON-RPC code
-with the code's public name as its message, and an `_aos/error` notification
+with the code's public name as its message, and an `_hgw/error` notification
 keeps only a public code. Any other failure reads `-31013`
 `temporarily_unavailable`. In a batched reply each entry is redacted
 independently; a successful entry in the same batch is unaffected.
@@ -167,12 +167,12 @@ independently; a successful entry in the same batch is unaffected.
 (model → `category: "model"`, effort → `category: "thought_level"`).
 
 `session/close` stops the Session's active work for every member and then
-detaches this connection. `_aos/session/part` (`AosSessionPartRequestSchema`,
+detaches this connection. `_hgw/session/part` (`AosSessionPartRequestSchema`,
 `acp.ts`) only detaches this connection; the Session's work and all other
 members continue. `session/delete` of a Session not known to this connection
 succeeds rather than returning not-found.
 
-### Request `_meta.aos` shapes
+### Request `_meta.hgw` shapes
 
 **`session/new`** request (`AosSessionNewMetaSchema`, `acp.ts`): `{ agentId, title?, clientId? }`
 
@@ -210,10 +210,10 @@ Agent before listing. `after` is the last `sequence` the client observed for
 live turn, rebuilds the Session from history in the same resume.
 
 `replayFrom` is absent (resume without replay), `{ type: "start" }`, or the
-`_aos/before` older-page variant described under
+`_hgw/before` older-page variant described under
 [Older history pages](#older-history-pages). As ACP asks of a receiver that
 does not understand a cursor, the proxy rejects every other `replayFrom` type,
-and an `_aos/before` without a string `cursor`, with `-32602` invalid params
+and an `_hgw/before` without a string `cursor`, with `-32602` invalid params
 rather than guessing where to replay from.
 
 **`session/prompt`** request (`AosPromptMetaSchema`, `acp.ts`):
@@ -225,18 +225,18 @@ the runtime confirms it stored the prompt. Attachment content referenced by
 `resource_link` blocks uses the `aos-attachment:` URI scheme
 (`AOS_ATTACHMENT_URI_SCHEME`, `acp.ts`).
 
-### Response `_meta.aos` shapes
+### Response `_meta.hgw` shapes
 
 **`session/new`** response: `{ sessionId }` as a top-level result field, with no
-`_meta.aos`. The Session row (`session_info_update`), capabilities
-(`available_commands_update._meta.aos.capabilities`), models, and usage arrive
+`_meta.hgw`. The Session row (`session_info_update`), capabilities
+(`available_commands_update._meta.hgw.capabilities`), models, and usage arrive
 as events after the answer.
 
 **`session/resume`** response (`AosSessionResumeResponseMetaSchema`, `acp.ts`):
-`{ position?, history? }` in `_meta.aos` — nothing else. `position` is
+`{ position?, history? }` in `_meta.hgw` — nothing else. `position` is
 the turn and sequence the joined Session stands at; a later resume continues
 from it. Session info (`session_info_update`), execution state (`state_update`),
-capabilities (`available_commands_update._meta.aos.capabilities`), models, and
+capabilities (`available_commands_update._meta.hgw.capabilities`), models, and
 usage arrive as events after the answer. When the journal cannot answer `after`
 (`ReplayCursorLostError`, `core/channel.ts`), the proxy rebuilds the Session
 from history as a `start` resume does: the retained messages arrive as standard
@@ -244,7 +244,7 @@ from history as a `start` resume does: the retained messages arrive as standard
 carries `history`. A resume that replayed carries `history`
 (`AosHistoryCursorSchema`): `{ nextCursor?, truncated? }`.
 
-**`session_info_update`** `_meta.aos` (`AosSessionInfoMetaSchema`, `acp.ts:148-153`):
+**`session_info_update`** `_meta.hgw` (`AosSessionInfoMetaSchema`, `acp.ts:148-153`):
 `{ agentId, status, archived, createdAt?, unread?, pinned? }`. `createdAt` is
 the UTC ISO timestamp of when the Session was created, absent when the runtime
 does not report it. `unread` and `pinned` are absent when the runtime does not
@@ -254,7 +254,7 @@ value** in the browser.
 ### Older history pages
 
 A client that pages history advertises it in `initialize`'s
-`clientCapabilities._meta.aos.historyPages: true` (`AosClientCapabilitiesMetaSchema`,
+`clientCapabilities._meta.hgw.historyPages: true` (`AosClientCapabilitiesMetaSchema`,
 default `false`). To that client, a server that sets `extensions.historyPages`
 (default `false`) replays only the newest page on a `start` resume and serves
 older ones through
@@ -273,11 +273,11 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   characters. The server picks the page size; offsets count back from the
   newest message, and pages break at turn starts.
 - The page's messages arrive as `session/update`s before the response, each
-  tagged `_meta.aos.historyPage: { cursor }` (`AosHistoryPageTagSchema`). The
+  tagged `_meta.hgw.historyPage: { cursor }` (`AosHistoryPageTagSchema`). The
   browser keeps them out of the turn position and every live listener. A page
   never carries `plan_update`; the Todo plan and a restored failed turn come
   only with the newest page.
-- The response carries only `_meta.aos.history`
+- The response carries only `_meta.hgw.history`
   (`AosHistoryPageResponseMetaSchema`). A missing `nextCursor` means the
   beginning. `truncated: true` with no cursor means the proxy's bound stopped
   the reading, or the runtime's own reach did, and the thread says earlier
@@ -302,8 +302,8 @@ ended.
 On reconnect (session/resume with replay) a client with a pending prompt
 receives history first, then buffered live events, then the current state, then
 the stored prompt answer (if it arrived before the storage deadline).
-Catch-up uses only standard ACP session updates; no `_aos/session_invalidated`
-or `_aos/steer_accepted` is sent.
+Catch-up uses only standard ACP session updates; no `_hgw/session_invalidated`
+or `_hgw/steer_accepted` is sent.
 
 | ACP event                   | Meaning                                                                                                  |
 | --------------------------- | -------------------------------------------------------------------------------------------------------- |
@@ -311,26 +311,26 @@ or `_aos/steer_accepted` is sent.
 | `agent_thought_chunk`       | Streaming reasoning                                                                                      |
 | `tool_call_update`          | Tool lifecycle and argument deltas                                                                       |
 | `state_update`              | Run state transitions                                                                                    |
-| `plan_update`               | Session Todos in `_meta.aos.todos`                                                                       |
+| `plan_update`               | Session Todos in `_meta.hgw.todos`                                                                       |
 | `usage_update`              | Context window usage                                                                                     |
 | `session_info_update`       | Session metadata changes                                                                                 |
-| `available_commands_update` | Slash commands and capabilities in `_meta.aos.capabilities` (`AosAvailableCommandsMetaSchema`, `acp.ts`) |
+| `available_commands_update` | Slash commands and capabilities in `_meta.hgw.capabilities` (`AosAvailableCommandsMetaSchema`, `acp.ts`) |
 | `config_option_update`      | Current model and effort-level selection                                                                 |
 
 `usage_update` carries the used and total token counts in its own fields, and
-the provider's attribution and provenance in `_meta.aos` (`source`,
+the provider's attribution and provenance in `_meta.hgw` (`source`,
 `estimated`, `breakdown`). It is session-scoped rather than run-scoped: the
 proxy sends one on `session/new`, on `session/resume`, after every settled turn,
 and after a `session/set_config_option` that changes the model, because the
 window grows with the conversation and its size belongs to the model. A provider
 that cannot report usage sends none, and the last reading stands.
 
-### Turn stream `_meta.aos`
+### Turn stream `_meta.hgw`
 
 Every event emitted from a turn carries a base of
 `{ sequence, turnId }` (`acp.ts:251-254`).
 
-| Event                                 | Extra `_meta.aos` fields                                                    |
+| Event                                 | Extra `_meta.hgw` fields                                                    |
 | ------------------------------------- | --------------------------------------------------------------------------- |
 | `state_update`                        | `execution?: "stopping"`, `code?`, `message?` (`acp.ts:257-264`)            |
 | `agent_message_chunk`/`thought_chunk` | (base only) — identical live and on replay (`AosChunkMetaSchema`)           |
@@ -338,38 +338,38 @@ Every event emitted from a turn carries a base of
 | `plan_update`                         | `sequence`, `turnId?`, `todos` (`acp.ts:290-294`)                           |
 | `usage_update`                        | `source`, `estimated?`, `breakdown?` (`acp.ts:303-307`); no sequence/turnId |
 
-Stop reasons `_aos_error` and `_aos_uncertain` appear in
+Stop reasons `_hgw_error` and `_hgw_uncertain` appear in
 `state_update { state: "idle" }` (`AOS_STOP_REASONS`, `acp.ts:54-57`). A
 `state_update { state: "running" }` carrying `code` and `message` reports a
 final failure on a run that stays active until it is stopped: the browser shows
 the failure and keeps Stop available, and the run's own idle update ends it.
 A prompt the proxy accepted whose turn then fails to start reaches its sender
-as a `running` update followed by an `_aos_error` idle update for the same
-`turnId`, carrying only a public `code`, never an `_aos/error` notification.
+as a `running` update followed by an `_hgw_error` idle update for the same
+`turnId`, carrying only a public `code`, never an `_hgw/error` notification.
 
-## AOS extension methods (`_aos/*`)
+## AOS extension methods (`_hgw/*`)
 
 ### Requests (client → server, expect a response)
 
 | Method                | Purpose                                                                                                                                                                                        |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_aos/session/update` | Set title, archived, or unread (exactly one intent per call; `acp.ts`)                                                                                                                         |
-| `_aos/session/part`   | Detach this connection from the Session; the Session's work and all other members continue (`AosSessionPartRequestSchema`, `acp.ts`)                                                           |
-| `_aos/session/steer`  | Deliver a text correction to the active run                                                                                                                                                    |
-| `_aos/session/focus`  | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — the browser may send `{}` as its liveness probe. (`AosFocusRequestSchema`, `acp.ts`) |
-| `_aos/agents/list`    | Fetch the agent catalog                                                                                                                                                                        |
-| `_aos/agents/update`  | Write visibility and/or avatar; compare-and-set on the observed revision (`AosAgentUpdateRequestSchema`, `acp.ts`)                                                                             |
+| `_hgw/session/update` | Set title, archived, or unread (exactly one intent per call; `acp.ts`)                                                                                                                         |
+| `_hgw/session/part`   | Detach this connection from the Session; the Session's work and all other members continue (`AosSessionPartRequestSchema`, `acp.ts`)                                                           |
+| `_hgw/session/steer`  | Deliver a text correction to the active run                                                                                                                                                    |
+| `_hgw/session/focus`  | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — the browser may send `{}` as its liveness probe. (`AosFocusRequestSchema`, `acp.ts`) |
+| `_hgw/agents/list`    | Fetch the agent catalog                                                                                                                                                                        |
+| `_hgw/agents/update`  | Write visibility and/or avatar; compare-and-set on the observed revision (`AosAgentUpdateRequestSchema`, `acp.ts`)                                                                             |
 
 ### Notifications (no response expected)
 
 | Method                     | Direction     | Purpose                                                  |
 | -------------------------- | ------------- | -------------------------------------------------------- |
-| `_aos/activity`            | server→client | Workspace-wide activity feed item (union type, `acp.ts`) |
-| `_aos/composer_prefill`    | server→client | Composer prefill text from a slash command               |
-| `_aos/catalog_invalidated` | server→client | Agent catalog may have changed (no params)               |
-| `_aos/error`               | server→client | Connection-level failure with no request to answer       |
+| `_hgw/activity`            | server→client | Workspace-wide activity feed item (union type, `acp.ts`) |
+| `_hgw/composer_prefill`    | server→client | Composer prefill text from a slash command               |
+| `_hgw/catalog_invalidated` | server→client | Agent catalog may have changed (no params)               |
+| `_hgw/error`               | server→client | Connection-level failure with no request to answer       |
 
-#### `_aos/activity` union (`acp.ts:466-493`)
+#### `_hgw/activity` union (`acp.ts:466-493`)
 
 Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `type`:
 
@@ -427,7 +427,7 @@ only against that Session's own provider history.
 ## Interactions: permission and elicitation
 
 ACP delivers pending interactions as `session/request_permission` or
-`elicitation/create`. The AOS `_meta.aos` extensions carried on these are
+`elicitation/create`. The AOS `_meta.hgw` extensions carried on these are
 (`acp.ts:409-440`):
 
 **Permission** (`AosPermissionMetaSchema`, `acp.ts:409`):
@@ -482,7 +482,7 @@ block covers only the failures ACP has no code for (`AOS_JSONRPC_ERRORS`,
 Codes `-32001` through `-32009` are no longer used.
 
 The machine name an error travels as — the `message` of a public reply, and the
-`code` field of an `_aos/error` notification (`AosErrorNotificationSchema`,
+`code` field of an `_hgw/error` notification (`AosErrorNotificationSchema`,
 `acp.ts`) — is keyed by its numeric code:
 
 | Code     | Machine name              |

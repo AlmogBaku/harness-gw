@@ -12,16 +12,16 @@ import type { z } from "zod"
 
 import type { AgentCatalogResponseSchema } from "../protocol"
 import type {
-  AosAgentUpdateRequest,
-  AosAgentUpdateResponseSchema,
-  AosHistoryCursor,
-  AosInitializeMetaSchema,
-  AosPromptMetaSchema,
-  AosSessionListMetaSchema,
-  AosSessionNewMetaSchema,
-  AosSessionUpdateRequestSchema,
-  AosSteerRequestSchema,
-  AosSteerResponseSchema,
+  HgwAgentUpdateRequest,
+  HgwAgentUpdateResponseSchema,
+  HgwHistoryCursor,
+  HgwInitializeMetaSchema,
+  HgwPromptMetaSchema,
+  HgwSessionListMetaSchema,
+  HgwSessionNewMetaSchema,
+  HgwSessionUpdateRequestSchema,
+  HgwSteerRequestSchema,
+  HgwSteerResponseSchema,
 } from "../protocol/acp"
 
 /**
@@ -62,13 +62,13 @@ export type AcpSessionUpdateListener = (
 
 /** One older page of a Session, read without resuming it again. */
 export type AcpHistoryPage = {
-  /** The page's updates in arrival order, each with its `_meta.aos`. */
+  /** The page's updates in arrival order, each with its `_meta.hgw`. */
   readonly updates: readonly {
     readonly update: SessionUpdate
     readonly meta: Record<string, unknown> | undefined
   }[]
   /** Where the page before this one starts, or that none can be read. */
-  readonly history: AosHistoryCursor
+  readonly history: HgwHistoryCursor
 }
 
 /**
@@ -90,7 +90,7 @@ export type AcpSessionState = "joining" | "joined" | "unavailable" | "gone"
 export type AcpSessionListener = {
   /** The owning Agent, when known before any list, e.g. from a deep link. */
   agentId?: string
-  /** `session/update` notifications for the Session, with `_meta.aos`. */
+  /** `session/update` notifications for the Session, with `_meta.hgw`. */
   update?: AcpSessionUpdateListener
   /**
    * Fires just before a from-start replay is requested, so whoever projects
@@ -110,8 +110,8 @@ export interface AcpConnection {
    * nothing: reconnection belongs to the connection alone.
    */
   start(): void
-  /** Resolves with `InitializeResponse._meta.aos` once the handshake settles. */
-  readonly initialized: Promise<z.infer<typeof AosInitializeMetaSchema>>
+  /** Resolves with `InitializeResponse._meta.hgw` once the handshake settles. */
+  readonly initialized: Promise<z.infer<typeof HgwInitializeMetaSchema>>
   subscribeStatus(listener: (status: AcpConnectionStatus) => void): () => void
   /** Set from a close until every resumed Session has rejoined. */
   readonly outage: AcpConnectionOutage | undefined
@@ -130,17 +130,17 @@ export interface AcpConnection {
    * The browser holds the shared address, so it names the Agent.
    */
   newSession(
-    meta: z.infer<typeof AosSessionNewMetaSchema> & { agentId: string }
+    meta: z.infer<typeof HgwSessionNewMetaSchema> & { agentId: string }
   ): Promise<{ sessionId: string }>
   listSessions(
-    meta: z.infer<typeof AosSessionListMetaSchema>,
+    meta: z.infer<typeof HgwSessionListMetaSchema>,
     cursor?: string
   ): Promise<{ sessions: SessionInfo[]; nextCursor?: string }>
   /**
    * Opens the Session while any listener subscribes. The connection joins it,
    * replaying it from the start the first time, rejoins it from its own
    * position after a reconnect, and retries a refused join on backoff. It
-   * parts, with `_aos/session/part`, 2 s after the last listener leaves, so a
+   * parts, with `_hgw/session/part`, 2 s after the last listener leaves, so a
    * listener back within that grace costs neither a part nor a resume. A
    * listener that subscribes before anything of a from-start replay under way
    * has arrived takes part in that replay.
@@ -166,12 +166,12 @@ export interface AcpConnection {
    * The history cursor the latest from-start replay of this opened Session
    * reported; a join that replays nothing leaves it as it was.
    */
-  history(sessionId: string): AosHistoryCursor | undefined
+  history(sessionId: string): HgwHistoryCursor | undefined
   /** Prompts an opened Session once it is joined, as `setConfigOption` and `steer` write. */
   prompt(
     sessionId: string,
     blocks: ContentBlock[],
-    meta: z.infer<typeof AosPromptMetaSchema>
+    meta: z.infer<typeof HgwPromptMetaSchema>
   ): Promise<{ messageId: string }>
   cancel(sessionId: string): void
   setConfigOption(
@@ -182,11 +182,11 @@ export interface AcpConnection {
   deleteSession(sessionId: string): Promise<void>
 
   updateSession(
-    request: z.infer<typeof AosSessionUpdateRequestSchema>
+    request: z.infer<typeof HgwSessionUpdateRequestSchema>
   ): Promise<void>
   steer(
-    request: z.infer<typeof AosSteerRequestSchema>
-  ): Promise<z.infer<typeof AosSteerResponseSchema>>
+    request: z.infer<typeof HgwSteerRequestSchema>
+  ): Promise<z.infer<typeof HgwSteerResponseSchema>>
   /** The exposed Session plus this connection's presence, re-sent on reconnect. */
   focus(
     sessionId: string | null,
@@ -195,8 +195,8 @@ export interface AcpConnection {
   listAgents(): Promise<z.infer<typeof AgentCatalogResponseSchema>>
   /** Unsupported and revision-conflict refusals reject as `AgentUpdateError`. */
   updateAgent(
-    request: AosAgentUpdateRequest
-  ): Promise<z.infer<typeof AosAgentUpdateResponseSchema>>
+    request: HgwAgentUpdateRequest
+  ): Promise<z.infer<typeof HgwAgentUpdateResponseSchema>>
 
   /** Extension notifications by method name (`AOS_METHODS.notify.*`). */
   subscribeNotification(

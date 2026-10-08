@@ -312,7 +312,7 @@ The Agent revision used for the compare-and-set is composite:
 `hermes-bots:N,aos:M`, where `N` and `M` are the per-namespace CAS counters
 that `profiles.list` returns in `ui_meta_revisions`.
 
-`_aos/agents/update` writes the avatar (and optionally visibility) with one
+`_hgw/agents/update` writes the avatar (and optionally visibility) with one
 `profiles.configure` call. That call sends only the `ui_meta` namespaces the
 patch touches, each paired with its current `ui_meta_expected_revisions` entry,
 so unrelated `aos` keys such as `role` survive intact. Passing `null` for the
@@ -334,7 +334,7 @@ visibility uses.
 - Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
 - Activity is workspace-wide: the feed covers every Session the connection may observe.
 - ACP v2 starts or resumes a run and carries its server-to-browser event stream.
-  Stop (`session/cancel`) and steering (`_aos/session/steer`) travel over the
+  Stop (`session/cancel`) and steering (`_hgw/session/steer`) travel over the
   same ACP socket; neither creates another run.
 - Stop uses native `session.interrupt`.
 - Text-only active-turn steering uses native `session.redirect`. Hermes may

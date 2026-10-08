@@ -20,23 +20,23 @@ import {
 import { SessionCreateResponseSchema } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_ACP_AGENTS_PATH,
-  AOS_EXTENSION_VERSION,
-  AOS_METHODS,
-  AOS_META_KEY,
-  AosFocusRequestSchema,
-  AosLoginMetaSchema,
-  AosPromptMetaSchema,
-  AosAgentUpdateRequestSchema,
-  AosClientCapabilitiesMetaSchema,
-  AosReplayBeforeSchema,
-  AosSessionListMetaSchema,
-  AosSessionNewMetaSchema,
-  AosSessionPartRequestSchema,
-  AosSessionResumeMetaSchema,
-  AosSessionUpdateRequestSchema,
-  AosSteerRequestSchema,
-  type AosExtensions,
+  HGW_ACP_AGENTS_PATH,
+  HGW_EXTENSION_VERSION,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HgwFocusRequestSchema,
+  HgwLoginMetaSchema,
+  HgwPromptMetaSchema,
+  HgwAgentUpdateRequestSchema,
+  HgwClientCapabilitiesMetaSchema,
+  HgwReplayBeforeSchema,
+  HgwSessionListMetaSchema,
+  HgwSessionNewMetaSchema,
+  HgwSessionPartRequestSchema,
+  HgwSessionResumeMetaSchema,
+  HgwSessionUpdateRequestSchema,
+  HgwSteerRequestSchema,
+  type HgwExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import { unlessAborted } from "../core/channel"
@@ -69,7 +69,7 @@ import {
 } from "../core/member"
 import { createMemberEncoder, type ClientReply } from "./member-encoder"
 import { shownAnswers } from "./translate/requests"
-import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
+import type { AcpConnectionContext, HgwAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
   errorNotificationOf,
@@ -84,7 +84,7 @@ import {
 
 /**
  * The per-connection ACP v2 agent that fronts the catalog and the channels.
- * One handler per method: it validates `_meta.aos`, runs its command through
+ * One handler per method: it validates `_meta.hgw`, runs its command through
  * the member stack, and leaves what reaches a Session's members to its
  * channel.
  */
@@ -102,7 +102,7 @@ const undecoded = (params: unknown) => params
  * The operator listener's extensions. The proxy implements each of them itself,
  * except the provider catalog invalidation a runtime may not signal.
  */
-function operatorExtensions(catalog: Catalog): AosExtensions {
+function operatorExtensions(catalog: Catalog): HgwExtensions {
   return {
     steer: true,
     rewind: true,
@@ -118,13 +118,13 @@ function operatorExtensions(catalog: Catalog): AosExtensions {
 }
 
 /**
- * The `_aos/before` cursor a resume names, or `undefined` for no replay or
+ * The `_hgw/before` cursor a resume names, or `undefined` for no replay or
  * `start`. ACP asks a receiver to refuse a cursor it does not understand
  * rather than guess where to replay from, so every other one is refused.
  */
 function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
   if (!replayFrom || replayFrom.type === "start") return undefined
-  const parsed = AosReplayBeforeSchema.safeParse(replayFrom)
+  const parsed = HgwReplayBeforeSchema.safeParse(replayFrom)
   if (!parsed.success) throw invalidParams()
   return parsed.data.cursor
 }
@@ -187,7 +187,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       live: () => context.authentication?.live() ?? true,
     })
   )
-  const app = agent({ name: "aos-proxy" })
+  const app = agent({ name: "harness-gw" })
 
   /**
    * The exposure this connection last acknowledged. A foreground browser
@@ -425,8 +425,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   }
 
   app.onRequest(methods.agent.initialize, async ({ params }) => {
-    const client = AosClientCapabilitiesMetaSchema.safeParse(
-      params.capabilities?._meta?.[AOS_META_KEY] ?? {}
+    const client = HgwClientCapabilitiesMetaSchema.safeParse(
+      params.capabilities?._meta?.[HGW_META_KEY] ?? {}
     )
     clientPagesHistory = client.success && client.data.historyPages
     const { elicitation } = params.capabilities ?? {}
@@ -444,11 +444,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: {
-        name: "aos-proxy",
+        name: "harness-gw",
         ...(info ? { title: info.runtime.name } : {}),
         // The build the proxy serves, so a tab running another one reloads; a
         // proxy serving none versions the AOS extension contract instead.
-        version: context.buildId ?? `${AOS_EXTENSION_VERSION}`,
+        version: context.buildId ?? `${HGW_EXTENSION_VERSION}`,
       },
       capabilities: {
         // Text and resource links are every agent's baseline; no runtime port
@@ -457,8 +457,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       },
       authMethods: authentication ? [...authentication.authMethods] : [],
       _meta: {
-        [AOS_META_KEY]: {
-          version: AOS_EXTENSION_VERSION,
+        [HGW_META_KEY]: {
+          version: HGW_EXTENSION_VERSION,
           role,
           extensions,
         },
@@ -477,7 +477,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       )
     )
       throw authenticationRequired()
-    const { token } = parseMeta(AosLoginMetaSchema, params._meta)
+    const { token } = parseMeta(HgwLoginMetaSchema, params._meta)
     if (!(await authentication.authenticate(token)))
       throw authenticationRequired()
     context.handshakeComplete?.()
@@ -488,11 +488,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     methods.agent.session.new,
     async ({ params, client, requestId }) => {
       admit(methods.agent.session.new, "new")
-      const meta = parseMeta(AosSessionNewMetaSchema, params._meta)
+      const meta = parseMeta(HgwSessionNewMetaSchema, params._meta)
       const agentId = agentOf(meta.agentId)
       if (agentId === undefined)
         throw invalidParams(
-          `name the Agent, or connect to ${AOS_ACP_AGENTS_PATH}/<agentId>`
+          `name the Agent, or connect to ${HGW_ACP_AGENTS_PATH}/<agentId>`
         )
       const { sessionId } = await perform(
         "new",
@@ -526,7 +526,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   app.onRequest(methods.agent.session.list, async ({ params, requestId }) => {
     admit(methods.agent.session.list, "list")
-    const meta = parseMeta(AosSessionListMetaSchema, params._meta)
+    const meta = parseMeta(HgwSessionListMetaSchema, params._meta)
     const agentId = agentOf(meta.agentId)
     const filter = params.cwd == null ? undefined : normalizeFolder(params.cwd)
     /** Each listed Agent's folder, read once for this request. */
@@ -607,12 +607,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         )
         return {
           _meta: {
-            [AOS_META_KEY]: { history: historyCursor(page, maxOffset) },
+            [HGW_META_KEY]: { history: historyCursor(page, maxOffset) },
           },
         }
       }
       admit(method, "resume")
-      const meta = parseMeta(AosSessionResumeMetaSchema, params._meta)
+      const meta = parseMeta(HgwSessionResumeMetaSchema, params._meta)
       const agentId = agentOf(meta.agentId)
       const resumed = await perform(
         "resume",
@@ -628,7 +628,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       const { history } = resumed
       return {
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             ...(history === undefined
               ? {}
               : { history: historyCursor(history, maxOffset) }),
@@ -642,7 +642,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     methods.agent.session.prompt,
     async ({ params, client, signal, requestId }) => {
       admit(methods.agent.session.prompt, "send")
-      const meta = parseMeta(AosPromptMetaSchema, params._meta)
+      const meta = parseMeta(HgwPromptMetaSchema, params._meta)
       if (!params.prompt.every(isPromptBlock)) throw invalidParams()
       const text = promptText(params.prompt)
       // A turn of attachments alone carries no text: its stage supplies the turn,
@@ -742,7 +742,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       async (command) => {
         const agentId = sessions.owner(command.sessionId) ?? context.agentId
         if (agentId === undefined)
-          throw invalidParams(`connect to ${AOS_ACP_AGENTS_PATH}/<agentId>`)
+          throw invalidParams(`connect to ${HGW_ACP_AGENTS_PATH}/<agentId>`)
         const scope = catalog.scope(agentId, command.sessionId)
         // A Session its Agent cannot find is already gone.
         if (scope) {
@@ -765,22 +765,22 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   // Leaves a Session this connection joined, whose work goes on for the rest.
   app.onRequest(
-    AOS_METHODS.session.part,
+    HGW_METHODS.session.part,
     undecoded,
     async ({ params: raw }) => {
       stack()
-      const { sessionId } = AosSessionPartRequestSchema.parse(raw)
+      const { sessionId } = HgwSessionPartRequestSchema.parse(raw)
       sessions.part(sessionId)
       return {}
     }
   )
 
   app.onRequest(
-    AOS_METHODS.session.update,
+    HGW_METHODS.session.update,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(AOS_METHODS.session.update, "update")
-      const params = AosSessionUpdateRequestSchema.parse(raw)
+      admit(HGW_METHODS.session.update, "update")
+      const params = HgwSessionUpdateRequestSchema.parse(raw)
       const patch: MemberCommands["update"]["patch"] =
         params.unread === false
           ? { unread: false }
@@ -805,11 +805,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onRequest(
-    AOS_METHODS.session.steer,
+    HGW_METHODS.session.steer,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(AOS_METHODS.session.steer, "steer")
-      const params = AosSteerRequestSchema.parse(raw)
+      admit(HGW_METHODS.session.steer, "steer")
+      const params = HgwSteerRequestSchema.parse(raw)
       return await perform(
         "steer",
         {
@@ -829,11 +829,11 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onRequest(
-    AOS_METHODS.session.focus,
+    HGW_METHODS.session.focus,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(AOS_METHODS.session.focus, "focus")
-      const { sessionId, foreground, idle } = AosFocusRequestSchema.parse(raw)
+      admit(HGW_METHODS.session.focus, "focus")
+      const { sessionId, foreground, idle } = HgwFocusRequestSchema.parse(raw)
       // A report naming no Session changes nothing; its answer is what the
       // browser probes its link for.
       if (sessionId === undefined) return {}
@@ -869,10 +869,10 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onRequest(
-    AOS_METHODS.agents.list,
+    HGW_METHODS.agents.list,
     withoutParams,
     async ({ requestId }) => {
-      admit(AOS_METHODS.agents.list, "agents")
+      admit(HGW_METHODS.agents.list, "agents")
       return await perform(
         "agents",
         {},
@@ -883,12 +883,12 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onRequest(
-    AOS_METHODS.agents.update,
+    HGW_METHODS.agents.update,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(AOS_METHODS.agents.update, "update-agent")
+      admit(HGW_METHODS.agents.update, "update-agent")
       const { agentId, revision, ...patch } =
-        AosAgentUpdateRequestSchema.parse(raw)
+        HgwAgentUpdateRequestSchema.parse(raw)
       return await perform(
         "update-agent",
         { agentId, patch, revision },
@@ -950,4 +950,4 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   return app
-}) satisfies AosAcpAgentFactory
+}) satisfies HgwAcpAgentFactory

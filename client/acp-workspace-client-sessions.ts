@@ -5,13 +5,14 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
-  AOS_METHODS,
-  AOS_STOP_REASONS,
-  AosActivityNotificationSchema,
-  AosPlanMetaSchema,
-  AosSessionInfoMetaSchema,
-  type AosActivityNotification,
-  type AosSessionInfoMeta,
+  HGW_META_KEY,
+  HGW_METHODS,
+  HGW_STOP_REASONS,
+  HgwActivityNotificationSchema,
+  HgwPlanMetaSchema,
+  HgwSessionInfoMetaSchema,
+  type HgwActivityNotification,
+  type HgwSessionInfoMeta,
 } from "../protocol/acp"
 
 import type {
@@ -48,15 +49,15 @@ function statusFromState(update: StateUpdate): SessionStatus {
   if (StateUpdate.isRequiresAction(update)) return "waiting-for-input"
   if (!StateUpdate.isIdle(update)) return "unknown"
   const stopReason = update.stopReason
-  return stopReason === AOS_STOP_REASONS.error ||
-    stopReason === AOS_STOP_REASONS.uncertain
+  return stopReason === HGW_STOP_REASONS.error ||
+    stopReason === HGW_STOP_REASONS.uncertain
     ? "failed"
     : "idle"
 }
 
 /** Content-free workspace events; read state travels as a row change instead. */
 function activityEventOf(
-  notification: AosActivityNotification
+  notification: HgwActivityNotification
 ): WorkspaceActivityEvent | undefined {
   const { agentId, sessionId, occurredAt, type } = notification
   if (type === "unread-changed") return undefined
@@ -152,7 +153,7 @@ export function createAcpSessionStore({
    */
   function put(
     sessionId: string,
-    info: AosSessionInfoMeta,
+    info: HgwSessionInfoMeta,
     updatedAt?: string | null
   ) {
     const previous = rows.get(sessionId)
@@ -205,7 +206,7 @@ export function createAcpSessionStore({
       listener()
   }
 
-  /** An update whose `_meta.aos` does not parse carries nothing to publish. */
+  /** An update whose `_meta.hgw` does not parse carries nothing to publish. */
   function acceptUpdate(
     sessionId: string,
     update: SessionUpdate,
@@ -228,12 +229,12 @@ export function createAcpSessionStore({
         titles.set(sessionId, update.title)
         invalidate(sessionId)
       }
-      const info = AosSessionInfoMetaSchema.safeParse(meta)
+      const info = HgwSessionInfoMetaSchema.safeParse(meta)
       if (info.success) put(sessionId, info.data, update.updatedAt)
       return
     }
     if (!SessionUpdate.isPlanUpdate(update)) return
-    const plan = AosPlanMetaSchema.safeParse(meta)
+    const plan = HgwPlanMetaSchema.safeParse(meta)
     if (plan.success) setTodos(sessionId, plan.data.todos)
   }
 
@@ -270,8 +271,8 @@ export function createAcpSessionStore({
 
   const leaveActivity = subscribeAosNotification(
     connection,
-    AOS_METHODS.notify.activity,
-    AosActivityNotificationSchema,
+    HGW_METHODS.notify.activity,
+    HgwActivityNotificationSchema,
     (notification) => {
       if (notification.type === "unread-changed")
         return patch(notification.sessionId, { unread: notification.unread })
@@ -363,7 +364,7 @@ export function createAcpSessionStore({
 export function rowOf(session: SessionInfo) {
   return {
     sessionId: session.sessionId,
-    info: AosSessionInfoMetaSchema.parse(session._meta?.aos),
+    info: HgwSessionInfoMetaSchema.parse(session._meta?.[HGW_META_KEY]),
     updatedAt: session.updatedAt,
     title: session.title,
   }

@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest"
 
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AOS_META_KEY,
+  HGW_AUTH_METHOD_INVITE,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HGW_META_KEY,
 } from "../../../protocol/acp"
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { assertLeakFree } from "../../../test/support/leak-oracle"
@@ -128,11 +128,11 @@ async function connectGuest(proxy: Proxy): Promise<Member> {
   await connection.agent.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
-    capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
+    capabilities: { _meta: { [HGW_META_KEY]: { historyPages: true } } },
   })
   await connection.agent.request(methods.agent.auth.login, {
-    methodId: AOS_AUTH_METHOD_INVITE,
-    _meta: { [AOS_META_KEY]: { token } },
+    methodId: HGW_AUTH_METHOD_INVITE,
+    _meta: { [HGW_META_KEY]: { token } },
   })
   return {
     agent: connection.agent,
@@ -216,7 +216,7 @@ const fromStart = { replayFrom: { type: "start" } }
 
 /** A resume at the cursor `member` holds of the live turn, as a rejoin sends. */
 const atCursor = (turnId: string | undefined, after: number) => ({
-  _meta: { [AOS_META_KEY]: { turnId, after } },
+  _meta: { [HGW_META_KEY]: { turnId, after } },
 })
 
 /** Sends one prompt under a client id, as the browser's composer does. */
@@ -224,7 +224,7 @@ function send(member: Member, clientId = "client-1") {
   const answered = member.agent.request(methods.agent.session.prompt, {
     sessionId: member.sessionId,
     prompt: [{ type: "text", text: "Summarize" }],
-    _meta: { [AOS_META_KEY]: { clientId } },
+    _meta: { [HGW_META_KEY]: { clientId } },
   })
   // A refusal may come only past a deadline; it is the row's to read then.
   answered.catch(() => undefined)
@@ -248,10 +248,10 @@ function updatesOf(member: Member, kind: string) {
     )
 }
 
-/** The `_aos/error` notices one member received, by code. */
+/** The `_hgw/error` notices one member received, by code. */
 function notices(member: Member) {
   return member.recorder
-    .of(AOS_METHODS.notify.error)
+    .of(HGW_METHODS.notify.error)
     .map(({ params }) => (params as { code: string }).code)
 }
 
@@ -299,7 +299,7 @@ function endings(member: Member) {
     const { update } = params as {
       update: { stopReason?: string; _meta?: Record<string, { code?: string }> }
     }
-    const code = update._meta?.[AOS_META_KEY]?.code
+    const code = update._meta?.[HGW_META_KEY]?.code
     return update.stopReason === undefined || code === undefined ? [] : [code]
   })
 }
@@ -423,7 +423,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("history", unavailable())
       await expect(join(t, t.operator, fromStart)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
       await join(t, t.guest, fromStart)
     },
@@ -465,7 +465,7 @@ const ROWS: Row[] = [
       t.test.faults.failOnce("resolveInvitedSession", unavailable())
       await join(t, t.operator)
       await expect(join(t, t.guest)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -489,7 +489,7 @@ const ROWS: Row[] = [
           info: { name: "aos-browser", version: "1" },
         })
       ).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
       t.browsers.push(refused)
     },
@@ -527,7 +527,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("start", unavailable())
       await expect(send(t.operator)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -547,7 +547,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("createSession", unavailable())
       await expect(create(t)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -564,7 +564,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("updateModel", unavailable())
       await expect(setModel(t)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -601,7 +601,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("updateSession", unavailable())
       await expect(rename(t)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -617,7 +617,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("deleteSession", unavailable())
       await expect(remove(t)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -633,7 +633,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("listAllSessions", unavailable())
       await expect(t.test.list()).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -651,7 +651,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("listSessions", unavailable())
       await expect(listAgentSessions(t)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -669,7 +669,7 @@ const ROWS: Row[] = [
     async meet(t) {
       t.test.faults.failOnce("listAgents", unavailable())
       await expect(listAgents(t)).rejects.toMatchObject({
-        code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       })
     },
     bound: 0,
@@ -797,7 +797,7 @@ const ROWS: Row[] = [
       t.test.faults.hangUntilAborted("history")
       t.settling.push(
         expect(join(t, t.operator, fromStart)).rejects.toMatchObject({
-          code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+          code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
         })
       )
       await join(t, t.guest)
@@ -962,7 +962,7 @@ const ROWS: Row[] = [
       // rebuilt from history.
       for (const member of members(t)) {
         const answer = await join(t, member, atCursor(t.turnId, LIVE_CURSOR))
-        expect(answer._meta?.[AOS_META_KEY]).toHaveProperty("history")
+        expect(answer._meta?.[HGW_META_KEY]).toHaveProperty("history")
       }
       chunk(t.source(), " reply")
       t.foreign.end()
@@ -1002,7 +1002,7 @@ function nestedDeadlines(): Row {
         expect(
           answer.finally(() => (marks.answered = mark(t)))
         ).rejects.toMatchObject({
-          code: AOS_JSONRPC_ERRORS.uncertainMutation,
+          code: HGW_JSONRPC_ERRORS.uncertainMutation,
         })
       )
     },
@@ -1056,7 +1056,7 @@ const setModel = (t: Table) =>
 const rename = (t: Table) =>
   settle(
     t,
-    t.operator.agent.request(AOS_METHODS.session.update, {
+    t.operator.agent.request(HGW_METHODS.session.update, {
       sessionId: SESSION,
       title: "Renamed",
     })
@@ -1074,11 +1074,11 @@ const create = (t: Table) => settle(t, t.test.create({ clientId: "create-1" }))
 
 const listAgentSessions = (t: Table) =>
   t.operator.agent.request(methods.agent.session.list, {
-    _meta: { [AOS_META_KEY]: { agentId: AGENT } },
+    _meta: { [HGW_META_KEY]: { agentId: AGENT } },
   })
 
 const listAgents = (t: Table) =>
-  t.operator.agent.request(AOS_METHODS.agents.list, {})
+  t.operator.agent.request(HGW_METHODS.agents.list, {})
 
 async function stageTo(t: Table, stage: Stage) {
   if (stage === "connected") return

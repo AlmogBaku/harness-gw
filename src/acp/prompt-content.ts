@@ -1,7 +1,7 @@
 import { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
 import {
-  AOS_ATTACHMENT_URI_SCHEME,
+  HGW_ATTACHMENT_URI_SCHEME,
   formatArtifactUri,
 } from "../../protocol/acp"
 import type { PromptPart } from "../core/member"
@@ -16,7 +16,7 @@ export function isPromptBlock(block: ContentBlock) {
 }
 
 function isStagedLink(uri: string) {
-  return uri.startsWith(AOS_ATTACHMENT_URI_SCHEME)
+  return uri.startsWith(HGW_ATTACHMENT_URI_SCHEME)
 }
 
 /**

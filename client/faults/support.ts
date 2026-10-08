@@ -57,7 +57,7 @@ export type Frame = {
   params?: {
     sessionId?: string
     replayFrom?: { type: string }
-    _meta?: { aos?: { clientId?: string } }
+    _meta?: { hgw?: { clientId?: string } }
   }
 }
 

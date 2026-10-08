@@ -215,7 +215,7 @@ describe("vocabulary", () => {
       retired: /\blanes?(?![a-z])|Lanes?(?![a-z])|(?<![A-Z])LANES?(?![A-Z])/u,
       scope: "protocol/**",
       reason:
-        "the wire names which kind of member a connection is its `role` (`_meta.aos.role`)",
+        "the wire names which kind of member a connection is its `role` (`_meta.hgw.role`)",
     },
     {
       retired: /[cC]ontrollerIds?\b|[sS]ubscriberIds?\b/u,

@@ -178,7 +178,7 @@ There is no file read or call lookup on this runtime yet.
 
 ## Agent icons
 
-OpenCode has no native Agent write, so every `_aos/agents/update` call returns
+OpenCode has no native Agent write, so every `_hgw/agents/update` call returns
 the `-31015 unsupported` error and `avatarEditable` is `false` for every Agent.
 
 An operator may hand-write an `avatar: ring/blue` key in the Agent file's

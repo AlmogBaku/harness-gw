@@ -34,24 +34,24 @@ import {
 } from "../lifecycle"
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AOS_META_KEY,
-  AOS_REPLAY_BEFORE,
-  AosActivityNotificationSchema,
-  AosAgentUpdateResponseSchema,
-  AosAgentsListResponseSchema,
-  AosChunkMetaSchema,
-  AosComposerPrefillNotificationSchema,
-  AosErrorNotificationSchema,
-  AosHistoryPageResponseMetaSchema,
-  AosHistoryPageTagSchema,
-  AosInitializeMetaSchema,
-  AosSessionResumeResponseMetaSchema,
-  AosSteerResponseSchema,
-  type AosHistoryCursor,
-  type AosInitializeMeta,
+  HGW_AUTH_METHOD_INVITE,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HGW_REPLAY_BEFORE,
+  HgwActivityNotificationSchema,
+  HgwAgentUpdateResponseSchema,
+  HgwAgentsListResponseSchema,
+  HgwChunkMetaSchema,
+  HgwComposerPrefillNotificationSchema,
+  HgwErrorNotificationSchema,
+  HgwHistoryPageResponseMetaSchema,
+  HgwHistoryPageTagSchema,
+  HgwInitializeMetaSchema,
+  HgwSessionResumeResponseMetaSchema,
+  HgwSteerResponseSchema,
+  type HgwHistoryCursor,
+  type HgwInitializeMeta,
 } from "../protocol/acp"
 
 import { AgentUpdateError } from "./workspace"
@@ -102,18 +102,18 @@ export const SILENT_LOGGER: Logger = {
 const AGENT_CWD = ""
 
 /** An ACP payload's `_meta`, keyed by extension; only AOS's half is read. */
-const AosEnvelopeSchema = z.object({
-  [AOS_META_KEY]: z.record(z.string(), z.unknown()),
+const HgwEnvelopeSchema = z.object({
+  [HGW_META_KEY]: z.record(z.string(), z.unknown()),
 })
 
 /** Session-scoped elicitations name their Session; request-scoped ones do not. */
 const ElicitationScopeSchema = z.object({ sessionId: z.string().min(1) })
 
 const NOTIFICATION_PARSERS: Readonly<Record<string, ParamsParser<unknown>>> = {
-  [AOS_METHODS.notify.activity]: AosActivityNotificationSchema,
-  [AOS_METHODS.notify.composerPrefill]: AosComposerPrefillNotificationSchema,
-  [AOS_METHODS.notify.catalogInvalidated]: z.unknown().optional(),
-  [AOS_METHODS.notify.error]: AosErrorNotificationSchema,
+  [HGW_METHODS.notify.activity]: HgwActivityNotificationSchema,
+  [HGW_METHODS.notify.composerPrefill]: HgwComposerPrefillNotificationSchema,
+  [HGW_METHODS.notify.catalogInvalidated]: z.unknown().optional(),
+  [HGW_METHODS.notify.error]: HgwErrorNotificationSchema,
 }
 
 /**
@@ -172,7 +172,7 @@ export type AcpConnectionOptions = {
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
 /** ACP's code for a Session the provider no longer has. */
 const RESOURCE_NOT_FOUND = RequestError.resourceNotFound().code
-/** The code an `_aos/error` names a Session the provider no longer has with. */
+/** The code an `_hgw/error` names a Session the provider no longer has with. */
 const NOT_FOUND_NOTICE = "not_found"
 
 function codeOf(error: unknown) {
@@ -223,20 +223,20 @@ function isTimeout(error: unknown) {
 
 /** The Agent update refusals a caller can act on, as typed errors. */
 function agentUpdateError(error: unknown) {
-  if (codeOf(error) === AOS_JSONRPC_ERRORS.unsupported)
+  if (codeOf(error) === HGW_JSONRPC_ERRORS.unsupported)
     return new AgentUpdateError(
       "unsupported",
       "This runtime cannot store that Agent field"
     )
-  if (codeOf(error) === AOS_JSONRPC_ERRORS.revisionConflict)
+  if (codeOf(error) === HGW_JSONRPC_ERRORS.revisionConflict)
     return new AgentUpdateError("conflict", "The Agent changed; reload it")
   return error
 }
 
-/** `_meta.aos` of an ACP payload, when it carries one. */
-function aosMetaOf(meta: unknown): Record<string, unknown> | undefined {
-  const parsed = AosEnvelopeSchema.safeParse(meta)
-  return parsed.success ? parsed.data[AOS_META_KEY] : undefined
+/** `_meta.hgw` of an ACP payload, when it carries one. */
+function hgwMetaOf(meta: unknown): Record<string, unknown> | undefined {
+  const parsed = HgwEnvelopeSchema.safeParse(meta)
+  return parsed.success ? parsed.data[HGW_META_KEY] : undefined
 }
 
 /** One of the gateway's ACP listener paths as a WebSocket URL from `base`. */
@@ -604,7 +604,7 @@ export function createAcpConnection(
     /** Where the live turn was last seen, which a rejoin resumes from. */
     position?: { turnId: string; after: number }
     /** What the latest from-start replay reported of older history. */
-    history?: AosHistoryCursor
+    history?: HgwHistoryCursor
     /** The updates of the page read in flight. */
     page?: PageUpdates
     /** Whether a join has replayed it from the start yet. */
@@ -646,9 +646,9 @@ export function createAcpConnection(
     { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
   /** The handle for the running inbound-silence timer; replaced on every inbound frame. */
   let silenceTimer: unknown = undefined
-  let settleInitialized: ((meta: AosInitializeMeta) => void) | undefined
+  let settleInitialized: ((meta: HgwInitializeMeta) => void) | undefined
   let failInitialized: ((error: Error) => void) | undefined
-  const initialized = new Promise<AosInitializeMeta>((resolve, reject) => {
+  const initialized = new Promise<HgwInitializeMeta>((resolve, reject) => {
     settleInitialized = resolve
     failInitialized = reject
   })
@@ -709,7 +709,7 @@ export function createAcpConnection(
   }
 
   /**
-   * Sends `_aos/session/focus` as a request. A reply within the probe
+   * Sends `_hgw/session/focus` as a request. A reply within the probe
    * deadline is the liveness acknowledgement; no reply closes the transport
    * and the connection reconnects. Re-reports the last known focused Session
    * if any, or `{}` when no focus has been reported yet.
@@ -717,7 +717,7 @@ export function createAcpConnection(
   function sendLivenessProbeAsync() {
     const params = lastFocus ?? {}
     request("probe", (agent, options) =>
-      agent.request(AOS_METHODS.session.focus, params, options)
+      agent.request(HGW_METHODS.session.focus, params, options)
     ).catch((err: unknown) => {
       logger.debug({ err }, "acp.liveness.failed")
     })
@@ -773,21 +773,21 @@ export function createAcpConnection(
 
   const app = client({ name: clientInfo.name })
     .onNotification(methods.client.session.update, ({ params }) => {
-      // Every `_meta.aos` the protocol defines for an update belongs to the
+      // Every `_meta.hgw` the protocol defines for an update belongs to the
       // update itself, not to the notification carrying it.
-      const meta = aosMetaOf(params.update._meta)
+      const meta = hgwMetaOf(params.update._meta)
       const open = sessions.get(params.sessionId)
       if (!open) return
       // An older page's updates belong to the page read alone: its turns are
       // long over, so a live listener or the rejoin position would take its
       // state markers for the running turn's.
-      if (AosHistoryPageTagSchema.safeParse(meta).data?.historyPage) {
+      if (HgwHistoryPageTagSchema.safeParse(meta).data?.historyPage) {
         open.page?.push({ update: params.update, meta })
         return
       }
       // Every turn meta extends the chunk meta, and reads drop unknown keys,
       // so the chunk schema positions any of them.
-      const position = AosChunkMetaSchema.safeParse(meta)
+      const position = HgwChunkMetaSchema.safeParse(meta)
       if (position.success)
         open.position = {
           turnId: position.data.turnId,
@@ -805,14 +805,14 @@ export function createAcpConnection(
     )
   for (const [method, parser] of Object.entries(NOTIFICATION_PARSERS))
     app.onNotification(method, parser, ({ params }) => {
-      if (method === AOS_METHODS.notify.error) noticeGone(params)
+      if (method === HGW_METHODS.notify.error) noticeGone(params)
       for (const listener of notificationListeners.get(method) ?? [])
         listener(params)
     })
 
   /** An opened Session the proxy reports as not found is gone for good. */
   function noticeGone(params: unknown) {
-    const notice = AosErrorNotificationSchema.safeParse(params).data
+    const notice = HgwErrorNotificationSchema.safeParse(params).data
     if (notice?.code !== NOT_FOUND_NOTICE || notice.sessionId === undefined)
       return
     sessions.get(notice.sessionId)?.owner?.actor.send({ type: "gone" })
@@ -897,7 +897,7 @@ export function createAcpConnection(
   }
 
   /**
-   * Notifications have no reply; the proxy reports failures as `_aos/error`.
+   * Notifications have no reply; the proxy reports failures as `_hgw/error`.
    * One for an open Session waits until it is joined.
    */
   function notifyAgent(
@@ -923,10 +923,10 @@ export function createAcpConnection(
       // itself, so a from-start resume may replay only the newest page.
       capabilities: {
         elicitation: { form: {} },
-        _meta: { [AOS_META_KEY]: { historyPages: true } },
+        _meta: { [HGW_META_KEY]: { historyPages: true } },
       },
     })
-    const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
+    const meta = HgwInitializeMetaSchema.parse(hgwMetaOf(response._meta))
     settleInitialized?.(meta)
     settleInitialized = undefined
     failInitialized = undefined
@@ -937,8 +937,8 @@ export function createAcpConnection(
       agent.request(
         methods.agent.auth.login,
         {
-          methodId: AOS_AUTH_METHOD_INVITE,
-          _meta: { [AOS_META_KEY]: { token } },
+          methodId: HGW_AUTH_METHOD_INVITE,
+          _meta: { [HGW_META_KEY]: { token } },
         },
         options
       )
@@ -997,7 +997,7 @@ export function createAcpConnection(
               cwd: AGENT_CWD,
               ...(fromStart ? { replayFrom: { type: "start" } } : {}),
               _meta: {
-                [AOS_META_KEY]: {
+                [HGW_META_KEY]: {
                   ...(agentId === undefined ? {} : { agentId }),
                   ...(fromStart ? {} : open.position),
                 },
@@ -1007,8 +1007,8 @@ export function createAcpConnection(
           ),
         signal
       )
-      const meta = AosSessionResumeResponseMetaSchema.parse(
-        aosMetaOf(response._meta)
+      const meta = HgwSessionResumeResponseMetaSchema.parse(
+        hgwMetaOf(response._meta)
       )
       if (signal.aborted) return
       if (agentId !== undefined) owners.set(sessionId, agentId)
@@ -1029,9 +1029,9 @@ export function createAcpConnection(
   }
 
   async function listAgents() {
-    return AosAgentsListResponseSchema.parse(
+    return HgwAgentsListResponseSchema.parse(
       await request("short", (agent, options) =>
-        agent.request(AOS_METHODS.agents.list, undefined, options)
+        agent.request(HGW_METHODS.agents.list, undefined, options)
       )
     )
   }
@@ -1167,7 +1167,7 @@ export function createAcpConnection(
     settleOutage()
     if (open.state === "gone") return
     request("short", (agent, options) =>
-      agent.request(AOS_METHODS.session.part, { sessionId }, options)
+      agent.request(HGW_METHODS.session.part, { sessionId }, options)
     ).catch((err: unknown) => {
       logger.debug({ err, sessionId }, "acp.session.part.failed")
     })
@@ -1191,13 +1191,13 @@ export function createAcpConnection(
           {
             sessionId,
             cwd: AGENT_CWD,
-            replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
+            replayFrom: { type: HGW_REPLAY_BEFORE, cursor },
           },
           options
         )
       )
-      const { history } = AosHistoryPageResponseMetaSchema.parse(
-        aosMetaOf(response._meta)
+      const { history } = HgwHistoryPageResponseMetaSchema.parse(
+        hgwMetaOf(response._meta)
       )
       return { updates, history }
     } finally {
@@ -1390,7 +1390,7 @@ export function createAcpConnection(
       const { sessionId } = await request("short", (agent, options) =>
         agent.request(
           methods.agent.session.new,
-          { cwd: AGENT_CWD, _meta: { [AOS_META_KEY]: meta } },
+          { cwd: AGENT_CWD, _meta: { [HGW_META_KEY]: meta } },
           options
         )
       )
@@ -1412,7 +1412,7 @@ export function createAcpConnection(
           methods.agent.session.list,
           {
             ...(cursor === undefined ? {} : { cursor }),
-            _meta: { [AOS_META_KEY]: meta },
+            _meta: { [HGW_META_KEY]: meta },
           },
           options
         )
@@ -1434,7 +1434,7 @@ export function createAcpConnection(
       const response = await write(sessionId, "long", (agent, options) =>
         agent.request(
           methods.agent.session.prompt,
-          { sessionId, prompt: blocks, _meta: { [AOS_META_KEY]: meta } },
+          { sessionId, prompt: blocks, _meta: { [HGW_META_KEY]: meta } },
           options
         )
       )
@@ -1467,14 +1467,14 @@ export function createAcpConnection(
 
     async updateSession(update) {
       await request("short", (agent, options) =>
-        agent.request(AOS_METHODS.session.update, update, options)
+        agent.request(HGW_METHODS.session.update, update, options)
       )
     },
 
     async steer(steer) {
-      return AosSteerResponseSchema.parse(
+      return HgwSteerResponseSchema.parse(
         await write(steer.sessionId, "medium", (agent, options) =>
-          agent.request(AOS_METHODS.session.steer, steer, options)
+          agent.request(HGW_METHODS.session.steer, steer, options)
         )
       )
     },
@@ -1489,7 +1489,7 @@ export function createAcpConnection(
       // The focus request is also the liveness probe: no reply in 10 s closes
       // the transport, and the reconnect re-reports it via sendLivenessProbeAsync.
       request("probe", (agent, options) =>
-        agent.request(AOS_METHODS.session.focus, report, options)
+        agent.request(HGW_METHODS.session.focus, report, options)
       ).catch((err: unknown) => {
         logger.debug({ err }, "acp.focus.failed")
       })
@@ -1499,11 +1499,11 @@ export function createAcpConnection(
 
     async updateAgent(update) {
       const response = await request("short", (agent, options) =>
-        agent.request(AOS_METHODS.agents.update, update, options)
+        agent.request(HGW_METHODS.agents.update, update, options)
       ).catch((error: unknown) => {
         throw agentUpdateError(error)
       })
-      return AosAgentUpdateResponseSchema.parse(response)
+      return HgwAgentUpdateResponseSchema.parse(response)
     },
 
     subscribeNotification: (method, listener) =>

@@ -10,14 +10,14 @@ import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
-  AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AOS_META_KEY,
-  AOS_REPLAY_BEFORE,
-  AOS_STOP_REASONS,
-  AosReplayBeforeSchema,
-  type AosHistoryCursor,
+  HGW_AUTH_METHOD_INVITE,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HGW_REPLAY_BEFORE,
+  HGW_STOP_REASONS,
+  HgwReplayBeforeSchema,
+  type HgwHistoryCursor,
 } from "../protocol/acp"
 
 import { AgentUpdateError } from "./workspace"
@@ -76,12 +76,12 @@ const RESUME_REPLIED = "session/resume:replied"
 function createProxyAgent(
   options: {
     refuseLoginAfter?: number
-    /** `_meta.aos.history` on every resume that replays from the start. */
-    history?: AosHistoryCursor
-    /** What a `_aos/before` page read streams, and the cursor it replies with. */
+    /** `_meta.hgw.history` on every resume that replays from the start. */
+    history?: HgwHistoryCursor
+    /** What a `_hgw/before` page read streams, and the cursor it replies with. */
     page?: {
       updates: readonly (readonly [SessionUpdate, Record<string, unknown>])[]
-      history?: AosHistoryCursor
+      history?: HgwHistoryCursor
     }
     /** Holds each plain resume open briefly, as a real rejoin takes time. */
     slowResume?: boolean
@@ -95,14 +95,14 @@ function createProxyAgent(
   const record = (method: string, params: unknown) => {
     calls.push({ method, params })
   }
-  const app = agent({ name: "fake-aos-proxy" })
+  const app = agent({ name: "fake-harness-gw" })
     .onRequest(methods.agent.initialize, ({ params }) => {
       record("initialize", params)
       return {
         protocolVersion: 2,
-        info: { name: "aos-proxy", version: "9.9.9" },
+        info: { name: "harness-gw", version: "9.9.9" },
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             version: 1,
             role: "operator",
             extensions: {
@@ -142,7 +142,7 @@ function createProxyAgent(
             sessionId: SESSION_ID,
             cwd: FOLDER,
             updatedAt: UPDATED_AT,
-            _meta: { [AOS_META_KEY]: sessionInfoMeta() },
+            _meta: { [HGW_META_KEY]: sessionInfoMeta() },
           },
         ],
         nextCursor: "cursor-2",
@@ -151,21 +151,21 @@ function createProxyAgent(
     .onRequest(methods.agent.session.resume, async ({ params }) => {
       record(methods.agent.session.resume, params)
       const replayFrom = params.replayFrom
-      if (replayFrom?.type === AOS_REPLAY_BEFORE) {
-        const { cursor } = AosReplayBeforeSchema.parse(replayFrom)
+      if (replayFrom?.type === HGW_REPLAY_BEFORE) {
+        const { cursor } = HgwReplayBeforeSchema.parse(replayFrom)
         for (const [update, meta] of options.page?.updates ?? [])
           await peer?.notify(methods.client.session.update, {
             sessionId: params.sessionId,
             update: {
               ...update,
               _meta: {
-                [AOS_META_KEY]: { ...meta, historyPage: { cursor } },
+                [HGW_META_KEY]: { ...meta, historyPage: { cursor } },
               },
             },
           })
         const history = options.page?.history
         return {
-          _meta: { [AOS_META_KEY]: history === undefined ? {} : { history } },
+          _meta: { [HGW_META_KEY]: history === undefined ? {} : { history } },
         }
       }
       if (options.slowResume)
@@ -174,7 +174,7 @@ function createProxyAgent(
       const replayed = replayFrom?.type === "start"
       return {
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             ...(replayed && options.history
               ? { history: options.history }
               : {}),
@@ -201,30 +201,30 @@ function createProxyAgent(
     .onNotification(methods.agent.session.cancel, ({ params }) => {
       record(methods.agent.session.cancel, params)
     })
-    .onRequest(AOS_METHODS.session.update, z.unknown(), ({ params }) => {
-      record(AOS_METHODS.session.update, params)
+    .onRequest(HGW_METHODS.session.update, z.unknown(), ({ params }) => {
+      record(HGW_METHODS.session.update, params)
       return {}
     })
-    .onRequest(AOS_METHODS.session.steer, z.unknown(), ({ params }) => {
-      record(AOS_METHODS.session.steer, params)
+    .onRequest(HGW_METHODS.session.steer, z.unknown(), ({ params }) => {
+      record(HGW_METHODS.session.steer, params)
       return { status: "queued" }
     })
     .onRequest(
-      AOS_METHODS.agents.list,
+      HGW_METHODS.agents.list,
       z.unknown().optional(),
       ({ params }) => {
-        record(AOS_METHODS.agents.list, params)
+        record(HGW_METHODS.agents.list, params)
         return { revision: "revision-1", agents: [catalogEntry()] }
       }
     )
-    .onRequest(AOS_METHODS.agents.update, z.unknown(), ({ params }) => {
-      record(AOS_METHODS.agents.update, params)
+    .onRequest(HGW_METHODS.agents.update, z.unknown(), ({ params }) => {
+      record(HGW_METHODS.agents.update, params)
       if (options.refuseAgentUpdate !== undefined)
         throw new RequestError(options.refuseAgentUpdate, "refused")
       return { revision: "revision-2", agent: catalogEntry() }
     })
-    .onRequest(AOS_METHODS.session.focus, z.unknown(), ({ params }) => {
-      record(AOS_METHODS.session.focus, params)
+    .onRequest(HGW_METHODS.session.focus, z.unknown(), ({ params }) => {
+      record(HGW_METHODS.session.focus, params)
       return {}
     })
     .onConnect((connection) => {
@@ -243,7 +243,7 @@ function createProxyAgent(
         sessionId: SESSION_ID,
         update: {
           ...update,
-          ...(meta ? { _meta: { [AOS_META_KEY]: meta } } : {}),
+          ...(meta ? { _meta: { [HGW_META_KEY]: meta } } : {}),
         },
       })
     },
@@ -259,7 +259,7 @@ function createProxyAgent(
           title: "Run the tool?",
           options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
           _meta: {
-            [AOS_META_KEY]: { requestId: "interrupt-1", message: "read file" },
+            [HGW_META_KEY]: { requestId: "interrupt-1", message: "read file" },
           },
         },
         withdrawal ? { cancellationSignal: withdrawal } : undefined
@@ -274,7 +274,7 @@ function createProxyAgent(
           mode: "form",
           message: "Which one?",
           requestedSchema: { type: "object", properties: {} },
-          _meta: { [AOS_META_KEY]: { requestId: "interrupt-2" } },
+          _meta: { [HGW_META_KEY]: { requestId: "interrupt-2" } },
         },
         withdrawal ? { cancellationSignal: withdrawal } : undefined
       )
@@ -377,8 +377,8 @@ describe("ACP connection", () => {
     await connection.login("invitation-token")
 
     expect(proxy.paramsOf(methods.agent.auth.login)).toEqual({
-      methodId: AOS_AUTH_METHOD_INVITE,
-      _meta: { [AOS_META_KEY]: { token: "invitation-token" } },
+      methodId: HGW_AUTH_METHOD_INVITE,
+      _meta: { [HGW_META_KEY]: { token: "invitation-token" } },
     })
     expect(logs.records()).toContainEqual(
       expect.objectContaining({
@@ -404,7 +404,7 @@ describe("ACP connection", () => {
     expect(created).toEqual({ sessionId: SESSION_ID })
     expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
       cwd: "",
-      _meta: { [AOS_META_KEY]: { agentId: AGENT_ID, title: "Weekly report" } },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT_ID, title: "Weekly report" } },
     })
 
     const listed = await connection.listSessions(
@@ -415,7 +415,7 @@ describe("ACP connection", () => {
     expect(listed.nextCursor).toBe("cursor-2")
     expect(proxy.paramsOf(methods.agent.session.list)).toMatchObject({
       cursor: "cursor-1",
-      _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
     })
 
     // `session/new` joined the Session, so opening it resumes nothing; the
@@ -426,7 +426,7 @@ describe("ACP connection", () => {
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       sessionId: SESSION_ID,
       replayFrom: { type: "start" },
-      _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
     })
 
     await expect(
@@ -437,7 +437,7 @@ describe("ACP connection", () => {
     expect(proxy.paramsOf(methods.agent.session.prompt)).toMatchObject({
       sessionId: SESSION_ID,
       prompt: [{ type: "text", text: "Hello" }],
-      _meta: { [AOS_META_KEY]: { attachmentStageId: "stage-1" } },
+      _meta: { [HGW_META_KEY]: { attachmentStageId: "stage-1" } },
     })
     connection.close()
   })
@@ -461,7 +461,7 @@ describe("ACP connection", () => {
     expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
     expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
       replayFrom: { type: "start" },
-      _meta: { [AOS_META_KEY]: { agentId: AGENT_ID } },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
     })
     // The whole Session is on its way, so whoever projects it is told to drop
     // what this replay resends.
@@ -490,7 +490,7 @@ describe("ACP connection", () => {
 
     await connection.deleteSession(SESSION_ID)
     await connection.updateSession({ sessionId: SESSION_ID, unread: false })
-    expect(proxy.paramsOf(AOS_METHODS.session.update)).toEqual({
+    expect(proxy.paramsOf(HGW_METHODS.session.update)).toEqual({
       sessionId: SESSION_ID,
       unread: false,
     })
@@ -512,7 +512,7 @@ describe("ACP connection", () => {
       revision: "revision-1",
     })
     expect(updated.revision).toBe("revision-2")
-    expect(proxy.paramsOf(AOS_METHODS.agents.update)).toEqual({
+    expect(proxy.paramsOf(HGW_METHODS.agents.update)).toEqual({
       agentId: AGENT_ID,
       visibility: "hidden",
       avatar: null,
@@ -522,8 +522,8 @@ describe("ACP connection", () => {
   })
 
   it.each([
-    [AOS_JSONRPC_ERRORS.unsupported, "unsupported"],
-    [AOS_JSONRPC_ERRORS.revisionConflict, "conflict"],
+    [HGW_JSONRPC_ERRORS.unsupported, "unsupported"],
+    [HGW_JSONRPC_ERRORS.revisionConflict, "conflict"],
   ] as const)(
     "names an Agent update refused with code %i as %s",
     async (refusal, code) => {
@@ -543,7 +543,7 @@ describe("ACP connection", () => {
 
   it("leaves any other Agent update failure as it came", async () => {
     const proxy = createProxyAgent({
-      refuseAgentUpdate: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+      refuseAgentUpdate: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
     })
     const connection = connectInProcess(proxy)
     await connection.initialized
@@ -554,7 +554,7 @@ describe("ACP connection", () => {
 
     expect(failure).not.toBeInstanceOf(AgentUpdateError)
     expect(failure).toMatchObject({
-      code: AOS_JSONRPC_ERRORS.temporarilyUnavailable,
+      code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
     })
     connection.close()
   })
@@ -571,7 +571,7 @@ describe("ACP connection", () => {
       expect(proxy.paramsOf(methods.agent.session.cancel)).toEqual({
         sessionId: SESSION_ID,
       })
-      expect(proxy.paramsOf(AOS_METHODS.session.focus)).toEqual({
+      expect(proxy.paramsOf(HGW_METHODS.session.focus)).toEqual({
         sessionId: null,
         foreground: true,
         idle: false,
@@ -593,7 +593,7 @@ describe("ACP connection", () => {
       {
         sessionUpdate: "state_update",
         state: "idle",
-        stopReason: AOS_STOP_REASONS.error,
+        stopReason: HGW_STOP_REASONS.error,
       },
       { sequence: 7, turnId: "run-1", code: "AOS_SEND_FAILED" }
     )
@@ -635,24 +635,24 @@ describe("ACP connection", () => {
     await connection.initialized
     const activity: unknown[] = []
     let catalogInvalidations = 0
-    connection.subscribeNotification(AOS_METHODS.notify.activity, (params) =>
+    connection.subscribeNotification(HGW_METHODS.notify.activity, (params) =>
       activity.push(params)
     )
     connection.subscribeNotification(
-      AOS_METHODS.notify.catalogInvalidated,
+      HGW_METHODS.notify.catalogInvalidated,
       () => {
         catalogInvalidations += 1
       }
     )
 
-    await proxy.notify(AOS_METHODS.notify.activity, {
+    await proxy.notify(HGW_METHODS.notify.activity, {
       agentId: AGENT_ID,
       sessionId: SESSION_ID,
       occurredAt: UPDATED_AT,
       type: "turn-started",
       turnId: "lifecycle-1",
     })
-    await proxy.notify(AOS_METHODS.notify.catalogInvalidated, undefined)
+    await proxy.notify(HGW_METHODS.notify.catalogInvalidated, undefined)
 
     await vi.waitFor(() => {
       expect(activity).toHaveLength(1)
@@ -797,7 +797,7 @@ describe("ACP connection", () => {
       expect(proxy.callsOf(methods.agent.session.resume).at(-1)).toEqual({
         sessionId: SESSION_ID,
         cwd: "",
-        replayFrom: { type: AOS_REPLAY_BEFORE, cursor: "cursor-1" },
+        replayFrom: { type: HGW_REPLAY_BEFORE, cursor: "cursor-1" },
       })
       expect(page.history).toEqual({ nextCursor: "cursor-older" })
       expect(page.updates.map(({ update }) => update.sessionUpdate)).toEqual([
@@ -864,7 +864,7 @@ describe("ACP connection", () => {
         method === RESUME_REPLIED
           ? ["rejoined"]
           : method === methods.agent.session.resume &&
-              z.object({ replayFrom: AosReplayBeforeSchema }).safeParse(params)
+              z.object({ replayFrom: HgwReplayBeforeSchema }).safeParse(params)
                 .success
             ? ["page"]
             : []
@@ -890,7 +890,7 @@ describe("ACP connection", () => {
     void connection.listAgents().catch(() => {})
     await clock.advance(1_000)
 
-    expect(proxy.callsOf(AOS_METHODS.agents.list)).toEqual([])
+    expect(proxy.callsOf(HGW_METHODS.agents.list)).toEqual([])
     connection.close()
   })
 
@@ -916,7 +916,7 @@ describe("ACP connection", () => {
     // A drop loses whatever is still in flight, so the first report lands first.
     await clock.advance(0)
     expect(seen).toHaveBeenCalledTimes(1)
-    expect(proxy.callsOf(AOS_METHODS.session.focus)).toHaveLength(1)
+    expect(proxy.callsOf(HGW_METHODS.session.focus)).toHaveLength(1)
 
     pipe.sockets[0]?.drop()
     await clock.advance(250)
@@ -924,22 +924,22 @@ describe("ACP connection", () => {
     expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
     expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
       _meta: {
-        [AOS_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
+        [HGW_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
       },
     })
     // The proxy forgot this connection's presence when the transport dropped, so
     // the report goes out again ahead of the rejoin it would otherwise
     // contradict. The wire order is the browser's to keep; the order the agent
     // runs its handlers in is not.
-    expect(proxy.callsOf(AOS_METHODS.session.focus)).toEqual([
+    expect(proxy.callsOf(HGW_METHODS.session.focus)).toEqual([
       { sessionId: SESSION_ID, foreground: true, idle: true },
       { sessionId: SESSION_ID, foreground: true, idle: true },
     ])
     const sent = pipe.sockets[1]!.sent.map((frame) =>
       "method" in frame ? frame.method : undefined
     )
-    expect(sent.indexOf(AOS_METHODS.session.focus)).toBeGreaterThan(-1)
-    expect(sent.indexOf(AOS_METHODS.session.focus)).toBeLessThan(
+    expect(sent.indexOf(HGW_METHODS.session.focus)).toBeGreaterThan(-1)
+    expect(sent.indexOf(HGW_METHODS.session.focus)).toBeLessThan(
       sent.indexOf(methods.agent.session.resume)
     )
     expect(connection.status).toBe("ready")

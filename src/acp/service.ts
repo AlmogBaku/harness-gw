@@ -12,7 +12,7 @@ import { withinGrace } from "../grace"
 import type { SocketRefusal } from "../server"
 import { HANDSHAKE_BUDGET, HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { createAcpSocket, type PublicErrors } from "./socket"
-import type { AcpConnectionContext, AosAcpAgentFactory } from "./types"
+import type { AcpConnectionContext, HgwAcpAgentFactory } from "./types"
 import { errorNotificationOf } from "./validation"
 import type { Role } from "../core/member"
 
@@ -60,7 +60,7 @@ export type AcpServiceOptions = {
   publicOrigin: string
   role: Role
   /** Builds the per-connection ACP agent app. */
-  agent: AosAcpAgentFactory
+  agent: HgwAcpAgentFactory
   /**
    * Builds the per-connection proxy state the agent app runs against, for the
    * Agent its address names, if any.

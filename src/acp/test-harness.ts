@@ -24,9 +24,9 @@ import {
 } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_METHODS,
-  AOS_META_KEY,
-  AOS_STOP_REASONS,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HGW_STOP_REASONS,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -254,7 +254,7 @@ function permissionOutbound(request: PendingRequest): RequestOutbound {
     request: {
       title: request.message ?? "",
       options: [{ optionId: "once", name: "Allow once", kind: "allow_once" }],
-      _meta: { [AOS_META_KEY]: { requestId: request.requestId } },
+      _meta: { [HGW_META_KEY]: { requestId: request.requestId } },
     },
   }
 }
@@ -281,7 +281,7 @@ export const translators: Translators = {
   translateTurnEvent(state, event, context) {
     const meta = {
       _meta: {
-        [AOS_META_KEY]: { sequence: context.sequence, turnId: context.turnId },
+        [HGW_META_KEY]: { sequence: context.sequence, turnId: context.turnId },
       },
     }
     if (event.kind === TurnEventKind.TurnStarted)
@@ -295,8 +295,8 @@ export const translators: Translators = {
               state: "running",
               // As the real translator does, a dated start keeps its date.
               _meta: {
-                [AOS_META_KEY]: {
-                  ...meta._meta[AOS_META_KEY],
+                [HGW_META_KEY]: {
+                  ...meta._meta[HGW_META_KEY],
                   ...(event.startedAt ? { at: event.startedAt } : {}),
                 },
               },
@@ -328,12 +328,12 @@ export const translators: Translators = {
             update: {
               sessionUpdate: "state_update",
               state: "idle",
-              stopReason: AOS_STOP_REASONS.uncertain,
+              stopReason: HGW_STOP_REASONS.uncertain,
               // As the real translator does, the failure itself travels with
               // the state it settled, which is what the member logs.
               _meta: {
-                [AOS_META_KEY]: {
-                  ...meta._meta[AOS_META_KEY],
+                [HGW_META_KEY]: {
+                  ...meta._meta[HGW_META_KEY],
                   ...(event.code ? { code: event.code } : {}),
                   message: event.message,
                 },
@@ -555,7 +555,7 @@ export function connectClient(
         )
       }
     )
-  for (const method of Object.values(AOS_METHODS.notify))
+  for (const method of Object.values(HGW_METHODS.notify))
     clientApp.onNotification(
       method,
       (params) => params,
@@ -946,7 +946,7 @@ export async function harness(options: HarnessOptions = {}) {
             // The harness answers questions, so it declares it can.
             elicitation: { form: {} },
             _meta: {
-              [AOS_META_KEY]: { historyPages: options.pagesHistory ?? true },
+              [HGW_META_KEY]: { historyPages: options.pagesHistory ?? true },
             },
           },
         }
@@ -963,7 +963,7 @@ export async function harness(options: HarnessOptions = {}) {
           connection.agent.request(methods.agent.session.new, {
             cwd: "/",
             _meta: {
-              [AOS_META_KEY]: { agentId: AGENT, ...meta },
+              [HGW_META_KEY]: { agentId: AGENT, ...meta },
             },
           }),
       }
@@ -1104,7 +1104,7 @@ export async function prompt(
     sessionId,
     prompt:
       typeof content === "string" ? [{ type: "text", text: content }] : content,
-    _meta: { [AOS_META_KEY]: meta },
+    _meta: { [HGW_META_KEY]: meta },
   })
   return accepted.messageId
 }

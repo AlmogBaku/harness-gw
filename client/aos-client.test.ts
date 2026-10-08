@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { AosClientError, AosRemoteClient } from "./aos-client"
+import { HgwClientError, HgwRemoteClient } from "./aos-client"
 
 const AGENT_ID = "researcher"
 const SESSION_ID = "opaque-session-1"
@@ -76,7 +76,7 @@ function byteFetcher() {
 describe("normalized AOS REST byte client", () => {
   it("reads the deployment descriptor from the same-origin runtime route", async () => {
     const fetcher = byteFetcher()
-    const client = new AosRemoteClient({ fetcher })
+    const client = new HgwRemoteClient({ fetcher })
 
     await expect(client.runtimeInfo()).resolves.toMatchObject({
       status: "ready",
@@ -91,7 +91,7 @@ describe("normalized AOS REST byte client", () => {
   })
 
   it("uses a normalized error description instead of proxy response details", async () => {
-    const client = new AosRemoteClient({
+    const client = new HgwRemoteClient({
       fetcher: vi.fn(async () =>
         Response.json(
           {
@@ -107,20 +107,20 @@ describe("normalized AOS REST byte client", () => {
     })
 
     await expect(client.runtimeInfo()).rejects.toMatchObject({
-      name: "AosClientError",
+      name: "HgwClientError",
       kind: "provider-unavailable",
       code: "temporarily_unavailable",
       message: "The service is temporarily unavailable. Please try again.",
-    } satisfies Partial<AosClientError>)
+    } satisfies Partial<HgwClientError>)
   })
 
   it("reports an unreachable proxy separately from a proxy failure", async () => {
-    const offline = new AosRemoteClient({
+    const offline = new HgwRemoteClient({
       fetcher: vi.fn(async () => {
         throw new Error("network down")
       }),
     })
-    const invalid = new AosRemoteClient({
+    const invalid = new HgwRemoteClient({
       fetcher: vi.fn(async () => Response.json({ status: "ready" })),
     })
 
@@ -134,7 +134,7 @@ describe("normalized AOS REST byte client", () => {
 
   it("routes Session bytes through the Agent that owns the Session", async () => {
     const fetcher = byteFetcher()
-    const client = new AosRemoteClient({ fetcher })
+    const client = new HgwRemoteClient({ fetcher })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
 
     await expect(
@@ -177,7 +177,7 @@ describe("normalized AOS REST byte client", () => {
 
   it("refuses Session bytes until ownership is known and never reassigns it", async () => {
     const fetcher = byteFetcher()
-    const client = new AosRemoteClient({ fetcher })
+    const client = new HgwRemoteClient({ fetcher })
 
     await expect(
       client.readArtifact(SESSION_ID, "artifact-1")
@@ -193,7 +193,7 @@ describe("normalized AOS REST byte client", () => {
 
   it("uses an Agent directly for draft voice without requiring Session ownership", async () => {
     const fetcher = byteFetcher()
-    const client = new AosRemoteClient({ fetcher })
+    const client = new HgwRemoteClient({ fetcher })
 
     await expect(
       client.transcribeForAgent(
@@ -213,7 +213,7 @@ describe("normalized AOS REST byte client", () => {
 
   it("serves an invited guest from its own base path and bearer invitation", async () => {
     const fetcher = byteFetcher()
-    const client = new AosRemoteClient({
+    const client = new HgwRemoteClient({
       fetcher,
       basePath: "/api/guest/v1",
       authorization: "Bearer invitation-token",
@@ -233,7 +233,7 @@ describe("normalized AOS REST byte client", () => {
   })
 
   it("rejects byte requests and responses it cannot trust", async () => {
-    const client = new AosRemoteClient({
+    const client = new HgwRemoteClient({
       fetcher: vi.fn(async () => new Response(Uint8Array.from([1]))),
     })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
@@ -251,7 +251,7 @@ describe("normalized AOS REST byte client", () => {
   })
 
   it("separates a pruned artifact from a proxy failure and a provider outage", async () => {
-    const pruned = new AosRemoteClient({
+    const pruned = new HgwRemoteClient({
       fetcher: vi.fn(async () =>
         Response.json(
           { error: { code: "not_found", description: "Artifact not found" } },
@@ -260,7 +260,7 @@ describe("normalized AOS REST byte client", () => {
       ),
     })
     pruned.adoptSessionOwnership(SESSION_ID, AGENT_ID)
-    const outage = new AosRemoteClient({
+    const outage = new HgwRemoteClient({
       fetcher: vi.fn(async () =>
         Response.json(
           { error: { code: "temporarily_unavailable", description: "Later" } },
@@ -273,10 +273,10 @@ describe("normalized AOS REST byte client", () => {
     await expect(
       pruned.readArtifact(SESSION_ID, "artifact-1")
     ).rejects.toMatchObject({
-      name: "AosClientError",
+      name: "HgwClientError",
       kind: "artifact-missing",
       message: "Artifact not found",
-    } satisfies Partial<AosClientError>)
+    } satisfies Partial<HgwClientError>)
     // Only the artifact read reads a 404 as bytes the provider no longer holds.
     await expect(pruned.speak(SESSION_ID, "Hello")).rejects.toMatchObject({
       kind: "proxy-failure",
@@ -299,12 +299,12 @@ describe("this device's push subscription", () => {
   }
 
   it("reads what the deployment offers and refuses a descriptor it cannot trust", async () => {
-    const available = new AosRemoteClient({
+    const available = new HgwRemoteClient({
       fetcher: vi.fn(async () =>
         Response.json({ status: "available", publicKey: "k".repeat(87) })
       ),
     })
-    const malformed = new AosRemoteClient({
+    const malformed = new HgwRemoteClient({
       fetcher: vi.fn(async () =>
         Response.json({ status: "available", publicKey: "too-short" })
       ),
@@ -323,7 +323,7 @@ describe("this device's push subscription", () => {
     const fetcher = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
     >(async () => new Response(null, { status: 204 }))
-    const client = new AosRemoteClient({ fetcher })
+    const client = new HgwRemoteClient({ fetcher })
 
     await expect(
       client.putPushSubscription(registration)
@@ -349,7 +349,7 @@ describe("this device's push subscription", () => {
   })
 
   it("refuses an endpoint it cannot send and reports proxy failures", async () => {
-    const client = new AosRemoteClient({
+    const client = new HgwRemoteClient({
       fetcher: vi.fn(async () => new Response(null, { status: 500 })),
     })
 
@@ -386,7 +386,7 @@ describe("MCP App routes", () => {
 
   it("opens a view, calls its tools, and reads its resources by tool call", async () => {
     const fetcher = appFetcher()
-    const client = new AosRemoteClient({ fetcher })
+    const client = new HgwRemoteClient({ fetcher })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
 
     await expect(
@@ -427,7 +427,7 @@ describe("MCP App routes", () => {
 
   it("serves an invited guest's App from its own base path and invitation", async () => {
     const fetcher = appFetcher()
-    const client = new AosRemoteClient({
+    const client = new HgwRemoteClient({
       fetcher,
       basePath: "/api/guest/v1",
       authorization: "Bearer invitation-token",
@@ -446,7 +446,7 @@ describe("MCP App routes", () => {
 
   it("refuses an empty tool call id before asking the proxy", async () => {
     const fetcher = appFetcher()
-    const client = new AosRemoteClient({ fetcher })
+    const client = new HgwRemoteClient({ fetcher })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
 
     await expect(
@@ -472,7 +472,7 @@ describe("MCP App routes", () => {
             },
           })
     )
-    const client = new AosRemoteClient({
+    const client = new HgwRemoteClient({
       fetcher,
       origin: "https://aos.example",
     })

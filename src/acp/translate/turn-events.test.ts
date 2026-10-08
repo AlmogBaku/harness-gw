@@ -2,14 +2,14 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
-  AOS_META_KEY,
-  AOS_PLAN_ID,
-  AOS_STOP_REASONS,
-  AosChunkMetaSchema,
-  AosPlanMetaSchema,
-  AosStateMetaSchema,
-  AosToolCallMetaSchema,
-  AosTurnMetaSchema,
+  HGW_META_KEY,
+  HGW_PLAN_ID,
+  HGW_STOP_REASONS,
+  HgwChunkMetaSchema,
+  HgwPlanMetaSchema,
+  HgwStateMetaSchema,
+  HgwToolCallMetaSchema,
+  HgwTurnMetaSchema,
 } from "../../../protocol/acp"
 import {
   CompactionStatus,
@@ -66,7 +66,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function aosMeta(update: SessionUpdate): unknown {
   const meta: unknown = update._meta
-  return isRecord(meta) ? meta[AOS_META_KEY] : undefined
+  return isRecord(meta) ? meta[HGW_META_KEY] : undefined
 }
 
 const started: TurnEvent = { kind: TurnEventKind.TurnStarted }
@@ -95,7 +95,7 @@ describe("translateTurnEvent lifecycle", () => {
       sessionUpdate: "state_update",
       state: "running",
     })
-    expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
+    expect(HgwStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
       turnId: "run-1",
       at: AT,
@@ -108,7 +108,7 @@ describe("translateTurnEvent lifecycle", () => {
       translate([{ kind: TurnEventKind.TurnStarted, startedAt }]).outbound
     )
 
-    expect(AosStateMetaSchema.parse(aosMeta(update!))).toMatchObject({
+    expect(HgwStateMetaSchema.parse(aosMeta(update!))).toMatchObject({
       at: startedAt,
     })
   })
@@ -124,7 +124,7 @@ describe("translateTurnEvent lifecycle", () => {
         sessionUpdate: "state_update",
         state: "idle",
         stopReason,
-        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1", at: AT } },
+        _meta: { [HGW_META_KEY]: { sequence: 7, turnId: "run-1", at: AT } },
       },
     ])
     expect(state).toEqual(initialTranslateState)
@@ -166,8 +166,8 @@ describe("translateTurnEvent lifecycle", () => {
   })
 
   it.each([
-    ["AOS_TOOL_FAILED", AOS_STOP_REASONS.error],
-    ["AOS_CONNECTION_INTERRUPTED", AOS_STOP_REASONS.uncertain],
+    ["AOS_TOOL_FAILED", HGW_STOP_REASONS.error],
+    ["AOS_CONNECTION_INTERRUPTED", HGW_STOP_REASONS.uncertain],
   ])("maps the %s run error to %s", (code, stopReason) => {
     const { state, outbound } = translate([
       { kind: TurnEventKind.TurnFailed, message: "provider refused", code },
@@ -175,7 +175,7 @@ describe("translateTurnEvent lifecycle", () => {
     const [update] = updatesOf(outbound)
 
     expect(update).toMatchObject({ state: "idle", stopReason })
-    expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
+    expect(HgwStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
       turnId: "run-1",
       at: AT,
@@ -206,7 +206,7 @@ describe("translateTurnEvent lifecycle", () => {
       state: "requires_action",
     })
     expect(update).not.toHaveProperty("stopReason")
-    expect(AosStateMetaSchema.parse(aosMeta(update!))).toEqual({
+    expect(HgwStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
       turnId: "run-1",
       at: AT,
@@ -234,13 +234,13 @@ describe("translateTurnEvent messages", () => {
         sessionUpdate: "agent_thought_chunk",
         messageId: "m1",
         content: { type: "text", text: "think" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
+        _meta: { [HGW_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
       {
         sessionUpdate: "agent_message_chunk",
         messageId: "m1",
         content: { type: "text", text: "he" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
+        _meta: { [HGW_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
       {
         sessionUpdate: "tool_call_update",
@@ -248,7 +248,7 @@ describe("translateTurnEvent messages", () => {
         title: "read_file",
         status: "in_progress",
         _meta: {
-          [AOS_META_KEY]: { sequence: 7, turnId: "run-1", messageId: "m1" },
+          [HGW_META_KEY]: { sequence: 7, turnId: "run-1", messageId: "m1" },
         },
       },
     ])
@@ -265,7 +265,7 @@ describe("translateTurnEvent messages", () => {
       sessionUpdate: "agent_thought_chunk",
       messageId: "m1",
       content: { type: "text", text: "think" },
-      _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
+      _meta: { [HGW_META_KEY]: { sequence: 7, turnId: "run-1" } },
     })
   })
 
@@ -280,13 +280,13 @@ describe("translateTurnEvent messages", () => {
         sessionUpdate: "agent_message_chunk",
         messageId: "m1",
         content: { type: "text", text: "he" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
+        _meta: { [HGW_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
       {
         sessionUpdate: "agent_message_chunk",
         messageId: "m2",
         content: { type: "text", text: "more" },
-        _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
+        _meta: { [HGW_META_KEY]: { sequence: 7, turnId: "run-1" } },
       },
     ])
     expect(state.messageId).toBe("m2")
@@ -320,7 +320,7 @@ describe("translateTurnEvent tool calls", () => {
       title: "read_file",
       status: "in_progress",
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
       sequence: 7,
       turnId: "run-1",
       messageId: "m1",
@@ -330,7 +330,7 @@ describe("translateTurnEvent tool calls", () => {
       toolCallId: "c1",
       rawInput: { p: "a" },
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(updates[3]!))).toMatchObject({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[3]!))).toMatchObject({
       argsText: '{"p":"a"}',
     })
     expect(state.toolArgsText).toEqual({})
@@ -356,7 +356,7 @@ describe("translateTurnEvent tool calls", () => {
 
       const update = updatesOf(translate(events).outbound).at(-1)
 
-      expect(AosToolCallMetaSchema.parse(aosMeta(update!)).messageId).toBe(
+      expect(HgwToolCallMetaSchema.parse(aosMeta(update!)).messageId).toBe(
         expected
       )
     }
@@ -381,7 +381,7 @@ describe("translateTurnEvent tool calls", () => {
       },
     ])
 
-    // Chunks name their message on the update; tool calls in `_meta.aos`.
+    // Chunks name their message on the update; tool calls in `_meta.hgw`.
     const owners = updatesOf(outbound).map((update) => {
       const meta = aosMeta(update)
       return "messageId" in update
@@ -457,7 +457,7 @@ describe("translateTurnEvent plans", () => {
       sessionUpdate: "plan_update",
       plan: {
         type: "items",
-        planId: AOS_PLAN_ID,
+        planId: HGW_PLAN_ID,
         entries: [{ content: "Ship it", priority: "medium", status }],
       },
     })
@@ -466,7 +466,7 @@ describe("translateTurnEvent plans", () => {
   it("keeps the Session Todos losslessly in plan metadata", () => {
     const [update] = updatesOf(translate([planUpdated([todo])]).outbound)
 
-    expect(AosPlanMetaSchema.parse(aosMeta(update!))).toEqual({
+    expect(HgwPlanMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
       turnId: "run-1",
       todos: [todo],
@@ -511,7 +511,7 @@ describe("translateTurnEvent extensions", () => {
         name: "chart.png",
         mimeType: "image/png",
       },
-      _meta: { [AOS_META_KEY]: { sequence: 7, turnId: "run-1" } },
+      _meta: { [HGW_META_KEY]: { sequence: 7, turnId: "run-1" } },
     })
   })
 
@@ -732,7 +732,7 @@ describe("provider facts", () => {
         cost: { amount: 0.25, currency: "USD" },
       },
     ])
-    expect(AosStateMetaSchema.parse(aosMeta(update)).cost).toEqual({
+    expect(HgwStateMetaSchema.parse(aosMeta(update)).cost).toEqual({
       amount: 0.25,
       currency: "USD",
     })
@@ -748,7 +748,7 @@ describe("provider facts", () => {
         model: "claude",
       },
     ])
-    expect(AosStateMetaSchema.parse(aosMeta(update))).toMatchObject({
+    expect(HgwStateMetaSchema.parse(aosMeta(update))).toMatchObject({
       provider: "anthropic",
       model: "claude",
     })
@@ -772,7 +772,7 @@ describe("provider facts", () => {
       status: "in_progress",
       locations: [{ path: "/repo/README.md", line: 3 }],
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(update))).toEqual({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update))).toEqual({
       ...turn,
       messageId: "m1",
       startedAt: "2026-09-22T10:00:01.000Z",
@@ -795,17 +795,17 @@ describe("provider facts", () => {
         toolStarted({ toolCallId: "c2", subagentId: "sub-1" }),
       ]).outbound
     )
-    expect(AosToolCallMetaSchema.parse(aosMeta(updates[0]!)).subagent).toEqual({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[0]!)).subagent).toEqual({
       id: "sub-1",
       goal: "audit",
       depth: 1,
     })
-    expect(AosChunkMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
+    expect(HgwChunkMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
       ...turn,
       subagentId: "sub-1",
       parentToolCallId: "c1",
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(updates[2]!))).toMatchObject({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[2]!))).toMatchObject({
       subagentId: "sub-1",
       parentToolCallId: "c1",
     })
@@ -820,7 +820,7 @@ describe("provider facts", () => {
         subagentId: "sub-9",
       },
     ])
-    expect(AosChunkMetaSchema.parse(aosMeta(update))).toEqual({
+    expect(HgwChunkMetaSchema.parse(aosMeta(update))).toEqual({
       ...turn,
       subagentId: "sub-9",
     })
@@ -840,7 +840,7 @@ describe("provider facts", () => {
       toolCallId: "c1",
       content: { type: "content", content: { type: "text", text: "line 1" } },
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(update))).toEqual({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update))).toEqual({
       ...turn,
       messageId: "m1",
     })
@@ -886,7 +886,7 @@ describe("provider facts", () => {
       ],
     })
     expect(update).not.toHaveProperty("content.2.patch")
-    expect(AosToolCallMetaSchema.parse(aosMeta(update))).toMatchObject({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update))).toMatchObject({
       completedAt: "2026-09-22T10:00:02.000Z",
       durationMs: 1000,
     })
@@ -925,7 +925,7 @@ describe("provider facts", () => {
       { sessionUpdate: "terminal_update", exitStatus: { exitCode: 0 } },
     ])
     expect(updates).toHaveLength(6)
-    expect(AosTurnMetaSchema.parse(aosMeta(updates[1]!))).toEqual(turn)
+    expect(HgwTurnMetaSchema.parse(aosMeta(updates[1]!))).toEqual(turn)
   })
 
   it("restates a call's terminals when the call settles", () => {
@@ -958,7 +958,7 @@ describe("provider facts", () => {
       sessionUpdate: "compaction_update",
       compactionId: "k1",
       status: "in_progress",
-      _meta: { [AOS_META_KEY]: turn },
+      _meta: { [HGW_META_KEY]: turn },
     })
     expect(compaction(CompactionStatus.Completed)).toMatchObject({
       status: "completed",
@@ -974,7 +974,7 @@ describe("provider facts", () => {
       sessionUpdate: "compaction_update",
       compactionId: "k1",
       status: "cancelled",
-      _meta: { [AOS_META_KEY]: turn },
+      _meta: { [HGW_META_KEY]: turn },
     })
   })
 
@@ -1002,7 +1002,7 @@ describe("provider facts", () => {
       sessionUpdate: "tool_call_update",
       toolCallId: "c1",
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(update)).subagent).toEqual({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update)).subagent).toEqual({
       id: "sub-1",
       status: "completed",
       summary: "done",

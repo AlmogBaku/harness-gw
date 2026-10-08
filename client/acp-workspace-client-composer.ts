@@ -9,10 +9,10 @@ import type { z } from "zod"
 
 import type { SlashCommand } from "../protocol"
 import {
-  AosAvailableCommandsMetaSchema,
-  AosStateMetaSchema,
-  AosUsageMetaSchema,
-  type AosCost,
+  HgwAvailableCommandsMetaSchema,
+  HgwStateMetaSchema,
+  HgwUsageMetaSchema,
+  type HgwCost,
 } from "../protocol/acp"
 
 import type {
@@ -22,9 +22,9 @@ import type {
 } from "./workspace"
 
 import type {
-  AosContext,
-  AosModelChoices,
-  AosWorkspaceCapabilities,
+  HgwContext,
+  HgwModelChoices,
+  HgwWorkspaceCapabilities,
 } from "./aos-client"
 import type { AcpConnection } from "./types"
 
@@ -41,7 +41,7 @@ const MODEL_CATEGORY = "model"
 const EFFORT_CATEGORY = "thought_level"
 
 type AcpCapabilities = z.infer<
-  typeof AosAvailableCommandsMetaSchema
+  typeof HgwAvailableCommandsMetaSchema
 >["capabilities"]
 
 type UsageUpdate = Extract<SessionUpdate, { sessionUpdate: "usage_update" }>
@@ -55,7 +55,7 @@ function selectOf(option: SessionConfigOption, category: string) {
 type SelectConfigOption = NonNullable<ReturnType<typeof selectOf>>
 
 export type AcpModelProjection = {
-  models?: AosModelChoices
+  models?: HgwModelChoices
   modelConfigId?: string
   effortConfigId?: string
 }
@@ -63,18 +63,18 @@ export type AcpModelProjection = {
 /** What the Session's settled turns spent, read from their `idle` updates. */
 export type AcpTurnUsage = {
   readonly lastTurn?: ComposerTurnUsage
-  readonly cost?: AosCost
+  readonly cost?: HgwCost
 }
 
 type SessionEntry = {
   /** What the Session reports it supports, with its commands folded in. */
-  capabilities?: AosWorkspaceCapabilities
+  capabilities?: HgwWorkspaceCapabilities
   reported?: AcpCapabilities
   commands?: SlashCommand[]
   projection: AcpModelProjection
   /** The model the projection names, the same reference until it changes. */
   current?: ComposerModelCurrent
-  context?: AosContext
+  context?: HgwContext
   turns?: AcpTurnUsage
   /** Rises with every config option write, so only the newest one projects. */
   writes: number
@@ -100,7 +100,7 @@ function entriesOf(
 
 function modelOptionsOf(
   option: SelectConfigOption
-): AosModelChoices["options"] {
+): HgwModelChoices["options"] {
   return entriesOf(option).flatMap((entry) =>
     "groupId" in entry
       ? entry.options.map((item) => ({
@@ -147,16 +147,16 @@ export function projectModels(
 
 /**
  * Translates one `usage_update` into the composer's context projection. ACP's
- * own fields carry the two counts; `_meta.aos` carries what the provider
+ * own fields carry the two counts; `_meta.hgw` carries what the provider
  * attributed them to and how it arrived at them, and a meta this build cannot
  * read degrades to the counts alone rather than to nothing.
  */
 function projectContext(
   update: UsageUpdate,
   meta: unknown
-): AosContext | undefined {
+): HgwContext | undefined {
   if (update.size <= 0) return undefined
-  const aos = AosUsageMetaSchema.safeParse(meta)
+  const aos = HgwUsageMetaSchema.safeParse(meta)
   return {
     usedTokens: update.used,
     maxTokens: update.size,
@@ -228,7 +228,7 @@ function turnUsageOf({
 export function foldTurnUsage(
   previous: AcpTurnUsage | undefined,
   usage: Usage | undefined,
-  cost: AosCost | undefined
+  cost: HgwCost | undefined
 ): AcpTurnUsage | undefined {
   if (!usage && !cost) return previous
   const total =
@@ -246,7 +246,7 @@ export function foldTurnUsage(
 function capabilitiesOf(
   capabilities: AcpCapabilities,
   commands: SlashCommand[] | undefined
-): AosWorkspaceCapabilities {
+): HgwWorkspaceCapabilities {
   if (!commands) return capabilities
   return {
     ...capabilities,
@@ -312,7 +312,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
       known.commands = update.availableCommands.map(
         ({ name, description }) => ({ name, description })
       )
-      const aos = AosAvailableCommandsMetaSchema.safeParse(meta)
+      const aos = HgwAvailableCommandsMetaSchema.safeParse(meta)
       if (aos.success) known.reported = aos.data.capabilities
       if (known.reported)
         known.capabilities = capabilitiesOf(known.reported, known.commands)
@@ -323,7 +323,7 @@ export function createAcpComposerStore(connection: AcpConnection) {
       known.context = context
       notify(listeners, sessionId)
     } else if (SessionUpdate.isStateUpdate(update) && update.state === "idle") {
-      const aos = AosStateMetaSchema.safeParse(meta)
+      const aos = HgwStateMetaSchema.safeParse(meta)
       const turns = foldTurnUsage(
         known.turns,
         isUsage(update.usage) ? update.usage : undefined,

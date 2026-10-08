@@ -6,7 +6,7 @@ content is collected in [§19 Target](#19-target-not-implemented).
 
 **Related references** (this doc links, not restates):
 
-- Full `_aos/*` wire table → [`docs/runtimes/acp.md`](../runtimes/acp.md)
+- Full `_hgw/*` wire table → [`docs/runtimes/acp.md`](../runtimes/acp.md)
 - Adapter obligations and five lifetimes → [`docs/development/runtime-adapter-authoring.md`](../development/runtime-adapter-authoring.md)
 - Operator-facing summary → [`docs/architecture.md`](../architecture.md)
 - Hermes lifecycle → [`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md)
@@ -206,7 +206,7 @@ found before its params are decoded (`acp/agent.ts:188-194`).
 usage, no model, no activity, no read state, and no catalog.
 
 **Errors** reach a guest as public codes only: the guest socket maps every
-error reply and `_aos/error` notification through `PUBLIC_ERRORS`
+error reply and `_hgw/error` notification through `PUBLIC_ERRORS`
 (`acp/socket.ts:249`; `acp/validation.ts:125-137`).
 
 ### 4.3 Shared runtime instance
@@ -224,7 +224,7 @@ The browser opens one WebSocket per surface. The 101 response carries
 `Acp-Connection-Id` (`acp/service.ts:15`), a UUID the proxy mints per
 connection.
 
-**Handshake** (`initialize`): the response `_meta.aos` carries `version`,
+**Handshake** (`initialize`): the response `_meta.hgw` carries `version`,
 `role`, and the `extensions` map (`protocol/acp.ts:100-120`; `acp/agent.ts:318-346`).
 Guests receive the `GUEST_EXTENSIONS` map and an `authMethods` list with the
 invite method.
@@ -255,8 +255,8 @@ The proxy owns a closed turn vocabulary defined in `core/events.ts`
 translates them to browser-facing ACP payloads. Neither end depends on the
 other's wire format.
 
-Every `session/update` on a turn segment carries `_meta.aos.sequence` and
-`_meta.aos.turnId` (`protocol/acp.ts`), so the browser can position
+Every `session/update` on a turn segment carries `_meta.hgw.sequence` and
+`_meta.hgw.turnId` (`protocol/acp.ts`), so the browser can position
 cursor-bearing reconnects.
 
 **AOS extension events** map to vendor wire notifications:
@@ -309,7 +309,7 @@ which carries one or more `PendingRequest` items (`core/events.ts`). The coordin
 retains the execution in `waiting-for-input`.
 
 Delivery: each pending request is sent as a server→client `requestPermission`
-or `elicitation.create` call with a `requestId` in `_meta.aos`
+or `elicitation.create` call with a `requestId` in `_meta.hgw`
 (`protocol/acp.ts:315-341`). The Channel offers each request to every member
 (`core/channel.ts:1230-1241`), a guest's middleware hides permissions, and the
 member encoder asks what remains (`acp/member-encoder.ts:250-315`).
@@ -381,7 +381,7 @@ smaller staging limits (`guest/context.ts:37-40`).
 
 **Status: Implemented**
 
-**Read state** (`acp/read-state.ts`): a `_aos/session/focus` notification from
+**Read state** (`acp/read-state.ts`): a `_hgw/session/focus` notification from
 the browser arms a debounce timer (400 ms, `FOCUS_DEBOUNCE_MS`). When it fires
 the proxy writes a read watermark to the provider. A floor of 5 000 ms
 (`REACK_FLOOR_MS`) prevents redundant writes. The provider's `sessionReadState`
@@ -397,7 +397,7 @@ mark-read write from clearing an optimistic `unread: false`.
 hydrates by reading one catalog page (100 entries, `HYDRATION_PAGE_SIZE`),
 publishing the current `unread` state and any attention-needing execution per
 row; live execution events from the coordinator fill the feed thereafter. Events
-reach the browser as `_aos/activity` notifications.
+reach the browser as `_hgw/activity` notifications.
 
 Guest connections carry no activity feed (`acp/types.ts:85-90`).
 
@@ -409,13 +409,13 @@ Guest connections carry no activity feed (`acp/types.ts:85-90`).
 
 | Notification                        | Trigger                                                                                                                                       |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_aos/catalog_invalidated`          | `subscribeCatalogChanges` fires (Hermes `sessions.changed`, `acp/agent.ts:648-650`; `adapter.ts:1070-1075`); also sent after `session/delete` |
-| `session_info_update` (`_meta.aos`) | `SessionRows` subscriber on a changed row (`acp/agent.ts:641-647`; `core/session-rows.ts:12-17`)                                              |
-| `_aos/activity`                     | Activity feed push (execution events, unread changes)                                                                                         |
+| `_hgw/catalog_invalidated`          | `subscribeCatalogChanges` fires (Hermes `sessions.changed`, `acp/agent.ts:648-650`; `adapter.ts:1070-1075`); also sent after `session/delete` |
+| `session_info_update` (`_meta.hgw`) | `SessionRows` subscriber on a changed row (`acp/agent.ts:641-647`; `core/session-rows.ts:12-17`)                                              |
+| `_hgw/activity`                     | Activity feed push (execution events, unread changes)                                                                                         |
 
 A subscriber that falls behind the fanout bounds is detached (`membership.detached`
 in the log); catch-up happens through a standard `session/resume` with
-`replayFrom: { type: "start" }`, not through `_aos/session_invalidated`.
+`replayFrom: { type: "start" }`, not through `_hgw/session_invalidated`.
 
 ---
 
@@ -425,7 +425,7 @@ in the log); catch-up happens through a standard `session/resume` with
 
 **Browser**: exponential backoff 250 ms → 5 000 ms
 (`src/runtime-adapters/aos/acp/connection.ts:59-60`). The browser rejoins each
-resumed Session via `session/resume` with `_meta.aos.after` (last sequence)
+resumed Session via `session/resume` with `_meta.hgw.after` (last sequence)
 and `turnId` (`protocol/acp.ts:168-174`); a cursor the proxy can no longer
 answer is rebuilt from history in that same resume. Guest re-logins before
 resuming (`connection.ts:374-377`).
@@ -545,8 +545,8 @@ AOS block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
 revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
 `-31015` unsupported. Codes `-32001` through `-32009` are no longer used.
 
-**Vendor stop reasons** on `state_update { state: "idle" }`: `_aos_error`,
-`_aos_uncertain` (`protocol/acp.ts:53-57`).
+**Vendor stop reasons** on `state_update { state: "idle" }`: `_hgw_error`,
+`_hgw_uncertain` (`protocol/acp.ts:53-57`).
 
 All errors pass through `redactForLog`. Native bodies, credentials, paths, and
 stack traces never cross either listener.

@@ -21,7 +21,7 @@ import {
   guestPrincipalId,
 } from "../auth/guest-request"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
-import { AOS_AUTH_METHOD_INVITE, type AosExtensions } from "../../protocol/acp"
+import { HGW_AUTH_METHOD_INVITE, type HgwExtensions } from "../../protocol/acp"
 import { createGuestMiddleware, type GuestGrant } from "./middleware"
 
 /** The capabilities only the guest voice routes use. */
@@ -83,14 +83,14 @@ const GUEST_EXTENSIONS = {
   focus: false,
   guestProjection: true,
   historyPages: true,
-} satisfies AosExtensions
+} satisfies HgwExtensions
 
 /** The longest delay one timer holds; a longer one fires at once. */
 const MAX_TIMER_MS = 2 ** 31 - 1
 
 const INVITE_AUTH_METHOD = {
   type: "agent",
-  methodId: AOS_AUTH_METHOD_INVITE,
+  methodId: HGW_AUTH_METHOD_INVITE,
   name: "Invitation",
 } as const
 

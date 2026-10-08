@@ -1,7 +1,7 @@
 import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
-import { AOS_METHODS } from "../../../protocol/acp"
+import { HGW_METHODS } from "../../../protocol/acp"
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { assertLeakFree } from "../../../test/support/leak-oracle"
 import { PendingRequestKind, TurnEventKind } from "../../core/events"
@@ -21,7 +21,7 @@ type Test = Awaited<ReturnType<typeof harness>>
 
 const gone = () => new ServerSessionNotFoundError()
 
-const notice = (entry: Recorded) => entry.method === AOS_METHODS.notify.error
+const notice = (entry: Recorded) => entry.method === HGW_METHODS.notify.error
 
 /** Every read the Session's readings took. */
 const reads = (test: Test) =>
@@ -79,7 +79,7 @@ const COMMANDS: {
     async fail(test) {
       test.sources[0]?.steer.mockRejectedValueOnce(gone())
       await expect(
-        test.agent.request(AOS_METHODS.session.steer, {
+        test.agent.request(HGW_METHODS.session.steer, {
           sessionId: SESSION,
           requestId: "steer-1",
           text: "Also check the tests",
@@ -131,7 +131,7 @@ const COMMANDS: {
     async fail(test: Test) {
       test.faults.failOnce("updateSession", gone())
       await expect(
-        test.agent.request(AOS_METHODS.session.update, {
+        test.agent.request(HGW_METHODS.session.update, {
           sessionId: SESSION,
           ...patch,
         })
@@ -174,9 +174,9 @@ describe("gone Session commands", () => {
       await clock.advance(60_000)
 
       for (const { recorder } of members)
-        expect(recorder.of(AOS_METHODS.notify.error)).toEqual([
+        expect(recorder.of(HGW_METHODS.notify.error)).toEqual([
           {
-            method: AOS_METHODS.notify.error,
+            method: HGW_METHODS.notify.error,
             params: {
               sessionId: SESSION,
               code: "not_found",

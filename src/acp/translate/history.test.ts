@@ -3,11 +3,11 @@ import { describe, expect, it } from "vitest"
 
 import type { SessionHistoryResponse } from "../../../protocol"
 import {
-  AOS_META_KEY,
-  AOS_STOP_REASONS,
-  AosPlanMetaSchema,
-  AosStateMetaSchema,
-  AosToolCallMetaSchema,
+  HGW_META_KEY,
+  HGW_STOP_REASONS,
+  HgwPlanMetaSchema,
+  HgwStateMetaSchema,
+  HgwToolCallMetaSchema,
 } from "../../../protocol/acp"
 import { persistedCorrections, withoutLiveRows } from "../../core/replay-page"
 import type { AcpOutbound } from "../types"
@@ -48,7 +48,7 @@ function artifactLink(
           ? {}
           : { size: artifact.sizeBytes }),
       },
-      _meta: { [AOS_META_KEY]: { sequence: 0, turnId: "history" } },
+      _meta: { [HGW_META_KEY]: { sequence: 0, turnId: "history" } },
     },
   }
 }
@@ -121,7 +121,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function aosMeta(update: SessionUpdate): unknown {
   const meta: unknown = update._meta
-  return isRecord(meta) ? meta[AOS_META_KEY] : undefined
+  return isRecord(meta) ? meta[HGW_META_KEY] : undefined
 }
 
 /** What the replay sends, naming a `session/update` by the update it carries. */
@@ -224,7 +224,7 @@ describe("translateHistory", () => {
         { type: "content", content: { type: "text", text: '{"ok":true}' } },
       ],
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(update!))).toEqual({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 0,
       turnId: "history",
       messageId: "a1",
@@ -258,7 +258,7 @@ describe("translateHistory", () => {
       (item) => item.sessionUpdate === "tool_call_update"
     )
 
-    expect(AosToolCallMetaSchema.parse(aosMeta(update!))).toMatchObject({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update!))).toMatchObject({
       app: {},
     })
   })
@@ -324,7 +324,7 @@ describe("translateHistory", () => {
         },
       ],
     })
-    expect(AosToolCallMetaSchema.parse(aosMeta(update!))).toMatchObject({
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update!))).toMatchObject({
       startedAt: "2026-09-19T09:00:05.000Z",
       completedAt: "2026-09-19T09:00:06.500Z",
       durationMs: 1500,
@@ -344,7 +344,7 @@ describe("translateHistory", () => {
         ],
       },
     })
-    expect(AosPlanMetaSchema.parse(aosMeta(update!))).toEqual({
+    expect(HgwPlanMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 0,
       todos: [{ id: "t1", label: "Ship it", status: "completed" }],
     })
@@ -376,11 +376,11 @@ describe("translateHistory", () => {
     expect(idle).toMatchObject({
       sessionUpdate: "state_update",
       state: "idle",
-      stopReason: AOS_STOP_REASONS.error,
+      stopReason: HGW_STOP_REASONS.error,
     })
     expect(
-      AosStateMetaSchema.parse(
-        (idle as { _meta: Record<string, unknown> })._meta[AOS_META_KEY]
+      HgwStateMetaSchema.parse(
+        (idle as { _meta: Record<string, unknown> })._meta[HGW_META_KEY]
       ).message
     ).toBe("The model provider rejected this turn.")
   })
@@ -431,12 +431,12 @@ describe("translateHistory", () => {
         sessionUpdate: "agent_message",
         messageId: "a2",
         content: [],
-        _meta: { [AOS_META_KEY]: { opensTurn: true, notice } },
+        _meta: { [HGW_META_KEY]: { opensTurn: true, notice } },
       },
       expect.objectContaining({ sessionUpdate: "agent_message_chunk" }),
     ])
     expect(updatesOf(opened([]))[0]).toMatchObject({
-      _meta: { [AOS_META_KEY]: { opensTurn: true } },
+      _meta: { [HGW_META_KEY]: { opensTurn: true } },
     })
     expect(JSON.stringify(opened([]))).not.toContain("notice")
     // An ordinary message says nothing of turns.

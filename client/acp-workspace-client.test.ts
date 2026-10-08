@@ -12,11 +12,11 @@ import {
   type RuntimeInfo,
 } from "../protocol"
 import {
-  AOS_METHODS,
-  AOS_META_KEY,
-  AOS_PLAN_ID,
-  AOS_STOP_REASONS,
-  type AosAvailableCommandsMetaSchema,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HGW_PLAN_ID,
+  HGW_STOP_REASONS,
+  type HgwAvailableCommandsMetaSchema,
 } from "../protocol/acp"
 
 import { useFakeClock } from "../test/support/fake-clock"
@@ -38,7 +38,7 @@ const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 const UNLISTED_SESSION_ID = "session-2"
 
 type AcpCapabilities = z.infer<
-  typeof AosAvailableCommandsMetaSchema
+  typeof HgwAvailableCommandsMetaSchema
 >["capabilities"]
 
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
@@ -131,7 +131,7 @@ function listEntry(unread = true, title?: string): SessionInfo {
     cwd: "/workspace",
     updatedAt: UPDATED_AT,
     ...(title === undefined ? {} : { title }),
-    _meta: { [AOS_META_KEY]: sessionInfoMeta(unread) },
+    _meta: { [HGW_META_KEY]: sessionInfoMeta(unread) },
   }
 }
 
@@ -361,11 +361,11 @@ function createFakeConnection() {
     setListed: (entry: SessionInfo) => {
       listed = entry
     },
-    /** What the next `_aos/agents/list` reports. */
+    /** What the next `_hgw/agents/list` reports. */
     setAgents: (next: AgentCatalogEntry[]) => {
       agents = next
     },
-    /** What every later `_aos/session/update` write rejects with. */
+    /** What every later `_hgw/session/update` write rejects with. */
     failUpdates: (reason: Error) => {
       updateFailure = reason
     },
@@ -504,8 +504,8 @@ describe("ACP workspace client", () => {
       client.getSessionMetadata([SESSION_ID]),
       client.getSessionMetadata([UNLISTED_SESSION_ID]),
     ])
-    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
     await clock.advance(300)
     answer()
     await reads
@@ -585,7 +585,7 @@ describe("ACP workspace client", () => {
       { sessionId: SESSION_ID, unread: false },
     ])
 
-    emitNotification(AOS_METHODS.notify.activity, {
+    emitNotification(HGW_METHODS.notify.activity, {
       agentId: AGENT_ID,
       sessionId: SESSION_ID,
       occurredAt: UPDATED_AT,
@@ -706,7 +706,7 @@ describe("ACP workspace client", () => {
     emitUpdate({
       sessionUpdate: "state_update",
       state: "idle",
-      stopReason: AOS_STOP_REASONS.uncertain,
+      stopReason: HGW_STOP_REASONS.uncertain,
     })
     expect(client.sessionStatus(SESSION_ID)).toBe("failed")
 
@@ -758,7 +758,7 @@ describe("ACP workspace client", () => {
     emitUpdate(
       {
         sessionUpdate: "plan_update",
-        plan: { type: "items", planId: AOS_PLAN_ID, entries: [] },
+        plan: { type: "items", planId: HGW_PLAN_ID, entries: [] },
       },
       {
         sequence: 3,
@@ -777,7 +777,7 @@ describe("ACP workspace client", () => {
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
 
-    emitNotification(AOS_METHODS.notify.activity, {
+    emitNotification(HGW_METHODS.notify.activity, {
       agentId: AGENT_ID,
       sessionId: SESSION_ID,
       occurredAt: UPDATED_AT,
@@ -785,7 +785,7 @@ describe("ACP workspace client", () => {
       requestId: "request-1",
       attentionKind: "permission",
     })
-    emitNotification(AOS_METHODS.notify.activity, {
+    emitNotification(HGW_METHODS.notify.activity, {
       agentId: AGENT_ID,
       sessionId: SESSION_ID,
       occurredAt: UPDATED_AT,
@@ -1092,7 +1092,7 @@ describe("ACP workspace client", () => {
       catalogInvalidations += 1
     })
 
-    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
 
     expect(catalogInvalidations).toBe(1)
   })
@@ -1112,9 +1112,9 @@ describe("ACP workspace client", () => {
     published.length = 0
 
     setListed(listEntry(true, "Renamed by the provider"))
-    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
-    emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
+    emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
     await clock.advance(300)
 
     expect(calls.filter((call) => call.method === "listSessions")).toHaveLength(
@@ -1240,13 +1240,13 @@ describe("ACP workspace client", () => {
 
       // One read fails and waits out its backoff while a burst debounces.
       failListOnce()
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
       await clock.advance(300)
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
       const readsBefore = reads()
       client.dispose()
 
-      emitNotification(AOS_METHODS.notify.catalogInvalidated, undefined)
+      emitNotification(HGW_METHODS.notify.catalogInvalidated, undefined)
       emitStatus("reconnecting")
       emitStatus("ready")
       emitUpdate({ sessionUpdate: "state_update", state: "running" })

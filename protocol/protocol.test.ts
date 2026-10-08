@@ -26,23 +26,23 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "./index"
 import {
-  AOS_ARTIFACT_URI_SCHEME,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AosAgentUpdateRequestSchema,
-  AosArtifactDescriptorSchema,
-  AosElicitationMetaSchema,
-  AosExtensionsSchema,
-  AosFocusRequestSchema,
-  AosPromptMetaSchema,
-  AosReplayBeforeSchema,
-  AosSessionNewMetaSchema,
-  AosSessionResumeResponseMetaSchema,
-  AosPermissionMetaSchema,
-  AosSessionUpdateRequestSchema,
-  AosChunkMetaSchema,
-  AosStateMetaSchema,
-  AosToolCallMetaSchema,
+  HGW_ARTIFACT_URI_SCHEME,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HgwAgentUpdateRequestSchema,
+  HgwArtifactDescriptorSchema,
+  HgwElicitationMetaSchema,
+  HgwExtensionsSchema,
+  HgwFocusRequestSchema,
+  HgwPromptMetaSchema,
+  HgwReplayBeforeSchema,
+  HgwSessionNewMetaSchema,
+  HgwSessionResumeResponseMetaSchema,
+  HgwPermissionMetaSchema,
+  HgwSessionUpdateRequestSchema,
+  HgwChunkMetaSchema,
+  HgwStateMetaSchema,
+  HgwToolCallMetaSchema,
   formatArtifactUri,
   parseArtifactUri,
 } from "./acp"
@@ -535,7 +535,7 @@ describe("AOS v1 normalized protocol", () => {
 
   it("addresses an ACP Agent update by agentId", () => {
     expect(
-      AosAgentUpdateRequestSchema.parse({
+      HgwAgentUpdateRequestSchema.parse({
         agentId: "agent-a",
         revision: "rev-1",
         visibility: "visible",
@@ -548,7 +548,7 @@ describe("AOS v1 normalized protocol", () => {
       avatar: "ring/blue",
     })
     expect(() =>
-      AosAgentUpdateRequestSchema.parse({ revision: "r", avatar: null })
+      HgwAgentUpdateRequestSchema.parse({ revision: "r", avatar: null })
     ).toThrow()
   })
 
@@ -601,19 +601,19 @@ describe("AOS v1 normalized protocol", () => {
     const sessionId = "hermes:researcher:stored-1"
 
     expect(
-      AosSessionUpdateRequestSchema.parse({ sessionId, pinned: true })
+      HgwSessionUpdateRequestSchema.parse({ sessionId, pinned: true })
     ).toEqual({ sessionId, pinned: true })
     expect(
-      AosSessionUpdateRequestSchema.parse({ sessionId, unread: false })
+      HgwSessionUpdateRequestSchema.parse({ sessionId, unread: false })
     ).toEqual({ sessionId, unread: false })
     expect(() =>
-      AosSessionUpdateRequestSchema.parse({
+      HgwSessionUpdateRequestSchema.parse({
         sessionId,
         pinned: true,
         archived: true,
       })
     ).toThrow()
-    expect(() => AosSessionUpdateRequestSchema.parse({ sessionId })).toThrow()
+    expect(() => HgwSessionUpdateRequestSchema.parse({ sessionId })).toThrow()
   })
 
   it("accepts only normalized history parts and stable Session creation identities", () => {
@@ -689,7 +689,7 @@ describe("AOS v1 normalized protocol", () => {
   })
 
   it("reads a turn meta a later proxy extended, keeping its known keys", () => {
-    const meta = AosToolCallMetaSchema.parse({
+    const meta = HgwToolCallMetaSchema.parse({
       sequence: 3,
       turnId: "turn-1",
       messageId: "message-1",
@@ -701,7 +701,7 @@ describe("AOS v1 normalized protocol", () => {
       messageId: "message-1",
     })
     expect(() =>
-      AosToolCallMetaSchema.parse({ sequence: 3, turnId: 7, messageId: "m" })
+      HgwToolCallMetaSchema.parse({ sequence: 3, turnId: 7, messageId: "m" })
     ).toThrow()
   })
 
@@ -730,9 +730,9 @@ describe("AOS v1 normalized protocol", () => {
       durationMs: 1000,
       subagent,
     }
-    expect(AosToolCallMetaSchema.parse(tool)).toEqual(tool)
+    expect(HgwToolCallMetaSchema.parse(tool)).toEqual(tool)
     expect(
-      AosChunkMetaSchema.parse({
+      HgwChunkMetaSchema.parse({
         sequence: 3,
         turnId: "turn-1",
         subagentId: "sub-1",
@@ -745,19 +745,19 @@ describe("AOS v1 normalized protocol", () => {
       model: "claude",
       cost: { amount: 0.25, currency: "USD" },
     }
-    expect(AosStateMetaSchema.parse(failed)).toEqual(failed)
+    expect(HgwStateMetaSchema.parse(failed)).toEqual(failed)
   })
 
   it("keeps a subagent's known keys and refuses a status it does not name", () => {
     const base = { sequence: 3, turnId: "turn-1", messageId: "message-1" }
     expect(
-      AosToolCallMetaSchema.parse({
+      HgwToolCallMetaSchema.parse({
         ...base,
         subagent: { id: "sub-1", addedLater: true },
       }).subagent
     ).toEqual({ id: "sub-1" })
     expect(
-      AosToolCallMetaSchema.safeParse({
+      HgwToolCallMetaSchema.safeParse({
         ...base,
         subagent: { id: "sub-1", status: "timeout" },
       }).success
@@ -766,10 +766,10 @@ describe("AOS v1 normalized protocol", () => {
 
   it("names a pending request by requestId on permissions and questions", () => {
     expect(
-      AosPermissionMetaSchema.parse({ requestId: "request-1", extra: 1 })
+      HgwPermissionMetaSchema.parse({ requestId: "request-1", extra: 1 })
     ).toEqual({ requestId: "request-1" })
     expect(
-      AosElicitationMetaSchema.safeParse({
+      HgwElicitationMetaSchema.safeParse({
         interruptId: "request-1",
         questions: [{ prompt: "Which?", options: [] }],
       }).success
@@ -777,10 +777,10 @@ describe("AOS v1 normalized protocol", () => {
   })
 
   it("reads a focus report with or without the presence flags", () => {
-    expect(AosFocusRequestSchema.parse({ sessionId: "session-1" })).toEqual({
+    expect(HgwFocusRequestSchema.parse({ sessionId: "session-1" })).toEqual({
       sessionId: "session-1",
     })
-    expect(AosFocusRequestSchema.parse({ sessionId: null })).toEqual({
+    expect(HgwFocusRequestSchema.parse({ sessionId: null })).toEqual({
       sessionId: null,
     })
     const reported = {
@@ -788,9 +788,9 @@ describe("AOS v1 normalized protocol", () => {
       foreground: false,
       idle: true,
     }
-    expect(AosFocusRequestSchema.parse(reported)).toEqual(reported)
+    expect(HgwFocusRequestSchema.parse(reported)).toEqual(reported)
     expect(() =>
-      AosFocusRequestSchema.parse({ sessionId: null, visible: true })
+      HgwFocusRequestSchema.parse({ sessionId: null, visible: true })
     ).toThrow()
   })
 
@@ -823,7 +823,7 @@ describe("AOS v1 normalized protocol", () => {
       },
     ],
   ])("accepts %s as its publisher emits it", (_label, descriptor) => {
-    expect(AosArtifactDescriptorSchema.parse(descriptor)).toEqual(descriptor)
+    expect(HgwArtifactDescriptorSchema.parse(descriptor)).toEqual(descriptor)
   })
 
   it.each([
@@ -833,7 +833,7 @@ describe("AOS v1 normalized protocol", () => {
     ["an empty media type", { mimeType: "" }],
   ])("refuses an artifact descriptor with %s", (_label, patch) => {
     expect(() =>
-      AosArtifactDescriptorSchema.parse({
+      HgwArtifactDescriptorSchema.parse({
         id: "artifact-1",
         filename: "report.md",
         source: { type: "provider", reference: "artifact-1" },
@@ -848,7 +848,7 @@ describe("AOS v1 normalized protocol", () => {
       const uri = formatArtifactUri(artifactId)
 
       expect(uri.startsWith("artifact://")).toBe(true)
-      expect(new URL(uri).protocol).toBe(AOS_ARTIFACT_URI_SCHEME)
+      expect(new URL(uri).protocol).toBe(HGW_ARTIFACT_URI_SCHEME)
       expect(parseArtifactUri(uri)).toBe(artifactId)
     }
   )
@@ -864,51 +864,51 @@ describe("AOS v1 normalized protocol", () => {
     "artifact://a/b",
     "artifact://a?b",
     "artifact://%E0%A4%A",
-    "aos-attachment:stage-1/att-1",
+    "hgw-attachment:stage-1/att-1",
   ])("reads no artifact from %s", (uri) => {
     expect(parseArtifactUri(uri)).toBeUndefined()
   })
 
   it("reads an older history page only through a server-issued cursor", () => {
     expect(
-      AosReplayBeforeSchema.parse({ type: "_aos/before", cursor: "500" })
-    ).toEqual({ type: "_aos/before", cursor: "500" })
+      HgwReplayBeforeSchema.parse({ type: "_hgw/before", cursor: "500" })
+    ).toEqual({ type: "_hgw/before", cursor: "500" })
     expect(
-      AosReplayBeforeSchema.parse({
-        type: "_aos/before",
+      HgwReplayBeforeSchema.parse({
+        type: "_hgw/before",
         cursor: "500",
         _meta: { client: {} },
       })
     ).toMatchObject({ cursor: "500" })
     for (const invalid of [
-      { type: "_aos/before" },
-      { type: "_aos/before", cursor: 500 },
-      { type: "_aos/before", cursor: "" },
-      { type: "_aos/before", cursor: "500", limit: 10 },
-      { type: "_aos/after", cursor: "500" },
+      { type: "_hgw/before" },
+      { type: "_hgw/before", cursor: 500 },
+      { type: "_hgw/before", cursor: "" },
+      { type: "_hgw/before", cursor: "500", limit: 10 },
+      { type: "_hgw/after", cursor: "500" },
     ]) {
-      expect(AosReplayBeforeSchema.safeParse(invalid).success).toBe(false)
+      expect(HgwReplayBeforeSchema.safeParse(invalid).success).toBe(false)
     }
   })
 
   it("reads the client id a create or send repeats, and the resume position", () => {
-    expect(AosPromptMetaSchema.parse({ clientId: "send-1" })).toEqual({
+    expect(HgwPromptMetaSchema.parse({ clientId: "send-1" })).toEqual({
       clientId: "send-1",
     })
     expect(
-      AosSessionNewMetaSchema.parse({
+      HgwSessionNewMetaSchema.parse({
         agentId: "researcher",
         clientId: "new-1",
       })
     ).toEqual({ agentId: "researcher", clientId: "new-1" })
     for (const clientId of ["", 7]) {
-      expect(AosPromptMetaSchema.safeParse({ clientId }).success).toBe(false)
+      expect(HgwPromptMetaSchema.safeParse({ clientId }).success).toBe(false)
       expect(
-        AosSessionNewMetaSchema.safeParse({ agentId: "researcher", clientId })
+        HgwSessionNewMetaSchema.safeParse({ agentId: "researcher", clientId })
           .success
       ).toBe(false)
     }
-    const { position } = AosSessionResumeResponseMetaSchema.shape
+    const { position } = HgwSessionResumeResponseMetaSchema.shape
     expect(position.parse({ turnId: "turn-1", sequence: 4 })).toEqual({
       turnId: "turn-1",
       sequence: 4,
@@ -927,33 +927,33 @@ describe("AOS v1 normalized protocol", () => {
       focus: true,
       guestProjection: true,
     }
-    expect(AosExtensionsSchema.parse(extensions).historyPages).toBe(false)
+    expect(HgwExtensionsSchema.parse(extensions).historyPages).toBe(false)
     expect(
-      AosExtensionsSchema.parse({ ...extensions, historyPages: true })
+      HgwExtensionsSchema.parse({ ...extensions, historyPages: true })
         .historyPages
     ).toBe(true)
   })
 
-  it("keeps the AOS extension to its method and error-code footprint", () => {
-    expect(AOS_METHODS).toEqual({
+  it("keeps the hgw extension to its method and error-code footprint", () => {
+    expect(HGW_METHODS).toEqual({
       session: {
-        update: "_aos/session/update",
-        steer: "_aos/session/steer",
-        focus: "_aos/session/focus",
-        part: "_aos/session/part",
+        update: "_hgw/session/update",
+        steer: "_hgw/session/steer",
+        focus: "_hgw/session/focus",
+        part: "_hgw/session/part",
       },
       agents: {
-        list: "_aos/agents/list",
-        update: "_aos/agents/update",
+        list: "_hgw/agents/list",
+        update: "_hgw/agents/update",
       },
       notify: {
-        activity: "_aos/activity",
-        composerPrefill: "_aos/composer_prefill",
-        catalogInvalidated: "_aos/catalog_invalidated",
-        error: "_aos/error",
+        activity: "_hgw/activity",
+        composerPrefill: "_hgw/composer_prefill",
+        catalogInvalidated: "_hgw/catalog_invalidated",
+        error: "_hgw/error",
       },
     })
-    const codes = Object.values(AOS_JSONRPC_ERRORS)
+    const codes = Object.values(HGW_JSONRPC_ERRORS)
     expect(new Set(codes).size).toBe(codes.length)
     for (const code of codes) {
       expect(code).toBeGreaterThanOrEqual(-31015)
@@ -974,7 +974,7 @@ describe("AOS v1 normalized protocol", () => {
       }
     )
     expect(acpCodes).toContain(RequestError.authRequired().code)
-    for (const code of Object.values(AOS_JSONRPC_ERRORS))
+    for (const code of Object.values(HGW_JSONRPC_ERRORS))
       expect(acpCodes).not.toContain(code)
   })
 })

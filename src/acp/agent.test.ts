@@ -12,16 +12,16 @@ import { backoffDelay } from "../../lifecycle"
 import { type SessionHistoryResponse } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_ATTACHMENT_URI_SCHEME,
-  AOS_EXTENSION_VERSION,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AOS_META_KEY,
-  AOS_REPLAY_BEFORE,
-  AOS_STOP_REASONS,
-  AosHistoryCursorSchema,
+  HGW_ATTACHMENT_URI_SCHEME,
+  HGW_EXTENSION_VERSION,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HGW_REPLAY_BEFORE,
+  HGW_STOP_REASONS,
+  HgwHistoryCursorSchema,
   formatArtifactUri,
-  type AosActivityNotification,
+  type HgwActivityNotification,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
@@ -78,17 +78,17 @@ import {
   withoutStates,
 } from "./test-harness"
 
-/** Every `_meta.aos.sequence` the recorded run-stream updates carry, in order. */
+/** Every `_meta.hgw.sequence` the recorded run-stream updates carry, in order. */
 function sequencesOf(recorder: Recorder) {
   const Schema = z.object({
     update: z.object({
-      _meta: z.object({ [AOS_META_KEY]: z.object({ sequence: z.number() }) }),
+      _meta: z.object({ [HGW_META_KEY]: z.object({ sequence: z.number() }) }),
     }),
   })
   return updates(recorder).flatMap((params) => {
     const parsed = Schema.safeParse(params)
     return parsed.success
-      ? [parsed.data.update._meta[AOS_META_KEY].sequence]
+      ? [parsed.data.update._meta[HGW_META_KEY].sequence]
       : []
   })
 }
@@ -119,7 +119,7 @@ function rowsSince(recorder: Recorder, from: number) {
 
 /** Every catalog relist this connection has asked the client for. */
 function relists(recorder: Recorder) {
-  return recorder.of(AOS_METHODS.notify.catalogInvalidated)
+  return recorder.of(HGW_METHODS.notify.catalogInvalidated)
 }
 
 /** Every context reading this connection has pushed, newest last. */
@@ -198,15 +198,15 @@ describe("AOS ACP agent", () => {
       protocolVersion: ACP_PROTOCOL_VERSION,
       // A proxy serving no build versions the extension contract instead.
       info: {
-        name: "aos-proxy",
+        name: "harness-gw",
         title: "Test Runtime",
-        version: `${AOS_EXTENSION_VERSION}`,
+        version: `${HGW_EXTENSION_VERSION}`,
       },
       capabilities: { session: { delete: {} } },
       authMethods: [],
       _meta: {
-        [AOS_META_KEY]: {
-          version: AOS_EXTENSION_VERSION,
+        [HGW_META_KEY]: {
+          version: HGW_EXTENSION_VERSION,
           role: "operator",
           extensions: {
             steer: true,
@@ -231,7 +231,7 @@ describe("AOS ACP agent", () => {
       { withoutCatalogChanges: true },
       {
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             extensions: { invalidation: false, steer: true, readState: true },
           },
         },
@@ -277,7 +277,7 @@ describe("AOS ACP agent", () => {
         sessionId: CREATED,
         update: {
           sessionUpdate: "session_info_update",
-          _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
+          _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "idle" } },
         },
       },
       {
@@ -289,7 +289,7 @@ describe("AOS ACP agent", () => {
           // ACP carries the counts; the provider's attribution of them and how
           // it arrived at them travel in the AOS extension's own meta.
           _meta: {
-            [AOS_META_KEY]: {
+            [HGW_META_KEY]: {
               source: "provider-usage",
               breakdown: {
                 systemTokens: 300,
@@ -332,11 +332,11 @@ describe("AOS ACP agent", () => {
           sessionId: SESSION,
           cwd: "/",
           title: "Notes",
-          _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
+          _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "idle" } },
         },
         {
           sessionId: "session-2",
-          _meta: { [AOS_META_KEY]: { unread: true } },
+          _meta: { [HGW_META_KEY]: { unread: true } },
         },
       ],
       nextCursor: expect.any(String) as string,
@@ -362,14 +362,14 @@ describe("AOS ACP agent", () => {
         {
           sessionId: SESSION,
           _meta: {
-            [AOS_META_KEY]: { createdAt: "2025-12-31T00:00:00.000Z" },
+            [HGW_META_KEY]: { createdAt: "2025-12-31T00:00:00.000Z" },
           },
         },
         { sessionId: "session-2" },
       ],
     })
     expect(
-      (page.sessions[1]?._meta as Record<string, object>)[AOS_META_KEY]
+      (page.sessions[1]?._meta as Record<string, object>)[HGW_META_KEY]
     ).not.toHaveProperty("createdAt")
     test.close()
   })
@@ -386,8 +386,8 @@ describe("AOS ACP agent", () => {
         return agentId === AGENT ? undefined : "/srv/writer/"
       },
     })
-    const UNSUPPORTED = { code: AOS_JSONRPC_ERRORS.unsupported }
-    const onAgent = { _meta: { [AOS_META_KEY]: { agentId: AGENT } } }
+    const UNSUPPORTED = { code: HGW_JSONRPC_ERRORS.unsupported }
+    const onAgent = { _meta: { [HGW_META_KEY]: { agentId: AGENT } } }
 
     const page = await test.list()
 
@@ -479,7 +479,7 @@ describe("AOS ACP agent", () => {
     // The answer says only where the replay ended; the row and the model
     // options follow it as updates.
     expect(resumed).toEqual({
-      _meta: { [AOS_META_KEY]: { history: expect.any(Object) } },
+      _meta: { [HGW_META_KEY]: { history: expect.any(Object) } },
     })
     expect(updates(test.recorder)[0]).toMatchObject({
       sessionId: SESSION,
@@ -494,7 +494,7 @@ describe("AOS ACP agent", () => {
       update: {
         sessionUpdate: "state_update",
         state: "running",
-        _meta: { [AOS_META_KEY]: { turnId: "run-live" } },
+        _meta: { [HGW_META_KEY]: { turnId: "run-live" } },
       },
     })
     const row = await test.recorder.wait(
@@ -503,7 +503,7 @@ describe("AOS ACP agent", () => {
     )
     expect(row.params).toMatchObject({
       update: {
-        _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "running" } },
+        _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "running" } },
       },
     })
     await test.recorder.wait(
@@ -536,7 +536,7 @@ describe("AOS ACP agent", () => {
     const accepted = await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
       prompt: [{ type: "text", text: "Summarize" }],
-      _meta: { [AOS_META_KEY]: {} },
+      _meta: { [HGW_META_KEY]: {} },
     })
 
     const messageId = accepted.messageId
@@ -620,7 +620,7 @@ describe("AOS ACP agent", () => {
       sessionId: CREATED,
       title: "permission-required",
       options: [{ optionId: "once", kind: "allow_once" }],
-      _meta: { [AOS_META_KEY]: { requestId: "approval-1" } },
+      _meta: { [HGW_META_KEY]: { requestId: "approval-1" } },
     })
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     expect(test.start.mock.calls[1]?.[1]).toMatchObject({
@@ -649,7 +649,7 @@ describe("AOS ACP agent", () => {
       {
         sessionId: CREATED,
         prompt: [{ type: "text", text: "Long job" }],
-        _meta: { [AOS_META_KEY]: {} },
+        _meta: { [HGW_META_KEY]: {} },
       },
       { cancellationSignal: cancelled.signal }
     )
@@ -682,7 +682,7 @@ describe("AOS ACP agent", () => {
       update: {
         sessionUpdate: "state_update",
         state: "running",
-        _meta: { [AOS_META_KEY]: { execution: "stopping" } },
+        _meta: { [HGW_META_KEY]: { execution: "stopping" } },
       },
     })
     expect(source?.stop).toHaveBeenCalledTimes(1)
@@ -775,7 +775,7 @@ describe("AOS ACP agent", () => {
         sessionUpdate: "usage_update",
         used: 1_200,
         size: 20_000,
-        _meta: { [AOS_META_KEY]: { source: "provider-usage" } },
+        _meta: { [HGW_META_KEY]: { source: "provider-usage" } },
       },
     })
     test.close()
@@ -860,7 +860,7 @@ describe("AOS ACP agent", () => {
       // The backoff gives up after its budget instead of retrying forever.
       expect(usages(test.recorder)).toEqual([])
       expect(
-        test.recorder.of(AOS_METHODS.notify.error).map((entry) => entry.params)
+        test.recorder.of(HGW_METHODS.notify.error).map((entry) => entry.params)
       ).toEqual([])
       expect(vi.getTimerCount()).toBe(0)
       test.close()
@@ -988,7 +988,7 @@ describe("AOS ACP agent", () => {
     const other = await openInSecondTab(test)
     const clock = useFakeClock()
 
-    await test.agent.request(AOS_METHODS.session.update, {
+    await test.agent.request(HGW_METHODS.session.update, {
       sessionId: SESSION,
       title: "Renamed",
     })
@@ -1005,7 +1005,7 @@ describe("AOS ACP agent", () => {
       update: {
         sessionUpdate: "session_info_update",
         title: "Renamed",
-        _meta: { [AOS_META_KEY]: { agentId: AGENT, status: "idle" } },
+        _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "idle" } },
       },
     })
     // A membership the rename made would wait out its join deadline.
@@ -1027,7 +1027,7 @@ describe("AOS ACP agent", () => {
     )
     const from = test.recorder.entries.length
 
-    await test.agent.request(AOS_METHODS.session.update, {
+    await test.agent.request(HGW_METHODS.session.update, {
       sessionId: SESSION,
       pinned: true,
     })
@@ -1041,7 +1041,7 @@ describe("AOS ACP agent", () => {
         sessionId: SESSION,
         update: {
           sessionUpdate: "session_info_update",
-          _meta: { [AOS_META_KEY]: { agentId: AGENT, pinned: true } },
+          _meta: { [HGW_META_KEY]: { agentId: AGENT, pinned: true } },
         },
       },
     ])
@@ -1053,7 +1053,7 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.request(AOS_METHODS.session.update, {
+    await test.agent.request(HGW_METHODS.session.update, {
       sessionId: SESSION,
       archived: true,
     })
@@ -1063,7 +1063,7 @@ describe("AOS ACP agent", () => {
     })
     expect(relists(test.recorder)).toHaveLength(1)
 
-    await test.agent.request(AOS_METHODS.session.update, {
+    await test.agent.request(HGW_METHODS.session.update, {
       sessionId: SESSION,
       title: "Renamed",
     })
@@ -1101,7 +1101,7 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.request(AOS_METHODS.session.update, {
+    await test.agent.request(HGW_METHODS.session.update, {
       sessionId: SESSION,
       unread: false,
     })
@@ -1119,7 +1119,7 @@ describe("AOS ACP agent", () => {
     await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
       prompt: [{ type: "text", text: "Start" }],
-      _meta: { [AOS_META_KEY]: {} },
+      _meta: { [HGW_META_KEY]: {} },
     })
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
@@ -1138,16 +1138,16 @@ describe("AOS ACP agent", () => {
     })
     await waitFor(() => expect(test.history).toHaveBeenCalled())
     await expect(
-      other.agent.request(AOS_METHODS.session.steer, {
+      other.agent.request(HGW_METHODS.session.steer, {
         sessionId: CREATED,
         requestId: "steer-0",
         text: "Stop there",
       })
-    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.turnInProgress })
+    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.turnInProgress })
     opening.release()
     await opened
 
-    const steered = await test.agent.request(AOS_METHODS.session.steer, {
+    const steered = await test.agent.request(HGW_METHODS.session.steer, {
       sessionId: CREATED,
       requestId: "steer-1",
       text: "Also check the tests",
@@ -1165,7 +1165,7 @@ describe("AOS ACP agent", () => {
         sessionUpdate: "user_message",
         messageId: "steer-1",
         content: [{ type: "text", text: "Also check the tests" }],
-        _meta: { [AOS_META_KEY]: { delivery: "steered" } },
+        _meta: { [HGW_META_KEY]: { delivery: "steered" } },
       },
     })
     test.close()
@@ -1176,16 +1176,16 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(HGW_METHODS.session.focus, { sessionId: SESSION })
     expect(test.readState.focus).toHaveBeenCalledWith(AGENT, SESSION)
     // The report the browser probes its link with.
     await expect(
-      test.agent.request(AOS_METHODS.session.focus, {})
+      test.agent.request(HGW_METHODS.session.focus, {})
     ).resolves.toEqual({})
     expect(test.readState.focus).toHaveBeenCalledTimes(1)
     expect(test.readState.blur).not.toHaveBeenCalled()
     expect(test.presence.set).toHaveBeenCalledTimes(1)
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: null })
+    await test.agent.request(HGW_METHODS.session.focus, { sessionId: null })
     expect(test.readState.blur).toHaveBeenCalled()
     test.close()
   })
@@ -1215,7 +1215,7 @@ describe("AOS ACP agent", () => {
       const test = await harness()
       await test.list()
 
-      await test.agent.request(AOS_METHODS.session.focus, params)
+      await test.agent.request(HGW_METHODS.session.focus, params)
 
       expect(test.presence.set).toHaveBeenCalledWith(
         PRINCIPAL,
@@ -1231,9 +1231,9 @@ describe("AOS ACP agent", () => {
     const test = await harness()
     await test.list()
 
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
-    await test.agent.request(AOS_METHODS.session.focus, {
+    await test.agent.request(HGW_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(HGW_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(HGW_METHODS.session.focus, {
       sessionId: SESSION,
       foreground: true,
       idle: false,
@@ -1246,7 +1246,7 @@ describe("AOS ACP agent", () => {
 
   it("forgets this connection's presence when it closes", async () => {
     const test = await harness()
-    await test.agent.request(AOS_METHODS.session.focus, { sessionId: SESSION })
+    await test.agent.request(HGW_METHODS.session.focus, { sessionId: SESSION })
     expect(test.presence.set).toHaveBeenCalled()
 
     test.close()
@@ -1257,7 +1257,7 @@ describe("AOS ACP agent", () => {
   })
 
   it("hydrates the connection with the activity snapshot", async () => {
-    const event: AosActivityNotification = {
+    const event: HgwActivityNotification = {
       type: "turn-started",
       agentId: AGENT,
       sessionId: SESSION,
@@ -1267,7 +1267,7 @@ describe("AOS ACP agent", () => {
     const test = await harness({ activity: [event] })
 
     const hydrated = await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.activity,
+      (entry) => entry.method === HGW_METHODS.notify.activity,
       "an activity notification"
     )
 
@@ -1335,7 +1335,7 @@ describe("AOS ACP agent", () => {
     await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
       prompt: [{ type: "text", text: "First" }],
-      _meta: { [AOS_META_KEY]: {} },
+      _meta: { [HGW_META_KEY]: {} },
     })
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
@@ -1343,9 +1343,9 @@ describe("AOS ACP agent", () => {
       test.agent.request(methods.agent.session.prompt, {
         sessionId: CREATED,
         prompt: [{ type: "text", text: "Second" }],
-        _meta: { [AOS_META_KEY]: {} },
+        _meta: { [HGW_META_KEY]: {} },
       })
-    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.turnInProgress })
+    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.turnInProgress })
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
   })
@@ -1378,7 +1378,7 @@ describe("AOS ACP agent", () => {
     answer.resolve({ outcome: { outcome: "selected", optionId: "once" } })
 
     await settled()
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
   })
@@ -1464,7 +1464,7 @@ describe("AOS ACP agent", () => {
     await test.agent.request(methods.agent.session.prompt, {
       sessionId: CREATED,
       prompt: [{ type: "text", text: "Long job" }],
-      _meta: { [AOS_META_KEY]: {} },
+      _meta: { [HGW_META_KEY]: {} },
     })
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const source = test.sources[0]
@@ -1484,7 +1484,7 @@ describe("AOS ACP agent", () => {
             event: "acp.turn.failed",
             connectionId: "connection-1",
             sessionId: CREATED,
-            stopReason: AOS_STOP_REASONS.uncertain,
+            stopReason: HGW_STOP_REASONS.uncertain,
             errorCode: "AOS_CONNECTION_INTERRUPTED",
             message: "the transport dropped",
             turnId: expect.any(String),
@@ -1523,7 +1523,7 @@ describe("Agent updates", () => {
       updateAgent: async () => ({ revision: "rev-2", agent: entry }),
     })
 
-    const result = await test.agent.request(AOS_METHODS.agents.update, {
+    const result = await test.agent.request(HGW_METHODS.agents.update, {
       agentId: AGENT,
       revision: "rev-1",
       visibility: "hidden",
@@ -1547,7 +1547,7 @@ describe("Agent updates", () => {
       { agentId: AGENT, revision: "rev-1" },
     ])
       await expect(
-        test.agent.request(AOS_METHODS.agents.update, params)
+        test.agent.request(HGW_METHODS.agents.update, params)
       ).rejects.toMatchObject({ code: invalidParams().code })
     expect(test.updateAgent).not.toHaveBeenCalled()
     test.close()
@@ -1561,12 +1561,12 @@ describe("Agent updates", () => {
     })
 
     await expect(
-      test.agent.request(AOS_METHODS.agents.update, {
+      test.agent.request(HGW_METHODS.agents.update, {
         agentId: AGENT,
         revision: "rev-1",
         avatar: "ring/blue",
       })
-    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.unsupported })
+    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.unsupported })
     test.close()
   })
 })
@@ -1623,12 +1623,12 @@ describe("Session rooms", () => {
     // A start that found its Session gone tells its sender, who holds no
     // readings yet, and asks the runtime after it no more.
     await test.recorder.wait(
-      (entry) => entry.method === AOS_METHODS.notify.error,
+      (entry) => entry.method === HGW_METHODS.notify.error,
       "the not_found notice"
     )
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([
       {
-        method: AOS_METHODS.notify.error,
+        method: HGW_METHODS.notify.error,
         params: { sessionId: SESSION, code: "not_found", message: "not_found" },
       },
     ])
@@ -1657,7 +1657,7 @@ describe("Session rooms", () => {
     })
     const unanswered = expect(
       prompt(test, "Again", SESSION, { attachmentStageId })
-    ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.uncertainMutation })
+    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.uncertainMutation })
     await clock.advance(ADMISSION_DEADLINE_MS)
     await unanswered
     expect(cleanup).not.toHaveBeenCalled()
@@ -1688,7 +1688,7 @@ describe("Session rooms", () => {
     ).rejects.toMatchObject({ code: RequestError.internalError().code })
     // The composer keeps its attachments and stages them anew.
     expect(cleanup).toHaveBeenCalledOnce()
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     const late = await test.connect("connection-3")
     await late.list()
     await open(late)
@@ -1752,7 +1752,7 @@ describe("Session rooms", () => {
     await waitFor(() => expect(signal.aborted).toBe(true))
     late.release()
     await settled()
-    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
     test.close()
     other.close()
@@ -1789,7 +1789,7 @@ describe("Session rooms", () => {
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
     await replyWhileWatched(test.sources[1], "Resumed", [other])
     expect(flow(other.recorder)).toContain("chunk Resumed")
-    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     test.close()
     other.close()
   })
@@ -1882,8 +1882,8 @@ describe("Session rooms", () => {
     await replyWhileWatched(test.sources[1], "Resumed", [test, other])
     expect(flow(test.recorder)).toContain("chunk Resumed")
     expect(flow(other.recorder)).toContain("chunk Resumed")
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
-    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     test.close()
     other.close()
   })
@@ -1918,8 +1918,8 @@ describe("Session rooms", () => {
       expect(signals.map(({ aborted }) => aborted)).toEqual([true, true])
     )
     await settled()
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
-    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(1)
     test.close()
     other.close()
@@ -1937,8 +1937,8 @@ describe("Session rooms", () => {
     // The later answer lands on a withdrawn request, which is no failure.
     await settled()
     expect(test.start).toHaveBeenCalledTimes(2)
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
-    expect(other.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
+    expect(other.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(flow(test.recorder)).toContain("chunk Resumed")
     expect(flow(other.recorder)).toContain("chunk Resumed")
     test.close()
@@ -2312,7 +2312,7 @@ describe("Session rooms", () => {
 
     const other = await test.connect("connection-2")
     await other.list()
-    await open(other, { _meta: { [AOS_META_KEY]: { turnId, after: 1 } } })
+    await open(other, { _meta: { [HGW_META_KEY]: { turnId, after: 1 } } })
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     expect(prompts(other.recorder)).toEqual([])
@@ -2398,7 +2398,7 @@ describe("Session rooms", () => {
     })
     const link = (id: string) => ({
       type: "resource_link" as const,
-      uri: `${AOS_ATTACHMENT_URI_SCHEME}${stageId}/${id}`,
+      uri: `${HGW_ATTACHMENT_URI_SCHEME}${stageId}/${id}`,
       name: `${id}.jpg`,
       mimeType: "image/jpeg",
     })
@@ -2425,13 +2425,13 @@ describe("Session rooms", () => {
     })
     const image = {
       type: "resource_link" as const,
-      uri: `${AOS_ATTACHMENT_URI_SCHEME}${stageId}/one`,
+      uri: `${HGW_ATTACHMENT_URI_SCHEME}${stageId}/one`,
       name: "one.jpg",
       mimeType: "image/jpeg",
     }
     const file = {
       type: "resource_link" as const,
-      uri: `${AOS_ATTACHMENT_URI_SCHEME}${stageId}/two`,
+      uri: `${HGW_ATTACHMENT_URI_SCHEME}${stageId}/two`,
       name: "notes.txt",
     }
 
@@ -2500,7 +2500,7 @@ describe("Session rooms", () => {
     // The winner is still being admitted when the loser reaches the
     // coordinator.
     await expect(prompt(other, "Second")).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.turnInProgress,
+      code: HGW_JSONRPC_ERRORS.turnInProgress,
     })
     admission.release()
     const messageId = await sent
@@ -2546,7 +2546,7 @@ describe("Session rooms", () => {
 
     staged.release()
     await expect(losing).rejects.toMatchObject({
-      code: AOS_JSONRPC_ERRORS.turnInProgress,
+      code: HGW_JSONRPC_ERRORS.turnInProgress,
     })
     await replyWhileWatched(test.sources[0], "Done", [other])
 
@@ -2956,7 +2956,7 @@ describe("Session rooms", () => {
         sessionUpdate: "notice",
         severity: "info",
         title: "Heartbeat",
-        _meta: { [AOS_META_KEY]: { kind: "heartbeat" } },
+        _meta: { [HGW_META_KEY]: { kind: "heartbeat" } },
       },
     })
     expect(watchers).toHaveLength(1)
@@ -3117,10 +3117,10 @@ describe("Reloading a running turn", () => {
         update: { state?: string; _meta?: unknown }
       }
       const meta = z
-        .object({ aos: z.object({ at: z.string() }) })
+        .object({ hgw: z.object({ at: z.string() }) })
         .safeParse(update._meta)
       return update.state === "running" && meta.success
-        ? [meta.data.aos.at]
+        ? [meta.data.hgw.at]
         : []
     })
     expect(dated).toEqual([new Date(admittedAt).toISOString()])
@@ -3213,7 +3213,7 @@ const cursorOf = (offset: number) =>
   Buffer.from(String(offset)).toString("base64url")
 
 const HistoryReplySchema = z.object({
-  _meta: z.object({ aos: z.object({ history: AosHistoryCursorSchema }) }),
+  _meta: z.object({ hgw: z.object({ history: HgwHistoryCursorSchema }) }),
 })
 
 /** Reads the page older than `cursor`, as a browser scrolling back does. */
@@ -3221,7 +3221,7 @@ function older(
   browser: Browser,
   cursor: string,
   sessionId = SESSION,
-  replayFrom: Record<string, unknown> = { type: AOS_REPLAY_BEFORE, cursor }
+  replayFrom: Record<string, unknown> = { type: HGW_REPLAY_BEFORE, cursor }
 ) {
   return browser.agent.request(methods.agent.session.resume, {
     sessionId,
@@ -3251,7 +3251,7 @@ const replayedIds = (recorder: Recorder, from: number) =>
   )
 
 const pageTag = (update: SentUpdate) =>
-  (update._meta?.[AOS_META_KEY] as { historyPage?: unknown } | undefined)
+  (update._meta?.[HGW_META_KEY] as { historyPage?: unknown } | undefined)
     ?.historyPage
 
 const INVALID_PARAMS = { code: invalidParams().code }
@@ -3277,10 +3277,10 @@ describe("History pages", () => {
       cwd: "/",
     })
 
-    expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({
+    expect(HistoryReplySchema.parse(replayed)._meta.hgw.history).toEqual({
       nextCursor: cursorOf(5),
     })
-    expect(resumed._meta?.[AOS_META_KEY]).not.toHaveProperty("history")
+    expect(resumed._meta?.[HGW_META_KEY]).not.toHaveProperty("history")
     test.close()
   })
 
@@ -3299,7 +3299,7 @@ describe("History pages", () => {
       replayFrom: { type: "start" },
     })
 
-    expect(HistoryReplySchema.parse(replayed)._meta.aos.history).toEqual({})
+    expect(HistoryReplySchema.parse(replayed)._meta.hgw.history).toEqual({})
     expect(replayedIds(test.recorder, from)).toEqual(
       conversation(12).map(({ id }) => id)
     )
@@ -3354,7 +3354,7 @@ describe("History pages", () => {
 
     const sent = pageUpdates(test.recorder, from)
     expect(page).toEqual({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
+      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
     expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 5, 5)
     expect(sent.map((update) => update.messageId)).toEqual(
@@ -3364,7 +3364,7 @@ describe("History pages", () => {
     )
     for (const update of sent)
       expect(update._meta).toEqual({
-        [AOS_META_KEY]: { historyPage: { cursor: cursorOf(5) } },
+        [HGW_META_KEY]: { historyPage: { cursor: cursorOf(5) } },
       })
     expect(test.logged()).toContainEqual(
       expect.objectContaining({
@@ -3378,7 +3378,7 @@ describe("History pages", () => {
     const last = test.recorder.entries.length
     const oldest = await older(test, cursorOf(10))
 
-    expect(oldest).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    expect(oldest).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
     expect(pageUpdates(test.recorder, last)).toHaveLength(2)
     test.close()
   })
@@ -3476,8 +3476,8 @@ describe("History pages", () => {
         ...update,
         _meta: {
           ...update._meta,
-          [AOS_META_KEY]: {
-            ...(update._meta?.[AOS_META_KEY] as object | undefined),
+          [HGW_META_KEY]: {
+            ...(update._meta?.[HGW_META_KEY] as object | undefined),
             historyPage: { cursor: cursorOf(5) },
           },
         },
@@ -3500,7 +3500,7 @@ describe("History pages", () => {
     })
     await test.create()
     await expect(older(test, cursorOf(5), CREATED)).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
+      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
     await open(test)
     await test.agent.request(methods.agent.session.close, {
@@ -3522,11 +3522,11 @@ describe("History pages", () => {
     const cursor = cursorOf(5)
 
     for (const replayFrom of [
-      { type: AOS_REPLAY_BEFORE },
-      { type: AOS_REPLAY_BEFORE, cursor: "" },
-      { type: AOS_REPLAY_BEFORE, cursor, after: 1 },
-      { type: AOS_REPLAY_BEFORE, cursor: 5 },
-      { type: "_aos/after", cursor },
+      { type: HGW_REPLAY_BEFORE },
+      { type: HGW_REPLAY_BEFORE, cursor: "" },
+      { type: HGW_REPLAY_BEFORE, cursor, after: 1 },
+      { type: HGW_REPLAY_BEFORE, cursor: 5 },
+      { type: "_hgw/after", cursor },
       { type: "future" },
     ])
       await expect(
@@ -3544,7 +3544,7 @@ describe("History pages", () => {
     await open(test)
 
     await expect(older(test, cursorOf(18))).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
+      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
     })
     await expect(older(test, cursorOf(20))).rejects.toMatchObject(
       INVALID_PARAMS
@@ -3559,7 +3559,7 @@ describe("History pages", () => {
     await cut.list()
     await open(cut)
     await expect(older(cut, cursorOf(10))).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
+      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
     })
     // A runtime at its reach may still count rows past it; no cursor leads there.
     cut.history.mockResolvedValueOnce({
@@ -3572,7 +3572,7 @@ describe("History pages", () => {
       truncated: true,
     })
     await expect(older(cut, cursorOf(5))).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: { truncated: true } } },
+      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
     })
     cut.close()
   })
@@ -3595,7 +3595,7 @@ describe("History pages", () => {
     })
 
     await expect(older(test, cursorOf(5))).resolves.toEqual({
-      _meta: { [AOS_META_KEY]: { history: {} } },
+      _meta: { [HGW_META_KEY]: { history: {} } },
     })
     test.close()
   })
@@ -3671,7 +3671,7 @@ describe("History pages", () => {
     pending.release()
 
     await expect(first).resolves.toMatchObject({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
+      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
     })
     hold = false
     await expect(older(test, cursorOf(10))).resolves.toBeDefined()

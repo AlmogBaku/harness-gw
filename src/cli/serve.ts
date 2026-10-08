@@ -1,4 +1,4 @@
-import { AOS_ACP_GUEST_PATH, AOS_ACP_OPERATOR_PATH } from "../../protocol/acp"
+import { HGW_ACP_GUEST_PATH, HGW_ACP_OPERATOR_PATH } from "../../protocol/acp"
 import { createConfiguredProxy } from "../composition"
 import { loadProxyConfig, nodeConfigFileAccess } from "../config-file"
 import {
@@ -77,7 +77,7 @@ export async function serveProxy(
     app: listenerApp(configured.app, "/api/aos/v1"),
     sockets: [
       {
-        path: AOS_ACP_OPERATOR_PATH,
+        path: HGW_ACP_OPERATOR_PATH,
         // Each Agent's own address sits below the shared one.
         subpaths: true,
         service: configured.acpService,
@@ -95,7 +95,7 @@ export async function serveProxy(
     ? start<SocketUpgrade>({
         sockets: [
           {
-            path: AOS_ACP_GUEST_PATH,
+            path: HGW_ACP_GUEST_PATH,
             service: configured.guest.acpService,
             maxPeers: configured.config.limits.operatorEventPeers,
           },

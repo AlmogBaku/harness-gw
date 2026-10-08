@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest"
 
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_ATTACHMENT_URI_SCHEME,
-  AOS_AUTH_METHOD_INVITE,
-  AOS_METHODS,
-  AOS_META_KEY,
+  HGW_ATTACHMENT_URI_SCHEME,
+  HGW_AUTH_METHOD_INVITE,
+  HGW_METHODS,
+  HGW_META_KEY,
 } from "../../protocol/acp"
 import {
   AGENT,
@@ -108,12 +108,12 @@ async function connectGuest(
     info: { name: "aos-guest-browser", version: "1" },
     capabilities: {
       elicitation: { form: {} },
-      _meta: { [AOS_META_KEY]: { historyPages: true } },
+      _meta: { [HGW_META_KEY]: { historyPages: true } },
     },
   })
   await connection.agent.request(methods.agent.auth.login, {
-    methodId: AOS_AUTH_METHOD_INVITE,
-    _meta: { [AOS_META_KEY]: { token } },
+    methodId: HGW_AUTH_METHOD_INVITE,
+    _meta: { [HGW_META_KEY]: { token } },
   })
   return {
     agent: connection.agent,
@@ -128,7 +128,7 @@ describe("guest in a Session channel", () => {
     const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
 
-    await guest.agent.request(AOS_METHODS.session.focus, {
+    await guest.agent.request(HGW_METHODS.session.focus, {
       sessionId: GUEST_REF,
     })
 
@@ -168,7 +168,7 @@ describe("guest in a Session channel", () => {
     await open(other)
     const attachment = {
       type: "resource_link" as const,
-      uri: `${AOS_ATTACHMENT_URI_SCHEME}stage/notes`,
+      uri: `${HGW_ATTACHMENT_URI_SCHEME}stage/notes`,
       name: "notes.md",
       mimeType: "text/markdown",
     }
@@ -192,7 +192,7 @@ describe("guest in a Session channel", () => {
     expect(prompts(other.recorder)).toEqual([
       [{ type: "text", text: "Summarize" }, attachment],
     ])
-    await guest.agent.request(AOS_METHODS.session.steer, {
+    await guest.agent.request(HGW_METHODS.session.steer, {
       sessionId: GUEST_REF,
       requestId: "steer-1",
       text: "Shorter",
@@ -400,7 +400,7 @@ describe("guest in a Session channel", () => {
       replies: [{ requestId: APPROVAL.requestId, payload: "deny" }],
     })
     for (const tab of tabs) {
-      expect(tab.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+      expect(tab.recorder.of(HGW_METHODS.notify.error)).toEqual([])
       tab.close()
     }
     test.close()

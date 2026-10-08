@@ -5,7 +5,7 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { AOS_PERMISSION_KIND_SESSION } from "../protocol/acp"
+import { HGW_PERMISSION_KIND_SESSION } from "../protocol/acp"
 import { createAcpApprovals } from "./acp-approvals"
 import type { AcpPendingRequest } from "./types"
 
@@ -56,14 +56,14 @@ function permission({
       {
         optionId: "session",
         name: "Allow for this Session",
-        kind: AOS_PERMISSION_KIND_SESSION,
+        kind: HGW_PERMISSION_KIND_SESSION,
       },
       { optionId: "always", name: "Always allow", kind: "allow_always" },
       { optionId: "deny", name: "Deny", kind: "reject_once" },
       { optionId: "never", name: "Never", kind: "reject_always" },
     ],
     _meta: meta ?? {
-      aos: {
+      hgw: {
         requestId,
         ...(message === undefined ? {} : { message }),
         ...(expiresAt === undefined ? {} : { expiresAt }),
@@ -88,7 +88,7 @@ function elicitation(): AcpPendingRequest {
     sessionId: "session-1",
     message: "Continue?",
     requestedSchema: { type: "object", properties: {} },
-    _meta: { aos: { requestId: "interrupt-9", questions: [] } },
+    _meta: { hgw: { requestId: "interrupt-9", questions: [] } },
   }
   return {
     kind: "elicitation",
@@ -122,7 +122,7 @@ describe("ACP permission approvals", () => {
         // Standard kinds carry no label, so the card localizes them.
         options: [
           { id: "once", kind: "allow-once" },
-          { id: "session", kind: AOS_PERMISSION_KIND_SESSION },
+          { id: "session", kind: HGW_PERMISSION_KIND_SESSION },
           { id: "always", kind: "allow-always" },
           { id: "deny", kind: "reject-once" },
           { id: "never", kind: "reject-always" },

@@ -16,7 +16,7 @@ import type {
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type { AosExtensions } from "../../protocol/acp"
+import type { HgwExtensions } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import type {
   ExecutionEvent,
@@ -118,7 +118,7 @@ export type ConnectionAuthentication = {
   /** What `initialize` offers to authenticate with. */
   authMethods: readonly AuthMethod[]
   /** The AOS extensions this connection is served. */
-  extensions: AosExtensions
+  extensions: HgwExtensions
   /** Redeems one credential; `false` means it is not usable. */
   authenticate(token: string): Promise<boolean>
   /** Who the credential acts as, and its stack; absent before it is redeemed. */
@@ -135,7 +135,7 @@ export type ConnectionAuthentication = {
 }
 
 /** Builds the per-connection ACP v2 agent app. Implemented in `agent.ts`. */
-export type AosAcpAgentFactory = (context: AcpConnectionContext) => AgentApp
+export type HgwAcpAgentFactory = (context: AcpConnectionContext) => AgentApp
 
 /** Inputs every turn-event translation needs besides the event itself. */
 export type TranslateContext = {
@@ -216,7 +216,7 @@ type WithoutSession<T> = T extends unknown ? Omit<T, "sessionId"> : never
 
 /**
  * Per-connection read-state service. The browser reports exposure through
- * `_aos/session/focus`; this service arms the watermark, re-acks activity in
+ * `_hgw/session/focus`; this service arms the watermark, re-acks activity in
  * the focused Session with a floor and debounce, and swallows failures.
  * Implemented in `read-state.ts`.
  */

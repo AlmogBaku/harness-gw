@@ -1,7 +1,7 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
 import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { ACP_PROTOCOL_VERSION, AOS_METHODS } from "../../protocol/acp"
+import { ACP_PROTOCOL_VERSION, HGW_METHODS } from "../../protocol/acp"
 import { authenticationRequired } from "./validation"
 
 /** The WebSocket shape a prepared ACP upgrade drives. */
@@ -20,7 +20,7 @@ export type AcpErrorReply = { code: number; message: string; data?: unknown }
 
 /**
  * How a listener shows its failures: an error reply's code, whatever it is, as
- * a public reply, and an `_aos/error` notification's code as a public code.
+ * a public reply, and an `_hgw/error` notification's code as a public code.
  */
 export type PublicErrors = {
   reply(code: unknown): AcpErrorReply
@@ -269,7 +269,7 @@ function publicMessage(frame: unknown, shown: PublicErrors): unknown {
       ),
     }
   }
-  if ("method" in frame && frame.method === AOS_METHODS.notify.error) {
+  if ("method" in frame && frame.method === HGW_METHODS.notify.error) {
     const params: Record<string, unknown> =
       "params" in frame &&
       typeof frame.params === "object" &&

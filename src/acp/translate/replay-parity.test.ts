@@ -2,7 +2,7 @@ import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import type { SessionHistoryResponse } from "../../../protocol"
-import { AOS_META_KEY } from "../../../protocol/acp"
+import { HGW_META_KEY } from "../../../protocol/acp"
 import { TurnEventKind, type TurnEvent } from "../../core/events"
 import {
   initialTranslateState,
@@ -180,7 +180,7 @@ const UNSHARED_META = new Set(["sequence", "turnId", "argsTextDelta"])
  */
 function anonymous(update: SessionUpdate): Record<string, unknown> {
   const { _meta, ...rest } = update as Record<string, unknown>
-  const wrapper = isRecord(_meta) ? _meta[AOS_META_KEY] : undefined
+  const wrapper = isRecord(_meta) ? _meta[HGW_META_KEY] : undefined
   const aos = isRecord(wrapper) ? wrapper : {}
   const meta = Object.fromEntries(
     Object.entries(aos).filter(([key]) => !UNSHARED_META.has(key))

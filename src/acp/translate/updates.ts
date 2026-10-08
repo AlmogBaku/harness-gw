@@ -8,20 +8,20 @@ import type {
 import type { z } from "zod"
 
 import {
-  AOS_META_KEY,
-  AOS_PLAN_ID,
-  AosPlanMetaSchema,
-  type AosArtifactDescriptor,
-  type AosChunkMetaSchema,
-  type AosStateMetaSchema,
-  type AosToolCallMetaSchema,
+  HGW_META_KEY,
+  HGW_PLAN_ID,
+  HgwPlanMetaSchema,
+  type HgwArtifactDescriptor,
+  type HgwChunkMetaSchema,
+  type HgwStateMetaSchema,
+  type HgwToolCallMetaSchema,
   formatArtifactUri,
 } from "../../../protocol/acp"
 import type { AcpOutbound, TranslateContext } from "../types"
 import { StopReason, type ToolDiff } from "../../core/events"
 
 /**
- * The `session/update` values the proxy emits, each carrying the `_meta.aos`
+ * The `session/update` values the proxy emits, each carrying the `_meta.hgw`
  * its schema in `protocol/acp.ts` defines. Run translation and history replay
  * share these builders so one Session speaks one vocabulary.
  */
@@ -34,7 +34,7 @@ const PLAN_STATUS = {
   failed: "_failed",
 } as const
 
-export const TodosSchema = AosPlanMetaSchema.shape.todos
+export const TodosSchema = HgwPlanMetaSchema.shape.todos
 type SessionTodos = z.infer<typeof TodosSchema>
 
 export function turnMeta(context: TranslateContext) {
@@ -62,13 +62,13 @@ export function stateOutbound(
     | { state: "running" }
     | { state: "requires_action" }
     | { state: "idle"; stopReason: string; usage?: Usage },
-  extra?: ExtraMeta<typeof AosStateMetaSchema>
+  extra?: ExtraMeta<typeof HgwStateMetaSchema>
 ): AcpOutbound {
   const at = extra?.at ?? new Date(context.now?.() ?? Date.now()).toISOString()
   return update({
     sessionUpdate: "state_update",
     ...state,
-    _meta: { [AOS_META_KEY]: { ...turnMeta(context), ...extra, at } },
+    _meta: { [HGW_META_KEY]: { ...turnMeta(context), ...extra, at } },
   })
 }
 
@@ -79,14 +79,14 @@ export function chunkOutbound(
     "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk",
   messageId: string,
   content: string | ContentBlock,
-  extra?: ExtraMeta<typeof AosChunkMetaSchema>
+  extra?: ExtraMeta<typeof HgwChunkMetaSchema>
 ): AcpOutbound {
   return update({
     sessionUpdate,
     messageId,
     content:
       typeof content === "string" ? { type: "text", text: content } : content,
-    _meta: { [AOS_META_KEY]: { ...turnMeta(context), ...extra } },
+    _meta: { [HGW_META_KEY]: { ...turnMeta(context), ...extra } },
   })
 }
 
@@ -99,7 +99,7 @@ export function artifactOutbound(
   context: TranslateContext,
   sessionUpdate: "agent_message_chunk" | "user_message_chunk",
   messageId: string,
-  artifact: AosArtifactDescriptor
+  artifact: HgwArtifactDescriptor
 ): AcpOutbound {
   return chunkOutbound(context, sessionUpdate, messageId, {
     type: "resource_link",
@@ -110,7 +110,7 @@ export function artifactOutbound(
   })
 }
 
-type ToolMeta = Omit<ExtraMeta<typeof AosToolCallMetaSchema>, "messageId">
+type ToolMeta = Omit<ExtraMeta<typeof HgwToolCallMetaSchema>, "messageId">
 
 export function toolOutbound(
   context: TranslateContext,
@@ -121,7 +121,7 @@ export function toolOutbound(
   return update({
     sessionUpdate: "tool_call_update",
     ...call,
-    _meta: { [AOS_META_KEY]: { ...turnMeta(context), messageId, ...extra } },
+    _meta: { [HGW_META_KEY]: { ...turnMeta(context), messageId, ...extra } },
   })
 }
 
@@ -136,11 +136,11 @@ export function toolContentOutbound(
     sessionUpdate: "tool_call_content_chunk",
     toolCallId,
     content,
-    _meta: { [AOS_META_KEY]: { ...turnMeta(context), messageId } },
+    _meta: { [HGW_META_KEY]: { ...turnMeta(context), messageId } },
   })
 }
 
-/** The one plan a Session carries: its Todos, kept losslessly in `_meta.aos`. */
+/** The one plan a Session carries: its Todos, kept losslessly in `_meta.hgw`. */
 export function planUpdate(
   todos: SessionTodos,
   meta: { sequence: number; turnId?: string }
@@ -149,14 +149,14 @@ export function planUpdate(
     sessionUpdate: "plan_update",
     plan: {
       type: "items",
-      planId: AOS_PLAN_ID,
+      planId: HGW_PLAN_ID,
       entries: todos.map((todo) => ({
         content: todo.label,
         priority: "medium",
         status: PLAN_STATUS[todo.status],
       })),
     },
-    _meta: { [AOS_META_KEY]: { ...meta, todos } },
+    _meta: { [HGW_META_KEY]: { ...meta, todos } },
   }
 }
 

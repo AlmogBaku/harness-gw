@@ -14,11 +14,11 @@ import {
 } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
-  AOS_METHODS,
-  AOS_META_KEY,
-  AOS_REPLAY_BEFORE,
+  HGW_AUTH_METHOD_INVITE,
+  HGW_JSONRPC_ERRORS,
+  HGW_METHODS,
+  HGW_META_KEY,
+  HGW_REPLAY_BEFORE,
 } from "../../protocol/acp"
 import { createChannels } from "../core/channel"
 import {
@@ -575,13 +575,13 @@ function harness(options: HarnessOptions = {}) {
         info: { name: "aos-guest-browser", version: "1" },
         capabilities: {
           elicitation: { form: {} },
-          _meta: { [AOS_META_KEY]: { historyPages: pagesHistory } },
+          _meta: { [HGW_META_KEY]: { historyPages: pagesHistory } },
         },
       }),
     login: async (token: string) =>
       await connection.agent.request(methods.agent.auth.login, {
-        methodId: AOS_AUTH_METHOD_INVITE,
-        _meta: { [AOS_META_KEY]: { token } },
+        methodId: HGW_AUTH_METHOD_INVITE,
+        _meta: { [HGW_META_KEY]: { token } },
       }),
     resume: (sessionId: string, replay = false) =>
       connection.agent.request(methods.agent.session.resume, {
@@ -593,7 +593,7 @@ function harness(options: HarnessOptions = {}) {
       connection.agent.request(methods.agent.session.resume, {
         sessionId: REF,
         cwd: "/",
-        replayFrom: { type: AOS_REPLAY_BEFORE, cursor },
+        replayFrom: { type: HGW_REPLAY_BEFORE, cursor },
       }),
     prompt: (text: string, sessionId = REF) =>
       connection.agent.request(methods.agent.session.prompt, {
@@ -601,7 +601,7 @@ function harness(options: HarnessOptions = {}) {
         prompt: [{ type: "text" as const, text }],
       }),
     steer: (text: string, sessionId = REF) =>
-      connection.agent.request(AOS_METHODS.session.steer, {
+      connection.agent.request(HGW_METHODS.session.steer, {
         sessionId,
         requestId: "steer-1",
         text,
@@ -658,12 +658,12 @@ async function loggedInWire(listener: GuestAcpServiceOptions, token: string) {
   await socket.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
-    capabilities: { _meta: { [AOS_META_KEY]: { historyPages: true } } },
+    capabilities: { _meta: { [HGW_META_KEY]: { historyPages: true } } },
   })
   expect(
     await socket.request(methods.agent.auth.login, {
-      methodId: AOS_AUTH_METHOD_INVITE,
-      _meta: { [AOS_META_KEY]: { token } },
+      methodId: HGW_AUTH_METHOD_INVITE,
+      _meta: { [HGW_META_KEY]: { token } },
     })
   ).toMatchObject({ result: {} })
   return socket
@@ -701,7 +701,7 @@ const ACTING_FRAMES: Array<[string, Record<string, unknown>]> = [
     "a steer",
     {
       id: "late",
-      method: AOS_METHODS.session.steer,
+      method: HGW_METHODS.session.steer,
       params: { sessionId: REF, requestId: "steer-1", text: "Shorter" },
     },
   ],
@@ -713,7 +713,7 @@ const ACTING_FRAMES: Array<[string, Record<string, unknown>]> = [
       params: {
         sessionId: REF,
         prompt: [{ type: "text", text: "Again" }],
-        _meta: { [AOS_META_KEY]: { rewindSourceId: "user-1" } },
+        _meta: { [HGW_META_KEY]: { rewindSourceId: "user-1" } },
       },
     },
   ],
@@ -726,7 +726,7 @@ const ACTING_FRAMES: Array<[string, Record<string, unknown>]> = [
         sessionId: REF,
         cwd: "/",
         replayFrom: {
-          type: AOS_REPLAY_BEFORE,
+          type: HGW_REPLAY_BEFORE,
           cursor: Buffer.from("500").toString("base64url"),
         },
       },
@@ -747,9 +747,9 @@ describe("guest ACP listener", () => {
     expect(initialize).toMatchObject({
       protocolVersion: ACP_PROTOCOL_VERSION,
       capabilities: { session: {} },
-      authMethods: [{ methodId: AOS_AUTH_METHOD_INVITE }],
+      authMethods: [{ methodId: HGW_AUTH_METHOD_INVITE }],
       _meta: {
-        [AOS_META_KEY]: {
+        [HGW_META_KEY]: {
           role: "guest",
           extensions: {
             guestProjection: true,
@@ -786,10 +786,10 @@ describe("guest ACP listener", () => {
       test.agent.request(methods.agent.session.close, { sessionId: REF })
     ).rejects.toMatchObject(required)
     await expect(
-      test.agent.request(AOS_METHODS.agents.list, undefined)
+      test.agent.request(HGW_METHODS.agents.list, undefined)
     ).rejects.toMatchObject(required)
     await expect(
-      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+      test.agent.request(HGW_METHODS.session.focus, { sessionId: REF })
     ).rejects.toMatchObject(required)
     expect(test.resolveInvitedSession).not.toHaveBeenCalled()
     test.close()
@@ -914,7 +914,7 @@ describe("guest ACP listener", () => {
     const resumed = await test.resume(REF, true)
 
     // The answer says only where the replay ended.
-    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    expect(resumed).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
     const commands = await test.recorder.wait(
       (entry) =>
         JSON.stringify(entry.params).includes("available_commands_update"),
@@ -925,7 +925,7 @@ describe("guest ACP listener", () => {
       update: {
         availableCommands: [],
         _meta: {
-          [AOS_META_KEY]: {
+          [HGW_META_KEY]: {
             capabilities: {
               workspace: {
                 slashCommands: { status: "unavailable" },
@@ -955,7 +955,7 @@ describe("guest ACP listener", () => {
         status: "completed",
         rawInput: {},
         _meta: {
-          [AOS_META_KEY]: expect.objectContaining({ argsText: "", app: {} }),
+          [HGW_META_KEY]: expect.objectContaining({ argsText: "", app: {} }),
         },
       },
     ])
@@ -998,7 +998,7 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toEqual({ _meta: { [AOS_META_KEY]: {} } })
+    expect(resumed).toEqual({ _meta: { [HGW_META_KEY]: {} } })
     expect(test.resolveInvitedSession).toHaveBeenCalledWith(
       AGENT,
       REF,
@@ -1023,7 +1023,7 @@ describe("guest ACP listener", () => {
           sessionUpdate: "available_commands_update",
           availableCommands: [],
           _meta: {
-            [AOS_META_KEY]: {
+            [HGW_META_KEY]: {
               capabilities: {
                 workspace: { slashCommands: { status: "unavailable" } },
               },
@@ -1045,14 +1045,14 @@ describe("guest ACP listener", () => {
     for (const [method, params] of [
       [methods.agent.session.new, { cwd: "/" }],
       [methods.agent.session.list, {}],
-      [AOS_METHODS.session.update, { sessionId: REF, title: "Renamed" }],
+      [HGW_METHODS.session.update, { sessionId: REF, title: "Renamed" }],
       [methods.agent.session.delete, { sessionId: REF }],
       [
         methods.agent.session.setConfigOption,
         { sessionId: REF, configId: "model", type: "id", value: "opus" },
       ],
-      [AOS_METHODS.session.update, { sessionId: 5 }],
-      [AOS_METHODS.agents.update, { sessionId: 5 }],
+      [HGW_METHODS.session.update, { sessionId: 5 }],
+      [HGW_METHODS.agents.update, { sessionId: 5 }],
     ] as const)
       expect(await socket.request(method, params), method).toMatchObject({
         error: { code: METHOD_NOT_FOUND },
@@ -1088,13 +1088,13 @@ describe("guest ACP listener", () => {
         sessionUpdate: "tool_call_update",
         toolCallId: "live-app",
         title: APP_TOOL,
-        _meta: { [AOS_META_KEY]: expect.objectContaining({ app: {} }) },
+        _meta: { [HGW_META_KEY]: expect.objectContaining({ app: {} }) },
       },
       {
         sessionUpdate: "tool_call_update",
         toolCallId: "live-app",
         status: "completed",
-        _meta: { [AOS_META_KEY]: expect.objectContaining({ app: {} }) },
+        _meta: { [HGW_META_KEY]: expect.objectContaining({ app: {} }) },
       },
     ])
     expect(streamed).not.toContain("read_file")
@@ -1128,7 +1128,7 @@ describe("guest ACP listener", () => {
       sessionId: REF,
       message: QUESTION.message,
       _meta: {
-        [AOS_META_KEY]: {
+        [HGW_META_KEY]: {
           questions: [
             {
               header: "Folder under /srv/aos",
@@ -1195,7 +1195,7 @@ describe("guest ACP listener", () => {
           "idle",
       "the continued turn to settle idle"
     )
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(test.start).toHaveBeenCalledTimes(2)
     test.close()
   })
@@ -1212,7 +1212,7 @@ describe("guest ACP listener", () => {
       test.agent.request(methods.agent.session.prompt, {
         sessionId: REF,
         prompt: [{ type: "text", text: "Hello" }],
-        _meta: { [AOS_META_KEY]: { clientId: "send-1" } },
+        _meta: { [HGW_META_KEY]: { clientId: "send-1" } },
       })
 
     const first = await send()
@@ -1243,7 +1243,7 @@ describe("guest ACP listener", () => {
     await vi.waitFor(() =>
       expect(test.handles.at(0)?.stop).toHaveBeenCalledOnce()
     )
-    expect(test.recorder.of(AOS_METHODS.notify.error)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     test.close()
   })
 
@@ -1291,7 +1291,7 @@ describe("guest ACP listener", () => {
     await test.resume(REF)
 
     await expect(
-      test.agent.request(AOS_METHODS.session.focus, { sessionId: REF })
+      test.agent.request(HGW_METHODS.session.focus, { sessionId: REF })
     ).resolves.toEqual({})
 
     expect(test.updateSession).not.toHaveBeenCalled()
@@ -1327,12 +1327,12 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
     expect(resumed).toMatchObject({
-      _meta: { [AOS_META_KEY]: { history: { nextCursor: cursor } } },
+      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursor } } },
     })
     const from = test.recorder.entries.length
     const page = await test.older(cursor)
 
-    expect(page).toEqual({ _meta: { [AOS_META_KEY]: { history: {} } } })
+    expect(page).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
     expect(test.history).toHaveBeenLastCalledWith(AGENT, STORED, 500, 500)
     const sent = test.recorder.entries
       .slice(from)
@@ -1346,7 +1346,7 @@ describe("guest ACP listener", () => {
     expect(replayed).not.toContain(INSTRUCTION)
     for (const { params } of sent)
       expect(params).toMatchObject({
-        update: { _meta: { [AOS_META_KEY]: { historyPage: { cursor } } } },
+        update: { _meta: { [HGW_META_KEY]: { historyPage: { cursor } } } },
       })
     test.close()
   })
@@ -1363,7 +1363,7 @@ describe("guest ACP listener", () => {
     })
 
     const resumed = await test.resume(REF, true)
-    expect(resumed).toMatchObject({ _meta: { [AOS_META_KEY]: {} } })
+    expect(resumed).toMatchObject({ _meta: { [HGW_META_KEY]: {} } })
     expect(JSON.stringify(updates(test.recorder))).not.toContain(INSTRUCTION)
     await expect(test.resume("other_ref")).rejects.toMatchObject({
       code: NOT_FOUND,
@@ -1490,7 +1490,7 @@ const FAILURES: Array<[string, () => unknown]> = [
 
 /** Every code a guest's error reply may carry. */
 const PUBLIC_CODES: readonly number[] = [
-  ...Object.values(AOS_JSONRPC_ERRORS),
+  ...Object.values(HGW_JSONRPC_ERRORS),
   AUTHENTICATION_REQUIRED,
   NOT_FOUND,
   INVALID_PARAMS,
@@ -1535,7 +1535,7 @@ describe("guest scope and commands", () => {
         sessionId: "another-session",
         cwd: "/",
         replayFrom: {
-          type: AOS_REPLAY_BEFORE,
+          type: HGW_REPLAY_BEFORE,
           cursor: Buffer.from("500").toString("base64url"),
         },
       })
@@ -1545,7 +1545,7 @@ describe("guest scope and commands", () => {
       sessionId: REF,
       cwd: "/",
       replayFrom: { type: "start" },
-      _meta: { [AOS_META_KEY]: { agentId: "another-agent" } },
+      _meta: { [HGW_META_KEY]: { agentId: "another-agent" } },
     })
     expect(test.resolveInvitedSession).toHaveBeenLastCalledWith(
       AGENT,
@@ -1678,7 +1678,7 @@ describe("guest scope and commands", () => {
     // Another connection on the same invitation steers only once it joins.
     const other = await loggedInWire(test.listener, token)
     expect(
-      await other.request(AOS_METHODS.session.steer, {
+      await other.request(HGW_METHODS.session.steer, {
         sessionId: REF,
         requestId: "steer-2",
         text: "Longer",
@@ -1707,7 +1707,7 @@ describe("guest scope and commands", () => {
       test.agent.request(methods.agent.session.prompt, {
         sessionId: REF,
         prompt: [{ type: "text", text: "Read this" }],
-        _meta: { [AOS_META_KEY]: { attachmentStageId } },
+        _meta: { [HGW_META_KEY]: { attachmentStageId } },
       })
 
     for (const [name, existing] of [
@@ -1756,7 +1756,7 @@ describe("guest scope and commands", () => {
       return test.agent.request(methods.agent.session.prompt, {
         sessionId: REF,
         prompt: [{ type: "text", text: "Again" }],
-        _meta: { [AOS_META_KEY]: { rewindSourceId } },
+        _meta: { [HGW_META_KEY]: { rewindSourceId } },
       })
     }
 
@@ -1802,7 +1802,7 @@ describe("guest scope and commands", () => {
     const smuggledMeta = await socket.request(methods.agent.session.prompt, {
       sessionId: REF,
       prompt: [{ type: "text", text: "Hello" }],
-      _meta: { [AOS_META_KEY]: { smuggled: "operator-only" } },
+      _meta: { [HGW_META_KEY]: { smuggled: "operator-only" } },
     })
     expect(smuggledMeta.error).toMatchObject({
       code: INVALID_PARAMS,
@@ -1918,7 +1918,7 @@ describe("guest scope and commands", () => {
         prompt: hello,
       })
     ).toMatchObject({
-      error: { code: AOS_JSONRPC_ERRORS.temporarilyUnavailable },
+      error: { code: HGW_JSONRPC_ERRORS.temporarilyUnavailable },
     })
     expect(test.start).toHaveBeenCalledTimes(2)
     first.close()
@@ -1933,7 +1933,7 @@ describe("guest scope and commands", () => {
     )
 
     expectPublicError(
-      await socket.request(AOS_METHODS.session.steer, {
+      await socket.request(HGW_METHODS.session.steer, {
         sessionId: REF,
         requestId: OPERATOR_SECRET,
         text: 5,
@@ -1985,9 +1985,9 @@ describe("guest scope and commands", () => {
     expect(kinds).not.toContain("usage_update")
     expect(kinds).not.toContain("config_option_update")
     expect(kinds).not.toContain("notice")
-    expect(test.recorder.of(AOS_METHODS.notify.catalogInvalidated)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.catalogInvalidated)).toEqual([])
     expect(JSON.stringify(test.recorder.entries)).not.toContain("unread")
-    expect(test.recorder.of(AOS_METHODS.notify.activity)).toEqual([])
+    expect(test.recorder.of(HGW_METHODS.notify.activity)).toEqual([])
     // Nor does it list the deployment's Sessions to seed one.
     expect(test.listAllSessions).not.toHaveBeenCalled()
     test.close()

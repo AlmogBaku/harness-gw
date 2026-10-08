@@ -8,7 +8,7 @@
  * cannot express is named in `gaps` with its reason and listed as skipped.
  *
  * The client is plain: it reaches the Agent at the Agent's own address,
- * sends no `_meta` of its own, registers no `_aos/*` handler, and reads
+ * sends no `_meta` of its own, registers no `_hgw/*` handler, and reads
  * standard fields only. A case that tests an extra on purpose uses an extras
  * client, and a case no runtime changes runs in `runWireListenerContract`,
  * over one runtime.
@@ -38,15 +38,15 @@ import {
 import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import {
-  AOS_ACP_AGENTS_PATH,
-  AOS_ACP_GUEST_PATH,
-  AOS_ACP_OPERATOR_PATH,
-  AOS_AUTH_METHOD_INVITE,
-  AOS_JSONRPC_ERRORS,
-  AOS_META_KEY,
-  AOS_METHODS,
-  AOS_STOP_REASONS,
-  aosAcpAgentPath,
+  HGW_ACP_AGENTS_PATH,
+  HGW_ACP_GUEST_PATH,
+  HGW_ACP_OPERATOR_PATH,
+  HGW_AUTH_METHOD_INVITE,
+  HGW_JSONRPC_ERRORS,
+  HGW_META_KEY,
+  HGW_METHODS,
+  HGW_STOP_REASONS,
+  hgwAcpAgentPath,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredProxy } from "../composition"
@@ -596,13 +596,13 @@ const TIGHT_LIMITS: SubscriberLimits = {
   subscriberBytes: 1_024,
 }
 
-/** The AOS-only methods a client read that name a view to rebuild. */
+/** The hgw-only methods a client read that name a view to rebuild. */
 function rebuildNotices(client: WireClient) {
   return client.bridge.sockets().flatMap(({ frames }) =>
     frames.flatMap((raw) => {
       const { method } = JSON.parse(raw) as { method?: string }
-      return method === "_aos/session_invalidated" ||
-        method === "_aos/steer_accepted"
+      return method === "_hgw/session_invalidated" ||
+        method === "_hgw/steer_accepted"
         ? [method]
         : []
     })
@@ -701,7 +701,7 @@ function wireCase(
           connect(
             proxy.acpService,
             OPERATOR_ORIGIN,
-            aosAcpAgentPath(runtime.agentId),
+            hgwAcpAgentPath(runtime.agentId),
             options
           ),
       })
@@ -827,7 +827,7 @@ export function runWireContract(
 
           await expect(
             until(clock, prompt(plain, sessionId, "and their sizes"))
-          ).rejects.toMatchObject({ code: AOS_JSONRPC_ERRORS.turnInProgress })
+          ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.turnInProgress })
           const stored = [{ id: answer.messageId, text: "list the files" }]
           expect(userSide(reader.updates)).toEqual(stored)
           expect(userSide(plain.updates)).toEqual(stored)
@@ -1074,7 +1074,7 @@ export function runWireContract(
             stale.connection.agent.request(methods.agent.session.resume, {
               sessionId,
               cwd: stale.folder,
-              _meta: { [AOS_META_KEY]: { after: 1 } },
+              _meta: { [HGW_META_KEY]: { after: 1 } },
             })
           )
           const reader = connectPlain()
@@ -1091,7 +1091,7 @@ export function runWireContract(
           for (const client of [plain, stale]) {
             expect(states(client.updates).at(-1)).toMatch(/^idle/u)
             expect(states(client.updates).join()).not.toContain(
-              AOS_STOP_REASONS.uncertain
+              HGW_STOP_REASONS.uncertain
             )
             expect(rebuildNotices(client)).toEqual([])
           }
@@ -1433,7 +1433,7 @@ export function runWireListenerContract(
                 rawSocket(
                   proxy.acpService,
                   OPERATOR_ORIGIN,
-                  AOS_ACP_OPERATOR_PATH
+                  HGW_ACP_OPERATOR_PATH
                 )
               )
               const frame = rawInitialize(version)
@@ -1462,7 +1462,7 @@ export function runWireListenerContract(
               rawSocket(
                 proxy.acpService,
                 OPERATOR_ORIGIN,
-                AOS_ACP_OPERATOR_PATH
+                HGW_ACP_OPERATOR_PATH
               )
             )
           const answers: unknown[] = []
@@ -1515,7 +1515,7 @@ export function runWireListenerContract(
         wireCase(createRuntime, async ({ proxy, clock }) => {
           const raw = await until(
             clock,
-            rawSocket(proxy.acpService, OPERATOR_ORIGIN, AOS_ACP_OPERATOR_PATH)
+            rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_OPERATOR_PATH)
           )
           raw.send(
             JSON.stringify([
@@ -1539,8 +1539,8 @@ export function runWireListenerContract(
         wireCase(createRuntime, async ({ proxy, clock }) => {
           const answers: unknown[] = []
           for (const [service, origin, path] of [
-            [proxy.acpService, OPERATOR_ORIGIN, AOS_ACP_OPERATOR_PATH],
-            [proxy.guest!.acpService, GUEST_ORIGIN, AOS_ACP_GUEST_PATH],
+            [proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_OPERATOR_PATH],
+            [proxy.guest!.acpService, GUEST_ORIGIN, HGW_ACP_GUEST_PATH],
           ] as const)
             for (const sent of [undefined, origin, "null", "https://x.test"]) {
               const upgrade = await until(
@@ -1566,13 +1566,13 @@ export function runWireListenerContract(
         wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
           const answers: Record<string, unknown> = {}
           for (const path of [
-            AOS_ACP_OPERATOR_PATH,
-            aosAcpAgentPath(agentId),
-            aosAcpAgentPath("writer"),
-            aosAcpAgentPath(`${agentId}/x`),
-            `${aosAcpAgentPath(agentId)}/x`,
-            `${AOS_ACP_AGENTS_PATH}/`,
-            `${AOS_ACP_OPERATOR_PATH}/sessions`,
+            HGW_ACP_OPERATOR_PATH,
+            hgwAcpAgentPath(agentId),
+            hgwAcpAgentPath("writer"),
+            hgwAcpAgentPath(`${agentId}/x`),
+            `${hgwAcpAgentPath(agentId)}/x`,
+            `${HGW_ACP_AGENTS_PATH}/`,
+            `${HGW_ACP_OPERATOR_PATH}/sessions`,
           ]) {
             const upgrade = await until(
               clock,
@@ -1618,10 +1618,10 @@ export function runWireListenerContract(
             const shared = connect(
               proxy.acpService,
               OPERATOR_ORIGIN,
-              AOS_ACP_OPERATOR_PATH
+              HGW_ACP_OPERATOR_PATH
             )
             await until(clock, shared.initialize())
-            const other = { _meta: { [AOS_META_KEY]: { agentId: "writer" } } }
+            const other = { _meta: { [HGW_META_KEY]: { agentId: "writer" } } }
             const refused = await Promise.all(
               (
                 [
@@ -1649,7 +1649,7 @@ export function runWireListenerContract(
             expect(
               listed.sessions.map((row) => ({
                 sessionId: row.sessionId,
-                agentId: row._meta?.[AOS_META_KEY],
+                agentId: row._meta?.[HGW_META_KEY],
               }))
             ).toEqual([
               { sessionId, agentId: expect.objectContaining({ agentId }) },
@@ -1799,7 +1799,7 @@ export function runWireListenerContract(
           const { token } = await guest.invitations.issue({ agentId, ref })
           const raw = await until(
             clock,
-            rawSocket(guest.acpService, GUEST_ORIGIN, AOS_ACP_GUEST_PATH)
+            rawSocket(guest.acpService, GUEST_ORIGIN, HGW_ACP_GUEST_PATH)
           )
           raw.send(JSON.stringify(rawInitialize(2)))
           await until(clock, raw.next())
@@ -1809,8 +1809,8 @@ export function runWireListenerContract(
               id: 2,
               method: methods.agent.auth.login,
               params: {
-                methodId: AOS_AUTH_METHOD_INVITE,
-                _meta: { [AOS_META_KEY]: { token } },
+                methodId: HGW_AUTH_METHOD_INVITE,
+                _meta: { [HGW_META_KEY]: { token } },
               },
             })
           )
@@ -1821,13 +1821,13 @@ export function runWireListenerContract(
               {
                 jsonrpc: "2.0",
                 id: 3,
-                method: AOS_METHODS.session.focus,
+                method: HGW_METHODS.session.focus,
                 params: {},
               },
               {
                 jsonrpc: "2.0",
                 id: 4,
-                method: AOS_METHODS.session.part,
+                method: HGW_METHODS.session.part,
                 // The SDK's invalid-params reply echoes an unknown key.
                 params: { sessionId: ref, "internal detail 7f3a": true },
               },
@@ -1866,7 +1866,7 @@ export function runWireListenerContract(
           const extras = connect(
             guest.acpService,
             GUEST_ORIGIN,
-            AOS_ACP_GUEST_PATH
+            HGW_ACP_GUEST_PATH
           )
           const { token } = await guest.invitations.issue({
             agentId,
@@ -1878,8 +1878,8 @@ export function runWireListenerContract(
             until(
               clock,
               extras.connection.agent.request(methods.agent.auth.login, {
-                methodId: AOS_AUTH_METHOD_INVITE,
-                _meta: { [AOS_META_KEY]: { token } },
+                methodId: HGW_AUTH_METHOD_INVITE,
+                _meta: { [HGW_META_KEY]: { token } },
               })
             )
           ).resolves.toBeTypeOf("object")

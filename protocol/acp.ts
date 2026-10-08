@@ -19,7 +19,7 @@ import {
  * The AOS extension contract carried over ACP v2 between the Bun proxy (agent
  * side) and the browser (client side). ACP defines the turn stream, sessions,
  * config options, permissions, and plans; everything AOS needs beyond that
- * travels as underscore-prefixed extension methods and `_meta.aos` payloads
+ * travels as underscore-prefixed extension methods and `_meta.hgw` payloads
  * defined here. Both ends import this module and nothing else defines these
  * shapes.
  *
@@ -31,61 +31,61 @@ import {
  */
 
 export const ACP_PROTOCOL_VERSION = 2 as const
-export const AOS_ACP_OPERATOR_PATH = "/api/aos/v1/acp" as const
+export const HGW_ACP_OPERATOR_PATH = "/api/aos/v1/acp" as const
 /**
  * Below the operator path, each Agent's own address: its Sessions alone, with
- * no `_meta.aos.agentId` to name.
+ * no `_meta.hgw.agentId` to name.
  */
-export const AOS_ACP_AGENTS_PATH = `${AOS_ACP_OPERATOR_PATH}/agents` as const
-export const AOS_ACP_GUEST_PATH = "/api/guest/v1/acp" as const
+export const HGW_ACP_AGENTS_PATH = `${HGW_ACP_OPERATOR_PATH}/agents` as const
+export const HGW_ACP_GUEST_PATH = "/api/guest/v1/acp" as const
 
 /** One Agent's own ACP address, its id one path segment. */
-export function aosAcpAgentPath(agentId: string) {
-  return `${AOS_ACP_AGENTS_PATH}/${encodeURIComponent(agentId)}`
+export function hgwAcpAgentPath(agentId: string) {
+  return `${HGW_ACP_AGENTS_PATH}/${encodeURIComponent(agentId)}`
 }
-export const AOS_META_KEY = "aos" as const
-export const AOS_EXTENSION_VERSION = 1 as const
-export const AOS_AUTH_METHOD_INVITE = "aos-invite" as const
-export const AOS_ATTACHMENT_URI_SCHEME = "aos-attachment:" as const
-export const AOS_ARTIFACT_URI_SCHEME = "artifact:" as const
+export const HGW_META_KEY = "hgw" as const
+export const HGW_EXTENSION_VERSION = 1 as const
+export const HGW_AUTH_METHOD_INVITE = "hgw-invite" as const
+export const HGW_ATTACHMENT_URI_SCHEME = "hgw-attachment:" as const
+export const HGW_ARTIFACT_URI_SCHEME = "artifact:" as const
 
-export const AOS_METHODS = {
+export const HGW_METHODS = {
   session: {
-    update: "_aos/session/update",
-    steer: "_aos/session/steer",
-    focus: "_aos/session/focus",
-    part: "_aos/session/part",
+    update: "_hgw/session/update",
+    steer: "_hgw/session/steer",
+    focus: "_hgw/session/focus",
+    part: "_hgw/session/part",
   },
   agents: {
-    list: "_aos/agents/list",
-    update: "_aos/agents/update",
+    list: "_hgw/agents/list",
+    update: "_hgw/agents/update",
   },
   notify: {
-    activity: "_aos/activity",
-    composerPrefill: "_aos/composer_prefill",
-    catalogInvalidated: "_aos/catalog_invalidated",
-    error: "_aos/error",
+    activity: "_hgw/activity",
+    composerPrefill: "_hgw/composer_prefill",
+    catalogInvalidated: "_hgw/catalog_invalidated",
+    error: "_hgw/error",
   },
 } as const
 
 /** Vendor stop reasons used on `state_update { state: "idle" }`. */
-export const AOS_STOP_REASONS = {
-  error: "_aos_error",
-  uncertain: "_aos_uncertain",
+export const HGW_STOP_REASONS = {
+  error: "_hgw_error",
+  uncertain: "_hgw_uncertain",
 } as const
 
 /** Vendor permission option kind for Hermes' "allow for this session" scope. */
-export const AOS_PERMISSION_KIND_SESSION = "_allow_session" as const
+export const HGW_PERMISSION_KIND_SESSION = "_allow_session" as const
 
 /** The single plan a Session carries: its Todos. */
-export const AOS_PLAN_ID = "todos" as const
+export const HGW_PLAN_ID = "todos" as const
 
 /**
  * JSON-RPC error codes for the failures ACP has no code for. Every error ACP
  * defines travels with ACP's own code, as the SDK's `RequestError` builds it;
  * these sit in their own block from -31010, clear of the codes ACP uses.
  */
-export const AOS_JSONRPC_ERRORS = {
+export const HGW_JSONRPC_ERRORS = {
   turnInProgress: -31010,
   staleRequest: -31011,
   revisionConflict: -31012,
@@ -93,8 +93,8 @@ export const AOS_JSONRPC_ERRORS = {
   uncertainMutation: -31014,
   unsupported: -31015,
 } as const
-export type AosJsonRpcErrorCode =
-  (typeof AOS_JSONRPC_ERRORS)[keyof typeof AOS_JSONRPC_ERRORS]
+export type HgwJsonRpcErrorCode =
+  (typeof HGW_JSONRPC_ERRORS)[keyof typeof HGW_JSONRPC_ERRORS]
 
 export const IdentifierSchema = z
   .string()
@@ -116,7 +116,7 @@ const readObject = z.object
 // initialize
 // ---------------------------------------------------------------------------
 
-export const AosExtensionsSchema = readObject({
+export const HgwExtensionsSchema = readObject({
   steer: z.boolean(),
   rewind: z.boolean(),
   composerPrefill: z.boolean(),
@@ -126,30 +126,30 @@ export const AosExtensionsSchema = readObject({
   readState: z.boolean(),
   focus: z.boolean(),
   guestProjection: z.boolean(),
-  /** `session/resume` accepts `replayFrom: { type: "_aos/before" }`. */
+  /** `session/resume` accepts `replayFrom: { type: "_hgw/before" }`. */
   historyPages: z.boolean().default(false),
 })
-export type AosExtensions = z.infer<typeof AosExtensionsSchema>
+export type HgwExtensions = z.infer<typeof HgwExtensionsSchema>
 
 /**
- * `ClientCapabilities._meta.aos` on `initialize`: the AOS extensions this
+ * `ClientCapabilities._meta.hgw` on `initialize`: the AOS extensions this
  * client understands. Without `historyPages`, a from-start resume replays the
  * whole Session, as ACP's `replayFrom: { type: "start" }` requires.
  */
-export const AosClientCapabilitiesMetaSchema = readObject({
+export const HgwClientCapabilitiesMetaSchema = readObject({
   historyPages: z.boolean().default(false),
 })
 
-/** `InitializeResponse._meta.aos` */
-export const AosInitializeMetaSchema = readObject({
-  version: z.literal(AOS_EXTENSION_VERSION),
+/** `InitializeResponse._meta.hgw` */
+export const HgwInitializeMetaSchema = readObject({
+  version: z.literal(HGW_EXTENSION_VERSION),
   role: RoleSchema,
-  extensions: AosExtensionsSchema,
+  extensions: HgwExtensionsSchema,
 })
-export type AosInitializeMeta = z.infer<typeof AosInitializeMetaSchema>
+export type HgwInitializeMeta = z.infer<typeof HgwInitializeMetaSchema>
 
-/** `LoginAuthRequest._meta.aos` for the guest listener. */
-export const AosLoginMetaSchema = z.strictObject({
+/** `LoginAuthRequest._meta.hgw` for the guest listener. */
+export const HgwLoginMetaSchema = z.strictObject({
   token: z.string().min(1).max(4096),
 })
 
@@ -163,8 +163,8 @@ export const AosLoginMetaSchema = z.strictObject({
  */
 const ClientIdSchema = IdentifierSchema.optional()
 
-/** `NewSessionRequest._meta.aos` */
-export const AosSessionNewMetaSchema = z.strictObject({
+/** `NewSessionRequest._meta.hgw` */
+export const HgwSessionNewMetaSchema = z.strictObject({
   /**
    * Required on the shared address; on an Agent's own address it is that
    * Agent, or absent.
@@ -174,18 +174,18 @@ export const AosSessionNewMetaSchema = z.strictObject({
   clientId: ClientIdSchema,
 })
 
-/** `ListSessionsRequest._meta.aos` */
-export const AosSessionListMetaSchema = z.strictObject({
+/** `ListSessionsRequest._meta.hgw` */
+export const HgwSessionListMetaSchema = z.strictObject({
   agentId: IdentifierSchema.optional(),
 })
 
 /**
- * `SessionInfo._meta.aos` on `session/list` entries and
- * `session_info_update._meta.aos`. `unread`, `pinned`, and `createdAt` are
+ * `SessionInfo._meta.hgw` on `session/list` entries and
+ * `session_info_update._meta.hgw`. `unread`, `pinned`, and `createdAt` are
  * absent when the runtime does not track that state or this read cannot know
  * it; absent never overwrites a known value.
  */
-export const AosSessionInfoMetaSchema = readObject({
+export const HgwSessionInfoMetaSchema = readObject({
   agentId: IdentifierSchema,
   status: SessionStatusSchema,
   archived: z.boolean(),
@@ -195,13 +195,13 @@ export const AosSessionInfoMetaSchema = readObject({
   /** External platform the Session came from; absent for AOS-native Sessions. */
   platform: SessionPlatformSchema.optional(),
 })
-export type AosSessionInfoMeta = z.infer<typeof AosSessionInfoMetaSchema>
+export type HgwSessionInfoMeta = z.infer<typeof HgwSessionInfoMetaSchema>
 
-/** `ResumeSessionRequest._meta.aos` */
-export const AosSessionResumeMetaSchema = z.strictObject({
+/** `ResumeSessionRequest._meta.hgw` */
+export const HgwSessionResumeMetaSchema = z.strictObject({
   /** Owning Agent, when the client knows it before listing (deep links). */
   agentId: IdentifierSchema.optional(),
-  /** Last `_meta.aos.sequence` the client saw for `turnId`. */
+  /** Last `_meta.hgw.sequence` the client saw for `turnId`. */
   after: SequenceSchema.optional(),
   turnId: IdentifierSchema.optional(),
 })
@@ -212,60 +212,60 @@ export const AosSessionResumeMetaSchema = z.strictObject({
  * `history.nextCursor` a previous resume returned; the server picks the page
  * size, so the client sends no limit. Like every ACP type it may carry `_meta`.
  */
-export const AOS_REPLAY_BEFORE = "_aos/before" as const
-export const AosReplayBeforeSchema = z.strictObject({
-  type: z.literal(AOS_REPLAY_BEFORE),
+export const HGW_REPLAY_BEFORE = "_hgw/before" as const
+export const HgwReplayBeforeSchema = z.strictObject({
+  type: z.literal(HGW_REPLAY_BEFORE),
   cursor: z.string().min(1).max(256),
   _meta: z.record(z.string(), z.unknown()).nullish(),
 })
 
 /**
- * `_meta.aos.history` on a resume that replayed. It follows ACP v2
+ * `_meta.hgw.history` on a resume that replayed. It follows ACP v2
  * `session/list` pagination: `nextCursor` is opaque and its absence means the
  * replayed page reached the Session's beginning, unless `truncated` says older
  * history exists but this server cannot reach it.
  */
-export const AosHistoryCursorSchema = readObject({
+export const HgwHistoryCursorSchema = readObject({
   nextCursor: z.string().min(1).max(256).optional(),
   truncated: z.boolean().optional(),
 })
-export type AosHistoryCursor = z.infer<typeof AosHistoryCursorSchema>
+export type HgwHistoryCursor = z.infer<typeof HgwHistoryCursorSchema>
 
 /**
- * `ResumeSessionResponse._meta.aos` for a `_aos/before` page read: only the
+ * `ResumeSessionResponse._meta.hgw` for a `_hgw/before` page read: only the
  * cursor, since a page read never resumes.
  */
-export const AosHistoryPageResponseMetaSchema = readObject({
-  history: AosHistoryCursorSchema,
+export const HgwHistoryPageResponseMetaSchema = readObject({
+  history: HgwHistoryCursorSchema,
 })
 
 /**
- * Read from the `_meta.aos` of any `session/update`: present only on an update
- * that belongs to a `_aos/before` page, never on a live or start-replay one.
+ * Read from the `_meta.hgw` of any `session/update`: present only on an update
+ * that belongs to a `_hgw/before` page, never on a live or start-replay one.
  * ACP notifications carry no request id, so this tag is what keeps a page apart
  * from live updates for the same Session.
  */
-export const AosHistoryPageTagSchema = readObject({
+export const HgwHistoryPageTagSchema = readObject({
   historyPage: readObject({ cursor: z.string().min(1).max(256) }).optional(),
 })
 
 /**
- * `ResumeSessionResponse._meta.aos`. `position` is the turn and sequence the
+ * `ResumeSessionResponse._meta.hgw`. `position` is the turn and sequence the
  * joined Session's stream stands at, which a later resume continues from.
  * The Session's row, execution, models and capabilities follow the answer as
  * updates.
  */
-export const AosSessionResumeResponseMetaSchema = readObject({
+export const HgwSessionResumeResponseMetaSchema = readObject({
   position: readObject({
     turnId: IdentifierSchema,
     sequence: SequenceSchema,
   }).optional(),
   /** Present whenever this resume replayed history. */
-  history: AosHistoryCursorSchema.optional(),
+  history: HgwHistoryCursorSchema.optional(),
 })
 
-/** `PromptRequest._meta.aos` */
-export const AosPromptMetaSchema = z.strictObject({
+/** `PromptRequest._meta.hgw` */
+export const HgwPromptMetaSchema = z.strictObject({
   /** User turn to rewind before Edit or Retry; validated authoritatively. */
   rewindSourceId: IdentifierSchema.optional(),
   /** Server-staged attachment batch referenced by `resource_link` blocks. */
@@ -273,8 +273,8 @@ export const AosPromptMetaSchema = z.strictObject({
   clientId: ClientIdSchema,
 })
 
-/** `_aos/session/update` params: exactly one intent per write. */
-export const AosSessionUpdateRequestSchema = z
+/** `_hgw/session/update` params: exactly one intent per write. */
+export const HgwSessionUpdateRequestSchema = z
   .strictObject({
     sessionId: IdentifierSchema,
     title: z.string().min(1).max(4096).optional(),
@@ -291,30 +291,30 @@ export const AosSessionUpdateRequestSchema = z
   )
 
 /**
- * `_aos/session/part` params, answered `{}`: this connection stops following
+ * `_hgw/session/part` params, answered `{}`: this connection stops following
  * the Session, whose work runs on. `session/close` also stops that work.
  */
-export const AosSessionPartRequestSchema = z.strictObject({
+export const HgwSessionPartRequestSchema = z.strictObject({
   sessionId: IdentifierSchema,
 })
 
-/** `_aos/session/steer` params and response. */
-export const AosSteerRequestSchema = z.strictObject({
+/** `_hgw/session/steer` params and response. */
+export const HgwSteerRequestSchema = z.strictObject({
   sessionId: IdentifierSchema,
   requestId: IdentifierSchema,
   text: z.string().min(1),
 })
-export const AosSteerResponseSchema = TurnSteerResponseSchema
+export const HgwSteerResponseSchema = TurnSteerResponseSchema
 
 /**
- * `_aos/session/focus` request, answered `{}`: the exposed Session, or none,
+ * `_hgw/session/focus` request, answered `{}`: the exposed Session, or none,
  * plus the workspace presence the browser re-sends every
  * `PRESENCE_HEARTBEAT_MS`. A report without a `sessionId` changes nothing, so
  * the browser can probe its link with `{}`. An absent `foreground` means an
  * exposed Session is in the foreground, and an absent `idle` means the operator
  * is still interacting.
  */
-export const AosFocusRequestSchema = z.strictObject({
+export const HgwFocusRequestSchema = z.strictObject({
   sessionId: IdentifierSchema.nullable().optional(),
   foreground: z.boolean().optional(),
   idle: z.boolean().optional(),
@@ -324,16 +324,16 @@ export const AosFocusRequestSchema = z.strictObject({
 // agents
 // ---------------------------------------------------------------------------
 
-export const AosAgentsListResponseSchema = AgentCatalogResponseSchema
-/** `_aos/agents/update` params: at least one of visibility and avatar. */
-export const AosAgentUpdateRequestSchema = z
+export const HgwAgentsListResponseSchema = AgentCatalogResponseSchema
+/** `_hgw/agents/update` params: at least one of visibility and avatar. */
+export const HgwAgentUpdateRequestSchema = z
   .strictObject({ agentId: IdentifierSchema, ...AgentUpdateFields })
   .refine(writesAgentField, "At least one of visibility, avatar")
-export type AosAgentUpdateRequest = z.infer<typeof AosAgentUpdateRequestSchema>
-export const AosAgentUpdateResponseSchema = AgentUpdateResponseSchema
+export type HgwAgentUpdateRequest = z.infer<typeof HgwAgentUpdateRequestSchema>
+export const HgwAgentUpdateResponseSchema = AgentUpdateResponseSchema
 
 // ---------------------------------------------------------------------------
-// turn stream `_meta.aos`
+// turn stream `_meta.hgw`
 // ---------------------------------------------------------------------------
 
 /** Base for every `session/update` the proxy emits from a turn segment. */
@@ -343,31 +343,31 @@ const TurnMetaBase = {
 }
 
 /**
- * `_meta.aos` of a `terminal_update`, `terminal_output_chunk`, or
+ * `_meta.hgw` of a `terminal_update`, `terminal_output_chunk`, or
  * `compaction_update`: ACP's own fields carry every fact, so only the turn it
  * belongs to travels here.
  */
-export const AosTurnMetaSchema = readObject(TurnMetaBase)
+export const HgwTurnMetaSchema = readObject(TurnMetaBase)
 
 const NoticeKindSchema = z.string().min(1).max(64)
 
 /**
- * `_meta.aos` of a Session-scoped `notice`: the provider's own status kind,
+ * `_meta.hgw` of a Session-scoped `notice`: the provider's own status kind,
  * such as `heartbeat`, which picks the line's icon. A `notice` is live only; a
  * stored one heads the turn it started (`AosMessageMetaSchema`).
  */
-export const AosNoticeMetaSchema = readObject({
+export const HgwNoticeMetaSchema = readObject({
   kind: NoticeKindSchema.optional(),
 })
-export type AosNoticeMeta = z.infer<typeof AosNoticeMetaSchema>
+export type HgwNoticeMeta = z.infer<typeof HgwNoticeMetaSchema>
 
 /**
- * `_meta.aos` of a replayed `agent_message` upsert whose message opens a turn
+ * `_meta.hgw` of a replayed `agent_message` upsert whose message opens a turn
  * of its own: one the provider started without a prompt, led by the notice
  * naming what started it when the provider stored one. Live, a run no prompt
  * opened says the same by its shape.
  */
-export const AosMessageMetaSchema = readObject({
+export const HgwMessageMetaSchema = readObject({
   opensTurn: z.literal(true),
   notice: readObject({
     severity: z.enum(["info", "warning", "error"]),
@@ -375,19 +375,19 @@ export const AosMessageMetaSchema = readObject({
     kind: NoticeKindSchema.optional(),
   }).optional(),
 })
-export type AosMessageMeta = z.infer<typeof AosMessageMetaSchema>
+export type HgwMessageMeta = z.infer<typeof HgwMessageMetaSchema>
 
 const CountSchema = z.number().int().nonnegative()
 
 /** What a turn cost, as the provider priced it; ISO 4217 currency. */
-export const AosCostSchema = readObject({
+export const HgwCostSchema = readObject({
   amount: z.number().nonnegative(),
   currency: z.string().min(1).max(16),
 })
-export type AosCost = z.infer<typeof AosCostSchema>
+export type HgwCost = z.infer<typeof HgwCostSchema>
 
 /** How far a delegated subagent has got. */
-export const AOS_SUBAGENT_STATUSES = [
+export const HGW_SUBAGENT_STATUSES = [
   "running",
   "completed",
   "failed",
@@ -398,13 +398,13 @@ export const AOS_SUBAGENT_STATUSES = [
  * One delegated subagent, as a patch keyed by `id`: a later report restates
  * only what changed, so an omitted key leaves the known value standing.
  */
-export const AosSubagentSchema = readObject({
+export const HgwSubagentSchema = readObject({
   id: IdentifierSchema,
   goal: z.string().max(65_536).optional(),
   model: z.string().min(1).max(256).optional(),
   /** 1 for a subagent the turn spawned, 2 for one that subagent spawned. */
   depth: z.number().int().min(1).optional(),
-  status: z.enum(AOS_SUBAGENT_STATUSES).optional(),
+  status: z.enum(HGW_SUBAGENT_STATUSES).optional(),
   /** Every token the subagent spent. */
   tokens: CountSchema.optional(),
   filesRead: z.array(z.string()).optional(),
@@ -414,7 +414,7 @@ export const AosSubagentSchema = readObject({
   childSessionId: IdentifierSchema.optional(),
   summary: z.string().max(65_536).optional(),
 })
-export type AosSubagent = z.infer<typeof AosSubagentSchema>
+export type HgwSubagent = z.infer<typeof HgwSubagentSchema>
 
 /**
  * Names the delegated subagent a chunk or tool call came from and, when the
@@ -426,8 +426,8 @@ const SubagentAttribution = {
   parentToolCallId: IdentifierSchema.optional(),
 }
 
-/** `state_update._meta.aos` */
-export const AosStateMetaSchema = readObject({
+/** `state_update._meta.hgw` */
+export const HgwStateMetaSchema = readObject({
   ...TurnMetaBase,
   /**
    * When the state took effect. The two state updates that bracket a turn carry
@@ -438,7 +438,7 @@ export const AosStateMetaSchema = readObject({
   /** Stop was acknowledged but the provider has not settled yet. */
   execution: z.literal("stopping").optional(),
   /**
-   * Present with the `_aos_error` and `_aos_uncertain` stop reasons, and on a
+   * Present with the `_hgw_error` and `_hgw_uncertain` stop reasons, and on a
    * `running` update when the turn reports a final failure but stays active
    * until it is stopped.
    */
@@ -451,17 +451,17 @@ export const AosStateMetaSchema = readObject({
    * What the turn cost, on its `idle` update. ACP prices only a Session's
    * cumulative spend, on a `usage_update` that also needs the context window.
    */
-  cost: AosCostSchema.optional(),
+  cost: HgwCostSchema.optional(),
 })
 
-/** `agent_message_chunk` / `agent_thought_chunk` `_meta.aos` */
-export const AosChunkMetaSchema = readObject({
+/** `agent_message_chunk` / `agent_thought_chunk` `_meta.hgw` */
+export const HgwChunkMetaSchema = readObject({
   ...TurnMetaBase,
   ...SubagentAttribution,
 })
 
-/** `tool_call_update` / `tool_call_content_chunk` `_meta.aos` */
-export const AosToolCallMetaSchema = readObject({
+/** `tool_call_update` / `tool_call_content_chunk` `_meta.hgw` */
+export const HgwToolCallMetaSchema = readObject({
   ...TurnMetaBase,
   ...SubagentAttribution,
   messageId: IdentifierSchema,
@@ -474,56 +474,56 @@ export const AosToolCallMetaSchema = readObject({
   /** How long the call ran, when the provider reports a span, not the ends. */
   durationMs: CountSchema.optional(),
   /** The subagent this call spawned; later updates patch it by `id`. */
-  subagent: AosSubagentSchema.optional(),
+  subagent: HgwSubagentSchema.optional(),
   /** The tool declares an MCP App view; a flag only, never a resource URI. */
   app: z.strictObject({}).optional(),
 })
 
-/** `plan_update._meta.aos`: the lossless Session Todos. */
-export const AosPlanMetaSchema = readObject({
+/** `plan_update._meta.hgw`: the lossless Session Todos. */
+export const HgwPlanMetaSchema = readObject({
   sequence: SequenceSchema,
   turnId: IdentifierSchema.optional(),
   todos: SessionTodosResponseSchema.shape.todos,
 })
 
 /**
- * `usage_update._meta.aos`. ACP's `usage_update` carries the used and total
+ * `usage_update._meta.hgw`. ACP's `usage_update` carries the used and total
  * token counts alone, so how the provider arrived at them and its own
  * attribution of what they hold travel here. A provider that attributes nothing
  * sends no breakdown rather than a guessed one, and usage belongs to the Session
  * rather than to a turn, so this meta names neither a turn nor a sequence.
  */
-export const AosUsageMetaSchema = readObject({
+export const HgwUsageMetaSchema = readObject({
   source: SessionContextResponseSchema.shape.source,
   estimated: SessionContextResponseSchema.shape.estimated,
   breakdown: SessionContextResponseSchema.shape.breakdown,
 })
 
 /**
- * `available_commands_update._meta.aos`: the Session's capabilities beyond its
+ * `available_commands_update._meta.hgw`: the Session's capabilities beyond its
  * slash commands travel with them, as one update.
  */
-export const AosAvailableCommandsMetaSchema = readObject({
+export const HgwAvailableCommandsMetaSchema = readObject({
   capabilities: SessionWorkspaceCapabilitiesResponseSchema,
 })
 
 // ---------------------------------------------------------------------------
-// pending requests `_meta.aos`
+// pending requests `_meta.hgw`
 // ---------------------------------------------------------------------------
 
-/** `RequestPermissionRequest._meta.aos` */
-export const AosPermissionMetaSchema = readObject({
+/** `RequestPermissionRequest._meta.hgw` */
+export const HgwPermissionMetaSchema = readObject({
   requestId: IdentifierSchema,
   expiresAt: z.string().datetime().optional(),
   message: z.string().max(4096).optional(),
 })
 
-export const AosQuestionOptionSchema = readObject({
+export const HgwQuestionOptionSchema = readObject({
   label: z.string().min(1).max(4096),
   value: z.string().max(4096).optional(),
   description: z.string().max(4096).optional(),
 })
-export const AosQuestionSchema = readObject({
+export const HgwQuestionSchema = readObject({
   id: IdentifierSchema.optional(),
   /**
    * The provider's own short label for the question, when it has one. A
@@ -532,17 +532,17 @@ export const AosQuestionSchema = readObject({
    */
   header: z.string().min(1).max(256).optional(),
   prompt: z.string().max(65_536),
-  options: z.array(AosQuestionOptionSchema).max(64),
+  options: z.array(HgwQuestionOptionSchema).max(64),
   multiple: z.boolean().optional(),
   custom: z.boolean().optional(),
 })
-export type AosQuestion = z.infer<typeof AosQuestionSchema>
+export type HgwQuestion = z.infer<typeof HgwQuestionSchema>
 
-/** `CreateElicitationRequest._meta.aos`: lossless projection of the questions. */
-export const AosElicitationMetaSchema = readObject({
+/** `CreateElicitationRequest._meta.hgw`: lossless projection of the questions. */
+export const HgwElicitationMetaSchema = readObject({
   requestId: IdentifierSchema,
   expiresAt: z.string().datetime().optional(),
-  questions: z.array(AosQuestionSchema).min(1).max(64),
+  questions: z.array(HgwQuestionSchema).min(1).max(64),
 })
 
 // ---------------------------------------------------------------------------
@@ -550,10 +550,10 @@ export const AosElicitationMetaSchema = readObject({
 // ---------------------------------------------------------------------------
 
 /** One published artifact; `ArtifactDescriptorSchema` in `./index` defines it. */
-export const AosArtifactDescriptorSchema = ArtifactDescriptorSchema
-export type AosArtifactDescriptor = ArtifactDescriptor
+export const HgwArtifactDescriptorSchema = ArtifactDescriptorSchema
+export type HgwArtifactDescriptor = ArtifactDescriptor
 
-const ARTIFACT_URI_PREFIX = `${AOS_ARTIFACT_URI_SCHEME}//`
+const ARTIFACT_URI_PREFIX = `${HGW_ARTIFACT_URI_SCHEME}//`
 
 /**
  * The uri of the `resource_link` a published artifact is announced as. It
@@ -582,15 +582,15 @@ export function parseArtifactUri(uri: string): string | undefined {
 // extension notifications (agent → client)
 // ---------------------------------------------------------------------------
 
-/** `_aos/composer_prefill` */
-export const AosComposerPrefillNotificationSchema = readObject({
+/** `_hgw/composer_prefill` */
+export const HgwComposerPrefillNotificationSchema = readObject({
   sessionId: IdentifierSchema,
   turnId: IdentifierSchema,
   text: z.string(),
 })
 
-/** `_aos/error`: a failure with no request to answer, e.g. a rejected cancel. */
-export const AosErrorNotificationSchema = readObject({
+/** `_hgw/error`: a failure with no request to answer, e.g. a rejected cancel. */
+export const HgwErrorNotificationSchema = readObject({
   sessionId: IdentifierSchema.optional(),
   code: z.string().min(1).max(128),
   message: z.string().max(4096),
@@ -603,11 +603,11 @@ const ActivityBase = {
 }
 
 /**
- * `_aos/activity`: content-free workspace events for every Session the
+ * `_hgw/activity`: content-free workspace events for every Session the
  * connection may observe. Hydrated on connect from coordinator snapshots and
  * the session list.
  */
-export const AosActivityNotificationSchema = z.discriminatedUnion("type", [
+export const HgwActivityNotificationSchema = z.discriminatedUnion("type", [
   readObject({
     ...ActivityBase,
     type: z.enum(["turn-started", "turn-finished", "turn-failed"]),
@@ -630,6 +630,6 @@ export const AosActivityNotificationSchema = z.discriminatedUnion("type", [
     unread: z.boolean(),
   }),
 ])
-export type AosActivityNotification = z.infer<
-  typeof AosActivityNotificationSchema
+export type HgwActivityNotification = z.infer<
+  typeof HgwActivityNotificationSchema
 >
