@@ -255,9 +255,35 @@ describe("vocabulary", () => {
       reason:
         "a Session a connection follows is resumed, not attached; an attachment is a file",
     },
+    {
+      retired: /\bthreadId\b|(?<!\.)\bthreadIds\b/u,
+      scope: "client/**",
+      reason:
+        "the public Session id is `sessionId`, from the wire to the client",
+    },
+    {
+      retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
+      scope: "client/**",
+      reason:
+        "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
+    },
+    {
+      retired:
+        /\bonSessionUpdate\b|\bonSessionReplay\b|\bonPendingRequest\b|\bon(?:Aos|Hgw)Notification\b|\bonPermissionChange\b/u,
+      scope: "client/**",
+      reason:
+        "our own listening function is `subscribe…` and returns its unsubscribe function",
+    },
+    {
+      retired:
+        /\battachSession\b|\bresumeAttached\b|\battachedSessions?\b|\battachedSessionId\b|\breattached\b/u,
+      scope: "client/**",
+      reason:
+        "a Session a connection follows is resumed, and a new transport rejoins it; an attachment is a file",
+    },
   ]
 
-  it("keeps retired names out of the proxy and the protocol", async () => {
+  it("keeps retired names out of the gateway, the protocol, and the client", async () => {
     const repositoryRoot = join(import.meta.dirname, "..")
     for (const { retired, scope, reason } of retiredNames) {
       const directory = join(repositoryRoot, scope.replace(/\/\*\*$/u, ""))

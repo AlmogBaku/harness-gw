@@ -5,7 +5,10 @@ import { configDefaults, defineConfig } from "vitest/config"
  * build or the package, so `bun run test` skips them and `bun run test:gate`
  * runs them.
  */
-const gateTests = ["test/architecture/adapter-boundaries.test.ts"]
+const gateTests = [
+  "test/architecture/adapter-boundaries.test.ts",
+  "test/architecture/package-contents.test.ts",
+]
 
 export default defineConfig({
   test: {

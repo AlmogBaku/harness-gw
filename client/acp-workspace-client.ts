@@ -16,7 +16,7 @@ import type {
   SessionActionCapabilities,
   SessionCreationOptions,
 } from "./workspace"
-import type { HgwRemoteClient } from "./aos-client"
+import type { HgwRemoteClient } from "./hgw-client"
 import { createAcpComposerStore } from "./acp-workspace-client-composer"
 import { createAcpSessionStore, rowOf } from "./acp-workspace-client-sessions"
 import type { AcpConnection } from "./types"

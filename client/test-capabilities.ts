@@ -1,4 +1,4 @@
-import type { HgwWorkspaceCapabilities } from "./aos-client"
+import type { HgwWorkspaceCapabilities } from "./hgw-client"
 
 type Capabilities = HgwWorkspaceCapabilities
 

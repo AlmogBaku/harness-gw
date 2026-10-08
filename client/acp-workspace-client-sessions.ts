@@ -21,7 +21,7 @@ import type {
   TodoItem,
   WorkspaceActivityEvent,
 } from "./workspace"
-import { subscribeAosNotification } from "./aos-notification"
+import { subscribeHgwNotification } from "./hgw-notification"
 import type { AcpConnection } from "./types"
 
 /**
@@ -269,7 +269,7 @@ export function createAcpSessionStore({
     }
   }
 
-  const leaveActivity = subscribeAosNotification(
+  const leaveActivity = subscribeHgwNotification(
     connection,
     HGW_METHODS.notify.activity,
     HgwActivityNotificationSchema,

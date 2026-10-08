@@ -25,7 +25,7 @@ import type {
   HgwContext,
   HgwModelChoices,
   HgwWorkspaceCapabilities,
-} from "./aos-client"
+} from "./hgw-client"
 import type { AcpConnection } from "./types"
 
 /**

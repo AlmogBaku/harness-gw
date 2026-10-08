@@ -3,7 +3,7 @@ import type { z } from "zod"
 import type { AcpConnection } from "./types"
 
 /** Runs `handler` for every notification of `method` the proxy sends. */
-export function subscribeAosNotification<Value>(
+export function subscribeHgwNotification<Value>(
   connection: Pick<AcpConnection, "subscribeNotification">,
   method: string,
   schema: Pick<z.ZodType<Value>, "safeParse">,

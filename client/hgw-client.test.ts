@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { HgwClientError, HgwRemoteClient } from "./aos-client"
+import { HgwClientError, HgwRemoteClient } from "./hgw-client"
 
 const AGENT_ID = "researcher"
 const SESSION_ID = "opaque-session-1"
