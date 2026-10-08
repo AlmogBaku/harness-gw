@@ -27,8 +27,8 @@ similar.
 ## Preserve the ownership boundary
 
 ```text
-browser presentation and drafts
-        -> ACP v2 WebSocket (ACP layer) / AOS REST (bytes/discovery)
+client (presentation, drafts, or any ACP v2 consumer)
+        -> ACP v2 WebSocket (ACP layer) / REST (bytes/discovery)
         -> member middleware stack (empty for the operator)
         -> Channel (per-member delivery)
         -> SessionCoordinator
@@ -38,7 +38,7 @@ browser presentation and drafts
 
 | Owner                | Responsibilities                                                                                                                                                                                                                                    |
 | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Browser              | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the Assistant UI follow-up queue.                                                                                                                  |
+| Client               | Presentation, local drafts, navigation, locale, accessibility, microphone capture, playback, and the client-side follow-up queue.                                                                                                                   |
 | Normalized routes    | Input validation, authorized resource scope, protocol encoding, and friendly errors.                                                                                                                                                                |
 | Member middleware    | Role rules as member commands and events: the guest stack scopes, refuses, and projects before anything reaches the Channel or the ACP encoder.                                                                                                     |
 | Channel              | Per-member delivery for one Session's channel: subscription, cursor, followed turn, offered and delivered requests, resume and replay, and reissue of pending requests.                                                                             |
@@ -76,7 +76,7 @@ They share coordinator semantics, not a generic socket manager.
 ## Own the native link
 
 Each adapter keeps one connection owner per native link, built with
-`createLink` (`packages/proxy/core/link.ts`). The owner dials the link,
+`createLink` (`src/core/link.ts`). The owner dials the link,
 reconnects on backoff with full jitter (`LINK_BACKOFF`: base 250 ms, cap 5 s),
 and applies a circuit breaker (`LINK_BREAKER`: open after 5 consecutive failed
 dials, half-open after 10 s). It stops retrying when the failure kind is
@@ -91,15 +91,15 @@ cancellation — so the owner stops dialing and releases any open connection.
 Keep the reconnect budget (`RETRY_BUDGET`) shared across all owners of one
 runtime so that N owners do not retry in lockstep after a runtime restart.
 
-## Map native output to the proxy-owned turn vocabulary
+## Map native output to the gateway-owned turn vocabulary
 
-Adapters emit the proxy-owned turn vocabulary (`TurnEvent`, `TurnEventKind`,
+Adapters emit the gateway-owned turn vocabulary (`TurnEvent`, `TurnEventKind`,
 `PendingRequest`, `RequestReply`, `TurnInput`, `ExecutionEvent` from
-`packages/proxy/core/events.ts`); the ACP layer in `packages/proxy/acp/`
-translates them for the browser. The `TurnEventKind` names
+`src/core/events.ts`); the ACP layer in `src/acp/`
+translates them for the client. The `TurnEventKind` names
 (`turn-started`, `message-chunk`, `thought-chunk`, `tool-call-*`,
 `plan-updated`, `turn-requires-action`, …) follow ACP's language and are
-proxy-internal; the browser sees only the ACP messages they translate to.
+proxy-internal; the client sees only the ACP messages they translate to.
 Treat the vocabulary as an event grammar, not a bag of JSON:
 
 - final assistant prose is a message chunk, never a thought chunk;
@@ -215,12 +215,12 @@ the runtime does not prove, from text or position.
 ## Preserve requests
 
 Questions and approvals are normalized pending requests. The ACP layer delivers
-them as `session/request_permission` or `elicitation/create` to the browser.
+them as `session/request_permission` or `elicitation/create` to the client.
 The `_meta.hgw` extensions on these requests are defined in
-`packages/protocol/acp.ts:315-341`. The vendor permission kind `_allow_session`
-(`AOS_PERMISSION_KIND_SESSION`, `acp.ts:60`) represents Hermes' "allow for this
+`protocol/acp.ts:315-341`. The vendor permission kind `_allow_session`
+(`HGW_PERMISSION_KIND_SESSION`, `protocol/acp.ts`) represents Hermes' "allow for this
 session" scope; the translation lives in
-`packages/proxy/acp/translate/requests.ts`. Elicitation questions arrive in
+`src/acp/translate/requests.ts`. Elicitation questions arrive in
 `_meta.hgw.questions`; a multi-select question must declare `items.enum` in the
 ACP property schema (`requests.ts`) so the SDK accepts the elicitation,
 while the response schema does not constrain values to the enum.
@@ -240,7 +240,7 @@ no native call. Reload reconstructs the request from normalized history or
 adapter-private native discovery, not from a browser polling contract.
 
 The coordinator collects the answers per conversation
-(`packages/proxy/core/session-coordinator.ts:748-782`), so members in different
+(`src/core/session-coordinator.ts:748-782`), so members in different
 tabs may each answer one request of a batch. The first answer to a request
 wins, and the adapter receives one complete batch of replies when the last
 open request is answered.
@@ -271,7 +271,7 @@ resubmitting user intent.
 ## Classify every failure
 
 Every failure crossing the adapter boundary is one of three kinds, or a caller error
-(`packages/proxy/core/failures.ts`):
+(`src/core/failures.ts`):
 
 | Kind                              | Meaning                                                                |
 | --------------------------------- | ---------------------------------------------------------------------- |
@@ -283,9 +283,9 @@ Every failure crossing the adapter boundary is one of three kinds, or a caller e
 | `runtime_authentication_required` | The credential is absent or rejected; re-authenticate before retrying. |
 
 A read is never uncertain: an adapter call past `ADAPTER_CALL_MS`
-(`packages/proxy/core/limits.ts`, 15 s) is `unavailable` for a read and
+(`src/core/limits.ts`, 15 s) is `unavailable` for a read and
 `uncertain` for a write. The native error travels as `cause` on every failure,
-so the coordinator and the proxy log can include the chain without the adapter
+so the coordinator and the gateway log can include the chain without the adapter
 deciding what to reveal.
 
 Use `failureOf(kind, cause)` to construct a `PublicFailure` with the
@@ -324,8 +324,8 @@ execution. Authorization controls observation and mutation; it does not create
 a duplicate runtime.
 
 Guest output is projected by the guest middleware
-(`packages/proxy/guest/middleware/`) before the member encoder
-(`packages/proxy/acp/member-encoder.ts`) writes it to the guest connection.
+(`src/guest/middleware/`) before the member encoder
+(`src/acp/member-encoder.ts`) writes it to the guest connection.
 This keeps reasoning, raw tools, permission requests, privileged roles, native
 metadata, paths, live IDs, and provider positions out of memory that an authorized guest
 connection can drain. Adapters stay role-blind: they never see which member
@@ -342,7 +342,7 @@ For each adapter operation:
 4. Implement the smallest native client, validation, and conversion change.
 5. Verify capability fidelity, ownership, isolation, and failure mapping.
 6. Exercise reconnect or uncertainty when the operation mutates native state.
-7. Run the adapter suite and the affected provider-neutral browser test.
+7. Run the adapter suite and the affected provider-neutral client test.
 
 Changing shared protocol or coordinator code requires evidence that the
 existing seam cannot express a real native capability. Prefer an adapter-private
@@ -355,23 +355,23 @@ An adapter is ready when:
 
 - its capability matrix matches inspected native behavior;
 - stable identity and Session ownership are enforced on every operation;
-- its event stream obeys the proxy-owned turn vocabulary ordering and rejects foreign Session events;
+- its event stream obeys the gateway-owned turn vocabulary ordering and rejects foreign Session events;
 - Stop, steering, commands, Edit/Retry, and requests preserve native
   semantics where supported;
 - lost mutation acknowledgements are uncertain and never replayed;
 - reconnect restores observation and state without resending prompts;
 - provider payloads and paths cannot enter normalized or guest output;
 - focused adapter tests and provider-neutral conformance tests pass;
-- `runServerRuntimeContract` (`packages/proxy/core/runtime-contract.ts`) passes
+- `runServerRuntimeContract` (`src/core/runtime-contract.ts`) passes
   in the adapter's own `contract.test.ts` — this suite is the gate for the
   adapter's failure taxonomy, recovery token, and link contract;
-- `runWireContract` (`packages/proxy/acp/wire-contract.ts`) passes in the
-  adapter's own `wire-contract.test.ts` — this suite drives the real proxy over
+- `runWireContract` (`src/acp/wire-contract.ts`) passes in the
+  adapter's own `wire-contract.test.ts` — this suite drives the real gateway over
   the adapter's native fake via an in-memory WebSocket and proves what a plain
   ACP v2 client reads; rows the adapter cannot express are named in `gaps`.
   Each adapter's fake lives beside its source, not in a shared test helper.
 
-When a runtime's native client is open source and the AOS server-side
+When a runtime's native client is open source and the gateway's server-side
 requirements (bounded decoding, credential isolation, uncertain-mutation
 handling, reconciliation) can be satisfied with a thin wrapper, vendor the
 upstream client files byte-identical rather than reimplementing the wire
@@ -383,14 +383,14 @@ adapter drive recovery from authoritative history.
 
 Use the Hermes adapter and its tests as a worked example, not as a transport
 template. Its package map is in
-[`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md).
+[`src/adapters/hermes/README.md`](../../src/adapters/hermes/README.md).
 
 ### Catalog-change subscription
 
 Implement the optional `subscribeCatalogChanges(listener)` method on
 `ServerRuntime` when the native provider broadcasts catalog-change signals.
 The method returns a `Promise<() => void>` (the unsubscribe function;
-`packages/proxy/core/runtime.ts:258`). Hermes uses its native
+`src/core/runtime.ts:258`). Hermes uses its native
 `sessions.changed` WebSocket event. The ACP layer calls this method to wake
 the activity feed on connect; adapters that omit it simply receive no wake.
 
@@ -398,8 +398,8 @@ the activity feed on connect; adapters that omit it simply receive no wake.
 
 Implement the optional `subscribeTurns(scope, { onTurn, onError })` method on
 `ServerTurnEngine` when the native runtime can start a turn in a Session
-without the proxy: a subagent result, a loop tick, a heartbeat, cron, or
-another native client. A Session's channel subscribes while any browser has
+without the gateway: a subagent result, a loop tick, a heartbeat, cron, or
+another native client. A Session's channel subscribes while any client has
 it resumed. The adapter only signals; the shared core adopts the turn through
 `discover` and streams it to every member, who can Stop it like any other.
 
@@ -419,7 +419,7 @@ return `undefined` for a turn the adapter admitted, including one still
 settling. It returns a running foreign turn with its events, and sets
 `fromStart` only when those events begin at the native turn's first event, so
 a browser following it replays the whole turn instead of receiving a reset.
-Adapters that omit `subscribeTurns` behave as before: only turns the proxy started
+Adapters that omit `subscribeTurns` behave as before: only turns the gateway started
 reach other browsers.
 
 ### Agent updates: `updateAgent(agentId, patch, observedRevision)`
@@ -444,36 +444,36 @@ Rules for every adapter:
 
 ### Session read state and `unread`
 
-Project `unread` in `AosSessionInfoMeta` only when the native payload proves the
+Project `unread` in `HgwSessionInfoMeta` only when the native payload proves the
 read state (for example, Hermes `last_read_at` NULL means read). Omit `unread`
 when the payload is absent or ambiguous; absent never overwrites a known value in
-the browser. Declare the read-state capability unavailable rather than emulating
+the client. Declare the read-state capability unavailable rather than emulating
 it with a synthetic value.
 
 ### Usage reporting
 
-The proxy emits one `usage_update` on `session/new`, on `session/resume`, after
+The gateway emits one `usage_update` on `session/new`, on `session/resume`, after
 every settled turn, and after a `session/set_config_option` that changes the
 model, to every member given the usage feed; guests are given none. The
-coordinator owns the reading (`packages/proxy/core/session-coordinator.ts:442-455`),
+coordinator owns the reading (`src/core/session-coordinator.ts`),
 and the Channel reports it to a member joining the Session
-(`packages/proxy/core/channel.ts:649-660`). Implement
+(`src/core/channel.ts`). Implement
 `workspaceCapabilities` to return a `SessionContextResponse`, or declare usage
 unavailable; a provider that cannot answer at all leaves the last reading
 standing without emitting an empty gauge.
 
 ### Published Artifacts
 
-A published Artifact travels as the proxy-owned `artifact-published` turn event
-carrying an `AosArtifactDescriptor`
-(`packages/protocol/acp.ts:374-396`; translated in
-`packages/proxy/acp/translate/turn-events.ts`), or, in history, as a `data`
+A published Artifact travels as the gateway-owned `artifact-published` turn event
+carrying an `HgwArtifactDescriptor`
+(`protocol/acp.ts`; translated in
+`src/acp/translate/turn-events.ts`), or, in history, as a `data`
 message part named `aos.artifact`
-(`packages/proxy/acp/translate/history.ts:33`). Only `id`, `filename`, and
+(`src/acp/translate/history.ts`). Only `id`, `filename`, and
 `source` are required; `source` is `inline`, `url`, or `provider` with an
 opaque `reference`. The ACP layer turns either form into a `resource_link`
 content block with `uri: "artifact://<id>"` on the owning turn, so a live turn
-and a replayed one reach the browser identically. The id must be opaque and
+and a replayed one reach the client identically. The id must be opaque and
 stable for that Agent and Session; never put a native path in it or in any
 public tool argument or result.
 
@@ -481,31 +481,31 @@ Emit a descriptor only from an authoritative source: a harness's own native
 media delivery (Hermes `MEDIA:` lines, OpenClaw `artifacts.download`), an
 uploaded attachment, or a trusted native delivery tool such as Hermes
 text-to-speech.
-`packages/proxy/adapters/hermes/media-lines.ts` (`MediaLineFilter`) strips
+`src/adapters/hermes/media-lines.ts` (`MediaLineFilter`) strips
 `MEDIA:` lines from streamed prose across deltas and replaces an unclaimed one
 with `[Media unavailable]`. It is private to the Hermes adapter and parses
 Hermes's own `MEDIA:` convention; it is not a general helper.
 
-Validate every path with `packages/proxy/core/artifact-path.ts` before keeping
+Validate every path with `src/core/artifact-path.ts` before keeping
 it: `safeArtifactPath` accepts only absolute POSIX paths with no `..`
 segment, no control characters, at most 4096 bytes, and no credential-like
 basename (`.env*`, `auth.json`, `config.yaml`, `credentials`, and similar).
 Keep the path in a private Agent-and-Session-scoped mapping.
 
 Implement `ServerRuntime.artifact(agentId, publicSessionId, artifactId)`
-(`packages/proxy/core/runtime.ts:264-268`) to resolve the id only within that
+(`src/core/runtime.ts`) to resolve the id only within that
 Session and return `{bytes, mimeType?, filename}`, read through the harness's
 own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB). The route
 `GET .../sessions/:sessionId/artifacts/:artifactId`
-(`packages/proxy/routes/content.ts:87`) serves it on both listeners.
+(`src/routes/content.ts`) serves it on both listeners.
 
 ### MCP tool names
 
-The `aos-ui` tools MCP server (`packages/tools-mcp`) and every other MCP server
-are registered with the harness by the operator, never by the proxy. Each
+The `aos-ui` tools MCP server and every other MCP server
+are registered with the harness by the operator, never by the gateway. Each
 harness prefixes MCP tool names its own way, so pass every native tool name
 through `canonicalToolName(rawName, resolve)`
-(`packages/proxy/core/aos-tool-names.ts`) before it enters the run vocabulary
+(`src/core/aos-tool-names.ts`) before it enters the run vocabulary
 or history:
 
 - the four `aos-ui` tools read bare: `render_chart`, `render_map`,
@@ -517,13 +517,13 @@ or history:
 
 The resolver matches a raw name against the runtime's own MCP server list,
 never by splitting the string. Hermes and OpenCode build it with
-`createMcpToolNames(scheme, catalog)` (`packages/proxy/mcp-apps/tool-names.ts`),
+`createMcpToolNames(scheme, catalog)` (`src/mcp-apps/tool-names.ts`),
 where the scheme states how the harness spells a tool: Hermes
 `mcp__<sanitized>__<sanitized>` with its 64-character hash clamp, OpenCode
 `<server>_<tool>` matched longest server first. OpenClaw resolves
 `<server>__<tool>` against its native `tools.effective` answer
-(`packages/proxy/adapters/openclaw/mcp-tool-names.ts`). Each list sits in
-`createMcpServerCache` (`packages/proxy/core/mcp-server-cache.ts`): one
+(`src/adapters/openclaw/mcp-tool-names.ts`). Each list sits in
+`createMcpServerCache` (`src/core/mcp-server-cache.ts`): one
 single-flight fetch per key, reused for 5 minutes; an unknown name refetches
 at most once per 30 s; a failed fetch keeps the last good list, and with no
 list names stay raw. Use the same resolver live and on replay.
@@ -534,15 +534,15 @@ OpenClaw adapter creates Sessions with
 `toolOverrides.mcpServers["aos-ui"] = true` and, before every non-resume turn,
 patches the same override onto a Session created elsewhere with a
 compare-and-swap on the previous overrides
-(`packages/proxy/adapters/openclaw/native-schemas.ts:175-203`,
-`packages/proxy/adapters/openclaw/run.ts:1253-1272`). A failed enable fails
+(`src/adapters/openclaw/native-schemas.ts`,
+`src/adapters/openclaw/run.ts`). A failed enable fails
 the turn rather than running it without the tools.
 
 ### MCP Apps
 
 An MCP tool whose server declares a `ui://` view (`_meta.ui.resourceUri`)
 renders as an App card. Implement the optional `ServerRuntime.mcpApps`
-(`packages/proxy/core/runtime.ts`) in the adapter's `mcp-apps.ts`:
+(`src/core/runtime.ts`) in the adapter's `mcp-apps.ts`:
 
 | Method                                             | Answers                                                                            |
 | -------------------------------------------------- | ---------------------------------------------------------------------------------- |
@@ -556,7 +556,7 @@ renders as an App card. Implement the optional `ServerRuntime.mcpApps`
 
 Every method first finds the `toolCallId` in this Session's own native
 history, or among the running calls `observe` heard for that Session; the
-browser never names a server, tool, or resource URI. An unknown or foreign call
+client never names a server, tool, or resource URI. An unknown or foreign call
 reads as not found. A host that holds its views natively leaves `observe` out.
 `serverResource` is the one exception: it names a server, the configured
 viewer's, and never a call. The fallback implements it; leave it out where the
@@ -566,19 +566,19 @@ published attachment then opens with no view.
 Map the native MCP Apps API when the runtime has one (OpenClaw's
 `mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`). Otherwise build
 the hook with `createMcpAppsFallback(source, client)`
-(`packages/proxy/mcp-apps/fallback.ts`): the adapter supplies only the server
-list and the stored call, and the proxy's own Streamable HTTP client reads the
+(`src/mcp-apps/fallback.ts`): the adapter supplies only the server
+list and the stored call, and the gateway's own Streamable HTTP client reads the
 view. A view named in the stored result wins over the server's `tools/list`.
-The fallback reaches only HTTP servers the proxy may connect to: without auth,
+The fallback reaches only HTTP servers the gateway may connect to: without auth,
 or with headers the operator configured under `mcpApps.fallback.servers`
-([configuration](../configuration.md#mcp-apps-fallback)), where the operator
-may also override the URL the proxy connects to. It is a bridge;
+(`src/config.ts`), where the operator
+may also override the URL the gateway connects to. It is a bridge;
 delete it once no adapter reaches it.
 
-Wrap the adapter in `withMcpApps(runtime)` (`packages/proxy/mcp-apps/annotate.ts`)
+Wrap the adapter in `withMcpApps(runtime)` (`src/mcp-apps/annotate.ts`)
 in its factory, before the coordinator. On the run, recover, and discover
 streams the wrapper awaits `describe` (1.5 s budget) when an `mcp__` or bare
-`aos-ui` tool call starts, so the browser draws the view while the call runs,
+`aos-ui` tool call starts, so the client draws the view while the call runs,
 and asks again with the result only for a call the start could not flag. It
 does the same for `history()`, sets the `app` flag, and advertises
 `content.mcpApps` in the Session capabilities. The ACP layer carries the flag
@@ -586,7 +586,7 @@ as `_meta.hgw.app` on `tool_call_update`, from the call's first update.
 
 ### readFile
 
-Implement the optional `ServerRuntime.readFile` (`packages/proxy/core/runtime.ts`)
+Implement the optional `ServerRuntime.readFile` (`src/core/runtime.ts`)
 to let an App view serve its files. It is a two-step contract:
 
 1. **Real path:** `realPath?(scope, path, signal)` resolves every link and
@@ -603,8 +603,8 @@ client as not found; any other non-2xx response, or a throw, is unavailable.
 ### Registration and adapter file layout
 
 Register a new adapter as a `kind` literal in the `RuntimeSchema` discriminated
-union (`packages/proxy/config.ts:109`) and add a corresponding branch in
-`packages/proxy/adapters/create-runtime.ts`. The conventional per-adapter
+union (`src/config.ts`) and add a corresponding branch in
+`src/adapters/create-runtime.ts`. The conventional per-adapter
 module layout (as used by OpenCode and OpenClaw) is:
 
 | Module              | Responsibility                                           |
@@ -617,10 +617,10 @@ module layout (as used by OpenCode and OpenClaw) is:
 | `history.ts`        | Converts authoritative native history rows               |
 | `interactions.ts`   | Answers native clarify/approval interactions             |
 | `mcp-apps.ts`       | `ServerRuntime.mcpApps`, native or through the fallback  |
-| `run.ts`            | Converts native execution frames to proxy-owned events   |
+| `run.ts`            | Converts native execution frames to gateway-owned events |
 | `workspace.ts`      | Agent/Session catalog and metadata                       |
 | `native-schemas.ts` | Validated Zod schemas for native payloads                |
 
 The Hermes adapter predates this layout and uses different module names for
 some of these roles; see
-[`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md).
+[`src/adapters/hermes/README.md`](../../src/adapters/hermes/README.md).

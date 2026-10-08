@@ -1,42 +1,43 @@
-# Run AOS with Hermes
+# Run the gateway with Hermes
 
-AOS connects to an independently operated `hermes serve` HTTP/WebSocket API
-through the TypeScript proxy. Hermes owns profiles, Sessions, runs, tools,
-credentials, and durable history. The browser connects over ACP v2 WebSocket at `/api/aos/v1/acp`.
+The gateway connects to an independently operated `hermes serve` HTTP/WebSocket
+API. Hermes owns profiles, Sessions, runs, tools, credentials, and durable
+history. Clients connect over ACP v2 WebSocket at `/api/v1/acp`. aos-ui is the
+first-class client.
 
 ## Prerequisites
 
-- An authenticated Hermes server reachable from the proxy
+- An authenticated Hermes server reachable from the gateway
 - A Hermes server token in a private, owner-readable file
-- Bun, or Docker with Compose
+- Bun
 
 The minimum supported Hermes revision is `v2026.9.24`.
 
 ## Start Hermes independently
 
-Install and configure Hermes outside the AOS checkout, then start its native
-server:
+Install and configure Hermes outside the harness-gw checkout, then start its
+native server:
 
 ```bash
 hermes serve
 ```
 
-The example proxy configuration expects Hermes at
+The example gateway configuration expects Hermes at
 `http://host.docker.internal:9119`. Keep native profile state and credentials
-outside AOS.
+outside the gateway checkout.
 
 ## Create private configuration
 
 Copy the example outside the checkout:
 
 ```bash
-cp deploy/proxy.hermes.example.yaml /absolute/private/path/proxy.yaml
-chmod 600 /absolute/private/path/proxy.yaml
+cp examples/config.hermes.example.yaml /absolute/private/path/config.yaml
+chmod 600 /absolute/private/path/config.yaml
 ```
 
-The proxy accepts the file when it is owned by the user running it at mode 0600
-or 0640, or owned by root at mode 0644; it refuses any group- or world-writable
-mode.
+The gateway accepts the file when it is owned by the user running it at mode
+0600 or 0640, or owned by root at mode 0644; it refuses any group- or
+world-writable mode.
 
 Set these fields in the private copy:
 
@@ -47,7 +48,7 @@ Set these fields in the private copy:
 
 The operator listener has no application login. Anyone who can reach it can
 operate every visible Agent and Session, so bind it to loopback or a trusted
-private network. State-changing browser requests must still use the exact
+private network. State-changing client requests must still use the exact
 configured origin.
 
 Secret files must be regular, non-symlinked, owner-only files. Generate each
@@ -58,61 +59,27 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
 ```
 
 Write the Hermes token exactly as supplied by Hermes, with at most one trailing
-newline. Never put it in `/runtime-config.json`, an environment variable, or a
-browser-facing URL.
+newline. Never put it in an environment variable or a client-facing URL.
 
 ## Run locally
 
-For a Vite development server on port `3000`, configure the private proxy to
-listen on `127.0.0.1:4100` with `publicOrigin` set to
-`http://localhost:3000`. Then run:
-
 ```bash
-# Terminal 1
-bun run proxy:serve -- --config /absolute/private/path/proxy.yaml
-
-# Terminal 2
-AOS_UI_RUNTIME_MODE=aos \
-AOS_UI_PROXY_TARGET=http://127.0.0.1:4100 \
-  bun run dev
+bun run serve --config /absolute/private/path/config.yaml
 ```
 
-Open <http://localhost:3000>. Vite forwards only normalized AOS traffic to the
-proxy; the browser never receives the Hermes URL or token.
+The gateway listens on the `listen` address and port from the config.
+Connect aos-ui (or any ACP v2 client) to the gateway's `publicOrigin`.
 
-## Run with Compose
-
-The Hermes overlay runs the Bun proxy as both the static server and normalized
-API. Hermes itself remains outside the stack:
+## Create a guest invitation
 
 ```bash
-AOS_UI_RUNTIME_CONFIG_FILE=./deploy/runtime-config.hermes.json \
-AOS_UI_PROXY_CONFIG_FILE=/absolute/private/path/proxy.yaml \
-AOS_UI_HERMES_TOKEN_FILE=/absolute/private/path/hermes-token \
-AOS_UI_GUEST_INVITE_SIGNING_KEY_FILE=/absolute/private/path/guest-invite-signing-key \
-  docker compose -f compose.yaml -f compose.hermes.yaml up --build
+bun run gateway invite --config /absolute/private/path/config.yaml --agent default
 ```
 
-The example config enables the optional guest listener on port `3001`; remove
-its `guest` block and the corresponding secret mount if the deployment does not
-offer guest access. Both listeners use the same Hermes token and runtime
-instance. Nginx is optional external TLS or access-control infrastructure.
-
-The browser talks only to same-origin `/api/aos/v1`; guests use the separate
-`/api/guest/v1` listener. The proxy never exposes Hermes' native `/auth`,
-`/api`, or WebSocket routes.
-
-Create a guest invitation locally from the configured signing key:
-
-```bash
-bun run gateway -- invite --config /absolute/private/path/proxy.yaml --agent default
-```
-
-The installed `aos-invite-link` skill uses `curl` against the operator proxy's
-`/api/aos/v1/guest-invitations` endpoint. Set `AOS_RUNTIME_PROXY_URL` to a
+The installed `aos-invite-link` skill uses `curl` against the operator gateway's
+`/api/v1/guest-invitations` endpoint. Set `AOS_RUNTIME_PROXY_URL` to a
 reachable configured operator origin in the Hermes environment. This works
-for native and containerized Hermes without exposing the invitation signing
-key.
+for native Hermes without exposing the invitation signing key.
 
 The command prints a link, defaults to 72 hours, and generates a stable
 conversation reference. Add `--ref`, `--instruction`, `--prefill`, `--title`,
@@ -120,42 +87,33 @@ conversation reference. Add `--ref`, `--instruction`, `--prefill`, `--title`,
 the link does not contact Hermes or create a Session; the first guest Send
 atomically reuses or creates `aos-invite:<reference>`.
 
-Before issuing a link, follow the [invited-chat guide](../invite-chat.md) to
+Before issuing a link, follow the [invited-chat guide](https://github.com/AlmogBaku/aos-ui/blob/main/docs/invite-chat.md) to
 prepare a dedicated, narrowly skilled Hermes profile and restrict its native
 tools, filesystem, network, credentials, and approval behavior for the guest
 workflow.
 
-Hermes owns native recovery policy, including auto-continue. AOS reattaches
-without submitting a new prompt. Disconnecting a browser does not stop work.
-After a terminal Session has no subscribers or pending interaction, the proxy
-keeps it warm for five minutes and then closes only that Session attachment.
-The shared Hermes socket stays open.
+Hermes owns native recovery policy, including auto-continue. The gateway
+reattaches without submitting a new prompt. Disconnecting a client does not stop
+work. After a terminal Session has no subscribers or pending interaction, the
+gateway keeps it warm for five minutes and then closes only that Session
+attachment. The shared Hermes socket stays open.
 
 ## Register the AOS UI tools
 
-The installation prompt, [`shared/install/PROMPT.md`](../../shared/install/PROMPT.md),
-lets an agent perform the steps below; its [Hermes reference](../../shared/install/reference/harness-hermes.md)
-holds the exact commands. The manual steps follow.
+The installation prompt in aos-ui (`shared/install/PROMPT.md`) lets an agent
+perform the steps below; its Hermes reference holds the exact commands. The
+manual steps follow.
 
-AOS UI ships its own stateless MCP server, `packages/tools-mcp`, separate from
-the proxy. It offers four tools: `render_chart`, `render_map`, `render_stats`,
-and `present_artifact({path, title?, mimeType?})`, where `path` is an absolute
-path. The first three are [MCP Apps](../mcp-apps.md) whose views draw the
-chart, map, or stats in the message; `present_artifact` has an App view that
-shows the file; the proxy reads it through Hermes. Each tool's description carries its usage
-guidance; there is no AOS system prompt to install.
+aos-ui ships its own stateless MCP server with four tools: `render_chart`,
+`render_map`, `render_stats`, and `present_artifact({path, title?, mimeType?})`,
+where `path` is an absolute path. The first three are
+[MCP Apps](https://github.com/AlmogBaku/aos-ui/blob/main/docs/mcp-apps.md) whose views draw the chart, map, or stats in the
+message; `present_artifact` has an App view that shows the file; the gateway
+reads it through Hermes. Each tool's description carries its usage guidance;
+there is no AOS system prompt to install.
 
-Run it on the Hermes host, bound to loopback:
-
-```bash
-bun run tools-mcp:serve                     # http://127.0.0.1:4110/mcp
-bun run tools-mcp:serve -- --port 4111      # another port
-```
-
-The Compose stack runs the same server as the `tools-mcp` service, published
-on `127.0.0.1:${AOS_UI_TOOLS_MCP_PORT:-4110}`. It serves `/mcp` (Streamable
-HTTP) and `/health`, has no authentication, and never reads files itself: the
-proxy reads them through Hermes when the view requests a file.
+Run the tools MCP server on the Hermes host, bound to loopback (see aos-ui for
+the `tools-mcp:serve` script and port details).
 
 Register it in each profile that should use the tools. Hermes reads
 `mcp_servers` from the profile's own `config.yaml`
@@ -172,17 +130,15 @@ mcp_servers:
 same entry interactively after probing the server; answer that it needs no
 authentication. Check the connection with `hermes -p PROFILE mcp test aos-ui`.
 
-The tools reach the model as `mcp__aos_ui__render_chart` and so on; the proxy
-canonicalizes those names, so the browser renders them as AOS tools. Hermes
-keeps no App views, so the proxy reads the chart, map, and stats views from
-the URL the profile registers ([MCP Apps](#mcp-apps)). A proxy in a container
-does not share the host's loopback, so it overrides that URL with its own
-address for the server under `mcpApps.fallback.servers.aos-ui.url`
-([MCP Apps fallback](../configuration.md#mcp-apps-fallback)); the Compose
-example, [`deploy/proxy.hermes.example.yaml`](../../deploy/proxy.hermes.example.yaml),
-sets `http://tools-mcp:4110/mcp`. The
-server loads on every platform the profile serves, messaging channels such as
-Telegram included.
+The tools reach the model as `mcp__aos_ui__render_chart` and so on; the gateway
+canonicalizes those names, so the client renders them as AOS tools. Hermes
+keeps no App views, so the gateway reads the chart, map, and stats views from
+the URL the profile registers ([MCP Apps](#mcp-apps)). A gateway running in a
+separate process from Hermes must override that URL with its own address for the
+server under `mcpApps.fallback.servers.aos-ui.url` in `src/config.ts`; the
+example config sets `http://tools-mcp:4110/mcp` when running alongside a
+separate tools-mcp process. The server loads on every platform the profile
+serves, messaging channels such as Telegram included.
 
 A running `hermes serve` connects a newly added server within about a minute
 and refreshes a Session's tool list between turns, so no restart is needed.
@@ -210,7 +166,7 @@ own skills. Hermes caches the skills index of a running server, so restart
 ## MCP Apps
 
 Any MCP server whose tool declares an App view renders as an App card in AOS
-([MCP Apps](../mcp-apps.md)). Register the server in the profile like any other
+([MCP Apps](https://github.com/AlmogBaku/aos-ui/blob/main/docs/mcp-apps.md)). Register the server in the profile like any other
 MCP server; AOS itself needs no entry:
 
 ```bash
@@ -219,19 +175,18 @@ hermes -p PROFILE mcp test NAME
 ```
 
 Hermes drops a tool's `_meta.ui` and has no API to read an MCP resource, so the
-proxy reads the view itself. It lists the profile's servers through
+gateway reads the view itself. It lists the profile's servers through
 `GET /api/mcp/servers?profile=PROFILE` and connects to their URLs with its own
 MCP client:
 
 - It reaches only enabled Streamable HTTP servers. A stdio server, or one that
-  needs credentials the proxy does not hold, shows the tool call's textual
+  needs credentials the gateway does not hold, shows the tool call's textual
   details instead.
-- For a server that needs headers, give the proxy its own copy under
-  `mcpApps.fallback.servers.NAME.headers` in the proxy configuration
-  ([MCP Apps fallback](../configuration.md#mcp-apps-fallback)). Its URL must
-  then be `https:` or loopback.
-- When the proxy reaches a server at another address than Hermes does, set
-  `mcpApps.fallback.servers.NAME.url`; the proxy connects there instead of the
+- For a server that needs headers, give the gateway its own copy under
+  `mcpApps.fallback.servers.NAME.headers` in the gateway configuration
+  (`src/config.ts`). Its URL must then be `https:` or loopback.
+- When the gateway reaches a server at another address than Hermes does, set
+  `mcpApps.fallback.servers.NAME.url`; the gateway connects there instead of the
   URL the profile registers.
 - The tool shows as `mcp__NAME__TOOL` with the server's original name, even
   where Hermes sanitizes or shortens it.
@@ -242,9 +197,9 @@ This fallback is temporary and goes away once Hermes serves MCP Apps itself.
 
 ## Sessions and Artifacts
 
-Sessions the proxy creates carry `source: "aos-ui"`. An Artifact is published
+Sessions the gateway creates carry `source: "aos-ui"`. An Artifact is published
 by an assistant `MEDIA:/absolute/path` line, Hermes's own delivery convention.
-The proxy removes each `MEDIA:` line from the prose, validates the path, and
+The gateway removes each `MEDIA:` line from the prose, validates the path, and
 reads the bytes through `GET /api/fs/read-data-url`. A path that is relative,
 traverses, or names a credential file such as `.env` or `auth.json` is refused.
 
@@ -252,29 +207,29 @@ Set `runtime.mediaArtifacts: false` to turn this off. A `MEDIA:` line then
 stays in the message text as written, so every reader of the Session, guests
 included, sees the file's native path, and a text-to-speech receipt publishes no
 audio Artifact. Images attached to a user message stay Artifacts either way,
-because they belong to AOS's own attachment flow rather than to Hermes's
+because they belong to the gateway's own attachment flow rather than to Hermes's
 delivery convention.
 
 ### MCP App file reads
 
-To read a file named by a `present_artifact` call's App view, the proxy
+To read a file named by a `present_artifact` call's App view, the gateway
 first lists the file's folder with
 `GET /api/files?path=<folder>&profile=<profile>&session_id=<sessionId>`. The
 listing entry's `path` is the real path — every link followed — and that is the
-path the proxy's [folder rules](../configuration.md#mcp-app-files) judge. A listing that answers 400 is a
-link loop or a non-folder path (`listing_invalid`); 403 means the folder is
-outside a locked root or Hermes may not read it (`listing_refused`); 404 is a
-missing folder (`listing_missing`); 500 is a broken link (`listing_failed`). If
-the real path cannot be determined because the file is not listed, the proxy
-logs `hermes.file.real_path_unknown` with reason `not_listed`. A broken or
-looping link anywhere in the folder makes the whole listing fail, blocking every
-file in it. A folder outside a locked Hermes root cannot be served. On Python
-3.13+ a link loop answers 500 instead of 400.
+path the gateway's folder rules (`src/config.ts`) judge. A listing that answers
+400 is a link loop or a non-folder path (`listing_invalid`); 403 means the
+folder is outside a locked root or Hermes may not read it (`listing_refused`);
+404 is a missing folder (`listing_missing`); 500 is a broken link
+(`listing_failed`). If the real path cannot be determined because the file is
+not listed, the gateway logs `hermes.file.real_path_unknown` with reason
+`not_listed`. A broken or looping link anywhere in the folder makes the whole
+listing fail, blocking every file in it. A folder outside a locked Hermes root
+cannot be served. On Python 3.13+ a link loop answers 500 instead of 400.
 
-Once the real path passes, the proxy streams bytes with
+Once the real path passes, the gateway streams bytes with
 `GET /api/fs/download?path=<realPath>&profile=<profile>&session_id=<sessionId>`.
 
-To look up the call's input when the App opens, the proxy pages the stored raw
+To look up the call's input when the App opens, the gateway pages the stored raw
 rows with `GET /api/sessions/:id/messages`. Hermes stores a call's row before
 the tool runs, so a call whose turn is still live is found.
 
@@ -282,7 +237,7 @@ the tool runs, so a call whose turn is still live is found.
 
 The creator behind **New Agent** is an ordinary profile, conventionally
 `aos-agent-creator`, that loads the `aos-agent-creator` skill. Its marker lives
-in its `profile.yaml`, and no `hermes` command sets it; the proxy keeps the
+in its `profile.yaml`, and no `hermes` command sets it; the gateway keeps the
 marked profile out of the Agent roster and management surfaces:
 
 ```yaml
@@ -323,7 +278,7 @@ never writable.
 
 Session `createdAt` comes from the Session row's `started_at` (epoch seconds).
 
-The first time the workspace opens after the proxy is upgraded, it saves an
+The first time the workspace opens after the gateway is upgraded, it saves an
 icon for every visible, editable Agent: one `ui_meta.aos.avatar` key per
 profile, written through the same compare-and-set `profiles.configure` call
 visibility uses.
@@ -331,27 +286,27 @@ visibility uses.
 ## Operational behavior
 
 - Native profiles form the AOS Agent catalog and can expose Agent updates (visibility and avatar).
-- Native CLI or cron Sessions may appear in AOS even when the browser did not create them.
+- Native CLI or cron Sessions may appear in AOS even when the client did not create them.
 - Activity is workspace-wide: the feed covers every Session the connection may observe.
-- ACP v2 starts or resumes a run and carries its server-to-browser event stream.
+- ACP v2 starts or resumes a run and carries its server-to-client event stream.
   Stop (`session/cancel`) and steering (`_hgw/session/steer`) travel over the
   same ACP socket; neither creates another run.
 - Stop uses native `session.interrupt`.
 - Text-only active-turn steering uses native `session.redirect`. Hermes may
   report the correction as immediately redirected or accepted into its native
-  build-window queue; both outcomes mean AOS must not submit another copy.
+  build-window queue; both outcomes mean the gateway must not submit another copy.
 - A steering redirect seals the current assistant generation, preserves
   completed tool results, presents the visible correction at that boundary,
-  and continues under the same logical AOS run until Hermes is authoritatively
+  and continues under the same logical run until Hermes is authoritatively
   idle.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present. The `aos-ui` tools appear only in profiles that register the MCP server.
 - AOS needs `display.tool_progress` left at its default (`all`). With `off`, live tool calls are withheld from the tui gateway stream and appear only after a reload. `display.show_reasoning` gates nothing AOS reads; it only makes the messaging gateway prepend reasoning to chat replies.
-- Each served profile needs an existing `terminal.cwd` that is neither `.`, `auto`, `cwd`, nor a missing directory; the proxy reads it with `config.get project` and lists it as the Agent's folder. If the launch profile or `TERMINAL_CWD` sets a different path at runtime, the listed folder may not match where the Session actually runs. A named SSH profile needs a remote `terminal.cwd` that is an absolute path (`~/…` yields no folder), or AOS cannot list, start, or resume its Sessions.
+- Each served profile needs an existing `terminal.cwd` that is neither `.`, `auto`, `cwd`, nor a missing directory; the gateway reads it with `config.get project` and lists it as the Agent's folder. If the launch profile or `TERMINAL_CWD` sets a different path at runtime, the listed folder may not match where the Session actually runs. A named SSH profile needs a remote `terminal.cwd` that is an absolute path (`~/…` yields no folder), or AOS cannot list, start, or resume its Sessions.
 - The listed folder is the Agent's. A resumed Session runs in the folder Hermes stored on its own row, which can differ.
-- When Hermes compacts a conversation, the carried-forward messages receive new row ids. History reads after a compaction return the new ids; live ids before it remain in the browser until the page reloads.
-- Session rename, pin, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the proxy keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
-- Voice controls appear for native STT/TTS interfaces and when the proxy `voice` block is configured; see [Use voice](../chat-voice.md).
-- The proxy authenticates the `/api/ws` WebSocket with `?token=` in the URL.
+- When Hermes compacts a conversation, the carried-forward messages receive new row ids. History reads after a compaction return the new ids; live ids before it remain in the client until the page reloads.
+- Session rename, pin, archive, delete, and provider-owned read state (`unread` catalog row; PATCH `{unread:false}`) are available. `runtime.sessionIdleMs` controls how long the gateway keeps a warm Session attachment after the last subscriber disconnects before closing only that Session.
+- Voice controls appear for native STT/TTS interfaces and when the gateway `voice` block is configured; see [Use voice](https://github.com/AlmogBaku/aos-ui/blob/main/docs/chat-voice.md).
+- The gateway authenticates the `/api/ws` WebSocket with `?token=` in the URL.
   This is upstream Hermes behavior; Hermes accepts the token query parameter
   only on loopback or when started with `--insecure`; do not expose a
   `--insecure` Hermes instance beyond a trusted private network.
@@ -376,10 +331,10 @@ visibility uses.
   `AOS_RESET_REQUIRED`, which clears the in-progress indicator and reloads
   history from the Hermes transcript. No prompt is re-sent.
 
-## Native routes the proxy calls
+## Native routes the gateway calls
 
-When placing an egress allowlist between the proxy and Hermes, allow these
-Hermes-native routes from the proxy host:
+When placing an egress allowlist between the gateway and Hermes, allow these
+Hermes-native routes from the gateway host:
 
 - `GET /api/sessions` — session list
 - `GET /api/sessions/:id`, `PATCH /api/sessions/:id`, `DELETE /api/sessions/:id` — session detail and mutations
@@ -395,10 +350,10 @@ Hermes-native routes from the proxy host:
 These checks require a disposable Session and real credentials. Run them
 against a new pin or before confirming a deployment.
 
-- **Network cut 5 s mid-turn**: sever the proxy-to-Hermes connection for 5
-  seconds while a long run is in progress, then restore it. The browser should
+- **Network cut 5 s mid-turn**: sever the gateway-to-Hermes connection for 5
+  seconds while a long run is in progress, then restore it. The client should
   show no error; the run should resume and complete normally. The
-  `AOS_CONNECTION_INTERRUPTED` event should not reach the browser.
+  `AOS_CONNECTION_INTERRUPTED` event should not reach the client.
 - **Network cut 30 s mid-turn**: sever for 30 seconds (beyond the 20 s heal
   grace). The adapter should produce one `AOS_RESET_REQUIRED` and reload
   history. No prompt should be re-sent.
@@ -407,24 +362,22 @@ against a new pin or before confirming a deployment.
   `AOS_RESET_REQUIRED` exactly once. The run indicator should clear; history
   should reload.
 - **Clarify and approval with mid-question reload**: start a Session that asks
-  a question or approval. Reload the browser tab mid-question. The interrupt
+  a question or approval. Reload the client mid-question. The interrupt
   should reconstruct from history. Answer the question; the run should
   continue.
-- **Invalid token**: set a wrong token in the config and start the proxy.
+- **Invalid token**: set a wrong token in the config and start the gateway.
   Connection should fail immediately with a recognizable authentication error
-  in the server log. No token value should appear in any browser-facing
+  in the server log. No token value should appear in any client-facing
   response.
 - **Confirm close code on auth rejection**: supply a bad token and observe the
   WebSocket close code. Expect 4401, which latches the auth failure state in
-  the proxy. 4403 (host/origin denial) retries silently; check the Hermes log
-  if the proxy never comes up.
+  the gateway. 4403 (host/origin denial) retries silently; check the Hermes log
+  if the gateway never comes up.
 
 ## Verify
 
 ```bash
-bunx vitest run packages/tools-mcp packages/proxy/adapters/hermes
-curl --fail --silent http://127.0.0.1:4110/health
-hermes -p PROFILE mcp test aos-ui
+bunx vitest run src/adapters/hermes
 ```
 
-Live acceptance requires an approved profile, disposable Session, and real credentials. If authentication, WebSocket attachment, or profile discovery fails, see [Troubleshooting](../troubleshooting.md).
+Live acceptance requires an approved profile, disposable Session, and real credentials. If authentication, WebSocket attachment, or profile discovery fails, see [Troubleshooting](https://github.com/AlmogBaku/aos-ui/blob/main/docs/troubleshooting.md).
