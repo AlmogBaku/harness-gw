@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { captureLogs } from "../../test/support/log-capture"
+import { captureLogs } from "../test/support/log-capture"
 import type { HermesRpcTransport } from "./adapters/hermes/adapter"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import {

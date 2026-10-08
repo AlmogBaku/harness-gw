@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import { EventSource } from "../../acp/test-harness"
 import { providerSessionId, sessionId } from "../../core/ids"
 import { runCommand } from "../../core/member"

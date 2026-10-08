@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
+import { captureLogs, type LogCapture } from "../../test/support/log-capture"
 import {
   COALESCE_WINDOW_MS,
   PRESENCE_CLOSED_GRACE_MS,

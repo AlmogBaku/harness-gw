@@ -10,7 +10,7 @@ import {
   HermesUnavailableError,
   type HermesGatewayOptions,
 } from "./gateway"
-import { useFakeClock } from "../../../../test/support/fake-clock"
+import { useFakeClock } from "../../../test/support/fake-clock"
 import { FakeSocket } from "./test-utils/fake-socket"
 import { nativeTurn } from "./test-utils/native-events"
 

@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 
-import { captureLogs } from "../../../test/support/log-capture"
+import { captureLogs } from "../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import type { AgentCatalogResponse } from "../../protocol"
 import { failureOf } from "../core/failures"

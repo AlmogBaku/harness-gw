@@ -7,11 +7,11 @@ import { describe, it } from "vitest"
 import type { AnyStateMachine } from "xstate"
 
 import { defaultClock, ownerSetup, type OwnerContext } from "../../../lifecycle"
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import {
   assertBounded,
   assertHasFinalState,
-} from "../../../../test/support/machine-coverage"
+} from "../../../test/support/machine-coverage"
 import { membershipMachine } from "../../core/channel"
 import { linkMachine, READY_LINK } from "../../core/link"
 import { turnMachine } from "../../core/session-coordinator"

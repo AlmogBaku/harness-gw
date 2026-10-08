@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises"
 import { join, relative } from "node:path"
 import { describe, expect, it } from "vitest"
 
-import { productionSources } from "../../test/support/production-sources"
+import { productionSources } from "../test/support/production-sources"
 import { CANONICAL_TOOL_NAMES } from "./adapters/hermes/tool-data"
 import { OPENCODE_CANONICAL_TOOL_NAMES } from "./adapters/opencode/tool-names"
 

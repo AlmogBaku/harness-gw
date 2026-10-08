@@ -1,5 +1,5 @@
-import { useFakeClock } from "../../../../test/support/fake-clock"
-import { captureLogs } from "../../../../test/support/log-capture"
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import {
   PendingRequestKind,
   TurnEventKind,

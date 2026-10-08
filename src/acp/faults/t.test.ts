@@ -8,8 +8,8 @@ import {
   AOS_METHODS,
   AOS_META_KEY,
 } from "../../../protocol/acp"
-import { useFakeClock } from "../../../../test/support/fake-clock"
-import { assertLeakFree } from "../../../../test/support/leak-oracle"
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { assertLeakFree } from "../../../test/support/leak-oracle"
 import type { OwnerKind } from "../../../lifecycle"
 import { createGuestInvitationService } from "../../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../../core/attachment-stages"

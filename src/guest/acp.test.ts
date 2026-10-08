@@ -52,8 +52,8 @@ import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
 import { createSessionRows } from "../core/session-rows"
-import { useFakeClock } from "../../../test/support/fake-clock"
-import { captureLogs } from "../../../test/support/log-capture"
+import { useFakeClock } from "../../test/support/fake-clock"
+import { captureLogs } from "../../test/support/log-capture"
 import {
   createGuestAcpService,
   createGuestConnection,

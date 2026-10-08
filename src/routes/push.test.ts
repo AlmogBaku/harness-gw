@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { captureLogs } from "../../../test/support/log-capture"
+import { captureLogs } from "../../test/support/log-capture"
 import type { PushRegistration } from "../../protocol/push"
 import { createProxyApp } from "../app"
 import type { RuntimeInstance } from "../core/runtime"

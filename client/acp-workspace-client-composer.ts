@@ -25,7 +25,7 @@ import type {
   AosContext,
   AosModelChoices,
   AosWorkspaceCapabilities,
-} from "../aos-client"
+} from "./aos-client"
 import type { AcpConnection } from "./types"
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { useFakeClock } from "../../../test/support/fake-clock"
+import { useFakeClock } from "../../test/support/fake-clock"
 import { createFilePassService, type FilePassScope } from "./file-pass"
 import { createGuestInvitationService } from "./guest-invitation"
 

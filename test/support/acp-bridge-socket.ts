@@ -1,7 +1,7 @@
 import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client"
 
-import type { AcpPeer, AcpUpgrade } from "../../packages/proxy/acp/service"
-import type { SocketRefusal } from "../../packages/proxy/server"
+import type { AcpPeer, AcpUpgrade } from "../../src/acp/service"
+import type { SocketRefusal } from "../../src/server"
 
 /** The calls a network listener makes on one ACP service. */
 export type BridgedAcpService = {

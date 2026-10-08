@@ -1,4 +1,4 @@
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import { runServerRuntimeContract } from "../../core/runtime-contract"
 import { composeOpenCodeRuntime } from "./factory"
 import { fakeOpenCode, fakeOpenCodeClient } from "./test-utils/fake-opencode"

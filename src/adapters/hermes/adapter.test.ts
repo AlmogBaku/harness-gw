@@ -18,8 +18,8 @@ import {
 } from "./gateway"
 import { createHermesHttp } from "./http"
 import { rpcRouter } from "./test-utils/rpc-router"
-import { useFakeClock } from "../../../../test/support/fake-clock"
-import { captureLogs } from "../../../../test/support/log-capture"
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import { PendingRequestKind } from "../../core/events"
 import {
   ServerAgentUpdateUnsupportedError,

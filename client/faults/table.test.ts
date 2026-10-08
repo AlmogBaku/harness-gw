@@ -8,10 +8,10 @@ import {
   SESSION,
   turnStarted,
   type HarnessOptions,
-} from "../../../../../packages/proxy/acp/test-harness"
-import { translateHistory } from "../../../../../packages/proxy/acp/translate"
-import { TurnEventKind } from "../../../../../packages/proxy/core/events"
-import { useFakeClock } from "../../../../../test/support/fake-clock"
+} from "../../src/acp/test-harness"
+import { translateHistory } from "../../src/acp/translate"
+import { TurnEventKind } from "../../src/core/events"
+import { useFakeClock } from "../../test/support/fake-clock"
 
 import {
   CAPACITY_BACKOFF,

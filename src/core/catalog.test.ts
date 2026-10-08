@@ -3,8 +3,8 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { Session } from "../../protocol"
-import { useFakeClock } from "../../../test/support/fake-clock"
-import { captureLogs } from "../../../test/support/log-capture"
+import { useFakeClock } from "../../test/support/fake-clock"
+import { captureLogs } from "../../test/support/log-capture"
 import { createCatalog } from "./catalog"
 import * as ids from "./ids"
 import { READY_LINK } from "./link"

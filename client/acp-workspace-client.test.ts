@@ -19,10 +19,10 @@ import {
   type AosAvailableCommandsMetaSchema,
 } from "@aos/protocol/acp"
 
-import { useFakeClock } from "../../../../test/support/fake-clock"
+import { useFakeClock } from "../test/support/fake-clock"
 
 import type { SessionMetadata } from "../../contracts"
-import { sessionCapabilities } from "../test-capabilities"
+import { sessionCapabilities } from "./test-capabilities"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
 import type {
   AcpConnection,

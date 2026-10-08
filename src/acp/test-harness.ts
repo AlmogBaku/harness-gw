@@ -44,7 +44,7 @@ import type {
   SessionScope,
 } from "../core/runtime"
 import { READY_LINK } from "../core/link"
-import { captureLogs, type LogCapture } from "../../../test/support/log-capture"
+import { captureLogs, type LogCapture } from "../../test/support/log-capture"
 import * as ids from "../core/ids"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { createCatalog, type Catalog } from "../core/catalog"

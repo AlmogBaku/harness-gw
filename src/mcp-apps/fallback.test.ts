@@ -9,7 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { captureLogs } from "../../../test/support/log-capture"
+import { captureLogs } from "../../test/support/log-capture"
 import * as ids from "../core/ids"
 import {
   ServerSessionNotFoundError,

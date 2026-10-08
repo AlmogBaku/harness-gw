@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { defaultClock } from "../../lifecycle"
-import { useFakeClock } from "../../../test/support/fake-clock"
-import { captureLogs } from "../../../test/support/log-capture"
+import { useFakeClock } from "../../test/support/fake-clock"
+import { captureLogs } from "../../test/support/log-capture"
 import { failureOf } from "./failures"
 import { createLink, type LinkOptions } from "./link"
 

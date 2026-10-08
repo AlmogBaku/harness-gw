@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { captureLogs } from "../../../test/support/log-capture"
+import { captureLogs } from "../../test/support/log-capture"
 import { defaultClock } from "../../lifecycle"
 import {
   PendingRequestKind,

@@ -5,7 +5,7 @@ import { join } from "node:path"
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
 import type { LinkState, ServerLink } from "../../core/link"
 import { CredentialValues } from "../../redaction"

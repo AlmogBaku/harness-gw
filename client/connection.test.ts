@@ -22,8 +22,8 @@ import {
 
 import { AgentUpdateError } from "@/runtime-adapters/contracts"
 
-import { useFakeClock } from "../../../../test/support/fake-clock"
-import { captureLogs } from "../../../../test/support/log-capture"
+import { useFakeClock } from "../test/support/fake-clock"
+import { captureLogs } from "../test/support/log-capture"
 
 import { createAcpConnection } from "./connection"
 import { PART_GRACE_MS } from "./limits"

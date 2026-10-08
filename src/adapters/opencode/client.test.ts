@@ -2,7 +2,7 @@ import { createServer } from "node:http"
 
 import { describe, expect, it } from "vitest"
 
-import { useFakeClock } from "../../../../test/support/fake-clock"
+import { useFakeClock } from "../../../test/support/fake-clock"
 
 import {
   OpenCodeClientAbortError,

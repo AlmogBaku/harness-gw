@@ -3,7 +3,7 @@ import { describe, expect, it, onTestFinished } from "vitest"
 
 import { AOS_META_KEY } from "@aos/protocol/acp"
 
-import { harness } from "../../../../packages/proxy/acp/test-harness"
+import { harness } from "../src/acp/test-harness"
 
 import { createAcpConnection } from "./connection"
 import { acpDebugEnabled, createAcpLogger, frameFields } from "./log"

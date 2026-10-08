@@ -7,11 +7,11 @@ import { describe, it } from "vitest"
 import type { AnyStateMachine } from "xstate"
 
 import { defaultClock } from "@aos/lifecycle"
-import { captureLogs } from "../../../../../test/support/log-capture"
+import { captureLogs } from "../../test/support/log-capture"
 import {
   assertBounded,
   assertHasFinalState,
-} from "../../../../../test/support/machine-coverage"
+} from "../../test/support/machine-coverage"
 import { connectionMachine, sessionMachine } from "../connection"
 
 const { logger } = captureLogs()

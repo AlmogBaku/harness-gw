@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { stringify } from "yaml"
 
-import { captureLogs, type LogCapture } from "../../test/support/log-capture"
+import { captureLogs, type LogCapture } from "../test/support/log-capture"
 import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"

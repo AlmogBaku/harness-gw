@@ -7,7 +7,7 @@ import {
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
-import { useFakeClock } from "../../../test/support/fake-clock"
+import { useFakeClock } from "../../test/support/fake-clock"
 import { backoffDelay } from "../../lifecycle"
 import { type SessionHistoryResponse } from "../../protocol"
 import {

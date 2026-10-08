@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 import { GatewayClientRequestError } from "@openclaw/gateway-client"
 
-import { useFakeClock } from "../../../../test/support/fake-clock"
-import { captureLogs } from "../../../../test/support/log-capture"
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import {
   OpenClawClient,
   OpenClawClientConnectionError,

@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useFakeClock } from "../../../test/support/fake-clock"
+import { useFakeClock } from "../../test/support/fake-clock"
 import {
   isUncertainFailure,
   TurnEventKind,

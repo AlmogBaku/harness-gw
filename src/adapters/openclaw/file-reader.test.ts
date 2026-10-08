@@ -4,7 +4,7 @@ import { inspect } from "node:util"
 
 import { describe, expect, it, onTestFinished } from "vitest"
 
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import { OpenClawClientUnavailableError } from "./client"
 import { composeOpenClawRuntime } from "./factory"
 import { OpenClawNativePayloadError } from "./native-schemas"

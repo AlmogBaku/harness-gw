@@ -1,4 +1,4 @@
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import { runServerRuntimeContract } from "../../core/runtime-contract"
 import { composeHermesRuntime } from "./factory"
 import { fakeHermes, fakeHermesGateway } from "./test-utils/fake-hermes"

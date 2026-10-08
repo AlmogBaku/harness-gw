@@ -34,9 +34,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   acpBridge,
   type BridgedAcpService,
-} from "../../../test/support/acp-bridge-socket"
-import { useFakeClock } from "../../../test/support/fake-clock"
-import { captureLogs } from "../../../test/support/log-capture"
+} from "../../test/support/acp-bridge-socket"
+import { useFakeClock } from "../../test/support/fake-clock"
+import { captureLogs } from "../../test/support/log-capture"
 import {
   AOS_ACP_AGENTS_PATH,
   AOS_ACP_GUEST_PATH,

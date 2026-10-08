@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 
-import { useFakeClock } from "../../../../test/support/fake-clock"
+import { useFakeClock } from "../../../test/support/fake-clock"
 import { canonicalToolName } from "../../core/aos-tool-names"
 import { createMcpServerCache } from "../../core/mcp-server-cache"
 import {

@@ -5,12 +5,12 @@ import {
   harness,
   SESSION,
   sessionRow,
-} from "../../../../../packages/proxy/acp/test-harness"
+} from "../../src/acp/test-harness"
 import {
   providerSessionId,
   sessionId,
-} from "../../../../../packages/proxy/core/ids"
-import { useFakeClock } from "../../../../../test/support/fake-clock"
+} from "../../src/core/ids"
+import { useFakeClock } from "../../test/support/fake-clock"
 
 import { AOS_METHODS } from "@aos/protocol/acp"
 

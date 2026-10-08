@@ -1,6 +1,6 @@
 import { vi } from "vitest"
 
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import { runServerRuntimeContract } from "../../core/runtime-contract"
 import { composeOpenClawRuntime } from "./factory"
 import { fakeOpenClaw, fakeOpenClawClient } from "./test-utils/fake-openclaw"

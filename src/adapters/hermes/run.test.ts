@@ -14,7 +14,7 @@ import {
 import { ServerTurnConflictError } from "../../core/runtime"
 import { describe, expect, it, vi } from "vitest"
 
-import { useFakeClock } from "../../../../test/support/fake-clock"
+import { useFakeClock } from "../../../test/support/fake-clock"
 import type {
   AttachmentObserver,
   AttachmentSignal,

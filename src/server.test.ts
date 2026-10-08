@@ -1,7 +1,7 @@
 import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { useFakeClock } from "../../test/support/fake-clock"
+import { useFakeClock } from "../test/support/fake-clock"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext } from "./acp/types"
 import { HANDSHAKE_BUDGET, SPEECH_CALL_MS } from "./core/limits"

@@ -2,8 +2,8 @@ import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import { OPERATOR_PRINCIPAL } from "../core/principal"
-import { useFakeClock } from "../../../test/support/fake-clock"
-import { captureLogs } from "../../../test/support/log-capture"
+import { useFakeClock } from "../../test/support/fake-clock"
+import { captureLogs } from "../../test/support/log-capture"
 import { createAcpService } from "./service"
 import type { AcpConnectionContext } from "./types"
 

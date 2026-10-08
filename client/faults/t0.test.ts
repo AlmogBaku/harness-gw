@@ -4,8 +4,8 @@ import {
   AGENT,
   harness,
   SESSION,
-} from "../../../../../packages/proxy/acp/test-harness"
-import { useFakeClock } from "../../../../../test/support/fake-clock"
+} from "../../src/acp/test-harness"
+import { useFakeClock } from "../../test/support/fake-clock"
 
 import { connectBrowser } from "./support"
 

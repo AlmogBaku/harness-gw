@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { backoffDelay, defaultClock } from "../../lifecycle"
-import { useFakeClock } from "../../../test/support/fake-clock"
-import { captureLogs } from "../../../test/support/log-capture"
+import { useFakeClock } from "../../test/support/fake-clock"
+import { captureLogs } from "../../test/support/log-capture"
 import { providerSessionId, sessionId } from "./ids"
 import { READING_BACKOFF } from "./limits"
 import { READY_LINK, type LinkState, type ServerLink } from "./link"

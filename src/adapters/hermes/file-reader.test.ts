@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished } from "vitest"
 
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import { createProxyApp } from "../../app"
 import { createFilePassService } from "../../auth/file-pass"
 import { createAppFileCalls } from "../../core/app-files"

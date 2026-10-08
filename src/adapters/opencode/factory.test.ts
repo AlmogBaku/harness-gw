@@ -4,7 +4,7 @@ import { join } from "node:path"
 
 import { describe, expect, it, vi } from "vitest"
 
-import { captureLogs } from "../../../../test/support/log-capture"
+import { captureLogs } from "../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
 import type { ServerTurnEngine } from "../../core/runtime"
 import type { OpenCodeAdapterClient } from "./adapter"

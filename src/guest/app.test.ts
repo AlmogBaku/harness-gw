@@ -3,7 +3,7 @@
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
-import { captureLogs } from "../../../test/support/log-capture"
+import { captureLogs } from "../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import type { McpAppFiles, McpAppView } from "../../protocol/mcp-apps"
 import { createFilePassService, type FilePassScope } from "../auth/file-pass"

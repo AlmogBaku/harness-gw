@@ -2,8 +2,8 @@ import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import { AOS_METHODS } from "../../../protocol/acp"
-import { useFakeClock } from "../../../../test/support/fake-clock"
-import { assertLeakFree } from "../../../../test/support/leak-oracle"
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { assertLeakFree } from "../../../test/support/leak-oracle"
 import { PendingRequestKind, TurnEventKind } from "../../core/events"
 import { ServerSessionNotFoundError } from "../../core/runtime"
 import {

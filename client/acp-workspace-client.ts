@@ -21,7 +21,7 @@ import type {
   SessionActionCapabilities,
   SessionCreationOptions,
 } from "../../contracts"
-import type { AosRemoteClient } from "../aos-client"
+import type { AosRemoteClient } from "./aos-client"
 import { createAcpComposerStore } from "./acp-workspace-client-composer"
 import { createAcpSessionStore, rowOf } from "./acp-workspace-client-sessions"
 import type { AcpConnection } from "./types"
