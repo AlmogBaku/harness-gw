@@ -15,7 +15,7 @@ export function registerInvitationRoutes(
     runtime: ServerRuntime
   }
 ) {
-  app.post("/api/aos/v1/guest-invitations", async (context) => {
+  app.post("/api/v1/guest-invitations", async (context) => {
     const input = await boundedJson(context.req.raw)
     if (input === undefined)
       return errorResponse(

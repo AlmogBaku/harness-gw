@@ -62,7 +62,7 @@ const history: SessionHistoryResponse = {
       content: [
         { type: "text", text: "Check this chart" },
         { type: "image", image: PNG, filename: "chart.png" },
-        { type: "image", image: "/api/aos/v1/artifacts/a1" },
+        { type: "image", image: "/api/v1/artifacts/a1" },
       ],
       createdAt: "2026-09-19T09:00:00.000Z",
     },

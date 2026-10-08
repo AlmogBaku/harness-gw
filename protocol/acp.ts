@@ -31,13 +31,17 @@ import {
  */
 
 export const ACP_PROTOCOL_VERSION = 2 as const
-export const HGW_ACP_OPERATOR_PATH = "/api/aos/v1/acp" as const
 /**
- * Below the operator path, each Agent's own address: its Sessions alone, with
- * no `_meta.hgw.agentId` to name.
+ * Every gateway route sits below this prefix, on both listeners: which
+ * listener a request reaches, never its path, decides whether it is a guest's.
  */
-export const HGW_ACP_AGENTS_PATH = `${HGW_ACP_OPERATOR_PATH}/agents` as const
-export const HGW_ACP_GUEST_PATH = "/api/guest/v1/acp" as const
+export const HGW_API_PREFIX = "/api/v1" as const
+export const HGW_ACP_PATH = `${HGW_API_PREFIX}/acp` as const
+/**
+ * Below the ACP path on the operator listener, each Agent's own address: its
+ * Sessions alone, with no `_meta.hgw.agentId` to name.
+ */
+export const HGW_ACP_AGENTS_PATH = `${HGW_ACP_PATH}/agents` as const
 
 /** One Agent's own ACP address, its id one path segment. */
 export function hgwAcpAgentPath(agentId: string) {

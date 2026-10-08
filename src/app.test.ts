@@ -124,7 +124,7 @@ describe("AOS V1 proxy", () => {
     )
 
     const response = await app(new HermesServerAdapter({ request })).request(
-      `${origin}/api/aos/v1/runtime`
+      `${origin}/api/v1/runtime`
     )
 
     expect(response.status).toBe(200)
@@ -153,7 +153,7 @@ describe("AOS V1 proxy", () => {
         stagedDataUrl.length
       ),
     })
-    const path = `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`
+    const path = `${origin}/api/v1/agents/researcher/sessions/stored/attachments/stage`
 
     const response = await proxy.request(path, stageRequest)
 
@@ -175,7 +175,7 @@ describe("AOS V1 proxy", () => {
     vi.spyOn(runtime, "stageAttachments")
 
     const response = await app(runtime).request(
-      `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
+      `${origin}/api/v1/agents/researcher/sessions/stored/attachments/stage`,
       {
         ...stageRequest,
         headers: {
@@ -194,7 +194,7 @@ describe("AOS V1 proxy", () => {
     const proxy = app(runtime)
 
     const response = await proxy.request(
-      `${origin}/api/aos/v1/guest-invitations`,
+      `${origin}/api/v1/guest-invitations`,
       {
         method: "POST",
         headers: { origin, "content-type": "application/json" },
@@ -208,14 +208,14 @@ describe("AOS V1 proxy", () => {
   it("serves no browser wire beside runtime discovery and content", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     const proxy = app(runtime)
-    const session = `${origin}/api/aos/v1/agents/researcher/sessions/stored`
+    const session = `${origin}/api/v1/agents/researcher/sessions/stored`
 
     // Sessions, history, models, context, visibility, runs, and the
     // invalidation socket all travel over ACP now.
     for (const path of [
-      `${origin}/api/aos/v1/agents`,
-      `${origin}/api/aos/v1/sessions`,
-      `${origin}/api/aos/v1/events`,
+      `${origin}/api/v1/agents`,
+      `${origin}/api/v1/sessions`,
+      `${origin}/api/v1/events`,
       session,
       `${session}/history`,
       `${session}/runs`,
@@ -239,7 +239,7 @@ describe("AOS V1 proxy", () => {
             throw error
           }),
         })
-      ).request(`${origin}/api/aos/v1/runtime`)
+      ).request(`${origin}/api/v1/runtime`)
 
     const rejected = await failing(new HermesAuthenticationError())
     expect(rejected.status).toBe(401)
@@ -266,7 +266,7 @@ describe("AOS V1 proxy", () => {
       }),
     }
 
-    const path = `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`
+    const path = `${origin}/api/v1/agents/researcher/sessions/stored/attachments/stage`
     const response = await app(new HermesServerAdapter(transport)).request(
       path,
       stageRequest
@@ -300,7 +300,7 @@ describe("AOS V1 proxy", () => {
     )
 
     const response = await app(runtime).request(
-      `${origin}/api/aos/v1/agents/researcher/sessions/stored/attachments/stage`,
+      `${origin}/api/v1/agents/researcher/sessions/stored/attachments/stage`,
       stageRequest
     )
 
@@ -318,10 +318,10 @@ describe("AOS V1 proxy", () => {
     })
     const proxy = app(runtime)
 
-    expect((await proxy.request(`${origin}/api/aos/v1/healthz`)).status).toBe(
+    expect((await proxy.request(`${origin}/api/v1/healthz`)).status).toBe(
       200
     )
-    expect((await proxy.request(`${origin}/api/aos/v1/readyz`)).status).toBe(
+    expect((await proxy.request(`${origin}/api/v1/readyz`)).status).toBe(
       503
     )
   })
@@ -342,7 +342,7 @@ describe("AOS V1 proxy", () => {
 
     // An artifact read is a REST route that reaches the provider, so an outage
     // there is the failure a log line has to name its path for.
-    const path = "/api/aos/v1/agents/researcher/sessions/stored/artifacts/art-1"
+    const path = "/api/v1/agents/researcher/sessions/stored/artifacts/art-1"
     expect((await proxy.request(`${origin}${path}?token=secret`)).status).toBe(
       503
     )
@@ -387,7 +387,7 @@ describe("AOS V1 proxy", () => {
     Object.defineProperty(runtime, "mcpApps", { value: mcpApps })
     const proxy = app(runtime)
     const view = (sessionId: string) =>
-      `${origin}/api/aos/v1/agents/researcher/sessions/${sessionId}/tool-calls/call-1/app`
+      `${origin}/api/v1/agents/researcher/sessions/${sessionId}/tool-calls/call-1/app`
 
     expect((await proxy.request(view("stored"))).status).toBe(200)
     expect((await proxy.request(view("other"))).status).toBe(404)
@@ -426,7 +426,7 @@ const reportCall: McpToolCall = {
 
 /** One call's MCP App path on the operator listener. */
 function appPath(sessionId = "stored", toolCallId = "call-1") {
-  return `/api/aos/v1/agents/researcher/sessions/${sessionId}/tool-calls/${toolCallId}/app`
+  return `/api/v1/agents/researcher/sessions/${sessionId}/tool-calls/${toolCallId}/app`
 }
 
 /** An answer as a client can tell it apart, its request id aside. */
@@ -454,7 +454,7 @@ const NOTES = {
 
 /** One published Artifact's MCP App path on the operator listener. */
 function artifactPath(sessionId = "stored", artifactId = "artifact-1") {
-  return `/api/aos/v1/agents/researcher/sessions/${sessionId}/artifacts/${artifactId}/app`
+  return `/api/v1/agents/researcher/sessions/${sessionId}/artifacts/${artifactId}/app`
 }
 
 /**
@@ -559,7 +559,7 @@ describe("MCP App files", () => {
   const offer = {
     addresses: {
       path: expect.stringMatching(
-        /^\/api\/aos\/v1\/agents\/researcher\/sessions\/stored\/tool-calls\/call-1\/app\/files\/path\?pass=[\w.-]+$/u
+        /^\/api\/v1\/agents\/researcher\/sessions\/stored\/tool-calls\/call-1\/app\/files\/path\?pass=[\w.-]+$/u
       ),
     },
     expiresAt: expect.any(String),
@@ -1030,7 +1030,7 @@ describe("Published Artifact views", () => {
       files: {
         addresses: {
           path: expect.stringMatching(
-            /^\/api\/aos\/v1\/agents\/researcher\/sessions\/stored\/artifacts\/artifact-1\/app\/files\/path\?pass=[\w.-]+$/u
+            /^\/api\/v1\/agents\/researcher\/sessions\/stored\/artifacts\/artifact-1\/app\/files\/path\?pass=[\w.-]+$/u
           ),
         },
         expiresAt: expect.any(String),

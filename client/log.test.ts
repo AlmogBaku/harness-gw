@@ -18,7 +18,7 @@ async function connectAndClose(debug: boolean) {
   onTestFinished(() => test.close())
   const connection = createAcpConnection({
     clientInfo: { name: "aos-ui", version: "1" },
-    url: "ws://proxy.test/api/aos/v1/acp",
+    url: "ws://proxy.test/api/v1/acp",
     socketConstructor: pipedSockets(test.agentApp).WebSocket,
     logger: createAcpLogger({ debug, write: (line) => lines.push(line) }),
   })

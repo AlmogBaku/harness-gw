@@ -7,13 +7,13 @@ import {
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
+import packageJson from "../../package.json"
 import { useFakeClock } from "../../test/support/fake-clock"
 import { backoffDelay } from "../../lifecycle"
 import { type SessionHistoryResponse } from "../../protocol"
 import {
   ACP_PROTOCOL_VERSION,
   HGW_ATTACHMENT_URI_SCHEME,
-  HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
@@ -191,22 +191,22 @@ async function promptAsking(
 }
 
 describe("AOS ACP agent", () => {
-  it("reports the AOS extension contract on initialize", async () => {
+  // Spelled literally: a test reading the key from the constant passes whatever the constant holds.
+  it("reports the hgw extension contract on initialize", async () => {
     const test = await harness()
 
     expect(test.initialize).toMatchObject({
       protocolVersion: ACP_PROTOCOL_VERSION,
-      // A proxy serving no build versions the extension contract instead.
       info: {
         name: "harness-gw",
         title: "Test Runtime",
-        version: `${HGW_EXTENSION_VERSION}`,
+        version: packageJson.version,
       },
       capabilities: { session: { delete: {} } },
       authMethods: [],
       _meta: {
-        [HGW_META_KEY]: {
-          version: HGW_EXTENSION_VERSION,
+        hgw: {
+          version: 1,
           role: "operator",
           extensions: {
             steer: true,
@@ -220,27 +220,16 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it.each([
-    [
-      "the build it serves as its version, so a tab on another reloads",
-      { buildId: "b1" },
-      { info: { version: "b1" } },
-    ],
-    [
-      "no catalog invalidation for a runtime that cannot signal one",
-      { withoutCatalogChanges: true },
-      {
-        _meta: {
-          [HGW_META_KEY]: {
-            extensions: { invalidation: false, steer: true, readState: true },
-          },
+  it("initializes with no catalog invalidation for a runtime that cannot signal one", async () => {
+    const test = await harness({ withoutCatalogChanges: true })
+
+    expect(test.initialize).toMatchObject({
+      _meta: {
+        [HGW_META_KEY]: {
+          extensions: { invalidation: false, steer: true, readState: true },
         },
       },
-    ],
-  ])("initializes with %s", async (_case, options, expected) => {
-    const test = await harness(options)
-
-    expect(test.initialize).toMatchObject(expected)
+    })
     test.close()
   })
 

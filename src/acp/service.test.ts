@@ -8,7 +8,7 @@ import { createAcpService } from "./service"
 import type { AcpConnectionContext } from "./types"
 
 const ORIGIN = "https://aos.example.test"
-const PATH = "/api/aos/v1/acp"
+const PATH = "/api/v1/acp"
 
 function initializeFrame(id: number) {
   return JSON.stringify({
@@ -274,7 +274,7 @@ describe("ACP WebSocket service", () => {
       connection: connectionContext,
     })
     const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}/api/guest/v1/acp`, { headers: { origin: ORIGIN } })
+      new Request(`${ORIGIN}/api/v1/acp`, { headers: { origin: ORIGIN } })
     )
     const transport = peer()
 

@@ -641,8 +641,6 @@ export type HarnessOptions = {
   }) => Pick<AcpConnectionContext, "readState" | "activityFeed">
   /** Where lifecycle owners log; a fresh capture by default. */
   logs?: LogCapture
-  /** The browser build the static root carries; absent stands for none. */
-  buildId?: string
   /** Arms faults before the first browser connects, for one its handshake meets. */
   arm?: (faults: Faults) => void
 }
@@ -915,7 +913,6 @@ export async function harness(options: HarnessOptions = {}) {
         channels,
         presence,
         logger: logs.logger.child({ connectionId, role: "operator" }),
-        buildId: options.buildId,
         role: "operator",
         activityFeed: composed?.activityFeed ?? activityFeed,
       }

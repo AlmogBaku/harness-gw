@@ -148,7 +148,7 @@ function hermesProxy() {
     hermes,
     file: (toolCallId: string, argument: string) =>
       proxy.request(
-        `${ORIGIN}/api/aos/v1/agents/${agentId}/sessions/${sessionId}/tool-calls/${toolCallId}/app/files/${argument}`
+        `${ORIGIN}/api/v1/agents/${agentId}/sessions/${sessionId}/tool-calls/${toolCallId}/app/files/${argument}`
       ),
   }
 }

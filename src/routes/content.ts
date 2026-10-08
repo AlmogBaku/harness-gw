@@ -56,7 +56,7 @@ export function registerContentRoutes(
     sessionId: string
   ) => Promise<string>
 ) {
-  const sessionContentPath = "/api/aos/v1/agents/:agentId/sessions/:sessionId"
+  const sessionContentPath = "/api/v1/agents/:agentId/sessions/:sessionId"
 
   app.post(`${sessionContentPath}/attachments/stage`, async (context) => {
     const runtime = await requireRuntime(context.req.raw)
@@ -114,7 +114,7 @@ export function registerContentRoutes(
     })
   })
 
-  app.post("/api/aos/v1/agents/:agentId/audio/transcribe", async (context) => {
+  app.post("/api/v1/agents/:agentId/audio/transcribe", async (context) => {
     const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)
@@ -136,7 +136,7 @@ export function registerContentRoutes(
     )
   })
 
-  app.post("/api/aos/v1/agents/:agentId/audio/speak", async (context) => {
+  app.post("/api/v1/agents/:agentId/audio/speak", async (context) => {
     const runtime = await requireRuntime(context.req.raw)
     if (context.req.header("origin") !== options.publicOrigin)
       return errorResponse("forbidden", 403)

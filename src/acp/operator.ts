@@ -1,5 +1,5 @@
 import type { Logger } from "../../lifecycle"
-import { HGW_ACP_OPERATOR_PATH } from "../../protocol/acp"
+import { HGW_ACP_PATH } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
@@ -25,8 +25,6 @@ export type OperatorAcpServiceOptions = {
   presence?: PresenceRegistry
   /** The workspace catalog the guest listener shares, with its row cache. */
   catalog: Catalog
-  /** The browser build the static root carries; absent without one. */
-  buildId?: string
   now?: () => number
 }
 
@@ -43,7 +41,6 @@ export function createOperatorAcpService({
   logger,
   presence,
   catalog,
-  buildId,
   now = Date.now,
 }: OperatorAcpServiceOptions) {
   const role = "operator" as const
@@ -58,7 +55,7 @@ export function createOperatorAcpService({
     principalId: OPERATOR_PRINCIPAL,
     agent: createAosAcpAgent,
     agentAddress: {
-      path: HGW_ACP_OPERATOR_PATH,
+      path: HGW_ACP_PATH,
       exists: async (agentId) =>
         (await catalog.agents()).agents.some(
           ({ summary }) => summary.id === agentId
@@ -79,7 +76,6 @@ export function createOperatorAcpService({
       channels,
       logger: logger.child({ connectionId, role }),
       presence,
-      buildId,
       readState: createReadState({
         catalog,
         relighting: runtimeInstance.runtime.translation?.relighting,

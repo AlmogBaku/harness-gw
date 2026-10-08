@@ -241,19 +241,16 @@ function harness(options: { existing?: boolean; files?: AppFileOptions } = {}) {
 type Harness = ReturnType<typeof harness>
 
 function speakRequest(subject: Harness, invite: string) {
-  return subject.app.request(
-    `${ORIGIN}/api/guest/v1/agents/${AGENT}/audio/speak`,
-    {
-      method: "POST",
-      headers: { ...headers(invite, true), "content-type": "application/json" },
-      body: JSON.stringify({ text: "Read this back." }),
-    }
-  )
+  return subject.app.request(`${ORIGIN}/api/v1/agents/${AGENT}/audio/speak`, {
+    method: "POST",
+    headers: { ...headers(invite, true), "content-type": "application/json" },
+    body: JSON.stringify({ text: "Read this back." }),
+  })
 }
 
 function transcribeRequest(subject: Harness, invite: string) {
   return subject.app.request(
-    `${ORIGIN}/api/guest/v1/agents/${AGENT}/audio/transcribe`,
+    `${ORIGIN}/api/v1/agents/${AGENT}/audio/transcribe`,
     {
       method: "POST",
       headers: { ...headers(invite, true), "content-type": "application/json" },
@@ -319,12 +316,9 @@ describe("guest app", () => {
     const subject = harness()
     const invite = await token(subject.invitationService)
 
-    const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/runtime`,
-      {
-        headers: headers(invite),
-      }
-    )
+    const response = await subject.app.request(`${ORIGIN}/api/v1/runtime`, {
+      headers: headers(invite),
+    })
 
     expect(response.status).toBe(200)
     const body = await response.json()
@@ -357,7 +351,7 @@ describe("guest app", () => {
     const invite = await token(subject.invitationService)
 
     const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
+      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
       {
         method: "POST",
         headers: {
@@ -389,10 +383,9 @@ describe("guest app", () => {
   it("returns warm copy for an invalid invitation and exposes no browser wire", async () => {
     const subject = harness()
 
-    const invalid = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/runtime`,
-      { headers: headers("invalid") }
-    )
+    const invalid = await subject.app.request(`${ORIGIN}/api/v1/runtime`, {
+      headers: headers("invalid"),
+    })
 
     expect(invalid.status).toBe(401)
     await expect(invalid.json()).resolves.toEqual({
@@ -405,15 +398,34 @@ describe("guest app", () => {
 
     // History, runs, and the invalidation socket all travel over guest ACP now.
     for (const path of [
-      `${ORIGIN}/api/guest/v1/events`,
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/history`,
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/runs`,
+      `${ORIGIN}/api/v1/events`,
+      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/history`,
+      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/runs`,
     ])
       expect(
         (await subject.app.request(path, { headers: headers("invalid") }))
           .status,
         path
       ).toBe(404)
+  })
+
+  // Both listeners share one prefix, so the guest's must not answer the operator's own routes.
+  it.each([
+    ["POST", "/api/v1/guest-invitations"],
+    ["GET", "/api/v1/push"],
+    ["PUT", "/api/v1/push/subscriptions"],
+    ["DELETE", "/api/v1/push/subscriptions"],
+  ])("answers the operator-only %s %s with 404", async (method, path) => {
+    const subject = harness()
+    const invite = await token(subject.invitationService)
+
+    const response = await subject.app.request(`${ORIGIN}${path}`, {
+      method,
+      headers: { ...headers(invite, true), "content-type": "application/json" },
+      ...(method === "GET" ? {} : { body: "{}" }),
+    })
+
+    expect(response.status).toBe(404)
   })
 
   it.each([
@@ -425,7 +437,7 @@ describe("guest app", () => {
     const invite = await scopedToken(overrides)
 
     const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
+      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
       {
         method: "POST",
         headers: {
@@ -455,7 +467,7 @@ describe("guest app", () => {
     const invite = await token(subject.invitationService)
 
     const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
+      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
       {
         method: "POST",
         headers: {
@@ -479,10 +491,9 @@ describe("guest app", () => {
     )
     const invite = await token(subject.invitationService)
 
-    const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/runtime`,
-      { headers: headers(invite) }
-    )
+    const response = await subject.app.request(`${ORIGIN}/api/v1/runtime`, {
+      headers: headers(invite),
+    })
 
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toEqual({
@@ -498,7 +509,7 @@ describe("guest app", () => {
     const subject = harness()
     const invite = await token(subject.invitationService)
     const response = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/audio/transcribe`,
+      `${ORIGIN}/api/v1/agents/${AGENT}/audio/transcribe`,
       {
         method: "POST",
         headers: {
@@ -537,7 +548,7 @@ describe("guest app", () => {
           : undefined
     )
     const invite = await token(subject.invitationService)
-    const url = `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/artifacts/artifact-1`
+    const url = `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/artifacts/artifact-1`
 
     subject.artifact.mockRejectedValueOnce(unreadable)
     const gone = await subject.app.request(url, { headers: headers(invite) })
@@ -594,7 +605,7 @@ describe("guest app", () => {
     Object.assign(subject.runtime, { mcpApps })
     const invite = await token(subject.invitationService)
     const view = (toolCallId: string) =>
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
+      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
 
     const own = await subject.app.request(view("call-1"), {
       headers: headers(invite),
@@ -675,7 +686,7 @@ describe("guest app", () => {
     await vi.waitFor(() => expect(subject.speak).toHaveBeenCalledTimes(1))
 
     const rejected = await subject.app.request(
-      `${ORIGIN}/api/guest/v1/agents/${AGENT}/audio/speak`,
+      `${ORIGIN}/api/v1/agents/${AGENT}/audio/speak`,
       {
         method: "POST",
         headers: {
@@ -708,12 +719,12 @@ describe("guest app", () => {
 
 /** One of the invited Session's calls' MCP App path on the guest listener. */
 function guestApp(toolCallId = "call-1") {
-  return `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
+  return `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
 }
 
 /** The invited Session's published Artifact's view path on the guest listener. */
 function guestArtifact(artifactId = "artifact-1") {
-  return `${ORIGIN}/api/guest/v1/agents/${AGENT}/sessions/${REF}/artifacts/${artifactId}/app`
+  return `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/artifacts/${artifactId}/app`
 }
 
 /**
@@ -785,7 +796,7 @@ describe("guest MCP App files", () => {
   const address = (argument: string) =>
     expect.stringMatching(
       new RegExp(
-        `^/api/guest/v1/agents/${AGENT}/sessions/${REF}/tool-calls/call-1/app/files/${argument}\\?pass=[\\w.-]+$`,
+        `^/api/v1/agents/${AGENT}/sessions/${REF}/tool-calls/call-1/app/files/${argument}\\?pass=[\\w.-]+$`,
         "u"
       )
     )

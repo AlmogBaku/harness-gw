@@ -9,7 +9,7 @@ import { PushRegistrationLimitError } from "../push/registrations"
 import { boundedJson, errorResponse } from "./http"
 import type { ProxyRouteApp } from "./types"
 
-const PUSH_PATH = "/api/aos/v1/push"
+const PUSH_PATH = "/api/v1/push"
 const SUBSCRIPTIONS_PATH = `${PUSH_PATH}/subscriptions`
 
 /**

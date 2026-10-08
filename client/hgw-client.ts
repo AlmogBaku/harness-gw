@@ -109,7 +109,7 @@ export class HgwRemoteClient {
 
   constructor(options: HgwRemoteClientOptions = {}) {
     this.#fetch = options.fetcher ?? globalThis.fetch.bind(globalThis)
-    this.#basePath = options.basePath ?? "/api/aos/v1"
+    this.#basePath = options.basePath ?? "/api/v1"
     this.#authorization = options.authorization
     this.#origin = options.origin
   }

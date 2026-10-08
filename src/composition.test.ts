@@ -168,7 +168,7 @@ describe("configured proxy composition", () => {
       Function
     )
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/readyz"
+      "https://aos.example.test/api/v1/readyz"
     )
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({
@@ -189,7 +189,7 @@ describe("configured proxy composition", () => {
     })
 
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/runtime"
+      "https://aos.example.test/api/v1/runtime"
     )
 
     expect(response.status).toBe(200)
@@ -245,7 +245,7 @@ describe("configured proxy composition", () => {
       clock: () => 1_700_000_000_000,
     })
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/guest-invitations",
+      "https://aos.example.test/api/v1/guest-invitations",
       {
         method: "POST",
         headers: {
@@ -296,7 +296,7 @@ describe("configured proxy composition", () => {
     })
 
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/guest-invitations",
+      "https://aos.example.test/api/v1/guest-invitations",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -319,7 +319,7 @@ describe("configured proxy composition", () => {
     })
     const post = (body: unknown) =>
       configured.app.request(
-        "https://aos.example.test/api/aos/v1/guest-invitations",
+        "https://aos.example.test/api/v1/guest-invitations",
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -363,7 +363,7 @@ describe("configured proxy composition", () => {
     })
 
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/guest-invitations",
+      "https://aos.example.test/api/v1/guest-invitations",
       {
         method: "POST",
         headers: {
@@ -399,7 +399,7 @@ describe("configured proxy composition", () => {
     expect(configured.push?.registrations.list("operator")).toEqual([])
 
     const response = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/push"
+      "https://aos.example.test/api/v1/push"
     )
     expect(response.status).toBe(200)
     const info = (await response.json()) as { publicKey: string }
@@ -425,7 +425,7 @@ describe("configured proxy composition", () => {
     expect(subscribeExecutions).not.toHaveBeenCalled()
     await expect(
       (
-        await configured.app.request("https://aos.example.test/api/aos/v1/push")
+        await configured.app.request("https://aos.example.test/api/v1/push")
       ).json()
     ).resolves.toEqual({ status: "not-configured" })
   })
@@ -509,7 +509,7 @@ describe("configured proxy composition", () => {
         }
       )
       const response = await configured.app.request(
-        "https://aos.example.test/api/aos/v1/agents/researcher/audio/speak",
+        "https://aos.example.test/api/v1/agents/researcher/audio/speak",
         {
           method: "POST",
           headers: {
@@ -554,7 +554,7 @@ describe("configured proxy composition", () => {
       expect(
         (
           await configured.app.request(
-            "https://aos.example.test/api/aos/v1/readyz"
+            "https://aos.example.test/api/v1/readyz"
           )
         ).status
       ).toBe(200)
@@ -590,7 +590,7 @@ describe("configured proxy composition", () => {
     )
 
     const health = await configured.app.request(
-      "https://aos.example.test/api/aos/v1/healthz"
+      "https://aos.example.test/api/v1/healthz"
     )
     expect(health.status).toBe(200)
     await expect(health.json()).resolves.toEqual({
@@ -608,7 +608,7 @@ describe("configured proxy composition", () => {
     expect(
       (
         await configured.app.request(
-          "https://aos.example.test/api/aos/v1/readyz"
+          "https://aos.example.test/api/v1/readyz"
         )
       ).status
     ).toBe(503)

@@ -72,11 +72,6 @@ type AcpConnectionBase = {
   presence?: PresenceRegistry
   /** This connection's log, bound to its `connectionId` and `role`. */
   logger: Logger
-  /**
-   * The browser build the static root carries, which `initialize` answers as
-   * its version so a tab running another build reloads; absent without one.
-   */
-  buildId?: string
   /** The clock injected by the service; defaults to performance.now when absent. */
   clock?: Clock
   /**

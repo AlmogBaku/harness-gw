@@ -39,8 +39,7 @@ import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import {
   HGW_ACP_AGENTS_PATH,
-  HGW_ACP_GUEST_PATH,
-  HGW_ACP_OPERATOR_PATH,
+  HGW_ACP_PATH,
   HGW_AUTH_METHOD_INVITE,
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
@@ -1433,7 +1432,7 @@ export function runWireListenerContract(
                 rawSocket(
                   proxy.acpService,
                   OPERATOR_ORIGIN,
-                  HGW_ACP_OPERATOR_PATH
+                  HGW_ACP_PATH
                 )
               )
               const frame = rawInitialize(version)
@@ -1462,7 +1461,7 @@ export function runWireListenerContract(
               rawSocket(
                 proxy.acpService,
                 OPERATOR_ORIGIN,
-                HGW_ACP_OPERATOR_PATH
+                HGW_ACP_PATH
               )
             )
           const answers: unknown[] = []
@@ -1515,7 +1514,7 @@ export function runWireListenerContract(
         wireCase(createRuntime, async ({ proxy, clock }) => {
           const raw = await until(
             clock,
-            rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_OPERATOR_PATH)
+            rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
           )
           raw.send(
             JSON.stringify([
@@ -1539,8 +1538,8 @@ export function runWireListenerContract(
         wireCase(createRuntime, async ({ proxy, clock }) => {
           const answers: unknown[] = []
           for (const [service, origin, path] of [
-            [proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_OPERATOR_PATH],
-            [proxy.guest!.acpService, GUEST_ORIGIN, HGW_ACP_GUEST_PATH],
+            [proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH],
+            [proxy.guest!.acpService, GUEST_ORIGIN, HGW_ACP_PATH],
           ] as const)
             for (const sent of [undefined, origin, "null", "https://x.test"]) {
               const upgrade = await until(
@@ -1566,13 +1565,13 @@ export function runWireListenerContract(
         wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
           const answers: Record<string, unknown> = {}
           for (const path of [
-            HGW_ACP_OPERATOR_PATH,
+            HGW_ACP_PATH,
             hgwAcpAgentPath(agentId),
             hgwAcpAgentPath("writer"),
             hgwAcpAgentPath(`${agentId}/x`),
             `${hgwAcpAgentPath(agentId)}/x`,
             `${HGW_ACP_AGENTS_PATH}/`,
-            `${HGW_ACP_OPERATOR_PATH}/sessions`,
+            `${HGW_ACP_PATH}/sessions`,
           ]) {
             const upgrade = await until(
               clock,
@@ -1618,7 +1617,7 @@ export function runWireListenerContract(
             const shared = connect(
               proxy.acpService,
               OPERATOR_ORIGIN,
-              HGW_ACP_OPERATOR_PATH
+              HGW_ACP_PATH
             )
             await until(clock, shared.initialize())
             const other = { _meta: { [HGW_META_KEY]: { agentId: "writer" } } }
@@ -1799,7 +1798,7 @@ export function runWireListenerContract(
           const { token } = await guest.invitations.issue({ agentId, ref })
           const raw = await until(
             clock,
-            rawSocket(guest.acpService, GUEST_ORIGIN, HGW_ACP_GUEST_PATH)
+            rawSocket(guest.acpService, GUEST_ORIGIN, HGW_ACP_PATH)
           )
           raw.send(JSON.stringify(rawInitialize(2)))
           await until(clock, raw.next())
@@ -1866,7 +1865,7 @@ export function runWireListenerContract(
           const extras = connect(
             guest.acpService,
             GUEST_ORIGIN,
-            HGW_ACP_GUEST_PATH
+            HGW_ACP_PATH
           )
           const { token } = await guest.invitations.issue({
             agentId,

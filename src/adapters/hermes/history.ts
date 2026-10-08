@@ -74,7 +74,7 @@ function parseRowJson(value: unknown): JsonValue | undefined {
 function imageSource(value: unknown) {
   const image = isRecord(value) ? value.url : value
   if (typeof image !== "string") return undefined
-  return /^(?:data:image\/(?:png|jpeg|gif|webp|bmp);base64,|\/api\/aos\/v1\/)/u.test(
+  return /^(?:data:image\/(?:png|jpeg|gif|webp|bmp);base64,|\/api\/v1\/)/u.test(
     image
   )
     ? image

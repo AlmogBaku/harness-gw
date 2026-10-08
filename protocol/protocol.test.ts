@@ -858,7 +858,7 @@ describe("AOS v1 normalized protocol", () => {
   })
 
   it.each([
-    "https://aos.example/api/aos/v1/artifacts/art-1",
+    "https://aos.example/api/v1/artifacts/art-1",
     "artifact:art-1",
     "artifact://",
     "artifact://a/b",

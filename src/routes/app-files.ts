@@ -42,7 +42,7 @@ export type AppFileOptions = ReturnType<typeof appFileSettings> & {
 export type AppFileGrant = {
   options: AppFileOptions
   role: FilePassScope["role"]
-  /** The listener's API root, such as `/api/aos/v1`. */
+  /** The listener's API root, such as `/api/v1`. */
   root: string
   sets: readonly AppFolderSet[]
   /** Whether a read needs the runtime's real path, as a guest's does. */

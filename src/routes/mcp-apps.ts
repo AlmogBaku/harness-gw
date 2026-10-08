@@ -300,12 +300,12 @@ export function registerMcpAppRoutes(
   const files: AppFileGrant | undefined = options.files && {
     options: options.files,
     role: "operator",
-    root: "/api/aos/v1",
+    root: "/api/v1",
     sets: [options.files.operator],
     requiresRealPath: false,
   }
   const { routes, filePaths } = mcpAppRoutes(
-    "/api/aos/v1/agents/:agentId/sessions/:sessionId",
+    "/api/v1/agents/:agentId/sessions/:sessionId",
     Boolean(files)
   )
   /** The subject a path names; an Artifact reads as the content route reads it. */

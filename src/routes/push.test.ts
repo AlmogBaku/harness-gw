@@ -77,15 +77,15 @@ async function harness(options: { push?: boolean; maxDevices?: number } = {}) {
     app,
     logs,
     registrations,
-    info: () => app.request(`${ORIGIN}/api/aos/v1/push`),
+    info: () => app.request(`${ORIGIN}/api/v1/push`),
     put: (body: unknown, origin = ORIGIN) =>
-      app.request(`${ORIGIN}/api/aos/v1/push/subscriptions`, {
+      app.request(`${ORIGIN}/api/v1/push/subscriptions`, {
         method: "PUT",
         headers: { origin, "content-type": "application/json" },
         body: typeof body === "string" ? body : JSON.stringify(body),
       }),
     remove: (body: unknown, origin = ORIGIN) =>
-      app.request(`${ORIGIN}/api/aos/v1/push/subscriptions`, {
+      app.request(`${ORIGIN}/api/v1/push/subscriptions`, {
         method: "DELETE",
         headers: { origin, "content-type": "application/json" },
         body: JSON.stringify(body),
@@ -209,7 +209,7 @@ describe("push routes", () => {
     await test.remove({ endpoint: ENDPOINT })
 
     const logged = JSON.stringify(test.logs.records())
-    expect(logged).toContain("/api/aos/v1/push/subscriptions")
+    expect(logged).toContain("/api/v1/push/subscriptions")
     expect(logged).not.toContain("push.example")
     expect(logged).not.toContain("p256dh")
   })

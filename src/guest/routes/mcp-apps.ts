@@ -75,13 +75,13 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
   const files: AppFileGrant | undefined = configured && {
     options: configured,
     role: "guest",
-    root: "/api/guest/v1",
+    root: "/api/v1",
     // A guest reads only what an operator may read too.
     sets: [configured.guest, configured.operator],
     requiresRealPath: true,
   }
   const { routes: guestRoutes, filePaths } = mcpAppRoutes(
-    "/api/guest/v1/agents/:agentId/sessions/:sessionId",
+    "/api/v1/agents/:agentId/sessions/:sessionId",
     Boolean(files)
   )
   if (files)

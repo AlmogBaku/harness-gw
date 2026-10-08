@@ -1,4 +1,4 @@
-import { HGW_ACP_GUEST_PATH, HGW_ACP_OPERATOR_PATH } from "../../protocol/acp"
+import { HGW_ACP_PATH, HGW_API_PREFIX } from "../../protocol/acp"
 import { createConfiguredProxy } from "../composition"
 import { loadProxyConfig, nodeConfigFileAccess } from "../config-file"
 import {
@@ -74,10 +74,10 @@ export async function serveProxy(
     exit(forcedShutdown ? 1 : 0)
   }
   const lifecycle = start<SocketUpgrade>({
-    app: listenerApp(configured.app, "/api/aos/v1"),
+    app: listenerApp(configured.app, HGW_API_PREFIX),
     sockets: [
       {
-        path: HGW_ACP_OPERATOR_PATH,
+        path: HGW_ACP_PATH,
         // Each Agent's own address sits below the shared one.
         subpaths: true,
         service: configured.acpService,
@@ -95,12 +95,12 @@ export async function serveProxy(
     ? start<SocketUpgrade>({
         sockets: [
           {
-            path: HGW_ACP_GUEST_PATH,
+            path: HGW_ACP_PATH,
             service: configured.guest.acpService,
             maxPeers: configured.config.limits.operatorEventPeers,
           },
         ],
-        app: listenerApp(configured.guest.app, "/api/guest/v1"),
+        app: listenerApp(configured.guest.app, HGW_API_PREFIX),
         host: configured.config.guest!.listen.host,
         port: configured.config.guest!.listen.port,
         shutdownGraceMs: graceMs,

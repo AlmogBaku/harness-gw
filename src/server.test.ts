@@ -41,7 +41,7 @@ describe("Bun proxy server lifecycle", () => {
       app: { fetch: vi.fn() },
       sockets: [
         {
-          path: "/api/aos/v1/acp",
+          path: "/api/v1/acp",
           service: {
             authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
             open: vi.fn(() => ({ receive: vi.fn(), close: vi.fn() })),
@@ -72,7 +72,7 @@ describe("Bun proxy server lifecycle", () => {
         }
       ) => Promise<Response | undefined>
       let data: unknown
-      await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
+      await fetch(handshake("https://aos.example.test/api/v1/acp"), {
         upgrade(_request, options) {
           data = options.data
           return true
@@ -221,7 +221,7 @@ describe("Bun proxy server lifecycle", () => {
     startProxyServer({
       app,
       sockets: [
-        { path: "/api/aos/v1/acp", subpaths: true, service: acpService },
+        { path: "/api/v1/acp", subpaths: true, service: acpService },
       ],
       host: "127.0.0.1",
       port: 4100,
@@ -234,7 +234,7 @@ describe("Bun proxy server lifecycle", () => {
       server: { upgrade: typeof upgrade }
     ) => Promise<Response | undefined>
     const denied = await fetch(
-      handshake("https://aos.example.test/api/aos/v1/acp", {
+      handshake("https://aos.example.test/api/v1/acp", {
         origin: "https://attacker.example.test",
       }),
       { upgrade }
@@ -243,20 +243,20 @@ describe("Bun proxy server lifecycle", () => {
     // A path below the mount reaches its service, which may refuse it; a
     // path that only shares its prefix is the app's.
     const refused = await fetch(
-      handshake("https://aos.example.test/api/aos/v1/acp/unknown", {
+      handshake("https://aos.example.test/api/v1/acp/unknown", {
         origin: "https://aos.example.test",
       }),
       { upgrade }
     )
     expect(refused?.status).toBe(404)
     const beside = await fetch(
-      new Request("https://aos.example.test/api/aos/v1/acpx"),
+      new Request("https://aos.example.test/api/v1/acpx"),
       { upgrade }
     )
     expect(beside?.status).toBe(204)
     // A request that is no WebSocket handshake never reaches the service.
     const plain = await fetch(
-      new Request("https://aos.example.test/api/aos/v1/acp", {
+      new Request("https://aos.example.test/api/v1/acp", {
         headers: { origin: "https://aos.example.test" },
       }),
       { upgrade }
@@ -267,7 +267,7 @@ describe("Bun proxy server lifecycle", () => {
     expect(acpService.open).not.toHaveBeenCalled()
 
     const accepted = await fetch(
-      handshake("https://aos.example.test/api/aos/v1/acp", {
+      handshake("https://aos.example.test/api/v1/acp", {
         origin: "https://aos.example.test",
       }),
       { upgrade }
@@ -315,7 +315,7 @@ describe("Bun proxy server lifecycle", () => {
       app: { fetch: vi.fn() },
       sockets: [
         {
-          path: "/api/guest/v1/acp",
+          path: "/guest/acp",
           service: {
             authorizeUpgrade: guestAuthorize,
             open: vi.fn(() => guestSocket),
@@ -323,7 +323,7 @@ describe("Bun proxy server lifecycle", () => {
           maxPeers: 1,
         },
         {
-          path: "/api/aos/v1/acp",
+          path: "/operator/acp",
           service: {
             authorizeUpgrade: vi.fn(async () => ({
               principalId: "operator",
@@ -371,8 +371,8 @@ describe("Bun proxy server lifecycle", () => {
       return peer
     }
 
-    await connect("/api/guest/v1/acp")
-    const overBudget = await connect("/api/guest/v1/acp")
+    await connect("/guest/acp")
+    const overBudget = await connect("/guest/acp")
     expect(overBudget.close).toHaveBeenCalledWith(
       1013,
       "Event peer capacity exceeded"
@@ -380,7 +380,7 @@ describe("Bun proxy server lifecycle", () => {
     // Past the budget the service is never asked, so it reads nothing.
     expect(guestAuthorize).toHaveBeenCalledTimes(1)
 
-    const operatorPeer = await connect("/api/aos/v1/acp")
+    const operatorPeer = await connect("/operator/acp")
     expect(upgrades[2]!.headers).toEqual({
       "Acp-Connection-Id": "connection-1",
     })
@@ -400,7 +400,7 @@ describe("Bun proxy server lifecycle", () => {
       app: { fetch: vi.fn() },
       sockets: [
         {
-          path: "/api/aos/v1/acp",
+          path: "/api/v1/acp",
           service: {
             authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
             open: vi.fn((_upgrade, peer) => {
@@ -430,7 +430,7 @@ describe("Bun proxy server lifecycle", () => {
     }
     const connect = async () => {
       let data: unknown
-      await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
+      await fetch(handshake("https://aos.example.test/api/v1/acp"), {
         upgrade(_request: Request, options: { data: unknown }) {
           data = options.data
           return true
@@ -462,7 +462,7 @@ describe("Bun proxy server lifecycle", () => {
       app: { fetch: vi.fn() },
       sockets: [
         {
-          path: "/api/guest/v1/acp",
+          path: "/api/v1/acp",
           service: createAcpService({
             publicOrigin: origin,
             role: "guest",
@@ -510,7 +510,7 @@ describe("Bun proxy server lifecycle", () => {
     }
     const connect = async () => {
       let data: unknown
-      await fetch(handshake(`${origin}/api/guest/v1/acp`, { origin }), {
+      await fetch(handshake(`${origin}/api/v1/acp`, { origin }), {
         upgrade(_request: Request, options: { data: unknown }) {
           data = options.data
           return true
@@ -576,7 +576,7 @@ describe("Bun proxy server lifecycle", () => {
       app: { fetch: vi.fn() },
       sockets: [
         {
-          path: "/api/aos/v1/acp",
+          path: "/api/v1/acp",
           service: {
             authorizeUpgrade: vi.fn(async () => ({
               principalId: "operator",
@@ -599,7 +599,7 @@ describe("Bun proxy server lifecycle", () => {
       request: Request,
       server: { upgrade(request: Request, options: { data: unknown }): boolean }
     ) => Promise<Response | undefined>
-    await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
+    await fetch(handshake("https://aos.example.test/api/v1/acp"), {
       upgrade(_request, options) {
         data = options.data
         return true
@@ -626,7 +626,7 @@ describe("Bun proxy server lifecycle", () => {
       app: { fetch: vi.fn() },
       sockets: [
         {
-          path: "/api/aos/v1/acp",
+          path: "/api/v1/acp",
           service: {
             authorizeUpgrade: vi.fn(async () => ({ principalId: "operator" })),
             open: vi.fn(() => ({ receive: vi.fn(), close: vi.fn() })),
@@ -673,7 +673,7 @@ describe("Bun proxy server lifecycle", () => {
       app: { fetch: vi.fn() },
       sockets: [
         {
-          path: "/api/aos/v1/acp",
+          path: "/api/v1/acp",
           service: {
             authorizeUpgrade: vi.fn(async () => ({
               principalId: "operator",
@@ -697,7 +697,7 @@ describe("Bun proxy server lifecycle", () => {
       request: Request,
       server: { upgrade(request: Request, options: { data: unknown }): boolean }
     ) => Promise<Response | undefined>
-    await fetch(handshake("https://aos.example.test/api/aos/v1/acp"), {
+    await fetch(handshake("https://aos.example.test/api/v1/acp"), {
       upgrade(_request, options) {
         data = options.data
         return true

@@ -4,7 +4,7 @@ import { projectGuestCapabilities } from "../../auth/guest-runtime-projection"
 import { emptyError, invitationError, type GuestRoutes } from "../context"
 
 export function registerGuestRuntimeRoute(app: Hono, routes: GuestRoutes) {
-  app.get("/api/guest/v1/runtime", async (context) => {
+  app.get("/api/v1/runtime", async (context) => {
     const identity = await routes.authenticate(context.req.raw)
     if (!identity) return invitationError()
     const resolved = await routes.options.runtime.runtime.resolveInvitedSession(

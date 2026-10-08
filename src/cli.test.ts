@@ -169,7 +169,7 @@ describe("proxy executable", () => {
         host: "0.0.0.0",
         port: 4100,
         sockets: [
-          expect.objectContaining({ path: "/api/aos/v1/acp", maxPeers: 256 }),
+          expect.objectContaining({ path: "/api/v1/acp", maxPeers: 256 }),
         ],
       })
     )
@@ -180,7 +180,7 @@ describe("proxy executable", () => {
         port: 4101,
         sockets: [
           expect.objectContaining({
-            path: "/api/guest/v1/acp",
+            path: "/api/v1/acp",
             maxPeers: 256,
           }),
         ],
@@ -193,7 +193,7 @@ describe("proxy executable", () => {
       start.mock.calls[0]![0].app!,
       start.mock.calls[1]![0].app!,
     ])
-      for (const page of ["/", "/runtime-config.json", "/sw.js"])
+      for (const page of ["/", "/runtime-config.json", "/sw.js", "/healthz"])
         expect(
           (await app.fetch(new Request(`https://gw.example.test${page}`)))
             ?.status

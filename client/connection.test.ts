@@ -299,7 +299,7 @@ describe("ACP connection", () => {
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/aos/v1/acp",
+      url: "ws://proxy.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
 
@@ -320,7 +320,7 @@ describe("ACP connection", () => {
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/aos/v1/acp",
+      url: "ws://proxy.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
 
@@ -391,7 +391,7 @@ describe("ACP connection", () => {
     const logs = captureLogs()
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://guest.test/api/guest/v1/acp",
+      url: "ws://guest.test/api/v1/acp",
       socketConstructor: pipedSockets(() => proxy.app).WebSocket,
       logger: logs.logger,
     })
@@ -781,7 +781,7 @@ describe("ACP connection", () => {
       const pipe = pipedSockets(() => proxy.app)
       const connection = createAcpConnection({
         clientInfo: CLIENT_INFO,
-        url: "ws://proxy.test/api/aos/v1/acp",
+        url: "ws://proxy.test/api/v1/acp",
         socketConstructor: pipe.WebSocket,
       })
       connection.start()
@@ -862,7 +862,7 @@ describe("ACP connection", () => {
       const pipe = pipedSockets(() => proxy.app)
       const connection = createAcpConnection({
         clientInfo: CLIENT_INFO,
-        url: "ws://proxy.test/api/aos/v1/acp",
+        url: "ws://proxy.test/api/v1/acp",
         socketConstructor: pipe.WebSocket,
       })
       connection.start()
@@ -903,7 +903,7 @@ describe("ACP connection", () => {
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/aos/v1/acp",
+      url: "ws://proxy.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
     connection.start()
@@ -923,7 +923,7 @@ describe("ACP connection", () => {
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/aos/v1/acp",
+      url: "ws://proxy.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
     connection.start()
@@ -976,7 +976,7 @@ describe("ACP connection", () => {
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/aos/v1/acp",
+      url: "ws://proxy.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
     connection.start()
@@ -1006,7 +1006,7 @@ describe("ACP connection", () => {
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://guest.test/api/guest/v1/acp",
+      url: "ws://guest.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
     connection.start()
@@ -1042,7 +1042,7 @@ describe("ACP connection", () => {
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://guest.test/api/guest/v1/acp",
+      url: "ws://guest.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
     connection.start()

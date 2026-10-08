@@ -44,7 +44,7 @@ export function projectedArtifact(
 
 export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   app.post(
-    "/api/guest/v1/agents/:agentId/sessions/:sessionId/attachments/stage",
+    "/api/v1/agents/:agentId/sessions/:sessionId/attachments/stage",
     async (context) => {
       if (context.req.header("origin") !== routes.options.publicOrigin)
         return emptyError(403)
@@ -152,7 +152,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   )
 
   app.post(
-    "/api/guest/v1/agents/:agentId/audio/transcribe",
+    "/api/v1/agents/:agentId/audio/transcribe",
     async (context) => {
       if (context.req.header("origin") !== routes.options.publicOrigin)
         return emptyError(403)
@@ -208,7 +208,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
     }
   )
 
-  app.post("/api/guest/v1/agents/:agentId/audio/speak", async (context) => {
+  app.post("/api/v1/agents/:agentId/audio/speak", async (context) => {
     if (context.req.header("origin") !== routes.options.publicOrigin)
       return emptyError(403)
     const identity = await routes.authenticate(context.req.raw)
@@ -257,7 +257,7 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   })
 
   app.get(
-    "/api/guest/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId",
+    "/api/v1/agents/:agentId/sessions/:sessionId/artifacts/:artifactId",
     async (context) => {
       const identity = await routes.authenticate(context.req.raw)
       if (!identity) return invitationError()

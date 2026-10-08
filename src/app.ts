@@ -150,7 +150,7 @@ export function createProxyApp(options: ProxyAppOptions) {
 
   // A native link down degrades the process but answers 200 all the same: the
   // container is not restarted for an upstream outage.
-  app.get("/api/aos/v1/healthz", (context) => {
+  app.get("/api/v1/healthz", (context) => {
     const { links, gauges } = options.health()
     return context.json({
       status: links.every(({ state }) => state === "ready") ? "ok" : "degraded",
@@ -158,7 +158,7 @@ export function createProxyApp(options: ProxyAppOptions) {
       gauges,
     })
   })
-  app.get("/api/aos/v1/readyz", async (context) => {
+  app.get("/api/v1/readyz", async (context) => {
     if (options.readiness) {
       const status = await options.readiness()
       return context.json(

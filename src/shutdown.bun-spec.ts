@@ -5,7 +5,7 @@ import { join } from "node:path"
 
 import { stringify } from "yaml"
 
-import { HGW_ACP_OPERATOR_PATH } from "../protocol/acp"
+import { HGW_ACP_PATH } from "../protocol/acp"
 
 /**
  * A real `serve` process, a real ACP peer, and a real provider socket: only a
@@ -171,7 +171,7 @@ describe("proxy shutdown under SIGTERM", () => {
 
     // Attach the provider socket the way a live deployment does.
     const readiness = await fetch(
-      `http://127.0.0.1:${port}/api/aos/v1/readyz`
+      `http://127.0.0.1:${port}/api/v1/readyz`
     ).catch(() => undefined)
     expect(readiness).toBeDefined()
     await hermes.connected
@@ -179,7 +179,7 @@ describe("proxy shutdown under SIGTERM", () => {
     // Hold one ACP connection open, with a live SDK session behind it.
     const origin = `http://127.0.0.1:${port}`
     const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${HGW_ACP_OPERATOR_PATH}`,
+      `ws://127.0.0.1:${port}${HGW_ACP_PATH}`,
       {
         headers: { Origin: origin },
       }

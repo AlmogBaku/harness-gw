@@ -48,8 +48,6 @@ export type ConfiguredProxyDependencies = {
   /** The credential values the log masks; every secret read here joins it. */
   credentials: CredentialValues
   clock?: () => number
-  /** The browser build the static root carries, read once at start. */
-  buildId?: string
   /** Reaches the configured speech providers; tests hand in a stub. */
   fetch?: typeof fetch
 }
@@ -318,7 +316,6 @@ export async function createConfiguredProxy(
         catalog,
         guestActiveExecutions: config.limits.guestActiveExecutions,
         logger: dependencies.logger,
-        buildId: dependencies.buildId,
         ...clock,
       }),
     }
@@ -345,7 +342,6 @@ export async function createConfiguredProxy(
     channels,
     catalog,
     logger: dependencies.logger,
-    buildId: dependencies.buildId,
     ...(push ? { presence: push.presence } : {}),
     ...clock,
   })

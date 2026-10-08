@@ -624,7 +624,7 @@ type Frame = {
 async function wire(listener: GuestAcpServiceOptions) {
   const service = createGuestAcpService(listener)
   const upgrade = await service.authorizeUpgrade(
-    new Request(`${ORIGIN}/api/aos/v1/acp`, { headers: { origin: ORIGIN } })
+    new Request(`${ORIGIN}/api/v1/acp`, { headers: { origin: ORIGIN } })
   )
   if (!upgrade) throw new Error("The guest upgrade was refused")
   const frames: Frame[] = []

@@ -41,6 +41,7 @@ import {
 import type { Catalog } from "../core/catalog"
 import { unlessAborted } from "../core/channel"
 import type { PresenceReport } from "../push/presence"
+import { GATEWAY_VERSION } from "../version"
 import {
   createSessions,
   sessionInfoOf,
@@ -446,9 +447,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       info: {
         name: "harness-gw",
         ...(info ? { title: info.runtime.name } : {}),
-        // The build the proxy serves, so a tab running another one reloads; a
-        // proxy serving none versions the AOS extension contract instead.
-        version: context.buildId ?? `${HGW_EXTENSION_VERSION}`,
+        version: GATEWAY_VERSION,
       },
       capabilities: {
         // Text and resource links are every agent's baseline; no runtime port

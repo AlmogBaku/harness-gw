@@ -83,7 +83,7 @@ describe("normalized AOS REST byte client", () => {
     })
 
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
-      "/api/aos/v1/runtime",
+      "/api/v1/runtime",
     ])
     expect(fetcher.mock.calls[0]?.[1]).toMatchObject({
       credentials: "same-origin",
@@ -158,10 +158,10 @@ describe("normalized AOS REST byte client", () => {
     )
 
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
-      "/api/aos/v1/agents/researcher/sessions/opaque-session-1/attachments/stage",
-      "/api/aos/v1/agents/researcher/sessions/opaque-session-1/artifacts/artifact-1",
-      "/api/aos/v1/agents/researcher/audio/transcribe",
-      "/api/aos/v1/agents/researcher/audio/speak",
+      "/api/v1/agents/researcher/sessions/opaque-session-1/attachments/stage",
+      "/api/v1/agents/researcher/sessions/opaque-session-1/artifacts/artifact-1",
+      "/api/v1/agents/researcher/audio/transcribe",
+      "/api/v1/agents/researcher/audio/speak",
     ])
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual({
       attachments: [
@@ -206,8 +206,8 @@ describe("normalized AOS REST byte client", () => {
     ).resolves.toBeInstanceOf(Blob)
 
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
-      "/api/aos/v1/agents/researcher/audio/transcribe",
-      "/api/aos/v1/agents/researcher/audio/speak",
+      "/api/v1/agents/researcher/audio/transcribe",
+      "/api/v1/agents/researcher/audio/speak",
     ])
   })
 
@@ -215,7 +215,7 @@ describe("normalized AOS REST byte client", () => {
     const fetcher = byteFetcher()
     const client = new HgwRemoteClient({
       fetcher,
-      basePath: "/api/guest/v1",
+      basePath: "/api/v1",
       authorization: "Bearer invitation-token",
     })
     client.adoptSessionOwnership("guest_ref", AGENT_ID)
@@ -225,7 +225,7 @@ describe("normalized AOS REST byte client", () => {
     ).resolves.toBeInstanceOf(Blob)
 
     expect(String(fetcher.mock.calls[0]?.[0])).toBe(
-      "/api/guest/v1/agents/researcher/sessions/guest_ref/artifacts/artifact-1"
+      "/api/v1/agents/researcher/sessions/guest_ref/artifacts/artifact-1"
     )
     expect(
       new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")
@@ -339,9 +339,9 @@ describe("this device's push subscription", () => {
         init?.body,
       ])
     ).toEqual([
-      ["/api/aos/v1/push/subscriptions", "PUT", JSON.stringify(registration)],
+      ["/api/v1/push/subscriptions", "PUT", JSON.stringify(registration)],
       [
-        "/api/aos/v1/push/subscriptions",
+        "/api/v1/push/subscriptions",
         "DELETE",
         JSON.stringify({ endpoint: subscription.endpoint }),
       ],
@@ -410,7 +410,7 @@ describe("MCP App routes", () => {
       )
     ).resolves.toMatchObject({ contents: [{ uri: "ui://board/data" }] })
 
-    const base = `/api/aos/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}`
+    const base = `/api/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}`
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
       base,
       `${base}/tools/call`,
@@ -429,7 +429,7 @@ describe("MCP App routes", () => {
     const fetcher = appFetcher()
     const client = new HgwRemoteClient({
       fetcher,
-      basePath: "/api/guest/v1",
+      basePath: "/api/v1",
       authorization: "Bearer invitation-token",
     })
     client.adoptSessionOwnership("guest_ref", AGENT_ID)
@@ -437,7 +437,7 @@ describe("MCP App routes", () => {
     await client.openMcpApp("guest_ref", { toolCallId: "call/1" })
 
     expect(String(fetcher.mock.calls[0]?.[0])).toBe(
-      `/api/guest/v1/agents/researcher/sessions/guest_ref${APP_PATH}`
+      `/api/v1/agents/researcher/sessions/guest_ref${APP_PATH}`
     )
     expect(
       new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")
@@ -458,7 +458,7 @@ describe("MCP App routes", () => {
   })
 
   it("hands a view absolute file addresses and renews them with a bare POST", async () => {
-    const files = `/api/aos/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}/files`
+    const files = `/api/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}/files`
     const fetcher = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
     >(async (input) =>

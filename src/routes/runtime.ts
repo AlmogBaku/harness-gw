@@ -10,7 +10,7 @@ export function registerRuntimeRoute(
   app: ProxyRouteApp,
   requireRuntime: (request: Request) => Promise<ServerRuntime>
 ) {
-  app.get("/api/aos/v1/runtime", async (context) => {
+  app.get("/api/v1/runtime", async (context) => {
     const runtime = await requireRuntime(context.req.raw)
     return context.json(RuntimeInfoSchema.parse(await runtime.runtimeInfo()))
   })
