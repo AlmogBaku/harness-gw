@@ -44,4 +44,9 @@ export { acpDebugEnabled, createAcpLogger, frameFields } from "./log"
 export { PART_GRACE_MS } from "./limits"
 export * from "./hgw-client"
 export * from "./workspace"
-export { backoffDelay } from "../lifecycle"
+export {
+  backoffDelay,
+  type LogFields,
+  type Logger,
+  type OwnerKind,
+} from "../lifecycle"
