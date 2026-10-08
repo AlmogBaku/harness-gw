@@ -49,11 +49,11 @@ function initializeOnlyAgent() {
 function acpProxy(handshakeDeadlineMs?: number) {
   const lifecycle = startProxyServer({
     app: { fetch: () => new Response("not found", { status: 404 }) },
+    origins: { allowedOrigins: [ORIGIN] },
     sockets: [
       {
         path: HGW_ACP_PATH,
         service: createAcpService({
-          publicOrigin: ORIGIN,
           role: "operator",
           principalId: OPERATOR_PRINCIPAL,
           agent: initializeOnlyAgent,
@@ -72,7 +72,7 @@ function acpProxy(handshakeDeadlineMs?: number) {
 }
 
 describe("real Bun WebSocket upgrade", () => {
-  it("authorizes before upgrade, sends frames, and cleans up on peer close", async () => {
+  it("refuses a foreign Origin before upgrade, sends frames, and cleans up on peer close", async () => {
     let opened = 0
     let closed = 0
     let resolveClosed!: () => void
@@ -81,14 +81,16 @@ describe("real Bun WebSocket upgrade", () => {
     })
     const lifecycle = startProxyServer({
       app: { fetch: () => new Response("not found", { status: 404 }) },
+      origins: { allowedOrigins: [ORIGIN] },
       sockets: [
         {
           path: HGW_ACP_PATH,
           service: {
-            authorizeUpgrade: async (request) =>
-              request.headers.get("origin") === ORIGIN
-                ? { principalId: "operator", connectionId: "connection-1" }
-                : undefined,
+            // Admits any upgrade, so only the listener's own check refuses one.
+            authorizeUpgrade: async () => ({
+              principalId: "operator",
+              connectionId: "connection-1",
+            }),
             open: (_authorization, peer) => {
               opened += 1
               peer.send(JSON.stringify({ jsonrpc: "2.0", method: "opened" }))
@@ -119,6 +121,16 @@ describe("real Bun WebSocket upgrade", () => {
     // A plain request is no WebSocket handshake.
     const denied = await fetch(`http://127.0.0.1:${port}${HGW_ACP_PATH}`)
     expect(denied.status).toBe(400)
+    expect(opened).toBe(0)
+
+    const foreign = new WebSocket(`ws://127.0.0.1:${port}${HGW_ACP_PATH}`, {
+      headers: { Origin: "https://attacker.example.test" },
+    })
+    await new Promise<void>((resolve) => {
+      foreign.addEventListener("open", () => resolve())
+      foreign.addEventListener("error", () => resolve())
+    })
+    expect(foreign.readyState).not.toBe(WebSocket.OPEN)
     expect(opened).toBe(0)
 
     const frames: unknown[] = []

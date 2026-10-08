@@ -60,8 +60,6 @@ export function registerContentRoutes(
 
   app.post(`${sessionContentPath}/attachments/stage`, async (context) => {
     const runtime = await requireRuntime(context.req.raw)
-    if (context.req.header("origin") !== options.publicOrigin)
-      return errorResponse("forbidden", 403)
     const body = SessionAttachmentStageRequestSchema.safeParse(
       await boundedJson(context.req.raw, MAXIMUM_STAGE_REQUEST_BYTES)
     )
@@ -116,8 +114,6 @@ export function registerContentRoutes(
 
   app.post("/api/v1/agents/:agentId/audio/transcribe", async (context) => {
     const runtime = await requireRuntime(context.req.raw)
-    if (context.req.header("origin") !== options.publicOrigin)
-      return errorResponse("forbidden", 403)
     const body = SessionTranscriptionRequestSchema.safeParse(
       await boundedJson(context.req.raw, 7_500_000)
     )
@@ -138,8 +134,6 @@ export function registerContentRoutes(
 
   app.post("/api/v1/agents/:agentId/audio/speak", async (context) => {
     const runtime = await requireRuntime(context.req.raw)
-    if (context.req.header("origin") !== options.publicOrigin)
-      return errorResponse("forbidden", 403)
     const body = SessionSpeechRequestSchema.safeParse(
       await boundedJson(context.req.raw, 40_000)
     )

@@ -122,7 +122,6 @@ function hermesProxy() {
   )
   onTestFinished(() => instance.close())
   const proxy = createProxyApp({
-    publicOrigin: ORIGIN,
     runtimeInstance: instance,
     logger,
     health: () => ({

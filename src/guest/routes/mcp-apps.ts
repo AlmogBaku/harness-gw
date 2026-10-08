@@ -121,11 +121,6 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
     const permission: GuestOperation =
       operation === "tools/call" ? "messages:create" : "artifacts:read"
     app[method](path, async (context) => {
-      if (
-        method === "post" &&
-        context.req.header("origin") !== routes.options.publicOrigin
-      )
-        return emptyError(403)
       const identity = await routes.authenticate(context.req.raw)
       if (!identity) return invitationError()
       const target = mcpAppParams(context.req.param())

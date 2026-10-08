@@ -74,7 +74,6 @@ function service() {
   return {
     contexts,
     acp: createAcpService({
-      publicOrigin: ORIGIN,
       role: "operator",
       principalId: OPERATOR_PRINCIPAL,
       agent(context) {
@@ -114,19 +113,8 @@ function peer() {
 }
 
 describe("ACP WebSocket service", () => {
-  it("authorizes the public origin or none, and mints a connection id", async () => {
+  it("mints a connection id for each upgrade it authorizes", async () => {
     const { acp } = service()
-
-    for (const origin of ["https://attacker.example.test", "null"])
-      await expect(
-        acp.authorizeUpgrade(
-          new Request(`${ORIGIN}${PATH}`, { headers: { origin } })
-        )
-      ).resolves.toBeUndefined()
-    // A client that is no browser sends no Origin at all.
-    await expect(
-      acp.authorizeUpgrade(new Request(`${ORIGIN}${PATH}`))
-    ).resolves.toMatchObject({ principalId: "operator" })
 
     const upgrade = await acp.authorizeUpgrade(
       new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
@@ -143,7 +131,6 @@ describe("ACP WebSocket service", () => {
   it("refuses an Agent's address as unavailable while the catalog cannot say", async () => {
     const logs = captureLogs()
     const acp = createAcpService({
-      publicOrigin: ORIGIN,
       role: "operator",
       principalId: OPERATOR_PRINCIPAL,
       agent: testAgent,
@@ -205,7 +192,6 @@ describe("ACP WebSocket service", () => {
   it("warns of a dropped send only while its socket is open", async () => {
     const logs = captureLogs()
     const acp = createAcpService({
-      publicOrigin: ORIGIN,
       role: "operator",
       principalId: OPERATOR_PRINCIPAL,
       agent: testAgent,
@@ -264,7 +250,6 @@ describe("ACP WebSocket service", () => {
   it("carries the configured principal into the connection context", async () => {
     const contexts: AcpConnectionContext[] = []
     const acp = createAcpService({
-      publicOrigin: ORIGIN,
       role: "guest",
       principalId: "invite-42",
       agent(context) {

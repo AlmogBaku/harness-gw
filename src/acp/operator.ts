@@ -13,7 +13,6 @@ import * as translators from "./translate"
 import type { AcpConnectionContext } from "./types"
 
 export type OperatorAcpServiceOptions = {
-  publicOrigin: string
   runtimeInstance: RuntimeInstance
   /** Shared with the HTTP app so prompts can reference REST-staged batches. */
   attachmentStages: ServerAttachmentStages
@@ -34,7 +33,6 @@ export type OperatorAcpServiceOptions = {
  * accepted connection its own read-state service.
  */
 export function createOperatorAcpService({
-  publicOrigin,
   runtimeInstance,
   attachmentStages,
   channels,
@@ -50,7 +48,6 @@ export function createOperatorAcpService({
     now,
   })
   const service = createAcpService({
-    publicOrigin,
     role,
     principalId: OPERATOR_PRINCIPAL,
     agent: createAosAcpAgent,

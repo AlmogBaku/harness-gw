@@ -1,5 +1,6 @@
 import type { Logger } from "../lifecycle"
 import { sleep, withinGrace } from "./grace"
+import { guardOrigins, type OriginPolicy } from "./origins"
 
 type FetchHandler = (
   request: Request,
@@ -147,6 +148,8 @@ export type StartProxyServerOptions<
   Upgrade extends SocketUpgrade = SocketUpgrade,
 > = {
   app: { fetch: FetchHandler }
+  /** The browser origins this listener serves, checked before any socket or route. */
+  origins: OriginPolicy
   /** WebSocket mounts hosted beside the HTTP app, each with its own peer budget. */
   sockets?: readonly ProxySocketMount<Upgrade>[]
   host: string
@@ -270,7 +273,7 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
           },
         }
       : undefined
-  const fetch: FetchHandler = async (request, rawServer) => {
+  const dispatch: FetchHandler = async (request, rawServer) => {
     const url = new URL(request.url)
     const mount = mounts.find(
       ({ path, subpaths }) =>
@@ -316,6 +319,8 @@ export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
     }
     return options.app.fetch(request, rawServer)
   }
+  const fetch: FetchHandler = (request, rawServer) =>
+    guardOrigins(options.origins, request, () => dispatch(request, rawServer))
   const server = (options.serve ?? bunServe())({
     hostname: options.host,
     port: options.port,

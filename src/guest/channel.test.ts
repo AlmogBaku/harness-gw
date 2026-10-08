@@ -88,7 +88,6 @@ async function connectGuest(
   const { invitations, token } = invitation ?? (await invite(test))
   const context = createGuestConnection(
     {
-      publicOrigin: "https://guest.example.test",
       runtimeInstance: test.runtimeInstance,
       invitations,
       attachmentStages: new AttachmentStageRegistry(),

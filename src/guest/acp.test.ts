@@ -496,7 +496,6 @@ function harness(options: HarnessOptions = {}) {
   const logs = captureLogs()
   const listener: GuestAcpServiceOptions = {
     logger: logs.logger,
-    publicOrigin: ORIGIN,
     runtimeInstance,
     invitations,
     attachmentStages: new AttachmentStageRegistry(),

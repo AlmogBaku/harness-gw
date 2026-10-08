@@ -222,7 +222,6 @@ function harness(options: { existing?: boolean; files?: AppFileOptions } = {}) {
   const invitationService = invitations()
   return {
     app: createGuestApp({
-      publicOrigin: ORIGIN,
       runtime: instance,
       invitations: invitationService,
       files: options.files,
@@ -458,28 +457,6 @@ describe("guest app", () => {
     )
 
     expect(response.status).toBe(401)
-    expect(subject.resolveInvitedSession).not.toHaveBeenCalled()
-    expect(subject.runtime.stageAttachments).not.toHaveBeenCalled()
-  })
-
-  it("rejects a wrong Origin before runtime access", async () => {
-    const subject = harness()
-    const invite = await token(subject.invitationService)
-
-    const response = await subject.app.request(
-      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/attachments/stage`,
-      {
-        method: "POST",
-        headers: {
-          ...headers(invite),
-          origin: "https://attacker.example",
-          "content-type": "application/json",
-        },
-        body: "{}",
-      }
-    )
-
-    expect(response.status).toBe(403)
     expect(subject.resolveInvitedSession).not.toHaveBeenCalled()
     expect(subject.runtime.stageAttachments).not.toHaveBeenCalled()
   })
@@ -879,7 +856,6 @@ describe("guest MCP App files", () => {
         method: "POST",
         headers: { ...headers(invite), origin },
       })
-    expect((await renew("https://attacker.example.test")).status).toBe(403)
     const renewed = await renew(ORIGIN)
     expect(renewed.status).toBe(200)
     expect(((await renewed.json()) as McpAppFiles).expiresAt).toBe(ends)

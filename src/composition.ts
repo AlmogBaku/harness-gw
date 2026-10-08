@@ -16,6 +16,7 @@ import {
   type GuestInvitationService,
 } from "./auth/guest-invitation"
 import {
+  listenerOrigins,
   parseProxyConfig,
   type McpAppsConfig,
   type ProxyConfig,
@@ -33,8 +34,10 @@ import { createPresenceRegistry } from "./push/presence"
 import { openPushRegistrations } from "./push/registrations"
 import { createPushSender } from "./push/sender"
 import { deriveVapidPublicKey } from "./push/vapid"
+import type { OriginPolicy } from "./origins"
 import type { CredentialValues } from "./redaction"
 import { appFileSettings, type AppFileOptions } from "./routes/app-files"
+import { isInvitationCreation } from "./routes/invitations"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import {
   createOpenAiCompatibleSynthesizer,
@@ -291,16 +294,12 @@ export async function createConfiguredProxy(
     logger: dependencies.logger,
   }
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
-  const guestListener = (
-    publicOrigin: string,
-    service: GuestInvitationService
-  ) => {
+  const guestListener = (service: GuestInvitationService) => {
     const attachmentStages = createGuestAttachmentStages()
     return {
       runtimeInstance,
       invitations: service,
       app: createGuestApp({
-        publicOrigin,
         runtime: runtimeInstance,
         invitations: service,
         attachmentStages,
@@ -308,7 +307,6 @@ export async function createConfiguredProxy(
         ...clock,
       }),
       acpService: createGuestAcpService({
-        publicOrigin,
         runtimeInstance,
         invitations: service,
         attachmentStages,
@@ -321,9 +319,7 @@ export async function createConfiguredProxy(
     }
   }
   const guest =
-    config.guest && invitations
-      ? guestListener(config.guest.publicOrigin, invitations)
-      : undefined
+    config.guest && invitations ? guestListener(invitations) : undefined
   const attachmentStages = new AttachmentStageRegistry()
   const push = config.push
     ? await createPushDelivery(
@@ -336,7 +332,6 @@ export async function createConfiguredProxy(
       )
     : undefined
   const acpService = createOperatorAcpService({
-    publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
     channels,
@@ -346,7 +341,6 @@ export async function createConfiguredProxy(
     ...clock,
   })
   const app = createProxyApp({
-    publicOrigin: config.publicOrigin,
     runtimeInstance,
     attachmentStages,
     files,
@@ -395,11 +389,23 @@ export async function createConfiguredProxy(
 
   return {
     app,
+    origins: {
+      allowedOrigins: listenerOrigins(config),
+      admitsMissing: isInvitationCreation,
+    } satisfies OriginPolicy,
     config,
     runtimeInstance,
     acpService,
     sessionRows,
-    guest,
+    guest:
+      guest && config.guest
+        ? {
+            ...guest,
+            origins: {
+              allowedOrigins: listenerOrigins(config.guest),
+            } satisfies OriginPolicy,
+          }
+        : undefined,
     ...(push ? { push } : {}),
   }
 }

@@ -92,7 +92,6 @@ function app(
   options: Partial<ProxyAppOptions> = {}
 ) {
   return createProxyApp({
-    publicOrigin: origin,
     runtimeInstance: runtimeInstance(runtime),
     logger: captureLogs().logger,
     health,
@@ -168,25 +167,6 @@ describe("AOS V1 proxy", () => {
 
     expect((await proxy.request(path, stageRequest)).status).toBe(503)
     expect(cleanup).toHaveBeenCalledOnce()
-  })
-
-  it("requires the exact configured origin for state changes", async () => {
-    const runtime = new HermesServerAdapter({ request: vi.fn() })
-    vi.spyOn(runtime, "stageAttachments")
-
-    const response = await app(runtime).request(
-      `${origin}/api/v1/agents/researcher/sessions/stored/attachments/stage`,
-      {
-        ...stageRequest,
-        headers: {
-          origin: "https://attacker.example.test",
-          "content-type": "application/json",
-        },
-      }
-    )
-
-    expect(response.status).toBe(403)
-    expect(runtime.stageAttachments).not.toHaveBeenCalled()
   })
 
   it("does not expose invitation signing when the guest surface is disabled", async () => {
@@ -327,7 +307,6 @@ describe("AOS V1 proxy", () => {
     })
     const logs = captureLogs()
     const proxy = createProxyApp({
-      publicOrigin: origin,
       runtimeInstance: runtimeInstance(runtime),
       logger: logs.logger,
       health,
@@ -851,7 +830,7 @@ describe("MCP App files", () => {
     expect(dropped).toHaveBeenCalled()
   })
 
-  it("renews a call's addresses only for the configured origin and a call the Session holds", async () => {
+  it("renews a call's addresses only for a call the Session holds", async () => {
     const { proxy } = fileProxy()
     const renew = (from: string, path = appPath()) =>
       proxy.request(`${origin}${path}/files`, {
@@ -859,7 +838,6 @@ describe("MCP App files", () => {
         headers: { origin: from },
       })
 
-    expect((await renew("https://attacker.example.test")).status).toBe(403)
     expect((await renew(origin, appPath("stored", "call-2"))).status).toBe(404)
     const renewed = await renew(origin)
     expect(renewed.status).toBe(200)

@@ -349,11 +349,6 @@ export function registerMcpAppRoutes(
   for (const [method, path, operation] of routes)
     app[method](path, async (context) => {
       const runtime = await requireRuntime(context.req.raw)
-      if (
-        method === "post" &&
-        context.req.header("origin") !== options.publicOrigin
-      )
-        return errorResponse("forbidden", 403)
       const target = mcpAppParams(context.req.param())
       if (!target) return errorResponse("not_found", 404)
       const { agentId, sessionId } = target

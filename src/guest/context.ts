@@ -31,7 +31,6 @@ const inactiveInvitation = {
 } as const
 
 export type GuestAppOptions = {
-  publicOrigin: string
   runtime: RuntimeInstance
   invitations: GuestInvitationService
   /** Shared with the guest ACP service so one upload serves either transport. */

@@ -55,7 +55,6 @@ async function harness(options: { push?: boolean; maxDevices?: number } = {}) {
       : { maxPerPrincipal: options.maxDevices }),
   })
   const app = createProxyApp({
-    publicOrigin: ORIGIN,
     runtimeInstance,
     logger: logs.logger,
     health: () => ({
@@ -117,13 +116,8 @@ describe("push routes", () => {
     expect((await test.remove({ endpoint: ENDPOINT })).status).toBe(404)
   })
 
-  it("registers a device from the trusted origin only", async () => {
+  it("registers a device", async () => {
     const test = await harness()
-
-    expect(
-      (await test.put(registration(), "https://attacker.example.test")).status
-    ).toBe(403)
-    expect(test.registrations.list("operator")).toEqual([])
 
     expect((await test.put(registration())).status).toBe(204)
 
@@ -178,19 +172,9 @@ describe("push routes", () => {
     expect(test.registrations.list("operator")).toHaveLength(2)
   })
 
-  it("unregisters a device from the trusted origin only", async () => {
+  it("unregisters a device", async () => {
     const test = await harness()
     await test.put(registration())
-
-    expect(
-      (
-        await test.remove(
-          { endpoint: ENDPOINT },
-          "https://attacker.example.test"
-        )
-      ).status
-    ).toBe(403)
-    expect(test.registrations.list("operator")).toHaveLength(1)
 
     expect((await test.remove({ endpoint: ENDPOINT })).status).toBe(204)
 

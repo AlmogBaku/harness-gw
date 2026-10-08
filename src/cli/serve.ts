@@ -75,6 +75,7 @@ export async function serveProxy(
   }
   const lifecycle = start<SocketUpgrade>({
     app: listenerApp(configured.app, HGW_API_PREFIX),
+    origins: configured.origins,
     sockets: [
       {
         path: HGW_ACP_PATH,
@@ -101,6 +102,7 @@ export async function serveProxy(
           },
         ],
         app: listenerApp(configured.guest.app, HGW_API_PREFIX),
+        origins: configured.guest.origins,
         host: configured.config.guest!.listen.host,
         port: configured.config.guest!.listen.port,
         shutdownGraceMs: graceMs,

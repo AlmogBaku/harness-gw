@@ -7,6 +7,8 @@ import type { AcpConnectionContext } from "./acp/types"
 import { HANDSHAKE_BUDGET, SPEECH_CALL_MS } from "./core/limits"
 import { startProxyServer, type ShutdownSettlement } from "./server"
 
+const ORIGINS = { allowedOrigins: ["https://aos.example.test"] }
+
 /** A WebSocket handshake for `url`, carrying `headers` besides. */
 function handshake(url: string, headers: Record<string, string> = {}) {
   return new Request(url, {
@@ -15,6 +17,7 @@ function handshake(url: string, headers: Record<string, string> = {}) {
       connection: "Upgrade",
       "sec-websocket-version": "13",
       "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+      origin: "https://aos.example.test",
       ...headers,
     },
   })
@@ -38,6 +41,7 @@ describe("Bun proxy server lifecycle", () => {
     const settlements: ShutdownSettlement[] = []
     let served: Record<string, unknown> | undefined
     const lifecycle = startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
         {
@@ -178,6 +182,7 @@ describe("Bun proxy server lifecycle", () => {
     const close = vi.fn(async () => undefined)
     const serve = vi.fn(() => ({ stop }))
     const server = startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       host: "127.0.0.1",
       port: 4100,
@@ -199,7 +204,7 @@ describe("Bun proxy server lifecycle", () => {
     expect(close).toHaveBeenCalledOnce()
   })
 
-  it("authorizes socket upgrades before opening a bounded socket", async () => {
+  it("checks the Origin, then authorizes socket upgrades before opening a bounded socket", async () => {
     const acpSocket = { receive: vi.fn(), close: vi.fn() }
     const acpService = {
       authorizeUpgrade: vi.fn(async (request: Request) =>
@@ -219,6 +224,7 @@ describe("Bun proxy server lifecycle", () => {
     })
     const app = { fetch: vi.fn(() => new Response(null, { status: 204 })) }
     startProxyServer({
+      origins: ORIGINS,
       app,
       sockets: [{ path: "/api/v1/acp", subpaths: true, service: acpService }],
       host: "127.0.0.1",
@@ -237,7 +243,8 @@ describe("Bun proxy server lifecycle", () => {
       }),
       { upgrade }
     )
-    expect(denied?.status).toBe(401)
+    // A foreign page is refused before the service reads its upgrade.
+    expect(denied?.status).toBe(403)
     // A path below the mount reaches its service, which may refuse it; a
     // path that only shares its prefix is the app's.
     const refused = await fetch(
@@ -260,7 +267,16 @@ describe("Bun proxy server lifecycle", () => {
       { upgrade }
     )
     expect(plain?.status).toBe(400)
-    expect(acpService.authorizeUpgrade).toHaveBeenCalledTimes(2)
+    const foreignWrite = await fetch(
+      new Request("https://aos.example.test/api/v1/acpx", {
+        method: "POST",
+        headers: { origin: "https://attacker.example.test" },
+      }),
+      { upgrade }
+    )
+    expect(foreignWrite?.status).toBe(403)
+    expect(app.fetch).toHaveBeenCalledTimes(1)
+    expect(acpService.authorizeUpgrade).toHaveBeenCalledTimes(1)
     expect(upgrade).not.toHaveBeenCalled()
     expect(acpService.open).not.toHaveBeenCalled()
 
@@ -310,6 +326,7 @@ describe("Bun proxy server lifecycle", () => {
     }> = []
     let served: Record<string, unknown> | undefined
     startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
         {
@@ -395,6 +412,7 @@ describe("Bun proxy server lifecycle", () => {
     let refuse = true
     let served: Record<string, unknown> | undefined
     startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
         {
@@ -457,12 +475,12 @@ describe("Bun proxy server lifecycle", () => {
     const contexts: AcpConnectionContext[] = []
     let served: Record<string, unknown> | undefined
     startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
         {
           path: "/api/v1/acp",
           service: createAcpService({
-            publicOrigin: origin,
             role: "guest",
             principalId: "guest",
             agent: () =>
@@ -571,6 +589,7 @@ describe("Bun proxy server lifecycle", () => {
     let served: Record<string, unknown> | undefined
     let data: unknown
     startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
         {
@@ -621,6 +640,7 @@ describe("Bun proxy server lifecycle", () => {
   it("sets Bun WebSocket limits on the mounted websocket options", () => {
     let served: Record<string, unknown> | undefined
     startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
         {
@@ -668,6 +688,7 @@ describe("Bun proxy server lifecycle", () => {
     let served: Record<string, unknown> | undefined
     let data: unknown
     startProxyServer({
+      origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
         {

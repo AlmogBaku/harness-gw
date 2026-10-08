@@ -47,7 +47,6 @@ const ACP_LISTENER_CAPABILITIES = guestCapabilities.filter(
  */
 
 export type GuestAcpServiceOptions = {
-  publicOrigin: string
   runtimeInstance: RuntimeInstance
   invitations: GuestInvitationService
   /** Shared with the guest HTTP app so prompts can reference staged batches. */
@@ -230,7 +229,6 @@ export function createGuestConnection(
 export function createGuestAcpService(options: GuestAcpServiceOptions) {
   const role = "guest" as const
   const service = createAcpService({
-    publicOrigin: options.publicOrigin,
     role,
     principalId: role,
     agent: createAosAcpAgent,

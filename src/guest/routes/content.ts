@@ -46,8 +46,6 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   app.post(
     "/api/v1/agents/:agentId/sessions/:sessionId/attachments/stage",
     async (context) => {
-      if (context.req.header("origin") !== routes.options.publicOrigin)
-        return emptyError(403)
       const identity = await routes.authenticate(context.req.raw)
       if (!identity) return invitationError()
       const agentId = context.req.param("agentId")
@@ -152,8 +150,6 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   )
 
   app.post("/api/v1/agents/:agentId/audio/transcribe", async (context) => {
-    if (context.req.header("origin") !== routes.options.publicOrigin)
-      return emptyError(403)
     const identity = await routes.authenticate(context.req.raw)
     if (!identity) return invitationError()
     const agentId = context.req.param("agentId")
@@ -204,8 +200,6 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
   })
 
   app.post("/api/v1/agents/:agentId/audio/speak", async (context) => {
-    if (context.req.header("origin") !== routes.options.publicOrigin)
-      return emptyError(403)
     const identity = await routes.authenticate(context.req.raw)
     if (!identity) return invitationError()
     const agentId = context.req.param("agentId")

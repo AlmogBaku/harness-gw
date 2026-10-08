@@ -111,7 +111,6 @@ async function connectGuest(proxy: Proxy): Promise<Member> {
   const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
   const context = createGuestConnection(
     {
-      publicOrigin: "https://guest.example.test",
       runtimeInstance: proxy.runtimeInstance,
       invitations,
       attachmentStages: new AttachmentStageRegistry(),

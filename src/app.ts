@@ -48,7 +48,6 @@ export type HealthReading = {
 }
 
 export type ProxyAppOptions = {
-  publicOrigin: string
   runtimeInstance: RuntimeInstance
   readiness?: () => Promise<"ready" | "not-ready">
   health: () => HealthReading

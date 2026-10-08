@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { isHttpsOrLoopback, parseProxyConfig } from "./config"
+import { isHttpsOrLoopback, listenerOrigins, parseProxyConfig } from "./config"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import { appFileSettings } from "./routes/app-files"
 
@@ -215,6 +215,45 @@ describe("proxy configuration and secret boundary", () => {
           },
         })
       ).toThrow("Invalid proxy configuration")
+  })
+
+  const guestOn = (allowedOrigins?: string[]) => ({
+    listen: { host: "127.0.0.1", port: 4101 },
+    publicOrigin: "https://guest.example.test",
+    ...(allowedOrigins ? { allowedOrigins } : {}),
+    invitations: {
+      keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
+      clockSkewSeconds: 0,
+    },
+  })
+
+  it("lists exact extra origins per listener, each defaulting to its public origin", () => {
+    const config = parseProxyConfig({
+      ...validConfig(),
+      allowedOrigins: ["https://aos.example.test", "https://app.example.test"],
+      guest: guestOn(),
+    })
+    expect(listenerOrigins(config)).toEqual([
+      "https://aos.example.test",
+      "https://app.example.test",
+    ])
+    expect(listenerOrigins(config.guest!)).toEqual([
+      "https://guest.example.test",
+    ])
+  })
+
+  it.each([
+    ["a wildcard", { allowedOrigins: ["*"] }],
+    ["the opaque origin", { allowedOrigins: ["null"] }],
+    ["a path", { allowedOrigins: ["https://aos.example.test/app"] }],
+    [
+      "an origin both listeners list",
+      { guest: guestOn(["https://aos.example.test"]) },
+    ],
+  ])("rejects %s as an allowed origin", (_name, override) => {
+    expect(() =>
+      parseProxyConfig({ ...validConfig(), guest: guestOn(), ...override })
+    ).toThrow("Invalid proxy configuration")
   })
 
   it("accepts plain HTTP only for exact loopback application origins", () => {

@@ -55,6 +55,17 @@ const PublicOriginSchema = HttpUrlSchema.refine((value) => {
   return value === url.origin && isHttpsOrLoopback(url)
 })
 
+/** Exact origins only: never `*`, `null`, or a URL with a path. */
+const AllowedOriginsSchema = z.array(PublicOriginSchema).min(1).max(16)
+
+/** The browser origins a listener serves: its public origin unless listed. */
+export function listenerOrigins(listener: {
+  publicOrigin: string
+  allowedOrigins?: readonly string[] | undefined
+}): readonly string[] {
+  return listener.allowedOrigins ?? [listener.publicOrigin]
+}
+
 const WebSocketUrlSchema = z
   .string()
   .max(2048)
@@ -333,12 +344,14 @@ export const ProxyConfigSchema = z
     deploymentId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
     listen: ListenerSchema,
     publicOrigin: PublicOriginSchema,
+    allowedOrigins: AllowedOriginsSchema.optional(),
     runtime: RuntimeSchema,
     limits: LimitsSchema,
     guest: z
       .strictObject({
         listen: ListenerSchema,
         publicOrigin: PublicOriginSchema,
+        allowedOrigins: AllowedOriginsSchema.optional(),
         invitations: z.strictObject({
           keys: UniqueSecretKeysSchema,
           clockSkewSeconds: z.number().int().min(0).max(60).default(0),
@@ -370,6 +383,17 @@ export const ProxyConfigSchema = z
         code: "custom",
         path: ["guest"],
         message: "Guest must use a separate origin and listener",
+      })
+    if (
+      config.guest &&
+      listenerOrigins(config.guest).some((origin) =>
+        listenerOrigins(config).includes(origin)
+      )
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["guest", "allowedOrigins"],
+        message: "Guest and operator listeners must not share an origin",
       })
   })
 

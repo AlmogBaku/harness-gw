@@ -1526,33 +1526,6 @@ export function runWireListenerContract(
       )
 
       it(
-        "admits an upgrade with no Origin or its listener's own, and no other",
-        wireCase(createRuntime, async ({ proxy, clock }) => {
-          const answers: unknown[] = []
-          for (const [service, origin, path] of [
-            [proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH],
-            [proxy.guest!.acpService, GUEST_ORIGIN, HGW_ACP_PATH],
-          ] as const)
-            for (const sent of [undefined, origin, "null", "https://x.test"]) {
-              const upgrade = await until(
-                clock,
-                service.authorizeUpgrade(
-                  new Request(`${origin}${path}`, {
-                    headers: sent === undefined ? {} : { Origin: sent },
-                  })
-                )
-              )
-              answers.push(upgrade === undefined ? 401 : "admitted")
-            }
-
-          expect(answers).toEqual([
-            ...["admitted", "admitted", 401, 401],
-            ...["admitted", "admitted", 401, 401],
-          ])
-        })
-      )
-
-      it(
         "serves each Agent at its own address, and no address it does not know",
         wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
           const answers: Record<string, unknown> = {}

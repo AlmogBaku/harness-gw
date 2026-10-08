@@ -20,6 +20,7 @@ import { SessionCoordinator } from "./core/session-coordinator"
 import { READY_LINK } from "./core/link"
 import { CredentialValues } from "./redaction"
 import type { RuntimeFactory } from "./adapters/create-runtime"
+import { guardOrigins } from "./origins"
 
 const directories: string[] = []
 
@@ -285,7 +286,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("issues invitations without an Origin header", async () => {
+  it("issues invitations without an Origin header, but never to a foreign page or on the guest listener", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
@@ -295,20 +296,35 @@ describe("configured proxy composition", () => {
       credentials: new CredentialValues(),
     })
 
-    const response = await configured.app.request(
-      "https://aos.example.test/api/v1/guest-invitations",
-      {
+    const invite = (origin?: string) =>
+      new Request("https://aos.example.test/api/v1/guest-invitations", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(origin === undefined ? {} : { origin }),
+        },
         body: JSON.stringify({
           agent: "researcher",
           ref: "guest-ref",
           expiresIn: "5m",
         }),
-      }
-    )
+      })
+    const operator = (request: Request) =>
+      guardOrigins(configured.origins, request, () =>
+        configured.app.fetch(request)
+      )
 
-    expect(response.status).toBe(201)
+    expect((await operator(invite()))?.status).toBe(201)
+    expect(
+      (await operator(invite("https://attacker.example.test")))?.status
+    ).toBe(403)
+    expect(
+      (
+        await guardOrigins(configured.guest!.origins, invite(), () =>
+          configured.guest!.app.fetch(invite())
+        )
+      )?.status
+    ).toBe(403)
   })
 
   it("names the rejected field when invitation input is invalid", async () => {

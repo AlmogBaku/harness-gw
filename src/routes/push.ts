@@ -35,8 +35,6 @@ export function registerPushRoutes(
   )
 
   app.put(SUBSCRIPTIONS_PATH, async (context) => {
-    if (context.req.header("origin") !== options.publicOrigin)
-      return errorResponse("forbidden", 403)
     if (!push) return errorResponse("not_found", 404)
     const body = PushRegistrationSchema.safeParse(
       await boundedJson(context.req.raw)
@@ -60,8 +58,6 @@ export function registerPushRoutes(
   })
 
   app.delete(SUBSCRIPTIONS_PATH, async (context) => {
-    if (context.req.header("origin") !== options.publicOrigin)
-      return errorResponse("forbidden", 403)
     if (!push) return errorResponse("not_found", 404)
     const body = PushUnregistrationSchema.safeParse(
       await boundedJson(context.req.raw)
