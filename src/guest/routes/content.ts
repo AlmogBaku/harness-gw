@@ -151,62 +151,57 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
     }
   )
 
-  app.post(
-    "/api/v1/agents/:agentId/audio/transcribe",
-    async (context) => {
-      if (context.req.header("origin") !== routes.options.publicOrigin)
-        return emptyError(403)
-      const identity = await routes.authenticate(context.req.raw)
-      if (!identity) return invitationError()
-      const agentId = context.req.param("agentId")
-      if (
-        !routes.authorize(identity, agentId, identity.ref, "audio:transcribe")
+  app.post("/api/v1/agents/:agentId/audio/transcribe", async (context) => {
+    if (context.req.header("origin") !== routes.options.publicOrigin)
+      return emptyError(403)
+    const identity = await routes.authenticate(context.req.raw)
+    if (!identity) return invitationError()
+    const agentId = context.req.param("agentId")
+    if (!routes.authorize(identity, agentId, identity.ref, "audio:transcribe"))
+      return emptyError(401)
+    const release = routes.audioBudget.acquire(identity.ref)
+    if (!release) {
+      if (context.req.raw.body)
+        context.req.raw.body.cancel().catch(() => undefined)
+      return routes.projectedError(
+        identity,
+        agentId,
+        identity.ref,
+        "rate_limited",
+        true,
+        503
       )
-        return emptyError(401)
-      const release = routes.audioBudget.acquire(identity.ref)
-      if (!release) {
-        if (context.req.raw.body)
-          context.req.raw.body.cancel().catch(() => undefined)
-        return routes.projectedError(
-          identity,
-          agentId,
-          identity.ref,
-          "rate_limited",
-          true,
-          503
-        )
-      }
-      try {
-        const body = SessionTranscriptionRequestSchema.safeParse(
-          await boundedJson(context.req.raw, 7_500_000)
-        )
-        if (!body.success) return emptyError(400)
-        const bytes = recordingBytes(body.data.dataUrl, body.data.mimeType)
-        if (!bytes) return emptyError(400)
-        return context.json(
-          SessionTranscriptionResponseSchema.parse({
-            transcript: await routes.options.runtime.runtime.transcribe(
-              agentId,
-              bytes,
-              body.data.mimeType,
-              context.req.raw.signal
-            ),
-          })
-        )
-      } catch {
-        return routes.projectedError(
-          identity,
-          agentId,
-          identity.ref,
-          "temporarily_unavailable",
-          true,
-          503
-        )
-      } finally {
-        release()
-      }
     }
-  )
+    try {
+      const body = SessionTranscriptionRequestSchema.safeParse(
+        await boundedJson(context.req.raw, 7_500_000)
+      )
+      if (!body.success) return emptyError(400)
+      const bytes = recordingBytes(body.data.dataUrl, body.data.mimeType)
+      if (!bytes) return emptyError(400)
+      return context.json(
+        SessionTranscriptionResponseSchema.parse({
+          transcript: await routes.options.runtime.runtime.transcribe(
+            agentId,
+            bytes,
+            body.data.mimeType,
+            context.req.raw.signal
+          ),
+        })
+      )
+    } catch {
+      return routes.projectedError(
+        identity,
+        agentId,
+        identity.ref,
+        "temporarily_unavailable",
+        true,
+        503
+      )
+    } finally {
+      release()
+    }
+  })
 
   app.post("/api/v1/agents/:agentId/audio/speak", async (context) => {
     if (context.req.header("origin") !== routes.options.publicOrigin)

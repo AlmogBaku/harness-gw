@@ -178,12 +178,9 @@ describe("proxy shutdown under SIGTERM", () => {
 
     // Hold one ACP connection open, with a live SDK session behind it.
     const origin = `http://127.0.0.1:${port}`
-    const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${HGW_ACP_PATH}`,
-      {
-        headers: { Origin: origin },
-      }
-    )
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${HGW_ACP_PATH}`, {
+      headers: { Origin: origin },
+    })
     const answered = new Promise<void>((resolve, reject) => {
       socket.addEventListener("open", () =>
         socket.send(

@@ -1429,11 +1429,7 @@ export function runWireListenerContract(
             for (const batched of [false, true]) {
               const raw = await until(
                 clock,
-                rawSocket(
-                  proxy.acpService,
-                  OPERATOR_ORIGIN,
-                  HGW_ACP_PATH
-                )
+                rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
               )
               const frame = rawInitialize(version)
               raw.send(JSON.stringify(batched ? [frame] : frame))
@@ -1458,11 +1454,7 @@ export function runWireListenerContract(
           const open = () =>
             until(
               clock,
-              rawSocket(
-                proxy.acpService,
-                OPERATOR_ORIGIN,
-                HGW_ACP_PATH
-              )
+              rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
             )
           const answers: unknown[] = []
           for (const frame of [
@@ -1862,11 +1854,7 @@ export function runWireListenerContract(
         "admits a guest on its own listener once it logs in with an invite",
         wireCase(createRuntime, async ({ proxy, agentId, clock, connect }) => {
           const guest = proxy.guest!
-          const extras = connect(
-            guest.acpService,
-            GUEST_ORIGIN,
-            HGW_ACP_PATH
-          )
+          const extras = connect(guest.acpService, GUEST_ORIGIN, HGW_ACP_PATH)
           const { token } = await guest.invitations.issue({
             agentId,
             ref: "wire-contract",

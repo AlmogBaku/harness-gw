@@ -220,9 +220,7 @@ describe("Bun proxy server lifecycle", () => {
     const app = { fetch: vi.fn(() => new Response(null, { status: 204 })) }
     startProxyServer({
       app,
-      sockets: [
-        { path: "/api/v1/acp", subpaths: true, service: acpService },
-      ],
+      sockets: [{ path: "/api/v1/acp", subpaths: true, service: acpService }],
       host: "127.0.0.1",
       port: 4100,
       shutdownGraceMs: 1_000,

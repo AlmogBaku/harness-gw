@@ -117,17 +117,14 @@ describe("real Bun WebSocket upgrade", () => {
     const port = portOf(lifecycle)
 
     // A plain request is no WebSocket handshake.
-    const denied = await fetch(
-      `http://127.0.0.1:${port}${HGW_ACP_PATH}`
-    )
+    const denied = await fetch(`http://127.0.0.1:${port}${HGW_ACP_PATH}`)
     expect(denied.status).toBe(400)
     expect(opened).toBe(0)
 
     const frames: unknown[] = []
-    const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${HGW_ACP_PATH}`,
-      { headers: { Origin: ORIGIN } }
-    )
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${HGW_ACP_PATH}`, {
+      headers: { Origin: ORIGIN },
+    })
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("message", (event) => {
         frames.push(JSON.parse(String(event.data)))
@@ -151,15 +148,12 @@ describe("real Bun WebSocket upgrade", () => {
     const port = portOf(acpProxy())
 
     // A plain request is no WebSocket handshake.
-    const denied = await fetch(
-      `http://127.0.0.1:${port}${HGW_ACP_PATH}`
-    )
+    const denied = await fetch(`http://127.0.0.1:${port}${HGW_ACP_PATH}`)
     expect(denied.status).toBe(400)
 
-    const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${HGW_ACP_PATH}`,
-      { headers: { Origin: ORIGIN } }
-    )
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${HGW_ACP_PATH}`, {
+      headers: { Origin: ORIGIN },
+    })
     const frames: unknown[] = []
     await new Promise<void>((resolve, reject) => {
       socket.addEventListener("open", () =>
@@ -230,10 +224,9 @@ describe("real Bun WebSocket upgrade", () => {
   })
   it("closes a socket that never sends initialize with 4408 at the handshake deadline", async () => {
     const port = portOf(acpProxy(100))
-    const socket = new WebSocket(
-      `ws://127.0.0.1:${port}${HGW_ACP_PATH}`,
-      { headers: { Origin: ORIGIN } }
-    )
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${HGW_ACP_PATH}`, {
+      headers: { Origin: ORIGIN },
+    })
     const code = await new Promise<number>((resolve, reject) => {
       socket.addEventListener("close", (event) => resolve(event.code))
       socket.addEventListener("error", reject)

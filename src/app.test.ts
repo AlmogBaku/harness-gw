@@ -193,14 +193,11 @@ describe("AOS V1 proxy", () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     const proxy = app(runtime)
 
-    const response = await proxy.request(
-      `${origin}/api/v1/guest-invitations`,
-      {
-        method: "POST",
-        headers: { origin, "content-type": "application/json" },
-        body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
-      }
-    )
+    const response = await proxy.request(`${origin}/api/v1/guest-invitations`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
+    })
 
     expect(response.status).toBe(404)
   })
@@ -318,12 +315,8 @@ describe("AOS V1 proxy", () => {
     })
     const proxy = app(runtime)
 
-    expect((await proxy.request(`${origin}/api/v1/healthz`)).status).toBe(
-      200
-    )
-    expect((await proxy.request(`${origin}/api/v1/readyz`)).status).toBe(
-      503
-    )
+    expect((await proxy.request(`${origin}/api/v1/healthz`)).status).toBe(200)
+    expect((await proxy.request(`${origin}/api/v1/readyz`)).status).toBe(503)
   })
 
   it("logs the request path without its query on a completed and a failed request", async () => {

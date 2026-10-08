@@ -552,11 +552,8 @@ describe("configured proxy composition", () => {
       // Both listeners and readiness still see one runtime instance.
       expect(configured.guest).toBeUndefined()
       expect(
-        (
-          await configured.app.request(
-            "https://aos.example.test/api/v1/readyz"
-          )
-        ).status
+        (await configured.app.request("https://aos.example.test/api/v1/readyz"))
+          .status
       ).toBe(200)
     })
 
@@ -606,11 +603,8 @@ describe("configured proxy composition", () => {
       },
     })
     expect(
-      (
-        await configured.app.request(
-          "https://aos.example.test/api/v1/readyz"
-        )
-      ).status
+      (await configured.app.request("https://aos.example.test/api/v1/readyz"))
+        .status
     ).toBe(503)
   })
 })
