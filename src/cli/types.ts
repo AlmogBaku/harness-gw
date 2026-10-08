@@ -2,7 +2,6 @@ import type { ConfiguredProxyDependencies } from "../composition"
 import type { ProxyLogLevel } from "../config"
 import type { ProxyConfigFileAccess } from "../config-file"
 import type { startProxyServer } from "../server"
-import type { StaticHandler } from "../static"
 
 export type ProxyCliDependencies = Omit<ConfiguredProxyDependencies, "logger"> &
   Partial<ProxyConfigFileAccess> & {
@@ -11,7 +10,6 @@ export type ProxyCliDependencies = Omit<ConfiguredProxyDependencies, "logger"> &
       level: ProxyLogLevel
     ) => ConfiguredProxyDependencies["logger"]
     start?: typeof startProxyServer
-    staticHandler?: StaticHandler
     /**
      * Required: the only `process.env`-backed reader is built in `cli.ts`, so a
      * test can never discover the operator's own configuration file.

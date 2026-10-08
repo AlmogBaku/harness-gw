@@ -2,7 +2,7 @@
 
 This document explains how the Hermes `/api/ws` protocol represents one model
 turn and how the AOS Hermes adapter maps that turn to the proxy-owned turn
-vocabulary defined in `packages/proxy/core/events.ts`. The ACP layer then
+vocabulary defined in `src/core/events.ts`. The ACP layer then
 delivers those events to the browser. This is a reference for contributors
 changing `gateway.ts`, `gateway-socket.ts`, `run.ts`, recovery, or history.
 

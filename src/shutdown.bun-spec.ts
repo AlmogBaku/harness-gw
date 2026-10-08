@@ -13,7 +13,7 @@ import { AOS_ACP_OPERATOR_PATH } from "../protocol/acp"
  */
 const SHUTDOWN_GRACE_MS = 1_000
 const EXIT_MARGIN_MS = 2_000
-const REPOSITORY_ROOT = join(import.meta.dir, "..", "..")
+const REPOSITORY_ROOT = join(import.meta.dir, "..")
 
 type FakeHermes = {
   baseUrl: string
@@ -146,7 +146,7 @@ describe("proxy shutdown under SIGTERM", () => {
       cmd: [
         process.execPath,
         "run",
-        "packages/proxy/cli.ts",
+        "src/cli.ts",
         "serve",
         "--config",
         configFile,

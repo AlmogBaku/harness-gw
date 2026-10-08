@@ -38,7 +38,9 @@ export function assertLeakFree(test: LeakTarget, timerBaseline = 0): void {
   // reached the terminal closed state. Connections never re-enter handshaking,
   // so departure count equals instance count.
   const cxn = test.logs.transitions({ owner: "connection" })
-  const connectionsOpened = cxn.filter(([from]) => from === "handshaking").length
+  const connectionsOpened = cxn.filter(
+    ([from]) => from === "handshaking"
+  ).length
   const connectionsClosed = cxn.filter(([, to]) => to === "closed").length
   expect(connectionsOpened, "connections: opened === closed").toBe(
     connectionsClosed

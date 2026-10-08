@@ -8,7 +8,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-const REPOSITORY_ROOT = join(import.meta.dir, "..", "..")
+const REPOSITORY_ROOT = join(import.meta.dir, "..")
 
 const cleanups: Array<() => void | Promise<void>> = []
 
@@ -52,7 +52,7 @@ describe("process handlers (bun process)", () => {
     await writeFile(
       script,
       `
-import { installProcessHandlers } from "${REPOSITORY_ROOT}/packages/proxy/cli/process-handlers.ts"
+import { installProcessHandlers } from "${REPOSITORY_ROOT}/src/cli/process-handlers.ts"
 ${INLINE_LOGGER}
 installProcessHandlers(logger)
 // Create an unhandled rejection: no .catch(), not awaited.
@@ -93,7 +93,7 @@ setTimeout(() => process.exit(0), 200)
     await writeFile(
       script,
       `
-import { installProcessHandlers } from "${REPOSITORY_ROOT}/packages/proxy/cli/process-handlers.ts"
+import { installProcessHandlers } from "${REPOSITORY_ROOT}/src/cli/process-handlers.ts"
 ${INLINE_LOGGER}
 installProcessHandlers(logger)
 // Throw synchronously outside any try-catch to trigger uncaughtException.

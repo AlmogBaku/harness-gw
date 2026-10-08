@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import {
-  AGENT,
-  harness,
-  SESSION,
-} from "../../src/acp/test-harness"
+import { AGENT, harness, SESSION } from "../../src/acp/test-harness"
 import { useFakeClock } from "../../test/support/fake-clock"
 
 import { connectBrowser } from "./support"

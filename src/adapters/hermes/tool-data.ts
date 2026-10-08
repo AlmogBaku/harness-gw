@@ -33,7 +33,7 @@ import {
   isCredentialPlaceholder,
   REDACTED,
   redactCredentials,
-} from "../../../../shared/credentials"
+} from "../../credentials"
 import {
   projectHermesMediaArtifacts,
   type HermesMediaOptions,

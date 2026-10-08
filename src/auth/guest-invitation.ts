@@ -288,8 +288,7 @@ export function createGuestInvitationService(
         throw new GuestInvitationError(describeIssues(parsed.error.issues))
       const issuedAt = nowSeconds(clock)
       const expiresAt =
-        issuedAt +
-        (parsed.data.expiresInSeconds ?? DEFAULT_EXPIRES_IN_SECONDS)
+        issuedAt + (parsed.data.expiresInSeconds ?? DEFAULT_EXPIRES_IN_SECONDS)
       if (expiresAt > MAX_UNIX_SECONDS)
         throw new GuestInvitationError("expiresIn: ends after the year 2100")
       const claims = ClaimsSchema.parse({

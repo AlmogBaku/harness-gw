@@ -40,10 +40,9 @@ const RUNTIME_NAME_LITERAL =
   /["'`][^"'`\n]*(?:hermes|openclaw|opencode)[^"'`\n]*["'`]/iu
 
 describe("runtime adapter boundary", () => {
-  it("keeps runtime vocabulary out of browser, protocol, and common proxy modules", async () => {
+  it("keeps runtime vocabulary out of the client, protocol, and common proxy modules", async () => {
     const proxyRoot = import.meta.dirname
-    const repositoryRoot = join(proxyRoot, "../..")
-    const fixtureRoot = join(repositoryRoot, "src/runtime-adapters/fixture")
+    const repositoryRoot = join(proxyRoot, "..")
     const nativeNames = [
       ...CANONICAL_TOOL_NAMES.keys(),
       ...OPENCODE_CANONICAL_TOOL_NAMES.keys(),
@@ -53,10 +52,8 @@ describe("runtime adapter boundary", () => {
       "u"
     )
     const files = [
-      ...(await productionSources(join(repositoryRoot, "src"))).filter(
-        ([path]) => !path.startsWith(fixtureRoot)
-      ),
-      ...(await productionSources(join(repositoryRoot, "packages/protocol"))),
+      ...(await productionSources(join(repositoryRoot, "client"))),
+      ...(await productionSources(join(repositoryRoot, "protocol"))),
       ...(
         await Promise.all(
           COMMON_PROXY_DIRECTORIES.map((directory) =>
@@ -79,9 +76,9 @@ describe("runtime adapter boundary", () => {
     }
   })
 
-  it("keeps provider-native code out of common proxy and browser modules", async () => {
+  it("keeps provider-native code out of common proxy and client modules", async () => {
     const proxyRoot = import.meta.dirname
-    const repositoryRoot = join(proxyRoot, "../..")
+    const repositoryRoot = join(proxyRoot, "..")
     const commonProxyFiles = (
       await Promise.all(
         ["acp", "auth", "core", "guest", "mcp-apps", "routes", "voice"].map(
@@ -89,9 +86,9 @@ describe("runtime adapter boundary", () => {
         )
       )
     ).flat()
-    const browserFiles = await productionSources(join(repositoryRoot, "src"))
+    const clientFiles = await productionSources(join(repositoryRoot, "client"))
 
-    for (const [path, source] of [...commonProxyFiles, ...browserFiles]) {
+    for (const [path, source] of [...commonProxyFiles, ...clientFiles]) {
       expect(source, path).not.toMatch(
         /(?:from\s+|import\s*\()["'][^"']*(?:hermes|@opencode-ai\/sdk|@openclaw\/gateway-)[^"']*["']/iu
       )
@@ -185,13 +182,13 @@ describe("vocabulary", () => {
   }> = [
     {
       retired: /\bthreadId\b/u,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "the public Session id is `sessionId`, from the wire to the adapters",
     },
     {
       retired: /\bruntimeSessionId\b/u,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "the provider's own Session id is `providerSessionId`, and it never leaves the proxy",
     },
@@ -202,7 +199,7 @@ describe("vocabulary", () => {
       // lookahead only admits candidate words to the costly lookbehind.
       retired:
         /\b(?=\w*(?:[Rr]oom|[Ss]eat))(?<!(?:\/\/|\/\*|^[ \t]*\*).*|["'`][\w.]*)\w*(?:[Rr]oom|[Ss]eat)\w*/mu,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "a Session's shared presence is a `Channel`, one member's place in it a `Membership`, joined and parted",
     },
@@ -210,58 +207,58 @@ describe("vocabulary", () => {
       // The word alone and inside any identifier: `lane`, `guestLane`,
       // `ACP_LANE_CAPABILITIES`.
       retired: /\blanes?(?![a-z])|Lanes?(?![a-z])|(?<![A-Z])LANES?(?![A-Z])/u,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "which kind of member it is is its `role` (`Principal.role`); where its socket arrives is a listener",
     },
     {
       retired: /\blanes?(?![a-z])|Lanes?(?![a-z])|(?<![A-Z])LANES?(?![A-Z])/u,
-      scope: "packages/protocol/**",
+      scope: "protocol/**",
       reason:
         "the wire names which kind of member a connection is its `role` (`_meta.aos.role`)",
     },
     {
       retired: /[cC]ontrollerIds?\b|[sS]ubscriberIds?\b/u,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "the member's id on a turn is its `principalId`; one membership's key is its `membershipId`",
     },
     {
       retired: /\btype Principal\b/u,
-      scope: "packages/proxy/push/**",
+      scope: "src/push/**",
       reason:
         "one principal's connections, for push, are its `Presence`; `Principal` is the member's",
     },
     {
       retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
     },
     {
       retired: /"attached-(?:active-)?session"|"session-not-attached"/u,
-      scope: "packages/protocol/**",
+      scope: "protocol/**",
       reason:
         "a Session this connection has resumed is scoped `session` or `active-session`; one it has not is `session-not-resumed`",
     },
     {
       retired:
         /\bServerTurnWatcher\b|\bobserveScope\b|\bonPendingRequest\b|\bonConnection\b|\bunobserve\b|\bunwatch\b/u,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "our own listening function is `subscribe…` and returns its unsubscribe function",
     },
     {
       retired:
         /\bensureAttached\b|#requireAttachedSession\b|#attachedRunning\b/u,
-      scope: "packages/proxy/**",
+      scope: "src/**",
       reason:
         "a Session a connection follows is resumed, not attached; an attachment is a file",
     },
   ]
 
   it("keeps retired names out of the proxy and the protocol", async () => {
-    const repositoryRoot = join(import.meta.dirname, "../..")
+    const repositoryRoot = join(import.meta.dirname, "..")
     for (const { retired, scope, reason } of retiredNames) {
       const directory = join(repositoryRoot, scope.replace(/\/\*\*$/u, ""))
       for (const [path, source] of await productionSources(directory)) {

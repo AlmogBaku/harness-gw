@@ -16,7 +16,7 @@
 // DO NOT edit the hash constants here without re-fetching the upstream source.
 //
 // Upstream's own tests are deliberately not vendored: the adapter tests in
-// `packages/proxy/adapters/hermes` cover the behavior `gateway.ts` uses.
+// `src/adapters/hermes` cover the behavior `gateway.ts` uses.
 
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"

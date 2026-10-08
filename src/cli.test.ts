@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { stringify } from "yaml"
 
 import { captureLogs, type LogCapture } from "../test/support/log-capture"
-import { MCP_APP_SANDBOX_CSP, MCP_APP_SANDBOX_PATH } from "../protocol/mcp-apps"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
 import { runProxyCli } from "./cli"
@@ -133,7 +132,6 @@ describe("proxy executable", () => {
   it("starts both listeners and closes the runtime exactly once", async () => {
     const shutdowns: Array<ReturnType<typeof vi.fn>> = []
     const transportClose = vi.fn(async () => undefined)
-    const staticHandler = vi.fn(async () => new Response("shell"))
     const exit = vi.fn()
     const logs = captureLogs()
     /** Models one listener: shutdown announces, closes resources, settles. */
@@ -161,7 +159,6 @@ describe("proxy executable", () => {
         credentials: new CredentialValues(),
         getenv: () => undefined,
         start,
-        staticHandler,
         exit,
       }
     )
@@ -191,69 +188,16 @@ describe("proxy executable", () => {
     )
     expect(start.mock.calls[0]![0].close).toBeInstanceOf(Function)
     expect(start.mock.calls[1]![0].close).toBeInstanceOf(Function)
-    const guestApp = start.mock.calls[1]![0].app
-    expect(
-      await (
-        await guestApp.fetch(
-          new Request("https://guest.example.test/runtime-config.json")
-        )
-      )?.json()
-    ).toEqual({
-      surface: "guest",
-      basePath: "/api/guest/v1",
-    })
-    const guestDocument = await guestApp.fetch(
-      new Request("https://guest.example.test/")
-    )
-    expect(guestDocument?.headers.get("content-security-policy")).toContain(
-      "frame-ancestors 'none'"
-    )
-    expect(guestDocument?.headers.get("content-security-policy")).toContain(
-      "img-src 'self' https: data: blob:"
-    )
-    expect(guestDocument?.headers.get("referrer-policy")).toBe("no-referrer")
-    // The guest page frames the MCP App sandbox proxy, which is served on
-    // both listeners with its own policy: the relay script runs, only this
-    // origin may frame it, and the guest page's policy does not apply.
-    expect(guestDocument?.headers.get("content-security-policy")).toContain(
-      "frame-src 'self'"
-    )
-    for (const app of [guestApp, start.mock.calls[0]![0].app!]) {
-      const sandbox = await app.fetch(
-        new Request(
-          `https://aos.example.test${MCP_APP_SANDBOX_PATH}?allow=camera`
-        )
-      )
-      const policy = sandbox?.headers.get("content-security-policy")
-      expect(policy).toBe(MCP_APP_SANDBOX_CSP)
-      expect(policy).toContain("script-src 'self'")
-      expect(policy).toContain("frame-ancestors 'self'")
-      expect(sandbox?.headers.get("x-frame-options")).toBeNull()
-    }
-    for (const reservedPath of [
-      "/auth",
-      "/auth/callback",
-      // A guest installs no workspace and registers no service worker, and an
-      // encoded path reaches the same file the static handler would decode.
-      "/sw.js",
-      "/sw%2Ejs",
-      "/manifest.webmanifest",
-    ]) {
-      const response = await guestApp.fetch(
-        new Request(`https://guest.example.test${reservedPath}`)
-      )
-      expect(response?.status).toBe(404)
-      expect(response?.headers.get("x-content-type-options")).toBe("nosniff")
-    }
-    const operatorApp = start.mock.calls[0]![0].app!
-    for (const installable of ["/sw.js", "/manifest.webmanifest"])
-      expect(
-        (
-          await operatorApp.fetch(
-            new Request(`https://aos.example.test${installable}`)
-          )
-        )?.status
-      ).toBe(200)
+    // A listener serves its API alone; every page belongs to the client.
+    for (const app of [
+      start.mock.calls[0]![0].app!,
+      start.mock.calls[1]![0].app!,
+    ])
+      for (const page of ["/", "/runtime-config.json", "/sw.js"])
+        expect(
+          (await app.fetch(new Request(`https://gw.example.test${page}`)))
+            ?.status
+        ).toBe(404)
 
     await lifecycle!.shutdown()
     await lifecycle!.shutdown()

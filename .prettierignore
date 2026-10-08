@@ -1,0 +1,7 @@
+dist/
+node_modules/
+coverage/
+src/adapters/hermes/vendor/**/json-rpc-gateway.ts
+src/adapters/hermes/vendor/**/json-rpc-channel.ts
+src/adapters/hermes/vendor/**/reconnect-backoff.ts
+src/adapters/hermes/vendor/**/LICENSE

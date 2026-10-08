@@ -48,7 +48,7 @@ listed here.
 Upstream's own tests (`json-rpc-channel.test.ts`,
 `json-rpc-gateway-replay.test.ts`, `reconnect-backoff.test.ts`) are
 deliberately not vendored. `gateway.ts` runs the client with `replay: false`,
-and the adapter tests in `packages/proxy/adapters/hermes` (`gateway.test.ts`,
+and the adapter tests in `src/adapters/hermes` (`gateway.test.ts`,
 `gateway-socket.test.ts`, `run.test.ts`) cover the correlation, heartbeat,
 server-request, backoff, and replay behavior AOS relies on.
 
@@ -79,7 +79,7 @@ To update to a new upstream pin:
 
    ```sh
    NEW_PIN=<new commit SHA>
-   DEST=packages/proxy/adapters/hermes/vendor/hermes-shared
+   DEST=src/adapters/hermes/vendor/hermes-shared
 
    gh api "repos/NousResearch/hermes-agent/contents/apps/shared/src/json-rpc-gateway.ts?ref=${NEW_PIN}" \
      --jq '.content' | base64 -d > "${DEST}/json-rpc-gateway.ts"
@@ -100,7 +100,7 @@ To update to a new upstream pin:
    hashes, then the adapter tests that exercise the vendored client:
 
    ```sh
-   bunx vitest run packages/proxy/adapters/hermes
+   bunx vitest run src/adapters/hermes
    ```
 
    If the hashes changed, update the constants in `snapshot.test.ts` and the

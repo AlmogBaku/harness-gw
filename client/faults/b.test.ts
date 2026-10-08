@@ -1,15 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
-import {
-  AGENT,
-  harness,
-  SESSION,
-  sessionRow,
-} from "../../src/acp/test-harness"
-import {
-  providerSessionId,
-  sessionId,
-} from "../../src/core/ids"
+import { AGENT, harness, SESSION, sessionRow } from "../../src/acp/test-harness"
+import { providerSessionId, sessionId } from "../../src/core/ids"
 import { useFakeClock } from "../../test/support/fake-clock"
 
 import { AOS_METHODS } from "@aos/protocol/acp"
