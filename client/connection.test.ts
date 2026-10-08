@@ -87,6 +87,8 @@ function createProxyAgent(
     slowResume?: boolean
     /** The JSON-RPC code an Agent update is refused with. */
     refuseAgentUpdate?: number
+    /** The hgw extension version `initialize` announces. */
+    version?: number
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -103,7 +105,7 @@ function createProxyAgent(
         info: { name: "harness-gw", version: "9.9.9" },
         _meta: {
           [HGW_META_KEY]: {
-            version: 1,
+            version: options.version ?? 1,
             role: "operator",
             extensions: {
               steer: true,
@@ -361,6 +363,27 @@ describe("ACP connection", () => {
     await vi.waitFor(() => expect(connection.status).toBe("ready"))
     connection.close()
     expect(connection.status).toBe("closed")
+  })
+
+  it("ends without reconnecting when the gateway speaks another version", async () => {
+    const proxy = createProxyAgent({ version: 2 })
+    const statuses: string[] = []
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://gateway.test/api/v1/acp",
+      socketConstructor: pipedSockets(() => proxy.app).WebSocket,
+    })
+    connection.subscribeStatus((status) => statuses.push(status))
+    connection.start()
+
+    const refusal = await connection.initialized.catch((error: Error) => error)
+    expect(refusal).toBeInstanceOf(Error)
+    expect((refusal as Error).message).toMatch(/version 2\b/)
+    expect((refusal as Error).message).toMatch(/version 1\b/)
+    await vi.waitFor(() => expect(connection.status).toBe("closed"))
+    expect(statuses).not.toContain("ready")
+    expect(statuses).not.toContain("reconnecting")
+    expect(proxy.callsOf("initialize")).toHaveLength(1)
   })
 
   it("redeems an invitation with the AOS login metadata, never logging it", async () => {

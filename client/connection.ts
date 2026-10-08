@@ -35,6 +35,7 @@ import {
 import {
   ACP_PROTOCOL_VERSION,
   HGW_AUTH_METHOD_INVITE,
+  HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
@@ -926,7 +927,20 @@ export function createAcpConnection(
         _meta: { [HGW_META_KEY]: { historyPages: true } },
       },
     })
-    const meta = HgwInitializeMetaSchema.parse(hgwMetaOf(response._meta))
+    const announced = hgwMetaOf(response._meta)
+    // A retry cannot change the gateway's version, so a mismatch ends the
+    // connection instead of reconnecting against it.
+    if (announced?.version !== HGW_EXTENSION_VERSION) {
+      const error = new Error(
+        `The gateway speaks hgw extension version ${String(announced?.version)}; this client speaks version ${HGW_EXTENSION_VERSION}`
+      )
+      failInitialized?.(error)
+      failInitialized = undefined
+      settleInitialized = undefined
+      closeConnection()
+      throw error
+    }
+    const meta = HgwInitializeMetaSchema.parse(announced)
     settleInitialized?.(meta)
     settleInitialized = undefined
     failInitialized = undefined
