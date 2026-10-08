@@ -1,6 +1,7 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { parse } from "yaml"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { isHttpsOrLoopback, listenerOrigins, parseProxyConfig } from "./config"
@@ -634,4 +635,45 @@ describe("the Artifact viewer", () => {
       "Invalid proxy configuration"
     )
   })
+})
+
+describe("the shipped examples", () => {
+  /** The secret files each example names; a client's Compose mounts them here. */
+  it.each([
+    [
+      "config.hermes.example.yaml",
+      ["/run/secrets/hermes-token", "/run/secrets/guest-invite-signing-key"],
+    ],
+    [
+      "config.openclaw.example.yaml",
+      [
+        "/run/secrets/openclaw-device-identity",
+        "/run/secrets/openclaw-device-token",
+        "/run/secrets/guest-invite-signing-key",
+      ],
+    ],
+    [
+      "config.opencode.example.yaml",
+      [
+        "/run/secrets/opencode-password",
+        "/run/secrets/guest-invite-signing-key",
+      ],
+    ],
+  ])(
+    "ships %s as a loadable configuration without push, reading its secrets from the mounted files",
+    async (filename, secretFiles) => {
+      const example: unknown = parse(
+        await readFile(
+          join(import.meta.dirname, "../examples", filename),
+          "utf8"
+        )
+      )
+      const config = parseProxyConfig(example)
+      expect(config.push).toBeUndefined()
+      const named = JSON.stringify(config).match(/"\/run\/secrets\/[^"]+"/gu)
+      expect(named?.map((path) => JSON.parse(path) as string)).toEqual(
+        secretFiles
+      )
+    }
+  )
 })

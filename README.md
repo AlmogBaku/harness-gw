@@ -25,3 +25,38 @@ bun run test
 bun run test:gate
 bun run build
 ```
+
+## Run the gateway
+
+The gateway reads one YAML file, named by `--config`, by
+`HARNESS_GW_CONFIG_FILE`, or found at
+`${XDG_CONFIG_HOME:-$HOME/.config}/harness-gw/config.yaml`. Start from an
+example in `examples/`; secrets stay in the files it points at. The file must
+be owned by the user the gateway runs as (or root) and never group- or
+world-writable.
+
+```bash
+bun run gateway config check --config /etc/harness-gw/config.yaml
+bun run serve --config /etc/harness-gw/config.yaml
+```
+
+The image runs the same CLI:
+
+```bash
+docker build --tag harness-gw .
+docker run --rm -v /etc/harness-gw:/config:ro harness-gw \
+  config check --config /config/config.yaml
+```
+
+`config check` validates the file, its `HARNESS_GW_*` overrides and the
+schema, and starts nothing; it does not read the secret files, which `serve`
+reads at start. The operator listener has no authentication of its own: keep
+it on loopback or a trusted private network, behind the client's own web
+server. The wire and HTTP API are specified in [docs/protocol.md](docs/protocol.md).
+
+## Release
+
+A `v*` tag matching `package.json`'s version runs `release.yml`: after a
+reviewer approves the `release` environment, it publishes `@harness-gw/sdk` to
+npm through trusted publishing with provenance, and pushes the gateway image to
+GHCR with a build attestation.
