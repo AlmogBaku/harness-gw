@@ -14,7 +14,7 @@ import { ProxyConfigSchema, type ProxyConfig } from "./config"
  * the unauthenticated operator listener.
  */
 
-const PATH_VARIABLE = "AOS_UI_PROXY_CONFIG_FILE"
+const PATH_VARIABLE = "HARNESS_GW_CONFIG_FILE"
 const EXPLICIT_PATH_HINT = `pass --config <path> or set ${PATH_VARIABLE}`
 const MAXIMUM_SIZE_BYTES = 1_024 * 1_024
 /** A merge writes into these, which is where pollution would be introduced. */
@@ -81,7 +81,10 @@ export function resolveProxyConfigPath({
     throw new ProxyConfigurationError(
       `No proxy configuration file: ${EXPLICIT_PATH_HINT}, or set XDG_CONFIG_HOME or HOME so the default configuration path can be resolved`
     )
-  return { path: join(searchRoot, "aos-ui", "proxy.yaml"), explicit: false }
+  return {
+    path: join(searchRoot, "harness-gw", "config.yaml"),
+    explicit: false,
+  }
 }
 
 /** The real file access `serve` and `invite` read configuration through. */
@@ -254,7 +257,7 @@ function deepMerge(
   return merged
 }
 
-export const PROXY_ENV_PREFIX = "AOS_UI_PROXY_"
+export const PROXY_ENV_PREFIX = "HARNESS_GW_"
 
 const RUNTIME_KINDS = ["hermes", "opencode", "openclaw"] as const
 
@@ -262,7 +265,7 @@ type RuntimeKind = (typeof RUNTIME_KINDS)[number]
 
 export type ProxyEnvOverride = {
   path: string[]
-  /** Appended to `AOS_UI_PROXY_` to form the variable an operator exports. */
+  /** Appended to `HARNESS_GW_` to form the variable an operator exports. */
   suffix: string
   type: "string" | "int" | "boolean"
   /**
@@ -275,8 +278,8 @@ export type ProxyEnvOverride = {
 /**
  * One row per scalar leaf of the schema, so the overrides are a list an
  * operator can read rather than a schema walk. `version` has no row, arrays and
- * the whole `mcpApps` block are file-only, and `AOS_UI_PROXY_TARGET`, `_HOST`, `_PORT` and `_CONFIG_FILE`
- * belong to other features.
+ * the whole `mcpApps` block are file-only, and `HARNESS_GW_CONFIG_FILE` names
+ * the file itself.
  */
 export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
   { path: ["deploymentId"], suffix: "DEPLOYMENT_ID", type: "string" },

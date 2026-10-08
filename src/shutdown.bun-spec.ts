@@ -113,7 +113,7 @@ async function proxyConfig(port: number, hermesBaseUrl: string) {
 function scrubbedEnvironment() {
   return Object.fromEntries(
     Object.entries(process.env).filter(
-      ([name]) => !name.startsWith("AOS_UI_PROXY_")
+      ([name]) => !name.startsWith("HARNESS_GW_")
     )
   )
 }
@@ -140,7 +140,7 @@ describe("proxy shutdown under SIGTERM", () => {
     const hermes = fakeHermes()
     cleanups.push(() => hermes.stop())
     const port = await freePort()
-    const { configFile, directory } = await proxyConfig(port, hermes.baseUrl)
+    const { configFile } = await proxyConfig(port, hermes.baseUrl)
 
     const child = Bun.spawn({
       cmd: [
@@ -152,7 +152,7 @@ describe("proxy shutdown under SIGTERM", () => {
         configFile,
       ],
       cwd: REPOSITORY_ROOT,
-      env: { ...scrubbedEnvironment(), AOS_UI_STATIC_ROOT: directory },
+      env: scrubbedEnvironment(),
       stdout: "pipe",
       stderr: "pipe",
     })

@@ -1,7 +1,7 @@
 import { Command, CommanderError } from "commander"
 
 import { createInvitationLink, type InviteFlags } from "./invite"
-import { serveProxy } from "./serve"
+import { loadServeConfig, serveProxy } from "./serve"
 import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
 
 export async function runProxyCli(
@@ -12,8 +12,10 @@ export async function runProxyCli(
   const writeOut =
     dependencies.writeOut ?? ((value: string) => process.stdout.write(value))
   const command = new Command()
-    .name("aos-gateway")
-    .description("Serve AOS UI and create restricted guest invitations")
+    .name("harness-gw")
+    .description(
+      "Serve the harness gateway and create restricted guest invitations"
+    )
     .exitOverride()
     .configureOutput({
       writeOut,
@@ -24,13 +26,29 @@ export async function runProxyCli(
 
   command
     .command("serve")
-    .description("Run the private AOS runtime proxy")
+    .description("Run the gateway")
     .option(
       "--config <path>",
-      "proxy configuration file; discovered under XDG_CONFIG_HOME when omitted"
+      "configuration file; discovered under XDG_CONFIG_HOME when omitted"
     )
     .action(async ({ config }: { config?: string }) => {
       result = await serveProxy({ config }, dependencies)
+    })
+
+  command
+    .command("config")
+    .description("Inspect the gateway configuration")
+    .command("check")
+    .description(
+      "Validate the configuration file and its overrides, then exit; secret files are read only at start"
+    )
+    .option(
+      "--config <path>",
+      "configuration file; discovered under XDG_CONFIG_HOME when omitted"
+    )
+    .action(async ({ config }: { config?: string }) => {
+      await loadServeConfig({ config }, dependencies)
+      writeOut("configuration is valid\n")
     })
 
   command
@@ -44,11 +62,11 @@ The command runs locally and does not contact the native runtime. Keep the print
 private: it is a reusable bearer credential until it expires.
 
 Examples:
-  aos-gateway invite --config /run/aos-ui/proxy.yaml --agent interviewer \
+  harness-gw invite --config /etc/harness-gw/config.yaml --agent interviewer \
     --expires-in 72h --prefill "Hey, Almog sent me here!" \
     --instruction "Load the interview skill for Dan." --lang en
 
-  aos-gateway invite --agent interviewer --ref returning-guest \
+  harness-gw invite --agent interviewer --ref returning-guest \
     --instruction "Continue the scheduled interview."
 `
     )

@@ -24,17 +24,24 @@ function listenerApp(
   }
 }
 
+/** The configuration `serve` runs with; `config check` loads it and stops. */
+export function loadServeConfig(
+  { config }: { config?: string },
+  dependencies: ProxyCliDependencies
+) {
+  return loadProxyConfig({
+    flag: config,
+    getenv: dependencies.getenv,
+    discover: true,
+    ...nodeConfigFileAccess(dependencies),
+  })
+}
+
 export async function serveProxy(
   { config }: { config?: string },
   dependencies: ProxyCliDependencies
 ): Promise<ProxyLifecycle> {
-  const { getenv } = dependencies
-  const input = await loadProxyConfig({
-    flag: config,
-    getenv,
-    discover: true,
-    ...nodeConfigFileAccess(dependencies),
-  })
+  const input = await loadServeConfig({ config }, dependencies)
   const logger = dependencies.createLogger(input.log.level)
   const configured = await createConfiguredProxy(input, {
     ...dependencies,

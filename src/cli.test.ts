@@ -40,8 +40,8 @@ async function proxyConfig() {
   const tokenFile = await writeSecret("hermes-token", "hermes-token")
   const invitationKey = await writeSecret("invitation-key", key)
   const configHome = join(directory, "config")
-  await mkdir(join(configHome, "aos-ui"), { recursive: true })
-  const configFile = join(configHome, "aos-ui", "proxy.yaml")
+  await mkdir(join(configHome, "harness-gw"), { recursive: true })
+  const configFile = join(configHome, "harness-gw", "config.yaml")
   await writeFile(
     configFile,
     stringify({
@@ -288,7 +288,7 @@ describe("proxy executable", () => {
           createLogger: () => captureLogs().logger,
           credentials: new CredentialValues(),
           getenv: (name) =>
-            name === "AOS_UI_PROXY_CONFIG_FILE" ? configFile : undefined,
+            name === "HARNESS_GW_CONFIG_FILE" ? configFile : undefined,
           randomBytes: (size) => {
             entropyCall += 1
             return Buffer.alloc(size, entropyCall === 1 ? 0xab : 0xcd)
@@ -394,6 +394,26 @@ describe("proxy executable", () => {
     )
     expect(errors(logs)).toEqual([])
     await lifecycle!.shutdown()
+  })
+
+  it("checks a configuration without starting anything, and names a file it rejects", async () => {
+    const { configFile } = await proxyConfig()
+    const start = vi.fn()
+    const missing = join(tmpdir(), "aos-proxy-absent", "config.yaml")
+    const check = (path: string, writeOut = vi.fn()) =>
+      runProxyCli(["bun", "proxy", "config", "check", "--config", path], {
+        createLogger: () => captureLogs().logger,
+        credentials: new CredentialValues(),
+        getenv: () => undefined,
+        start,
+        writeOut,
+      })
+
+    const writeOut = vi.fn()
+    await check(configFile, writeOut)
+    expect(writeOut).toHaveBeenCalledWith("configuration is valid\n")
+    await expect(check(missing)).rejects.toThrow(missing)
+    expect(start).not.toHaveBeenCalled()
   })
 
   it("requires an explicit configuration file to mint an invitation", async () => {

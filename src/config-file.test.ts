@@ -22,7 +22,7 @@ describe("proxy configuration path resolution", () => {
       resolveProxyConfigPath({
         flag: "/etc/aos-ui/flag.yaml",
         getenv: env({
-          AOS_UI_PROXY_CONFIG_FILE: "/etc/aos-ui/env.yaml",
+          HARNESS_GW_CONFIG_FILE: "/etc/harness-gw/env.yaml",
           XDG_CONFIG_HOME: "/config",
           HOME: "/home/operator",
         }),
@@ -32,23 +32,23 @@ describe("proxy configuration path resolution", () => {
     expect(
       resolveProxyConfigPath({
         getenv: env({
-          AOS_UI_PROXY_CONFIG_FILE: "/etc/aos-ui/env.yaml",
+          HARNESS_GW_CONFIG_FILE: "/etc/harness-gw/env.yaml",
           XDG_CONFIG_HOME: "/config",
           HOME: "/home/operator",
         }),
       })
-    ).toEqual({ path: "/etc/aos-ui/env.yaml", explicit: true })
+    ).toEqual({ path: "/etc/harness-gw/env.yaml", explicit: true })
 
     expect(
       resolveProxyConfigPath({
         getenv: env({ XDG_CONFIG_HOME: "/config", HOME: "/home/operator" }),
       })
-    ).toEqual({ path: "/config/aos-ui/proxy.yaml", explicit: false })
+    ).toEqual({ path: "/config/harness-gw/config.yaml", explicit: false })
 
     expect(
       resolveProxyConfigPath({ getenv: env({ HOME: "/home/operator" }) })
     ).toEqual({
-      path: "/home/operator/.config/aos-ui/proxy.yaml",
+      path: "/home/operator/.config/harness-gw/config.yaml",
       explicit: false,
     })
   })
@@ -57,13 +57,13 @@ describe("proxy configuration path resolution", () => {
     expect(
       resolveProxyConfigPath({
         getenv: env({
-          AOS_UI_PROXY_CONFIG_FILE: "   ",
+          HARNESS_GW_CONFIG_FILE: "   ",
           XDG_CONFIG_HOME: "",
           HOME: "/home/operator",
         }),
       })
     ).toEqual({
-      path: "/home/operator/.config/aos-ui/proxy.yaml",
+      path: "/home/operator/.config/harness-gw/config.yaml",
       explicit: false,
     })
   })
@@ -99,20 +99,20 @@ describe("proxy configuration path resolution", () => {
       message = (error as Error).message
     }
     expect(message).toContain("--config")
-    expect(message).toContain("AOS_UI_PROXY_CONFIG_FILE")
-    expect(message).not.toContain("proxy.yaml")
+    expect(message).toContain("HARNESS_GW_CONFIG_FILE")
+    expect(message).not.toContain("config.yaml")
 
     expect(
       resolveProxyConfigPath({
         discover: false,
-        getenv: env({ AOS_UI_PROXY_CONFIG_FILE: "/etc/aos-ui/env.yaml" }),
+        getenv: env({ HARNESS_GW_CONFIG_FILE: "/etc/harness-gw/env.yaml" }),
       })
-    ).toEqual({ path: "/etc/aos-ui/env.yaml", explicit: true })
+    ).toEqual({ path: "/etc/harness-gw/env.yaml", explicit: true })
   })
 })
 
-const CONFIG_PATH = "/etc/aos-ui/proxy.yaml"
-const DISCOVERED_PATH = "/config/aos-ui/proxy.yaml"
+const CONFIG_PATH = "/etc/harness-gw/config.yaml"
+const DISCOVERED_PATH = "/config/harness-gw/config.yaml"
 const OWNER_UID = 4321
 
 type FakeEntry = {
@@ -591,10 +591,10 @@ describe("proxy configuration environment overrides", () => {
       loadProxyConfig({
         flag: CONFIG_PATH,
         getenv: env({
-          AOS_UI_PROXY_DEPLOYMENT_ID: "env-deployment",
-          AOS_UI_PROXY_LISTEN_PORT: " 4200 ",
-          AOS_UI_PROXY_RUNTIME_SESSION_IDLE_MS: "60000",
-          AOS_UI_PROXY_LIMITS_SUBSCRIBER_EVENTS: "1024",
+          HARNESS_GW_DEPLOYMENT_ID: "env-deployment",
+          HARNESS_GW_LISTEN_PORT: " 4200 ",
+          HARNESS_GW_RUNTIME_SESSION_IDLE_MS: "60000",
+          HARNESS_GW_LIMITS_SUBSCRIBER_EVENTS: "1024",
         }),
         ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
       })
@@ -609,21 +609,21 @@ describe("proxy configuration environment overrides", () => {
   it("names the variable, never the value, when an integer override is not a number", async () => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
-      getenv: env({ AOS_UI_PROXY_LISTEN_PORT: "42ab" }),
+      getenv: env({ HARNESS_GW_LISTEN_PORT: "42ab" }),
       ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
     })
-    expect(message).toContain("AOS_UI_PROXY_LISTEN_PORT")
+    expect(message).toContain("HARNESS_GW_LISTEN_PORT")
     expect(message).not.toContain("42ab")
   })
 
   it("reports an out-of-range override at its field and names the variable", async () => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
-      getenv: env({ AOS_UI_PROXY_LISTEN_PORT: "70000" }),
+      getenv: env({ HARNESS_GW_LISTEN_PORT: "70000" }),
       ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
     })
     expect(message).toContain("listen.port")
-    expect(message).toContain("AOS_UI_PROXY_LISTEN_PORT")
+    expect(message).toContain("HARNESS_GW_LISTEN_PORT")
     expect(message).not.toContain("70000")
   })
 
@@ -645,11 +645,11 @@ describe("proxy configuration environment overrides", () => {
 
     const fromEnvironment = await loadFailure({
       flag: CONFIG_PATH,
-      getenv: env({ AOS_UI_PROXY_RUNTIME_KIND: "hermez" }),
+      getenv: env({ HARNESS_GW_RUNTIME_KIND: "hermez" }),
       ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
     })
     expect(fromEnvironment).toContain("runtime.kind")
-    expect(fromEnvironment).toContain("set by AOS_UI_PROXY_RUNTIME_KIND")
+    expect(fromEnvironment).toContain("set by HARNESS_GW_RUNTIME_KIND")
     expect(fromEnvironment).not.toContain("hermez")
   })
 
@@ -658,11 +658,11 @@ describe("proxy configuration environment overrides", () => {
       loadProxyConfig({
         flag: CONFIG_PATH,
         getenv: env({
-          AOS_UI_PROXY_RUNTIME_KIND: "opencode",
-          AOS_UI_PROXY_RUNTIME_BASE_URL: "http://127.0.0.1:4096",
-          AOS_UI_PROXY_RUNTIME_DIRECTORY: "/srv/worktree",
-          AOS_UI_PROXY_RUNTIME_USERNAME: "operator",
-          AOS_UI_PROXY_RUNTIME_PASSWORD_FILE: "/run/secrets/opencode-password",
+          HARNESS_GW_RUNTIME_KIND: "opencode",
+          HARNESS_GW_RUNTIME_BASE_URL: "http://127.0.0.1:4096",
+          HARNESS_GW_RUNTIME_DIRECTORY: "/srv/worktree",
+          HARNESS_GW_RUNTIME_USERNAME: "operator",
+          HARNESS_GW_RUNTIME_PASSWORD_FILE: "/run/secrets/opencode-password",
         }),
         // An override cannot remove a file key, so the file names no branch.
         ...access({
@@ -686,12 +686,12 @@ runtime:
     const message = await loadFailure({
       flag: CONFIG_PATH,
       getenv: env({
-        AOS_UI_PROXY_RUNTIME_KIND: "opencode",
-        AOS_UI_PROXY_RUNTIME_TOKEN_FILE: "/run/secrets/hermes-token",
+        HARNESS_GW_RUNTIME_KIND: "opencode",
+        HARNESS_GW_RUNTIME_TOKEN_FILE: "/run/secrets/hermes-token",
       }),
       ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
     })
-    expect(message).toContain("AOS_UI_PROXY_RUNTIME_TOKEN_FILE")
+    expect(message).toContain("HARNESS_GW_RUNTIME_TOKEN_FILE")
     expect(message).toContain("hermes")
   })
 
@@ -700,9 +700,9 @@ runtime:
       loadProxyConfig({
         flag: CONFIG_PATH,
         getenv: env({
-          AOS_UI_PROXY_PUSH_STATE_DIR: "/var/lib/aos-ui/push",
-          AOS_UI_PROXY_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
-          AOS_UI_PROXY_PUSH_VAPID_PRIVATE_KEY_FILE:
+          HARNESS_GW_PUSH_STATE_DIR: "/var/lib/aos-ui/push",
+          HARNESS_GW_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
+          HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE:
             "/run/secrets/vapid-private-key",
         }),
         ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
@@ -720,7 +720,7 @@ runtime:
     expect(
       await loadFailure({
         flag: CONFIG_PATH,
-        getenv: env({ AOS_UI_PROXY_PUSH_STATE_DIR: "/var/lib/aos-ui/push" }),
+        getenv: env({ HARNESS_GW_PUSH_STATE_DIR: "/var/lib/aos-ui/push" }),
         ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
       })
     ).toContain("push.vapid")
@@ -731,16 +731,15 @@ runtime:
       loadProxyConfig({
         flag: CONFIG_PATH,
         getenv: env({
-          AOS_UI_PROXY_VOICE_TRANSCRIPTION_PROVIDER: "openai-compatible",
-          AOS_UI_PROXY_VOICE_TRANSCRIPTION_BASE_URL:
-            "https://voice.example.test",
-          AOS_UI_PROXY_VOICE_TRANSCRIPTION_MODEL: "synthetic-transcribe",
-          AOS_UI_PROXY_VOICE_TRANSCRIPTION_LANGUAGE: "en",
-          AOS_UI_PROXY_VOICE_SPEECH_PROVIDER: "openai-compatible",
-          AOS_UI_PROXY_VOICE_SPEECH_BASE_URL: "https://voice.example.test",
-          AOS_UI_PROXY_VOICE_SPEECH_MODEL: "synthetic-speak",
-          AOS_UI_PROXY_VOICE_SPEECH_VOICE: "synthetic-voice",
-          AOS_UI_PROXY_VOICE_SPEECH_TIMEOUT_MS: "30000",
+          HARNESS_GW_VOICE_TRANSCRIPTION_PROVIDER: "openai-compatible",
+          HARNESS_GW_VOICE_TRANSCRIPTION_BASE_URL: "https://voice.example.test",
+          HARNESS_GW_VOICE_TRANSCRIPTION_MODEL: "synthetic-transcribe",
+          HARNESS_GW_VOICE_TRANSCRIPTION_LANGUAGE: "en",
+          HARNESS_GW_VOICE_SPEECH_PROVIDER: "openai-compatible",
+          HARNESS_GW_VOICE_SPEECH_BASE_URL: "https://voice.example.test",
+          HARNESS_GW_VOICE_SPEECH_MODEL: "synthetic-speak",
+          HARNESS_GW_VOICE_SPEECH_VOICE: "synthetic-voice",
+          HARNESS_GW_VOICE_SPEECH_TIMEOUT_MS: "30000",
         }),
         ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
       })
@@ -762,7 +761,7 @@ runtime:
   it("lets the schema report an unknown runtime kind before any branch row is judged", async () => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
-      getenv: env({ AOS_UI_PROXY_RUNTIME_TOKEN_FILE: "/run/secrets/token" }),
+      getenv: env({ HARNESS_GW_RUNTIME_TOKEN_FILE: "/run/secrets/token" }),
       ...access({
         [CONFIG_PATH]: {
           source: MINIMAL_YAML.replace("kind: hermes", "kind: hermez"),
@@ -779,10 +778,10 @@ runtime:
   ])("refuses a guest override when %s", async (_case, source) => {
     const message = await loadFailure({
       flag: CONFIG_PATH,
-      getenv: env({ AOS_UI_PROXY_GUEST_LISTEN_PORT: "4101" }),
+      getenv: env({ HARNESS_GW_GUEST_LISTEN_PORT: "4101" }),
       ...access({ [CONFIG_PATH]: { source } }),
     })
-    expect(message).toContain("AOS_UI_PROXY_GUEST_LISTEN_PORT")
+    expect(message).toContain("HARNESS_GW_GUEST_LISTEN_PORT")
     expect(message).toContain("guest block")
   })
 
@@ -928,13 +927,7 @@ runtime:
       (override) => `${PROXY_ENV_PREFIX}${override.suffix}`
     )
     expect(new Set(names).size).toBe(names.length)
-    for (const reserved of [
-      "AOS_UI_PROXY_TARGET",
-      "AOS_UI_PROXY_HOST",
-      "AOS_UI_PROXY_PORT",
-      "AOS_UI_PROXY_CONFIG_FILE",
-    ])
-      expect(names).not.toContain(reserved)
+    expect(names).not.toContain("HARNESS_GW_CONFIG_FILE")
   })
 })
 
