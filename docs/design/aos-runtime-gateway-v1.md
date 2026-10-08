@@ -82,7 +82,7 @@ The following test files exist and cover the V1 acceptance criteria:
 | Tests and invariants                          | [Architecture §17–18](aos-runtime-gateway-architecture.md#17-tests-that-enforce-the-boundaries)                                                                             |
 | Hermes lifecycle detail                       | [`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md), [`TURN-LIFECYCLE.md`](../../packages/proxy/adapters/hermes/TURN-LIFECYCLE.md) |
 | Adapter obligations, five lifetimes           | [`docs/development/runtime-adapter-authoring.md`](../development/runtime-adapter-authoring.md)                                                                              |
-| Full wire table                               | [`docs/runtimes/acp.md`](../runtimes/acp.md)                                                                                                                                |
+| Full wire table                               | [`docs/runtimes/acp.md`](../protocol.md)                                                                                                                                    |
 
 ## Research basis
 

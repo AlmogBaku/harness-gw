@@ -6,7 +6,7 @@ content is collected in [§19 Target](#19-target-not-implemented).
 
 **Related references** (this doc links, not restates):
 
-- Full `_hgw/*` wire table → [`docs/runtimes/acp.md`](../runtimes/acp.md)
+- Full `_hgw/*` wire table → [`docs/runtimes/acp.md`](../protocol.md)
 - Adapter obligations and five lifetimes → [`docs/development/runtime-adapter-authoring.md`](../development/runtime-adapter-authoring.md)
 - Operator-facing summary → [`docs/architecture.md`](../architecture.md)
 - Hermes lifecycle → [`packages/proxy/adapters/hermes/README.md`](../../packages/proxy/adapters/hermes/README.md)
@@ -242,7 +242,7 @@ and logged as `acp.upgrade.origin_refused`. The per-Agent path
 never be exposed publicly. A cap of `operatorEventPeers` is enforced per socket
 mount (`cli/serve.ts:123,139`).
 
-For the full method table see [`docs/runtimes/acp.md`](../runtimes/acp.md).
+For the full method table see [`docs/runtimes/acp.md`](../protocol.md).
 
 ---
 
