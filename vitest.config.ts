@@ -1,13 +1,6 @@
 import { configDefaults, defineConfig } from "vitest/config"
 
 /**
- * The `.test.ts` files that need a DOM: they reach browser storage, history,
- * or page visibility. Every other test runs in Node, and one missing here fails
- * there on the first browser global it touches.
- */
-const domTests = ["client/connection.test.ts"]
-
-/**
  * Checks that run a build or an external tool. They change only with the
  * build or the package, so `bun run test` skips them and `bun run test:gate`
  * runs them.
@@ -35,12 +28,8 @@ export default defineConfig({
           name: "node",
           environment: "node",
           include: ["**/*.test.ts"],
-          exclude: [...domTests, ...gateTests],
+          exclude: gateTests,
         },
-      },
-      {
-        extends: true,
-        test: { name: "dom", environment: "jsdom", include: domTests },
       },
       {
         extends: true,

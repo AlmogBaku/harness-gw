@@ -1,7 +1,7 @@
 import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, onTestFinished } from "vitest"
 
-import { AOS_META_KEY } from "@aos/protocol/acp"
+import { AOS_META_KEY } from "../protocol/acp"
 
 import { harness } from "../src/acp/test-harness"
 

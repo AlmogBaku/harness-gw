@@ -7,19 +7,19 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
-import type { SlashCommand } from "@aos/protocol"
+import type { SlashCommand } from "../protocol"
 import {
   AosAvailableCommandsMetaSchema,
   AosStateMetaSchema,
   AosUsageMetaSchema,
   type AosCost,
-} from "@aos/protocol/acp"
+} from "../protocol/acp"
 
 import type {
   ComposerModelCurrent,
   ComposerModelFeed,
   ComposerTurnUsage,
-} from "@/runtime-adapters/contracts"
+} from "./workspace"
 
 import type {
   AosContext,

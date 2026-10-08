@@ -2,8 +2,7 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["DOM", "DOM.Iterable", "ES2024", "ESNext.Disposable"],
-    "types": ["bun", "node"]
+    "types": ["node"]
   },
-  "include": ["**/*.ts", "**/*.mjs"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["client/**/*.ts"]
 }

@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { ArtifactMissingError } from "@/artifacts/browser-artifact-adapter"
-
-import { McpAppFilesRefusedError } from "../contracts"
 import { AosClientError, AosRemoteClient } from "./aos-client"
-import { AosMcpAppAdapter } from "./aos-mcp-apps"
 
 const AGENT_ID = "researcher"
 const SESSION_ID = "opaque-session-1"
@@ -448,53 +444,6 @@ describe("MCP App routes", () => {
     ).toBe("Bearer invitation-token")
   })
 
-  it("addresses a published Artifact's view by its id and calls none of its tools", async () => {
-    const fetcher = appFetcher()
-    const client = new AosRemoteClient({ fetcher })
-    client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
-    const adapter = new AosMcpAppAdapter(client)
-    const target = {
-      agentId: AGENT_ID,
-      sessionId: SESSION_ID,
-      artifactId: "artifact/1",
-    }
-
-    await adapter.open(target)
-    await adapter.readResource({ ...target, uri: "ui://aos-ui/artifact" })
-    await expect(
-      adapter.callTool({ ...target, name: "refresh", arguments: {} })
-    ).rejects.toThrow("calls no tool")
-
-    const base = `/api/aos/v1/agents/researcher/sessions/opaque-session-1/artifacts/artifact%2F1/app`
-    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
-      base,
-      `${base}/resources/read`,
-    ])
-  })
-
-  it.each<
-    [string, { toolCallId: string } | { artifactId: string }, number, boolean]
-  >([
-    ["a pruned Artifact", { artifactId: "artifact-1" }, 404, true],
-    ["an Artifact with no viewer", { artifactId: "artifact-1" }, 503, false],
-    ["a tool call the Session lacks", { toolCallId: "call-1" }, 404, false],
-  ])("reads opening %s as missing: %s", async (_, subject, status, missing) => {
-    const client = new AosRemoteClient({
-      fetcher: vi.fn(async () => Response.json({}, { status })),
-    })
-    client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
-
-    const opened = new AosMcpAppAdapter(client).open({
-      agentId: AGENT_ID,
-      sessionId: SESSION_ID,
-      ...subject,
-    })
-
-    await expect(opened).rejects.toBeInstanceOf(
-      missing ? ArtifactMissingError : AosClientError
-    )
-  })
-
   it("refuses an empty tool call id before asking the proxy", async () => {
     const fetcher = appFetcher()
     const client = new AosRemoteClient({ fetcher })
@@ -548,28 +497,4 @@ describe("MCP App routes", () => {
     expect(init).toMatchObject({ method: "POST" })
     expect(init?.body).toBeUndefined()
   })
-
-  it.each([
-    [404, true],
-    [401, true],
-    [403, true],
-    [429, false],
-    [503, false],
-  ])(
-    "reads a renewal answered %i as refused for good: %s",
-    async (status, refused) => {
-      const client = new AosRemoteClient({
-        fetcher: vi.fn(async () => Response.json({}, { status })),
-      })
-      client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
-      const renewal = new AosMcpAppAdapter(client).renewFiles({
-        agentId: AGENT_ID,
-        sessionId: SESSION_ID,
-        toolCallId: "call/1",
-      })
-      await expect(renewal).rejects.toBeInstanceOf(
-        refused ? McpAppFilesRefusedError : AosClientError
-      )
-    }
-  )
 })

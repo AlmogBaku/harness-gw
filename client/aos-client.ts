@@ -11,12 +11,12 @@ import {
   SessionTranscriptionRequestSchema,
   SessionTranscriptionResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
-} from "@aos/protocol"
+} from "../protocol"
 import {
   PushInfoSchema,
   PushUnregistrationSchema,
   type PushRegistration,
-} from "@aos/protocol/push"
+} from "../protocol/push"
 import {
   CallToolResultSchema,
   McpAppFilesSchema,
@@ -27,9 +27,9 @@ import {
   type McpAppFiles,
   type McpAppResourceReadRequest,
   type McpAppToolCallRequest,
-} from "@aos/protocol/mcp-apps"
+} from "../protocol/mcp-apps"
 
-import type { AosStagedAttachment } from "./aos-attachment-adapter"
+import type { StagedAttachment } from "./workspace"
 
 /**
  * The normalized proxy's REST surface, which carries bytes and deployment
@@ -68,11 +68,20 @@ export class AosClientError extends Error {
   }
 }
 
+/** The `fetch` the client sends every request with. */
+export type Fetcher = (
+  input: RequestInfo | URL,
+  init?: RequestInit
+) => Promise<Response>
+
 export type AosRemoteClientOptions = {
-  fetcher?: typeof fetch
+  fetcher?: Fetcher
   basePath?: string
   authorization?: string
-  /** What a relative base path resolves against; the page's own by default. */
+  /**
+   * What a relative base path resolves against, for the absolute file
+   * addresses an MCP App view is handed; a browser passes its own origin.
+   */
   origin?: string
 }
 
@@ -92,7 +101,7 @@ async function dataUrl(blob: Blob) {
 }
 
 export class AosRemoteClient {
-  readonly #fetch: typeof fetch
+  readonly #fetch: Fetcher
   readonly #basePath: string
   readonly #authorization?: string
   readonly #origin?: string
@@ -102,7 +111,7 @@ export class AosRemoteClient {
     this.#fetch = options.fetcher ?? globalThis.fetch.bind(globalThis)
     this.#basePath = options.basePath ?? "/api/aos/v1"
     this.#authorization = options.authorization
-    this.#origin = options.origin ?? globalThis.location?.origin
+    this.#origin = options.origin
   }
 
   async #read<T>(
@@ -183,7 +192,7 @@ export class AosRemoteClient {
 
   async stageAttachments(
     sessionId: string,
-    attachments: readonly AosStagedAttachment[]
+    attachments: readonly StagedAttachment[]
   ) {
     const request = SessionAttachmentStageRequestSchema.safeParse({
       attachments: attachments.map(({ dataUrl, filename, mimeType, type }) =>

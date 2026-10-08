@@ -5,7 +5,7 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { AOS_PERMISSION_KIND_SESSION } from "@aos/protocol/acp"
+import { AOS_PERMISSION_KIND_SESSION } from "../protocol/acp"
 import { createAcpApprovals } from "./acp-approvals"
 import type { AcpPendingRequest } from "./types"
 

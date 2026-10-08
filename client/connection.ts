@@ -31,10 +31,9 @@ import {
   type Clock,
   type Logger,
   type Owner,
-} from "@aos/lifecycle"
+} from "../lifecycle"
 import {
   ACP_PROTOCOL_VERSION,
-  AOS_ACP_OPERATOR_PATH,
   AOS_AUTH_METHOD_INVITE,
   AOS_JSONRPC_ERRORS,
   AOS_METHODS,
@@ -53,9 +52,9 @@ import {
   AosSteerResponseSchema,
   type AosHistoryCursor,
   type AosInitializeMeta,
-} from "@aos/protocol/acp"
+} from "../protocol/acp"
 
-import { AgentUpdateError } from "../../contracts"
+import { AgentUpdateError } from "./workspace"
 import {
   CAPACITY_BACKOFF,
   HANDSHAKE_DEADLINE_MS,
@@ -66,7 +65,7 @@ import {
   STABLE_AFTER_MS,
   type RequestTier,
 } from "./limits"
-import { acpDebugEnabled, loggedStream } from "./log"
+import { loggedStream } from "./log"
 import type {
   AcpConnection,
   AcpConnectionOutage,
@@ -87,8 +86,8 @@ import type {
 const TRY_AGAIN_LATER = 1013
 const POLICY_VIOLATION = 1008
 
-/** Where a connection logs when its caller passes no logger. */
-const SILENT_LOGGER: Logger = {
+/** Where the client logs when its caller passes no logger. */
+export const SILENT_LOGGER: Logger = {
   debug: () => {},
   info: () => {},
   warn: () => {},
@@ -117,14 +116,28 @@ const NOTIFICATION_PARSERS: Readonly<Record<string, ParamsParser<unknown>>> = {
   [AOS_METHODS.notify.error]: AosErrorNotificationSchema,
 }
 
+/**
+ * What the connection hears of the page it runs in. A visible page probes a
+ * quiet transport at once, and a hidden one stops probing until it shows
+ * again; coming back online probes too.
+ */
+export type PageSignals = {
+  visible(): boolean
+  /** Calls `listener` on each change; returns the unsubscribe function. */
+  subscribe(listener: (change: "visibility" | "online") => void): () => void
+}
+
+/** A page that is always visible and never changes: no page at all. */
+const NO_PAGE: PageSignals = { visible: () => true, subscribe: () => () => {} }
+
+/** The inspector xstate hands each owner's actor, as `createOwner` takes it. */
+export type OwnerInspector = NonNullable<
+  Parameters<typeof createOwner>[1]["inspect"]
+>
+
 export type AcpConnectionOptions = {
+  /** Sent as `initialize` `info`. */
   clientInfo: { name: string; version: string }
-  /** Defaults to the same-origin operator endpoint. */
-  url?: string
-  /** Defaults to `globalThis.WebSocket`; tests inject a fake. */
-  socketConstructor?: WebSocketConstructor
-  /** Pairs in process with an agent app instead of opening a socket. */
-  connectAgent?: AgentApp
   /** Times every deadline and backoff; tests fake it. */
   clock?: Clock
   /**
@@ -132,21 +145,28 @@ export type AcpConnectionOptions = {
    * silent by default.
    */
   logger?: Logger
+  /** The page the connection runs in; none by default. */
+  page?: PageSignals
   /**
-   * The browser's compiled build id, sent as `info.version` in `initialize`.
-   * Defaults to `__AOS_BUILD_ID__` (null on the dev server). When both the
-   * browser and the proxy carry an id and they differ, the tab is reloaded
-   * once per proxy build, which `storage` remembers.
+   * Loads an inspector for the connection's owner before it opens; one that
+   * fails to load leaves the owner uninspected.
    */
-  buildId?: string | null
-  /** Called when a build id mismatch triggers a reload; tests inject a spy. */
-  reload?: () => void
-  /** Persists the reload guard across the reload; tests inject a fake. */
-  storage?: {
-    getItem(key: string): string | null
-    setItem(key: string, value: string): void
-  }
-}
+  inspector?: () => Promise<OwnerInspector | undefined>
+} & (
+  | {
+      /** The gateway's ACP WebSocket URL; see `acpSocketUrl`. */
+      url: string
+      /** Defaults to `globalThis.WebSocket`; tests inject a fake. */
+      socketConstructor?: WebSocketConstructor
+      connectAgent?: never
+    }
+  | {
+      /** Pairs in process with an agent app instead of opening a socket. */
+      connectAgent: AgentApp
+      url?: never
+      socketConstructor?: never
+    }
+)
 
 /** ACP's code for a request that needs authentication, as the SDK builds it. */
 const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
@@ -154,8 +174,6 @@ const AUTHENTICATION_REQUIRED = RequestError.authRequired().code
 const RESOURCE_NOT_FOUND = RequestError.resourceNotFound().code
 /** The code an `_aos/error` names a Session the provider no longer has with. */
 const NOT_FOUND_NOTICE = "not_found"
-/** sessionStorage key naming the proxy build the tab last reloaded for. */
-const RELOADED_FOR_BUILD_KEY = "aos-reloaded-for-build"
 
 function codeOf(error: unknown) {
   return typeof error === "object" && error !== null && "code" in error
@@ -221,9 +239,9 @@ function aosMetaOf(meta: unknown): Record<string, unknown> | undefined {
   return parsed.success ? parsed.data[AOS_META_KEY] : undefined
 }
 
-/** One of the proxy's ACP listener paths as a same-origin WebSocket URL. */
-export function acpSocketUrl(path: string) {
-  const url = new URL(path, window.location.href)
+/** One of the gateway's ACP listener paths as a WebSocket URL from `base`. */
+export function acpSocketUrl(path: string, base: string) {
+  const url = new URL(path, base)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   return url.toString()
 }
@@ -559,17 +577,8 @@ export function createAcpConnection(
     connectAgent,
     clock = defaultClock,
     logger = SILENT_LOGGER,
-    reload,
-    storage,
+    page = NO_PAGE,
   } = options
-  // __AOS_BUILD_ID__ is injected by Vite's define plugin at build time.
-  // It is not available in the test environment, so guard with typeof.
-  const buildId =
-    "buildId" in options
-      ? options.buildId
-      : typeof __AOS_BUILD_ID__ !== "undefined"
-        ? (__AOS_BUILD_ID__ ?? null)
-        : null
   const notificationListeners = new Map<
     string,
     Set<(params: unknown) => void>
@@ -620,7 +629,7 @@ export function createAcpConnection(
   let status: AcpConnectionStatus = "connecting"
   let outage: AcpConnectionOutage | undefined
   let started = false
-  /** Settles once a debug dev build has loaded its inspector and opened. */
+  /** Settles once the inspector has loaded and the owner opened. */
   let inspecting: Promise<void> | undefined
   let ended = false
   /** Opens, recovers and ends transports; `start` creates it. */
@@ -679,11 +688,6 @@ export function createAcpConnection(
       }
   }
 
-  /** Whether the browser tab is currently visible. */
-  function isVisible() {
-    return globalThis.document?.visibilityState !== "hidden"
-  }
-
   /**
    * (Re)arms the inbound-silence timer after each received frame. When the
    * page is not visible the timer is cleared; the `visibilitychange` handler
@@ -692,7 +696,7 @@ export function createAcpConnection(
   function armSilenceTimer() {
     clock.clearTimeout(silenceTimer)
     silenceTimer = undefined
-    if (!isVisible() || ended) return
+    if (!page.visible() || ended) return
     silenceTimer = clock.setTimeout(() => {
       silenceTimer = undefined
       sendLivenessProbeAsync()
@@ -913,13 +917,7 @@ export function createAcpConnection(
   async function handshake(connection: ClientConnection) {
     const response = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
-      info: {
-        name: clientInfo.name,
-        // Send the compiled build id so the proxy can detect a stale tab.
-        // On the dev server and in the service worker, buildId is null and
-        // the proxy's version acts as the AOS extension version instead.
-        version: buildId ?? clientInfo.version,
-      },
+      info: clientInfo,
       // The question composer answers form elicitations, so the proxy asks
       // this client its Session's questions. This client pages older history
       // itself, so a from-start resume may replay only the newest page.
@@ -929,21 +927,6 @@ export function createAcpConnection(
       },
     })
     const meta = AosInitializeMetaSchema.parse(aosMetaOf(response._meta))
-    // Both sides carry a build id: a mismatch means the proxy serves another
-    // bundle. The tab reloads once per proxy build, so a reload that still
-    // loads the old bundle cannot loop, and a later deployment reloads again.
-    const proxyBuildId = response.info?.version
-    if (
-      buildId &&
-      proxyBuildId !== undefined &&
-      proxyBuildId !== buildId &&
-      reload &&
-      storage &&
-      storage.getItem(RELOADED_FOR_BUILD_KEY) !== proxyBuildId
-    ) {
-      storage.setItem(RELOADED_FOR_BUILD_KEY, proxyBuildId)
-      reload()
-    }
     settleInitialized?.(meta)
     settleInitialized = undefined
     failInitialized = undefined
@@ -1255,23 +1238,20 @@ export function createAcpConnection(
   function openTransport() {
     const opened = Promise.withResolvers<void>()
     let closeCode: number | undefined
-    const connection = connectAgent
-      ? app.connect(connectAgent)
+    const connection = options.connectAgent
+      ? app.connect(options.connectAgent)
       : app.connect(
           loggedStream(
             trackedInbound(
-              createWebSocketStream<AnyWireMessage>(
-                options.url ?? acpSocketUrl(AOS_ACP_OPERATOR_PATH),
-                {
-                  WebSocket: observedSocket(
-                    options.socketConstructor ?? globalThis.WebSocket,
-                    () => opened.resolve(),
-                    (code) => {
-                      closeCode = code
-                    }
-                  ),
-                }
-              ),
+              createWebSocketStream<AnyWireMessage>(options.url, {
+                WebSocket: observedSocket(
+                  options.socketConstructor ?? globalThis.WebSocket,
+                  () => opened.resolve(),
+                  (code) => {
+                    closeCode = code
+                  }
+                ),
+              }),
               onInbound
             ),
             logger
@@ -1337,17 +1317,9 @@ export function createAcpConnection(
   function start() {
     if (started || ended) return
     started = true
-    // Dev builds only: Rollup drops this branch, and the inspector with it, in
-    // production. An inspector that cannot load leaves the owner uninspected.
-    if (
-      import.meta.env.DEV &&
-      acpDebugEnabled(
-        globalThis.location?.search ?? "",
-        globalThis.sessionStorage
-      )
-    )
-      inspecting = import("@statelyai/inspect")
-        .then(({ createBrowserInspector }) => createBrowserInspector().inspect)
+    if (options.inspector)
+      inspecting = options
+        .inspector()
         .catch((err: unknown) => {
           logger.debug({ err }, "acp.inspector.load_failed")
           return undefined
@@ -1360,31 +1332,19 @@ export function createAcpConnection(
     if (ended) return
     owner = createOwner(machine, { logger, clock, bindings: {}, inspect })
     owner.stack.defer(shutdown)
-    const handleVisibilityChange = () => {
-      if (globalThis.document?.visibilityState === "hidden") {
+    const unsubscribePage = page.subscribe((change) => {
+      if (change === "visibility" && !page.visible()) {
         // Disarm while hidden; the page becoming visible probes at once.
         clock.clearTimeout(silenceTimer)
         silenceTimer = undefined
       } else if (status === "ready") {
         sendLivenessProbeAsync()
       }
-    }
-    const handleOnline = () => {
-      if (status === "ready") sendLivenessProbeAsync()
-    }
-    globalThis.document?.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange
-    )
-    globalThis.addEventListener?.("online", handleOnline)
+    })
     owner.stack.defer(() => {
       clock.clearTimeout(silenceTimer)
       silenceTimer = undefined
-      globalThis.document?.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange
-      )
-      globalThis.removeEventListener?.("online", handleOnline)
+      unsubscribePage()
     })
   }
 

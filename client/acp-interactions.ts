@@ -1,9 +1,9 @@
-import { AOS_META_KEY, AosElicitationMetaSchema } from "@aos/protocol/acp"
+import { AOS_META_KEY, AosElicitationMetaSchema } from "../protocol/acp"
 import type {
   RuntimeInteractionAdapter,
   RuntimeQuestion,
   RuntimeQuestionRequest,
-} from "@/runtime-adapters/contracts"
+} from "./workspace"
 import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**

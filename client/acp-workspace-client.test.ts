@@ -10,18 +10,18 @@ import {
   INTERACTION_PROTOCOL,
   type AgentCatalogEntry,
   type RuntimeInfo,
-} from "@aos/protocol"
+} from "../protocol"
 import {
   AOS_METHODS,
   AOS_META_KEY,
   AOS_PLAN_ID,
   AOS_STOP_REASONS,
   type AosAvailableCommandsMetaSchema,
-} from "@aos/protocol/acp"
+} from "../protocol/acp"
 
 import { useFakeClock } from "../test/support/fake-clock"
 
-import type { SessionMetadata } from "../../contracts"
+import type { SessionMetadata } from "./workspace"
 import { sessionCapabilities } from "./test-capabilities"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
 import type {

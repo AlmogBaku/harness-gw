@@ -4,7 +4,7 @@ import {
   AOS_META_KEY,
   AOS_PERMISSION_KIND_SESSION,
   AosPermissionMetaSchema,
-} from "@aos/protocol/acp"
+} from "../protocol/acp"
 
 import type { AcpConnection, AcpPendingRequest } from "./types"
 

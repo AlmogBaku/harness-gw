@@ -5,8 +5,8 @@ import {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import pino from "pino/browser.js"
 
-import type { LogFields, Logger } from "@aos/lifecycle"
-import { AOS_META_KEY } from "@aos/protocol/acp"
+import type { LogFields, Logger } from "../lifecycle"
+import { AOS_META_KEY } from "../protocol/acp"
 
 /**
  * The ACP client's logging. A tab logs only warnings and errors until its URL
@@ -52,16 +52,6 @@ export function createAcpLogger({
       formatters: { level: (label) => ({ level: label }) },
       ...(write && { write: (line: object) => write(line as LogFields) }),
     },
-  })
-}
-
-/** This tab's ACP logger. */
-export function tabAcpLogger() {
-  return createAcpLogger({
-    debug: acpDebugEnabled(
-      globalThis.location.search,
-      globalThis.sessionStorage
-    ),
   })
 }
 

@@ -6,7 +6,7 @@
 import { describe, it } from "vitest"
 import type { AnyStateMachine } from "xstate"
 
-import { defaultClock } from "@aos/lifecycle"
+import { defaultClock } from "../../lifecycle"
 import { captureLogs } from "../../test/support/log-capture"
 import {
   assertBounded,

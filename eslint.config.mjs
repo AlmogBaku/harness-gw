@@ -10,6 +10,17 @@ const styleAssertionMessage =
 /** The gateway's own code, which the client must never reach. */
 const gatewayImports = ["../src", "../src/**", "../../src/**"]
 
+/** The page's own state, which the client is handed instead of reading. */
+const pageGlobals = [
+  "window",
+  "document",
+  "location",
+  "history",
+  "navigator",
+  "sessionStorage",
+  "localStorage",
+]
+
 export default defineConfig([
   globalIgnores([
     "dist/**",
@@ -43,7 +54,17 @@ export default defineConfig([
     files: ["client/**/*.ts"],
     ignores: ["client/**/*.test.ts"],
     rules: {
-      "no-restricted-globals": ["error", "process"],
+      // Decision 5: the page arrives as options, so the client runs anywhere.
+      "no-restricted-globals": ["error", "process", ...pageGlobals],
+      "no-restricted-properties": [
+        "error",
+        ...[...pageGlobals, "addEventListener"].map((property) => ({
+          object: "globalThis",
+          property,
+          message:
+            "The page arrives as an option; the client reads no page global.",
+        })),
+      ],
       "no-restricted-imports": [
         "error",
         {

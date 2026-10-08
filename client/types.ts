@@ -10,7 +10,7 @@ import type {
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
-import type { AgentCatalogResponseSchema } from "@aos/protocol"
+import type { AgentCatalogResponseSchema } from "../protocol"
 import type {
   AosAgentUpdateRequest,
   AosAgentUpdateResponseSchema,
@@ -22,7 +22,7 @@ import type {
   AosSessionUpdateRequestSchema,
   AosSteerRequestSchema,
   AosSteerResponseSchema,
-} from "@aos/protocol/acp"
+} from "../protocol/acp"
 
 /**
  * The browser-side seam over one ACP v2 WebSocket connection to the proxy.

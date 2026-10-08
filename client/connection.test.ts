@@ -6,7 +6,7 @@ import {
   type SessionConfigOption,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk/experimental/v2"
-import { describe, expect, it, onTestFinished, vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import {
@@ -18,9 +18,9 @@ import {
   AOS_STOP_REASONS,
   AosReplayBeforeSchema,
   type AosHistoryCursor,
-} from "@aos/protocol/acp"
+} from "../protocol/acp"
 
-import { AgentUpdateError } from "@/runtime-adapters/contracts"
+import { AgentUpdateError } from "./workspace"
 
 import { useFakeClock } from "../test/support/fake-clock"
 import { captureLogs } from "../test/support/log-capture"
@@ -85,8 +85,6 @@ function createProxyAgent(
     }
     /** Holds each plain resume open briefly, as a real rejoin takes time. */
     slowResume?: boolean
-    /** The build id the proxy answers `initialize` with. */
-    buildId?: string
     /** The JSON-RPC code an Agent update is refused with. */
     refuseAgentUpdate?: number
   } = {}
@@ -102,7 +100,7 @@ function createProxyAgent(
       record("initialize", params)
       return {
         protocolVersion: 2,
-        info: { name: "aos-proxy", version: options.buildId ?? "9.9.9" },
+        info: { name: "aos-proxy", version: "9.9.9" },
         _meta: {
           [AOS_META_KEY]: {
             version: 1,
@@ -332,17 +330,14 @@ describe("ACP connection", () => {
     await expect(connection.initialized).rejects.toThrow()
   })
 
-  it("holds a first request until the debug inspector settles, and runs without one that cannot load", async () => {
-    vi.doMock("@statelyai/inspect", () => {
-      throw new Error("The inspector is unavailable")
+  it("holds a first request until the inspector settles, and runs without one that cannot load", async () => {
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      connectAgent: createProxyAgent().app,
+      inspector: () =>
+        Promise.reject(new Error("The inspector is unavailable")),
     })
-    globalThis.history.replaceState(null, "", "?debug=acp")
-    onTestFinished(() => {
-      vi.doUnmock("@statelyai/inspect")
-      globalThis.history.replaceState(null, "", "/")
-      globalThis.sessionStorage.clear()
-    })
-    const connection = connectInProcess(createProxyAgent())
+    connection.start()
 
     await expect(connection.listAgents()).resolves.toBeDefined()
     connection.close()
@@ -1041,62 +1036,5 @@ describe("ACP connection", () => {
     expect(proxy.callsOf(methods.agent.auth.login)).toHaveLength(2)
     expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
     expect(pipe.sockets).toHaveLength(2)
-  })
-})
-
-describe("build id handshake", () => {
-  /** One tab's storage, which outlives the reloads it triggers. */
-  function tabStorage() {
-    const stored = new Map<string, string>()
-    return {
-      getItem: (key: string) => stored.get(key) ?? null,
-      setItem: (key: string, value: string) => void stored.set(key, value),
-    }
-  }
-
-  async function handshake(options: {
-    buildId: string | null
-    proxyBuildId: string
-    reload: () => void
-    storage: ReturnType<typeof tabStorage>
-  }) {
-    const connection = createAcpConnection({
-      clientInfo: CLIENT_INFO,
-      connectAgent: createProxyAgent({ buildId: options.proxyBuildId }).app,
-      buildId: options.buildId,
-      reload: options.reload,
-      storage: options.storage,
-    })
-    connection.start()
-    await connection.initialized
-    connection.close()
-  }
-
-  it("reloads once for each proxy build that differs from the tab's", async () => {
-    const reload = vi.fn()
-    const storage = tabStorage()
-    const tab = { buildId: "build-a", reload, storage }
-
-    await handshake({ ...tab, proxyBuildId: "build-b" })
-    // The reload still loaded the old bundle: no second reload, so no loop.
-    await handshake({ ...tab, proxyBuildId: "build-b" })
-    expect(reload).toHaveBeenCalledTimes(1)
-
-    // A later deployment reloads the same long-lived tab again.
-    await handshake({ ...tab, proxyBuildId: "build-c" })
-    expect(reload).toHaveBeenCalledTimes(2)
-  })
-
-  it("skips the check when the browser has no build id", async () => {
-    const reload = vi.fn()
-
-    await handshake({
-      buildId: null,
-      proxyBuildId: "build-b",
-      reload,
-      storage: tabStorage(),
-    })
-
-    expect(reload).not.toHaveBeenCalled()
   })
 })

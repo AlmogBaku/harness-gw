@@ -3,28 +3,24 @@ import {
   defaultClock,
   type Clock,
   type Logger,
-} from "@aos/lifecycle"
-import { tabAcpLogger } from "./log"
-
-// Lazy logger for background error reporting.
-let _clientLog: Logger | undefined
-const clientLog = () => (_clientLog ??= tabAcpLogger())
-import { AOS_METHODS, type AosSessionInfoMeta } from "@aos/protocol/acp"
+} from "../lifecycle"
+import { AOS_METHODS, type AosSessionInfoMeta } from "../protocol/acp"
 import type {
   RuntimeInfo,
   SessionModelUpdateRequest,
   SessionModelUpdateResponse,
-} from "@aos/protocol"
+} from "../protocol"
 
 import type {
   AgentUpdate,
   SessionActionCapabilities,
   SessionCreationOptions,
-} from "../../contracts"
+} from "./workspace"
 import type { AosRemoteClient } from "./aos-client"
 import { createAcpComposerStore } from "./acp-workspace-client-composer"
 import { createAcpSessionStore, rowOf } from "./acp-workspace-client-sessions"
 import type { AcpConnection } from "./types"
+import { SILENT_LOGGER } from "./connection"
 
 /**
  * The workspace surface over one ACP connection: Agent and Session ownership,
@@ -67,6 +63,8 @@ export type AcpWorkspaceClientOptions = {
   now?: () => number
   /** Runs the relist debounce and its retry backoff. */
   clock?: Clock
+  /** Where background failures are logged; silent by default. */
+  logger?: Logger
 }
 
 export function createAcpWorkspaceClient({
@@ -75,13 +73,14 @@ export function createAcpWorkspaceClient({
   agentIdFor,
   now,
   clock = defaultClock,
+  logger: clientLog = SILENT_LOGGER,
 }: AcpWorkspaceClientOptions) {
   const store = createAcpSessionStore({
     connection,
     ...(now ? { now } : {}),
     onTurnFinished: (sessionId) => {
       reportCreatedAgents(sessionId).catch((err: unknown) =>
-        clientLog().warn({ err }, "agent.report_created_failed")
+        clientLog.warn({ err }, "agent.report_created_failed")
       )
     },
   })
@@ -289,7 +288,7 @@ export function createAcpWorkspaceClient({
     relistTimer = clock.setTimeout(() => {
       relistTimer = undefined
       reliableListSessions().catch((err: unknown) =>
-        clientLog().warn({ err }, "sessions.relist_failed")
+        clientLog.warn({ err }, "sessions.relist_failed")
       )
     }, CATALOG_RELIST_DEBOUNCE_MS)
   }

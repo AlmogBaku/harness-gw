@@ -12,14 +12,14 @@ import {
   AosSessionInfoMetaSchema,
   type AosActivityNotification,
   type AosSessionInfoMeta,
-} from "@aos/protocol/acp"
+} from "../protocol/acp"
 
 import type {
   SessionMetadata,
   SessionStatus,
   TodoItem,
   WorkspaceActivityEvent,
-} from "../../contracts"
+} from "./workspace"
 import { subscribeAosNotification } from "./aos-notification"
 import type { AcpConnection } from "./types"
 

@@ -5,15 +5,9 @@
  */
 import { onTestFinished, vi } from "vitest"
 
-import type { AgentCatalogResponse } from "@aos/protocol"
+import type { AgentCatalogResponse } from "../../protocol"
 
 import { createAcpConnection } from "../connection"
-import {
-  applyUpdate,
-  clearTranscript,
-  initialProjectorState,
-  replacedTurns,
-} from "../session-projector"
 import type { AcpConnection } from "../types"
 import { PipedSocket, pipedSockets } from "../test-socket"
 
@@ -92,39 +86,65 @@ export const methodsOf = (frames: Frame[], session: string) =>
     frame.params?.sessionId === session && frame.method ? [frame.method] : []
   )
 
+type Recorded = { role: string; text: string }
+
+const ROLES: Readonly<Record<string, string>> = {
+  user_message: "user",
+  user_message_chunk: "user",
+  agent_message: "assistant",
+  agent_message_chunk: "assistant",
+}
+
+const textOf = (content: unknown): string =>
+  Array.isArray(content)
+    ? content.map(textOf).join("")
+    : typeof content === "object" &&
+        content !== null &&
+        "type" in content &&
+        content.type === "text" &&
+        "text" in content &&
+        typeof content.text === "string"
+      ? content.text
+      : ""
+
 /**
- * Subscribes to a Session as the thread does, folding its updates with the
- * session projector and letting a from-start replay replace what it resends
- * once it lands. Reads the transcript as `role: text`, one line per message.
+ * Records what the connection hands a Session's subscriber: each message's
+ * text by its id, a whole message replacing its text and a chunk appending
+ * to it, and a from-start replay replacing everything before it once its
+ * first update lands or it settles replayed. Reads the transcript as
+ * `role: text`, one line per message.
  */
 export function watchTranscript(
   connection: AcpConnection,
   { agentId, sessionId }: { agentId: string; sessionId: string }
 ) {
-  let state = initialProjectorState
-  let replacing: ReadonlySet<string> | undefined
+  const messages = new Map<string, Recorded>()
+  let replacing = false
   connection.subscribe(sessionId, {
     agentId,
-    update: (update, meta) => {
-      const base = replacing ? clearTranscript(state, replacing) : state
-      replacing = undefined
-      state = applyUpdate(base, update, meta)
+    update: (update) => {
+      if (replacing) messages.clear()
+      replacing = false
+      const role = ROLES[update.sessionUpdate]
+      if (!role || !("messageId" in update)) return
+      const id = update.messageId
+      if (typeof id !== "string" || !id) return
+      const text = textOf("content" in update ? update.content : undefined)
+      const whole = !update.sessionUpdate.endsWith("_chunk")
+      const before = messages.get(id)?.text ?? ""
+      messages.set(id, {
+        role,
+        text: whole ? text : before + text,
+      })
     },
     replay: () => {
-      const replaced = replacedTurns(state)
-      replacing = replaced
+      replacing = true
       return (replayed) => {
-        if (replacing !== replaced) return
-        replacing = undefined
-        if (replayed) state = clearTranscript(state, replaced)
+        if (replacing && replayed) messages.clear()
+        replacing = false
       }
     },
   })
   return () =>
-    state.messages.map(({ role, parts }) => {
-      const text = parts.flatMap((part) =>
-        "block" in part && part.block.type === "text" ? [part.block.text] : []
-      )
-      return `${role}: ${text.join("")}`
-    })
+    [...messages.values()].map(({ role, text }) => `${role}: ${text}`)
 }

@@ -4,7 +4,7 @@ import { AGENT, harness, SESSION, sessionRow } from "../../src/acp/test-harness"
 import { providerSessionId, sessionId } from "../../src/core/ids"
 import { useFakeClock } from "../../test/support/fake-clock"
 
-import { AOS_METHODS } from "@aos/protocol/acp"
+import { AOS_METHODS } from "../../protocol/acp"
 
 import {
   LIVENESS_SILENCE_MS,

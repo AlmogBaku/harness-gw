@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2023", "ESNext.Disposable"],
+    "lib": ["ES2024", "ESNext.Disposable"],
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
