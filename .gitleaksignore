@@ -1,0 +1,7 @@
+# Synthetic test values: the RFC 6455 sample WebSocket key, and made-up
+# credentials the redaction tests must catch.
+ebbf9c901d6da8d74606e0e63c576f7ac3f2bdba:src/credentials.test.ts:curl-auth-header:9
+083a2537bcf9663b9276751ded1c5244a2c0466e:src/server.test.ts:generic-api-key:17
+dd59174bf13825c22e1633dd5c9504a63f38b974:test/support/acp-bridge-socket.ts:generic-api-key:26
+8f58290518f46c2777fac11c304266b109c00959:src/adapters/hermes/tool-data.test.ts:generic-api-key:331
+88492f363b0aacceba1a8b779005c31d74e69636:src/server.bun-spec.ts:generic-api-key:204
