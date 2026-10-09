@@ -1834,14 +1834,13 @@ export function runWireListenerContract(
           })
           await until(clock, extras.initialize())
 
+          // The login verifies the token with real crypto, so stepping the
+          // fake clock meanwhile can pass the handshake deadline under load.
           await expect(
-            until(
-              clock,
-              extras.connection.agent.request(methods.agent.auth.login, {
-                methodId: HGW_AUTH_METHOD_INVITE,
-                _meta: { [HGW_META_KEY]: { token } },
-              })
-            )
+            extras.connection.agent.request(methods.agent.auth.login, {
+              methodId: HGW_AUTH_METHOD_INVITE,
+              _meta: { [HGW_META_KEY]: { token } },
+            })
           ).resolves.toBeTypeOf("object")
         })
       )
