@@ -112,7 +112,7 @@ flowchart TB
   LC -.- OC
 ```
 
-`createConfiguredProxy` (`src/composition.ts`) loads secrets once and
+`createConfiguredGateway` (`src/composition.ts`) loads secrets once and
 constructs one `RuntimeInstance` shared by every listener.
 
 ---
@@ -479,7 +479,7 @@ global cap (`src/config.ts`).
 
 **Status: Implemented**
 
-`ProxyConfig` (`src/config.ts`): `listen` (host union `{127.0.0.1,::1,0.0.0.0,::}`
+`GatewayConfig` (`src/config.ts`): `listen` (host union `{127.0.0.1,::1,0.0.0.0,::}`
 
 - port; wide hosts require `exposure: "private-container"`);
   `publicOrigin` (HTTPS or loopback HTTP); `allowedOrigins` (defaults to
@@ -487,9 +487,9 @@ global cap (`src/config.ts`).
   (discriminated union `kind ∈ {hermes,openclaw,opencode}`); `guest` must use a
   separate origin and listener; `shutdownGraceMs`.
 
-`parseProxyConfig` stays opaque for library callers: it rejects the whole
+`parseGatewayConfig` stays opaque for library callers: it rejects the whole
 config with `"Invalid proxy configuration"` so rejected input containing
-secrets is never logged. The startup path is different. `loadProxyConfig` in
+secrets is never logged. The startup path is different. `loadGatewayConfig` in
 `src/config-file.ts` resolves the path (via `HARNESS_GW_CONFIG_FILE` or the
 discovered `${XDG_CONFIG_HOME:-$HOME/.config}/harness-gw/config.yaml`), checks
 the file, parses the YAML, merges defaults and `HARNESS_GW_*` overrides, and

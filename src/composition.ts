@@ -7,7 +7,7 @@ import {
   readRuntimeCredentials,
   type RuntimeFactory,
 } from "./adapters/create-runtime"
-import { createProxyApp } from "./app"
+import { createGatewayApp } from "./app"
 import { createFilePassService } from "./auth/file-pass"
 import { createAppFileCalls } from "./core/app-files"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
@@ -18,9 +18,9 @@ import {
 } from "./auth/guest-invitation"
 import {
   listenerOrigins,
-  parseProxyConfig,
+  parseGatewayConfig,
   type McpAppsConfig,
-  type ProxyConfig,
+  type GatewayConfig,
   type VoiceConfig,
 } from "./config"
 import type { McpServerOverrides } from "./mcp-apps/client"
@@ -45,7 +45,7 @@ import {
 } from "./voice/openai-compatible"
 import { withVoiceProviders, type VoiceProviders } from "./voice/runtime"
 
-export type ConfiguredProxyDependencies = {
+export type ConfiguredGatewayDependencies = {
   runtimeFactory?: RuntimeFactory
   logger: Logger
   /** The credential values the log masks; every secret read here joins it. */
@@ -148,10 +148,10 @@ async function readMcpServerOverrides(
  * notification.
  */
 async function createPushDelivery(
-  push: NonNullable<ProxyConfig["push"]>,
+  push: NonNullable<GatewayConfig["push"]>,
   runtimeInstance: RuntimeInstance,
   sessionRows: SessionRows,
-  dependencies: ConfiguredProxyDependencies,
+  dependencies: ConfiguredGatewayDependencies,
   clock: { now?: () => number },
   readers: SecretReaders
 ) {
@@ -183,7 +183,7 @@ async function createPushDelivery(
  * uses, and constructs nothing: `config check` fails on a file `serve` would.
  */
 export async function checkConfiguredSecrets(input: unknown) {
-  const config = parseProxyConfig(input)
+  const config = parseGatewayConfig(input)
   const credentials = new CredentialValues()
   const readers: SecretReaders = {
     secret: readSecretFile,
@@ -206,11 +206,11 @@ export async function checkConfiguredSecrets(input: unknown) {
 }
 
 /** Loads secrets once and constructs one runtime shared by every listener. */
-export async function createConfiguredProxy(
+export async function createConfiguredGateway(
   input: unknown,
-  dependencies: ConfiguredProxyDependencies
+  dependencies: ConfiguredGatewayDependencies
 ) {
-  const config = parseProxyConfig(input)
+  const config = parseGatewayConfig(input)
   /** One injected clock, in the shape every constructed service takes it. */
   const clock =
     dependencies.clock === undefined ? {} : { now: dependencies.clock }
@@ -367,7 +367,7 @@ export async function createConfiguredProxy(
     ...(push ? { presence: push.presence } : {}),
     ...clock,
   })
-  const app = createProxyApp({
+  const app = createGatewayApp({
     runtimeInstance,
     attachmentStages,
     files,

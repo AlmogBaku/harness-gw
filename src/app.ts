@@ -47,7 +47,7 @@ export type HealthReading = {
   >
 }
 
-export type ProxyAppOptions = {
+export type GatewayAppOptions = {
   runtimeInstance: RuntimeInstance
   readiness?: () => Promise<"ready" | "not-ready">
   health: () => HealthReading
@@ -100,7 +100,7 @@ const securityHeaders = {
   "x-frame-options": "DENY",
 } as const
 
-export function createProxyApp(options: ProxyAppOptions) {
+export function createGatewayApp(options: GatewayAppOptions) {
   const app = new Hono<{ Variables: { requestId: string } }>()
   const clock = options.clock ?? Date.now
   const runtime = options.runtimeInstance.runtime

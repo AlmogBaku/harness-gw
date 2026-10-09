@@ -2,13 +2,13 @@
 
 import { describe, expect, it } from "vitest"
 
-import { parseProxyConfig } from "./config"
+import { parseGatewayConfig } from "./config"
 import {
-  loadProxyConfig,
+  loadGatewayConfig,
   PROXY_ENV_OVERRIDES,
   PROXY_ENV_PREFIX,
   GatewayConfigurationError,
-  resolveProxyConfigPath,
+  resolveGatewayConfigPath,
 } from "./config-file"
 
 /** Every test reads its own synthetic environment; none reads the real one. */
@@ -19,7 +19,7 @@ function env(values: Record<string, string | undefined>) {
 describe("proxy configuration path resolution", () => {
   it("prefers the flag, then the environment, then the XDG default", () => {
     expect(
-      resolveProxyConfigPath({
+      resolveGatewayConfigPath({
         flag: "/etc/aos-ui/flag.yaml",
         getenv: env({
           HARNESS_GW_CONFIG_FILE: "/etc/harness-gw/env.yaml",
@@ -30,7 +30,7 @@ describe("proxy configuration path resolution", () => {
     ).toEqual({ path: "/etc/aos-ui/flag.yaml", explicit: true })
 
     expect(
-      resolveProxyConfigPath({
+      resolveGatewayConfigPath({
         getenv: env({
           HARNESS_GW_CONFIG_FILE: "/etc/harness-gw/env.yaml",
           XDG_CONFIG_HOME: "/config",
@@ -40,13 +40,13 @@ describe("proxy configuration path resolution", () => {
     ).toEqual({ path: "/etc/harness-gw/env.yaml", explicit: true })
 
     expect(
-      resolveProxyConfigPath({
+      resolveGatewayConfigPath({
         getenv: env({ XDG_CONFIG_HOME: "/config", HOME: "/home/operator" }),
       })
     ).toEqual({ path: "/config/harness-gw/config.yaml", explicit: false })
 
     expect(
-      resolveProxyConfigPath({ getenv: env({ HOME: "/home/operator" }) })
+      resolveGatewayConfigPath({ getenv: env({ HOME: "/home/operator" }) })
     ).toEqual({
       path: "/home/operator/.config/harness-gw/config.yaml",
       explicit: false,
@@ -55,7 +55,7 @@ describe("proxy configuration path resolution", () => {
 
   it("treats an empty or whitespace-only environment value as unset", () => {
     expect(
-      resolveProxyConfigPath({
+      resolveGatewayConfigPath({
         getenv: env({
           HARNESS_GW_CONFIG_FILE: "   ",
           XDG_CONFIG_HOME: "",
@@ -70,7 +70,7 @@ describe("proxy configuration path resolution", () => {
 
   it("rejects a relative XDG_CONFIG_HOME by name", () => {
     expect(() =>
-      resolveProxyConfigPath({
+      resolveGatewayConfigPath({
         getenv: env({ XDG_CONFIG_HOME: "relative/config", HOME: "/home/o" }),
       })
     ).toThrow(/XDG_CONFIG_HOME/u)
@@ -79,7 +79,7 @@ describe("proxy configuration path resolution", () => {
   it("names both variables when neither XDG_CONFIG_HOME nor HOME is set", () => {
     let message = ""
     try {
-      resolveProxyConfigPath({ getenv: env({}) })
+      resolveGatewayConfigPath({ getenv: env({}) })
     } catch (error) {
       message = (error as Error).message
     }
@@ -91,7 +91,7 @@ describe("proxy configuration path resolution", () => {
   it("does not discover a path for a command that requires an explicit one", () => {
     let message = ""
     try {
-      resolveProxyConfigPath({
+      resolveGatewayConfigPath({
         discover: false,
         getenv: env({ XDG_CONFIG_HOME: "/config", HOME: "/home/operator" }),
       })
@@ -103,7 +103,7 @@ describe("proxy configuration path resolution", () => {
     expect(message).not.toContain("config.yaml")
 
     expect(
-      resolveProxyConfigPath({
+      resolveGatewayConfigPath({
         discover: false,
         getenv: env({ HARNESS_GW_CONFIG_FILE: "/etc/harness-gw/env.yaml" }),
       })
@@ -156,16 +156,16 @@ function access(entries: Record<string, FakeEntry>) {
 }
 
 /** Loads a configuration expected to be rejected, and reports the rejection. */
-async function loadError(options: Parameters<typeof loadProxyConfig>[0]) {
+async function loadError(options: Parameters<typeof loadGatewayConfig>[0]) {
   try {
-    await loadProxyConfig(options)
+    await loadGatewayConfig(options)
   } catch (error) {
     return error as Error
   }
   throw new Error("the configuration was expected to be rejected")
 }
 
-async function loadFailure(options: Parameters<typeof loadProxyConfig>[0]) {
+async function loadFailure(options: Parameters<typeof loadGatewayConfig>[0]) {
   const error = await loadError(options)
   expect(error).toBeInstanceOf(GatewayConfigurationError)
   return error.message
@@ -230,7 +230,7 @@ const MINIMAL_CONFIG = {
 describe("proxy configuration file reading", () => {
   it("reads an explicit file the current user owns", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({}),
         ...access({ [CONFIG_PATH]: { source: COMPLETE_YAML } }),
@@ -240,7 +240,7 @@ describe("proxy configuration file reading", () => {
 
   it("accepts a root-owned read-only file, as a container config mount is", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({}),
         ...access({
@@ -400,7 +400,7 @@ describe("proxy configuration file reading", () => {
 
   it("accepts a file of exactly the size limit", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({}),
         ...access({
@@ -452,7 +452,7 @@ describe("proxy configuration file reading", () => {
 describe("proxy configuration defaults and merging", () => {
   it("fills every default a minimal file leaves out", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({}),
         ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
@@ -462,7 +462,7 @@ describe("proxy configuration defaults and merging", () => {
 
   it("merges a partial block instead of replacing it, and never mutates the defaults", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({}),
         ...access({
@@ -472,7 +472,7 @@ describe("proxy configuration defaults and merging", () => {
     ).resolves.toMatchObject({ listen: { host: "127.0.0.1", port: 4200 } })
 
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({}),
         ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
@@ -481,7 +481,7 @@ describe("proxy configuration defaults and merging", () => {
   })
 
   it("defaults the Hermes session idle window only for a Hermes runtime", async () => {
-    const config = await loadProxyConfig({
+    const config = await loadGatewayConfig({
       flag: CONFIG_PATH,
       getenv: env({}),
       ...access({
@@ -588,7 +588,7 @@ const EVERY_OVERRIDE: Record<string, string> = {
 describe("proxy configuration environment overrides", () => {
   it("lets an override win over the file", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({
           HARNESS_GW_DEPLOYMENT_ID: "env-deployment",
@@ -655,7 +655,7 @@ describe("proxy configuration environment overrides", () => {
 
   it("switches the runtime branch from the environment and rejects an off-branch variable", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({
           HARNESS_GW_RUNTIME_KIND: "opencode",
@@ -697,7 +697,7 @@ runtime:
 
   it("creates the push block from the environment and reports a partial one", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({
           HARNESS_GW_PUSH_STATE_DIR: "/var/lib/aos-ui/push",
@@ -728,7 +728,7 @@ runtime:
 
   it("creates a voice direction from the environment alone", async () => {
     await expect(
-      loadProxyConfig({
+      loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({
           HARNESS_GW_VOICE_TRANSCRIPTION_PROVIDER: "openai-compatible",
@@ -900,7 +900,7 @@ runtime:
     )
     const reachable = new Set<string>()
     for (const runtime of Object.values(runtimes))
-      for (const leaf of leaves(parseProxyConfig(populated(runtime)))) {
+      for (const leaf of leaves(parseGatewayConfig(populated(runtime)))) {
         if (leaf.array) continue
         reachable.add(leaf.path)
         if (leaf.path === "version") continue

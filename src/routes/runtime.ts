@@ -1,13 +1,13 @@
 import { RuntimeInfoSchema } from "../../protocol"
 import type { ServerRuntime } from "../core/runtime"
-import type { ProxyRouteApp } from "./types"
+import type { GatewayRouteApp } from "./types"
 
 /**
  * Runtime discovery stays on REST: the browser reads it before it has an ACP
  * connection, to decide whether the normalized runtime is reachable at all.
  */
 export function registerRuntimeRoute(
-  app: ProxyRouteApp,
+  app: GatewayRouteApp,
   requireRuntime: (request: Request) => Promise<ServerRuntime>
 ) {
   app.get("/api/v1/runtime", async (context) => {

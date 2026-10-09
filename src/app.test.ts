@@ -6,7 +6,7 @@ import type {
   McpAppView,
   ReadResourceResult,
 } from "../protocol/mcp-apps"
-import { createProxyApp, type ProxyAppOptions } from "./app"
+import { createGatewayApp, type GatewayAppOptions } from "./app"
 import {
   HermesAuthenticationError,
   HermesHttpError,
@@ -89,9 +89,9 @@ function runtimeInstance(runtime: HermesServerAdapter): RuntimeInstance {
 
 function app(
   runtime: HermesServerAdapter,
-  options: Partial<ProxyAppOptions> = {}
+  options: Partial<GatewayAppOptions> = {}
 ) {
-  return createProxyApp({
+  return createGatewayApp({
     runtimeInstance: runtimeInstance(runtime),
     logger: captureLogs().logger,
     health,
@@ -307,7 +307,7 @@ describe("AOS V1 proxy", () => {
       }),
     })
     const logs = captureLogs()
-    const proxy = createProxyApp({
+    const proxy = createGatewayApp({
       runtimeInstance: runtimeInstance(runtime),
       logger: logs.logger,
       health,
@@ -438,7 +438,7 @@ function artifactPath(sessionId = "stored", artifactId = "artifact-1") {
  * publishes NOTES as `artifact-1`, and any server's `ui://` resource reads
  * as one viewer page unless `viewer` is `null`, a runtime that reads none.
  */
-function fileProxy(
+function fileGateway(
   setup: {
     call?: McpToolCall | null
     viewInput?: Record<string, unknown>
@@ -550,7 +550,7 @@ describe("MCP App files", () => {
   }
 
   it.each<
-    [string, Parameters<typeof fileProxy>[0], McpAppFiles | undefined, number]
+    [string, Parameters<typeof fileGateway>[0], McpAppFiles | undefined, number]
   >([
     [
       "a call from a server named aos_ui",
@@ -584,7 +584,7 @@ describe("MCP App files", () => {
       404,
     ],
   ])("gives %s only the files it may read", async (_, setup, files, status) => {
-    const { proxy } = fileProxy(setup)
+    const { proxy } = fileGateway(setup)
 
     expect((await openView(proxy)).files).toEqual(files)
     expect(
@@ -603,7 +603,7 @@ describe("MCP App files", () => {
       parent: "/srv/agent/../agent/report.pdf",
       nul: "/srv/agent/report.pdf\u0000.txt",
     }
-    const { proxy, getSession, read } = fileProxy({
+    const { proxy, getSession, read } = fileGateway({
       call: { ...reportCall, input },
     })
     const file = async (argument: string) =>
@@ -668,7 +668,7 @@ describe("MCP App files", () => {
       416,
     ],
   ])("answers %s with an empty %i", async (_, read, status) => {
-    const { proxy } = fileProxy({ reader: { read } })
+    const { proxy } = fileGateway({ reader: { read } })
 
     expect(
       await observed(await proxy.request(`${origin}${appPath()}/files/path`))
@@ -676,7 +676,7 @@ describe("MCP App files", () => {
   })
 
   it("passes on only the runtime headers a file needs, and lets only a view that sent a pass read the answer", async () => {
-    const { proxy, read } = fileProxy({
+    const { proxy, read } = fileGateway({
       call: {
         ...reportCall,
         input: { path: REPORT, notes: "/srv/agent/notes.txt" },
@@ -756,7 +756,7 @@ describe("MCP App files", () => {
   ])(
     "serves %s, reported as %s, as %s",
     async (name, reported, served, filename) => {
-      const { proxy, read } = fileProxy({
+      const { proxy, read } = fileGateway({
         call: { ...reportCall, input: { path: `/srv/agent/${name}` } },
       })
       read.mockResolvedValue(
@@ -773,7 +773,7 @@ describe("MCP App files", () => {
   )
 
   it("streams one byte range and stops the read once the client leaves", async () => {
-    const { proxy, read } = fileProxy()
+    const { proxy, read } = fileGateway()
     const url = `${origin}${appPath()}/files/path`
     read.mockResolvedValueOnce(
       new Response("PD", {
@@ -832,7 +832,7 @@ describe("MCP App files", () => {
   })
 
   it("renews a call's addresses only for a call the Session holds", async () => {
-    const { proxy } = fileProxy()
+    const { proxy } = fileGateway()
     const renew = (from: string, path = appPath()) =>
       proxy.request(`${origin}${path}/files`, {
         method: "POST",
@@ -851,7 +851,7 @@ describe("MCP App files", () => {
 
   it("limits file reads and renewals apart from the view's own requests", async () => {
     // One instant, so every request falls in one window.
-    const { proxy } = fileProxy({
+    const { proxy } = fileGateway({
       files: { ratePerSecond: 11 },
       clock: () => Date.UTC(2026, 0, 1),
     })
@@ -870,7 +870,7 @@ describe("MCP App files", () => {
   })
 
   it("keeps a call's paths and passes out of its view, its refusals, and the log", async () => {
-    const { proxy, toolCall, open, read, logs } = fileProxy()
+    const { proxy, toolCall, open, read, logs } = fileGateway()
     // Two Sessions whose calls share one id, each naming its own file.
     const paths: Record<string, string> = {
       stored: REPORT,
@@ -943,7 +943,7 @@ describe("MCP App files", () => {
         (await files.passes.issue({ ...pass, role: "guest" })).pass,
     ],
   ])("refuses a %s pass with an empty 401", async (_, forge) => {
-    const { proxy, read, files } = fileProxy()
+    const { proxy, read, files } = fileGateway()
     await openView(proxy)
     const forged = await forge(files)
 
@@ -978,7 +978,7 @@ describe("Published Artifact views", () => {
     })
 
   it("opens an Artifact in the viewer with its server-side name and type, and serves its bytes", async () => {
-    const { proxy, serverResource, logs } = fileProxy()
+    const { proxy, serverResource, logs } = fileGateway()
 
     const response = await proxy.request(`${origin}${artifactPath()}`)
     expect(response.status).toBe(200)
@@ -1052,7 +1052,7 @@ describe("Published Artifact views", () => {
   it.each<
     [
       string,
-      NonNullable<Parameters<typeof fileProxy>[0]>,
+      NonNullable<Parameters<typeof fileGateway>[0]>,
       string,
       "get" | "post",
     ]
@@ -1072,7 +1072,7 @@ describe("Published Artifact views", () => {
       "get",
     ],
   ])("answers %s with 404", async (_, setup, path, method) => {
-    const { proxy, serverResource } = fileProxy(setup)
+    const { proxy, serverResource } = fileGateway(setup)
 
     const response =
       method === "get"
@@ -1086,7 +1086,7 @@ describe("Published Artifact views", () => {
   it.each<
     [
       string,
-      Parameters<typeof fileProxy>[0],
+      Parameters<typeof fileGateway>[0],
       Error | ReadResourceResult | undefined,
     ]
   >([
@@ -1100,7 +1100,7 @@ describe("Published Artifact views", () => {
   ])(
     "answers an Artifact that is there with 503, not 404, under %s",
     async (_, setup, answer) => {
-      const { proxy, serverResource } = fileProxy(setup)
+      const { proxy, serverResource } = fileGateway(setup)
       if (answer instanceof Error) serverResource.mockRejectedValue(answer)
       else if (answer) serverResource.mockResolvedValue(answer)
 
@@ -1119,7 +1119,7 @@ describe("Published Artifact views", () => {
   ])(
     "refuses %s pass with an empty 401 and no bytes",
     async (_, other, path) => {
-      const { proxy, files, artifact, read } = fileProxy()
+      const { proxy, files, artifact, read } = fileGateway()
       const forged = (await files.passes.issue({ ...pass, ...other })).pass
 
       const response = await proxy.request(
@@ -1137,7 +1137,7 @@ describe("Published Artifact views", () => {
   )
 
   it("refuses a tool call's pass on the Artifact of the same id", async () => {
-    const { proxy, files, artifact } = fileProxy()
+    const { proxy, files, artifact } = fileGateway()
     const { role, agentId, sessionId } = pass
     const forged = (
       await files.passes.issue({

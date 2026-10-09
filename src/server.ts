@@ -46,12 +46,12 @@ export type SocketUpgrade = {
 export type SocketRefusal = { refused: 404 | 503 }
 
 /** The transport-neutral socket a mounted service owns for one peer. */
-export type ProxySocket = {
+export type GatewaySocket = {
   receive(raw: string | Uint8Array): void | Promise<void>
   close(): void
 }
 
-export type ProxySocketPeer = {
+export type GatewaySocketPeer = {
   /**
    * Bun's answer: the bytes written, -1 for a frame queued behind
    * backpressure, or 0 for one dropped, past the backpressure limit or on a
@@ -63,30 +63,30 @@ export type ProxySocketPeer = {
   close(code: number, reason: string): void
 }
 
-export type ProxySocketService<Upgrade extends SocketUpgrade> = {
+export type GatewaySocketService<Upgrade extends SocketUpgrade> = {
   /** The upgrade, its refusal, or `undefined` for an unauthorized one. */
   authorizeUpgrade(
     request: Request
   ): Promise<Upgrade | SocketRefusal | undefined>
-  open(upgrade: Upgrade, peer: ProxySocketPeer): ProxySocket
+  open(upgrade: Upgrade, peer: GatewaySocketPeer): GatewaySocket
 }
 
 /** One WebSocket path hosted beside the HTTP app, with its own peer budget. */
-export type ProxySocketMount<Upgrade extends SocketUpgrade> = {
+export type GatewaySocketMount<Upgrade extends SocketUpgrade> = {
   path: string
   /**
    * Also routes every path below `path` to the service, which refuses one it
    * does not serve.
    */
   subpaths?: boolean
-  service: ProxySocketService<Upgrade>
+  service: GatewaySocketService<Upgrade>
   maxPeers?: number
 }
 
 type MountState<Upgrade extends SocketUpgrade> = {
   path: string
   subpaths: boolean
-  service: ProxySocketService<Upgrade>
+  service: GatewaySocketService<Upgrade>
   maxPeers: number
   peers: Set<SocketPeer<Upgrade>>
   reserved: number
@@ -95,7 +95,7 @@ type SocketData<Upgrade extends SocketUpgrade> = {
   mount: MountState<Upgrade>
   /** Absent for a peer past the budget, which is closed as soon as it opens. */
   authorization?: Upgrade
-  socket?: ProxySocket
+  socket?: GatewaySocket
   failed?: boolean
   /** Bun ran this peer's close handler, which it does inside the close call. */
   closed?: boolean
@@ -144,14 +144,14 @@ export type ShutdownSettlement = {
   forced: boolean
 }
 
-export type StartProxyServerOptions<
+export type StartGatewayServerOptions<
   Upgrade extends SocketUpgrade = SocketUpgrade,
 > = {
   app: { fetch: FetchHandler }
   /** The browser origins this listener serves, checked before any socket or route. */
   origins: OriginPolicy
   /** WebSocket mounts hosted beside the HTTP app, each with its own peer budget. */
-  sockets?: readonly ProxySocketMount<Upgrade>[]
+  sockets?: readonly GatewaySocketMount<Upgrade>[]
   host: string
   port: number
   /** Bounds the whole shutdown sequence, however the shutdown was triggered. */
@@ -182,7 +182,7 @@ function isWebSocketHandshake(request: Request) {
 }
 
 function mountState<Upgrade extends SocketUpgrade>(
-  mount: ProxySocketMount<Upgrade>
+  mount: GatewaySocketMount<Upgrade>
 ): MountState<Upgrade> {
   const maxPeers = mount.maxPeers ?? Number.MAX_SAFE_INTEGER
   if (!Number.isSafeInteger(maxPeers) || maxPeers < 1)
@@ -197,8 +197,8 @@ function mountState<Upgrade extends SocketUpgrade>(
   }
 }
 
-export function startProxyServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
-  options: StartProxyServerOptions<Upgrade>
+export function startGatewayServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
+  options: StartGatewayServerOptions<Upgrade>
 ) {
   const mounts = (options.sockets ?? []).map((mount) => mountState(mount))
   const { logger } = options

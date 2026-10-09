@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
-import { createProxyLogger } from "../../cli/logger"
+import { createGatewayLogger } from "../../cli/logger"
 import { sessionId } from "../../core/ids"
 import { CredentialValues } from "../../redaction"
 import type { RuntimeServices } from "../create-runtime"
@@ -122,7 +122,7 @@ describe("Hermes runtime shutdown", () => {
   it("hands the proxy a turn engine that watches for turns Hermes starts by itself, and re-reads and masks the token on every dial", async () => {
     const lines: string[] = []
     const credentials = new CredentialValues()
-    const logger = createProxyLogger({
+    const logger = createGatewayLogger({
       level: "info",
       credentials,
       destination: { write: (line) => void lines.push(line) },

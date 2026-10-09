@@ -1,17 +1,17 @@
-import { runProxyCli } from "./cli/program"
-import { createProxyLogger } from "./cli/logger"
+import { runGatewayCli } from "./cli/program"
+import { createGatewayLogger } from "./cli/logger"
 import { installProcessHandlers } from "./cli/process-handlers"
 import { CredentialValues } from "./redaction"
 
-export { runProxyCli } from "./cli/program"
+export { runGatewayCli } from "./cli/program"
 
 if (import.meta.main) {
   const credentials = new CredentialValues()
   // Writes a start failure before the configuration, and so its level, has loaded.
-  const bootstrapLogger = createProxyLogger({ level: "info", credentials })
+  const bootstrapLogger = createGatewayLogger({ level: "info", credentials })
   installProcessHandlers(bootstrapLogger)
-  void runProxyCli(process.argv, {
-    createLogger: (level) => createProxyLogger({ level, credentials }),
+  void runGatewayCli(process.argv, {
+    createLogger: (level) => createGatewayLogger({ level, credentials }),
     credentials,
     // The only reader of the real environment.
     getenv: (name: string) => process.env[name],

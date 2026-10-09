@@ -5,12 +5,12 @@ import {
 } from "../auth/invitation-link"
 import type { ServerRuntime } from "../core/runtime"
 import { boundedJson, errorResponse } from "./http"
-import type { ProxyRouteApp } from "./types"
+import type { GatewayRouteApp } from "./types"
 
 export const GUEST_INVITATIONS_PATH = "/api/v1/guest-invitations"
 
 export function registerInvitationRoutes(
-  app: ProxyRouteApp,
+  app: GatewayRouteApp,
   options: {
     guestPublicOrigin: string
     invitations: GuestInvitationService

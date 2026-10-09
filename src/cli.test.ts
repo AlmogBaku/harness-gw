@@ -7,10 +7,10 @@ import { stringify } from "yaml"
 import { captureLogs, type LogCapture } from "../test/support/log-capture"
 import type { RuntimeFactory } from "./adapters/create-runtime"
 import { createHermesRuntime } from "./adapters/hermes/factory"
-import { runProxyCli } from "./cli"
+import { runGatewayCli } from "./cli"
 import { installProcessHandlers } from "./cli/process-handlers"
 import { CredentialValues, redactForLog } from "./redaction"
-import type { startProxyServer } from "./server"
+import type { startGatewayServer } from "./server"
 
 const temporaryDirectories: string[] = []
 
@@ -103,7 +103,7 @@ function stubbedHermesRuntime(): RuntimeFactory {
 
 /** Models one listener that settles as soon as it is asked to stop. */
 function stubbedStart() {
-  return vi.fn((options: Parameters<typeof startProxyServer>[0]) => ({
+  return vi.fn((options: Parameters<typeof startGatewayServer>[0]) => ({
     server: { stop: vi.fn() },
     shutdown: vi.fn(async () => {
       await options.close?.()
@@ -118,7 +118,7 @@ describe("proxy executable", () => {
     const start = vi.fn()
 
     await expect(
-      runProxyCli(["bun", "proxy", "--help"], {
+      runGatewayCli(["bun", "proxy", "--help"], {
         createLogger: () => logs.logger,
         credentials: new CredentialValues(),
         start,
@@ -135,7 +135,7 @@ describe("proxy executable", () => {
     const exit = vi.fn()
     const logs = captureLogs()
     /** Models one listener: shutdown announces, closes resources, settles. */
-    const start = vi.fn((options: Parameters<typeof startProxyServer>[0]) => {
+    const start = vi.fn((options: Parameters<typeof startGatewayServer>[0]) => {
       const shutdown = vi.fn(async () => {
         options.onShutdownStarted?.()
         await options.close?.()
@@ -144,7 +144,7 @@ describe("proxy executable", () => {
       shutdowns.push(shutdown)
       return { server: { stop: vi.fn() }, shutdown }
     })
-    const lifecycle = await runProxyCli(
+    const lifecycle = await runGatewayCli(
       ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
       {
         runtimeFactory: (config, limits, services) => {
@@ -230,7 +230,7 @@ describe("proxy executable", () => {
     let output = ""
 
     await expect(
-      runProxyCli(["bun", "proxy", "invite", "--help"], {
+      runGatewayCli(["bun", "proxy", "invite", "--help"], {
         createLogger: () => captureLogs().logger,
         credentials: new CredentialValues(),
         getenv: () => undefined,
@@ -264,7 +264,7 @@ describe("proxy executable", () => {
     let entropyCall = 0
 
     await expect(
-      runProxyCli(
+      runGatewayCli(
         [
           "bun",
           "proxy",
@@ -339,7 +339,7 @@ describe("proxy executable", () => {
     let output = ""
 
     await expect(
-      runProxyCli(
+      runGatewayCli(
         [
           "bun",
           "proxy",
@@ -381,7 +381,7 @@ describe("proxy executable", () => {
     const start = stubbedStart()
     const logs = captureLogs()
 
-    const lifecycle = await runProxyCli(["bun", "proxy", "serve"], {
+    const lifecycle = await runGatewayCli(["bun", "proxy", "serve"], {
       runtimeFactory: stubbedHermesRuntime(),
       createLogger: () => logs.logger,
       credentials: new CredentialValues(),
@@ -403,7 +403,7 @@ describe("proxy executable", () => {
     const start = vi.fn()
     const missing = join(tmpdir(), "aos-proxy-absent", "config.yaml")
     const check = (path: string, writeOut = vi.fn()) =>
-      runProxyCli(["bun", "proxy", "config", "check", "--config", path], {
+      runGatewayCli(["bun", "proxy", "config", "check", "--config", path], {
         createLogger: () => captureLogs().logger,
         credentials: new CredentialValues(),
         getenv: () => undefined,
@@ -425,7 +425,7 @@ describe("proxy executable", () => {
 
   it("requires an explicit configuration file to mint an invitation", async () => {
     await expect(
-      runProxyCli(["bun", "proxy", "invite", "--agent", "default"], {
+      runGatewayCli(["bun", "proxy", "invite", "--agent", "default"], {
         createLogger: () => captureLogs().logger,
         credentials: new CredentialValues(),
         getenv: () => undefined,
@@ -437,7 +437,7 @@ describe("proxy executable", () => {
     const start = vi.fn()
     const missing = join(tmpdir(), "aos-proxy-absent", "proxy.yaml")
 
-    const failure = await runProxyCli(
+    const failure = await runGatewayCli(
       ["bun", "proxy", "serve", "--config", missing],
       {
         createLogger: () => captureLogs().logger,

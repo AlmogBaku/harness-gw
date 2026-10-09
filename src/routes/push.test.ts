@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest"
 
 import { captureLogs } from "../../test/support/log-capture"
 import type { PushRegistration } from "../../protocol/push"
-import { createProxyApp } from "../app"
+import { createGatewayApp } from "../app"
 import type { RuntimeInstance } from "../core/runtime"
 import { openPushRegistrations } from "../push/registrations"
 
@@ -54,7 +54,7 @@ async function harness(options: { push?: boolean; maxDevices?: number } = {}) {
       ? {}
       : { maxPerPrincipal: options.maxDevices }),
   })
-  const app = createProxyApp({
+  const app = createGatewayApp({
     runtimeInstance,
     logger: logs.logger,
     health: () => ({

@@ -73,7 +73,7 @@ type AgentCall = { method: string; params: unknown }
 const RESUME_REPLIED = "session/resume:replied"
 
 /** An in-process proxy: the AOS agent side of the connection under test. */
-function createProxyAgent(
+function createGatewayAgent(
   options: {
     refuseLoginAfter?: number
     /** `_meta.hgw.history` on every resume that replays from the start. */
@@ -284,7 +284,7 @@ function createProxyAgent(
   }
 }
 
-function connectInProcess(proxy: ReturnType<typeof createProxyAgent>) {
+function connectInProcess(proxy: ReturnType<typeof createGatewayAgent>) {
   const connection = createAcpConnection({
     clientInfo: CLIENT_INFO,
     connectAgent: proxy.app,
@@ -295,7 +295,7 @@ function connectInProcess(proxy: ReturnType<typeof createProxyAgent>) {
 
 describe("ACP connection", () => {
   it("constructs no transport until it is started, and only one", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -316,7 +316,7 @@ describe("ACP connection", () => {
   })
 
   it("stays closed when a connection is closed before it starts", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -335,7 +335,7 @@ describe("ACP connection", () => {
   it("holds a first request until the inspector settles, and runs without one that cannot load", async () => {
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      connectAgent: createProxyAgent().app,
+      connectAgent: createGatewayAgent().app,
       inspector: () =>
         Promise.reject(new Error("The inspector is unavailable")),
     })
@@ -346,7 +346,7 @@ describe("ACP connection", () => {
   })
 
   it("initializes with the negotiated AOS extension metadata", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
 
     await expect(connection.initialized).resolves.toEqual({
@@ -366,7 +366,7 @@ describe("ACP connection", () => {
   })
 
   it("ends without reconnecting when the gateway speaks another version", async () => {
-    const proxy = createProxyAgent({ version: 2 })
+    const proxy = createGatewayAgent({ version: 2 })
     const statuses: string[] = []
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -387,7 +387,7 @@ describe("ACP connection", () => {
   })
 
   it("redeems an invitation with the AOS login metadata, never logging it", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const logs = captureLogs()
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -417,7 +417,7 @@ describe("ACP connection", () => {
   })
 
   it("creates, lists, resumes, and prompts Sessions with AOS metadata", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
 
     const created = await connection.newSession({
@@ -466,7 +466,7 @@ describe("ACP connection", () => {
   })
 
   it("replays a Session from the start when asked", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
     const replaySettled = vi.fn()
     const dropTranscript = vi.fn(() => replaySettled)
@@ -493,7 +493,7 @@ describe("ACP connection", () => {
   })
 
   it("writes Session config, lifecycle, and AOS extension requests", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
 
     const options = await connection.setConfigOption(
@@ -550,7 +550,7 @@ describe("ACP connection", () => {
   ] as const)(
     "names an Agent update refused with code %i as %s",
     async (refusal, code) => {
-      const proxy = createProxyAgent({ refuseAgentUpdate: refusal })
+      const proxy = createGatewayAgent({ refuseAgentUpdate: refusal })
       const connection = connectInProcess(proxy)
       await connection.initialized
 
@@ -565,7 +565,7 @@ describe("ACP connection", () => {
   )
 
   it("leaves any other Agent update failure as it came", async () => {
-    const proxy = createProxyAgent({
+    const proxy = createGatewayAgent({
       refuseAgentUpdate: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
     })
     const connection = connectInProcess(proxy)
@@ -583,7 +583,7 @@ describe("ACP connection", () => {
   })
 
   it("sends cancel as a notification and focus as a request", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
 
@@ -604,7 +604,7 @@ describe("ACP connection", () => {
   })
 
   it("dispatches Session updates with their AOS metadata to the Session's listeners", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
     const seen: { update: SessionUpdate; meta?: Record<string, unknown> }[] = []
@@ -639,7 +639,7 @@ describe("ACP connection", () => {
 
   it("keeps a Session joined while any subscription of a listener stays", async () => {
     const clock = useFakeClock()
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
     const listener = { agentId: AGENT_ID }
     const leave = connection.subscribe(SESSION_ID, listener)
@@ -653,7 +653,7 @@ describe("ACP connection", () => {
   })
 
   it("dispatches AOS extension notifications by method", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
     const activity: unknown[] = []
@@ -686,7 +686,7 @@ describe("ACP connection", () => {
   })
 
   it("answers a pending permission request with the operator's response", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
@@ -710,7 +710,7 @@ describe("ACP connection", () => {
   it.each(["askPermission", "askQuestion"] as const)(
     "releases a request the proxy withdraws as cancelled (%s)",
     async (ask) => {
-      const proxy = createProxyAgent()
+      const proxy = createGatewayAgent()
       const connection = connectInProcess(proxy)
       await connection.initialized
       const pending: AcpPendingRequest[] = []
@@ -728,7 +728,7 @@ describe("ACP connection", () => {
   )
 
   it("keeps a pending request answerable when one consumer cannot show it", async () => {
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
@@ -777,7 +777,7 @@ describe("ACP connection", () => {
 
     it("keeps the latest history a resume reports, and a rejoin without one leaves it", async () => {
       const clock = useFakeClock()
-      const proxy = createProxyAgent({ history: { nextCursor: "cursor-1" } })
+      const proxy = createGatewayAgent({ history: { nextCursor: "cursor-1" } })
       const pipe = pipedSockets(() => proxy.app)
       const connection = createAcpConnection({
         clientInfo: CLIENT_INFO,
@@ -800,7 +800,7 @@ describe("ACP connection", () => {
     })
 
     it("reads a page as tagged updates that reach no live listener or position", async () => {
-      const proxy = createProxyAgent({ page: olderPage })
+      const proxy = createGatewayAgent({ page: olderPage })
       const connection = connectInProcess(proxy)
       await connection.initialized
       const live: SessionUpdate[] = []
@@ -847,7 +847,7 @@ describe("ACP connection", () => {
     })
 
     it("fails a page whose reply carries no history", async () => {
-      const proxy = createProxyAgent({ page: { updates: olderPage.updates } })
+      const proxy = createGatewayAgent({ page: { updates: olderPage.updates } })
       const connection = connectInProcess(proxy)
 
       await expect(
@@ -858,7 +858,7 @@ describe("ACP connection", () => {
 
     it("waits for a recovering transport to rejoin before reading a page", async () => {
       const clock = useFakeClock()
-      const proxy = createProxyAgent({ page: olderPage, slowResume: true })
+      const proxy = createGatewayAgent({ page: olderPage, slowResume: true })
       const pipe = pipedSockets(() => proxy.app)
       const connection = createAcpConnection({
         clientInfo: CLIENT_INFO,
@@ -899,7 +899,7 @@ describe("ACP connection", () => {
 
   it("delivers no request over a half-open transport", async () => {
     const clock = useFakeClock()
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -919,7 +919,7 @@ describe("ACP connection", () => {
 
   it("reconnects a dropped transport and rejoins every resumed Session", async () => {
     const clock = useFakeClock()
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -972,7 +972,7 @@ describe("ACP connection", () => {
 
   it("reports the outage from a drop until the resumed Session has rejoined", async () => {
     const clock = useFakeClock()
-    const proxy = createProxyAgent({ slowResume: true })
+    const proxy = createGatewayAgent({ slowResume: true })
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -1002,7 +1002,7 @@ describe("ACP connection", () => {
 
   it("redeems the invitation again before replaying a recovered transport", async () => {
     const clock = useFakeClock()
-    const proxy = createProxyAgent()
+    const proxy = createGatewayAgent()
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -1038,7 +1038,7 @@ describe("ACP connection", () => {
 
   it("ends the connection when the invitation can no longer be redeemed", async () => {
     const clock = useFakeClock()
-    const proxy = createProxyAgent({ refuseLoginAfter: 1 })
+    const proxy = createGatewayAgent({ refuseLoginAfter: 1 })
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,

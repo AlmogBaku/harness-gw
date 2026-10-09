@@ -6,16 +6,16 @@ import { HGW_ACP_PATH } from "../protocol/acp"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext, ActivityFeed, ReadState } from "./acp/types"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
-import { startProxyServer } from "./server"
+import { startGatewayServer } from "./server"
 
 const ORIGIN = "https://aos.example.test"
-const lifecycles: Array<ReturnType<typeof startProxyServer>> = []
+const lifecycles: Array<ReturnType<typeof startGatewayServer>> = []
 
 afterEach(async () => {
   await Promise.all(lifecycles.splice(0).map(({ shutdown }) => shutdown()))
 })
 
-function portOf(lifecycle: ReturnType<typeof startProxyServer>) {
+function portOf(lifecycle: ReturnType<typeof startGatewayServer>) {
   return (lifecycle.server as unknown as { port: number }).port
 }
 
@@ -46,8 +46,8 @@ function initializeOnlyAgent() {
   }))
 }
 
-function acpProxy(handshakeDeadlineMs?: number) {
-  const lifecycle = startProxyServer({
+function acpGateway(handshakeDeadlineMs?: number) {
+  const lifecycle = startGatewayServer({
     app: { fetch: () => new Response("not found", { status: 404 }) },
     origins: { allowedOrigins: [ORIGIN] },
     sockets: [
@@ -79,7 +79,7 @@ describe("real Bun WebSocket upgrade", () => {
     const peerClosed = new Promise<void>((resolve) => {
       resolveClosed = resolve
     })
-    const lifecycle = startProxyServer({
+    const lifecycle = startGatewayServer({
       app: { fetch: () => new Response("not found", { status: 404 }) },
       origins: { allowedOrigins: [ORIGIN] },
       sockets: [
@@ -157,7 +157,7 @@ describe("real Bun WebSocket upgrade", () => {
   })
 
   it("answers an ACP initialize first frame over the hosted socket", async () => {
-    const port = portOf(acpProxy())
+    const port = portOf(acpGateway())
 
     // A plain request is no WebSocket handshake.
     const denied = await fetch(`http://127.0.0.1:${port}${HGW_ACP_PATH}`)
@@ -197,7 +197,7 @@ describe("real Bun WebSocket upgrade", () => {
   })
 
   it("carries the ACP connection id on the 101 response", async () => {
-    const port = portOf(acpProxy())
+    const port = portOf(acpGateway())
 
     const switching = await new Promise<{
       status: number | undefined
@@ -235,7 +235,7 @@ describe("real Bun WebSocket upgrade", () => {
     expect(switching.headers["acp-connection-id"]).toMatch(/^[0-9a-f-]{36}$/u)
   })
   it("closes a socket that never sends initialize with 4408 at the handshake deadline", async () => {
-    const port = portOf(acpProxy(100))
+    const port = portOf(acpGateway(100))
     const socket = new WebSocket(`ws://127.0.0.1:${port}${HGW_ACP_PATH}`, {
       headers: { Origin: ORIGIN },
     })

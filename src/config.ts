@@ -5,7 +5,7 @@ import { isUiResourceUri } from "./mcp-apps/policy"
 
 /** The gateway log's levels, quietest last; `info` is the default. */
 export const PROXY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
-export type ProxyLogLevel = (typeof PROXY_LOG_LEVELS)[number]
+export type GatewayLogLevel = (typeof PROXY_LOG_LEVELS)[number]
 
 const AbsoluteSecretFileSchema = z
   .string()
@@ -338,7 +338,7 @@ const McpAppsSchema = z.strictObject({
     .optional(),
 })
 
-export const ProxyConfigSchema = z
+export const GatewayConfigSchema = z
   .strictObject({
     version: z.literal(1),
     deploymentId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
@@ -397,17 +397,17 @@ export const ProxyConfigSchema = z
       })
   })
 
-export type ProxyConfig = z.infer<typeof ProxyConfigSchema>
-export type RuntimeConfig = ProxyConfig["runtime"]
-export type RuntimeLimits = ProxyConfig["limits"]
-export type VoiceConfig = NonNullable<ProxyConfig["voice"]>
-export type McpAppsConfig = NonNullable<ProxyConfig["mcpApps"]>
+export type GatewayConfig = z.infer<typeof GatewayConfigSchema>
+export type RuntimeConfig = GatewayConfig["runtime"]
+export type RuntimeLimits = GatewayConfig["limits"]
+export type VoiceConfig = NonNullable<GatewayConfig["voice"]>
+export type McpAppsConfig = NonNullable<GatewayConfig["mcpApps"]>
 export type VoiceTranscriptionConfig = NonNullable<VoiceConfig["transcription"]>
 export type VoiceSpeechConfig = NonNullable<VoiceConfig["speech"]>
 
 /** Parser issues are hidden because rejected input may contain secrets. */
-export function parseProxyConfig(input: unknown): ProxyConfig {
-  const result = ProxyConfigSchema.safeParse(input)
+export function parseGatewayConfig(input: unknown): GatewayConfig {
+  const result = GatewayConfigSchema.safeParse(input)
   if (!result.success) throw new Error("Invalid proxy configuration")
   return result.data
 }

@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { parse } from "yaml"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { isHttpsOrLoopback, listenerOrigins, parseProxyConfig } from "./config"
+import { isHttpsOrLoopback, listenerOrigins, parseGatewayConfig } from "./config"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import { appFileSettings } from "./routes/app-files"
 
@@ -61,13 +61,13 @@ describe("proxy configuration and secret boundary", () => {
       ...config,
       runtime: { ...config.runtime, mediaArtifacts: true },
     }
-    expect(parseProxyConfig(config)).toEqual(parsed)
-    expect(parseProxyConfig({ ...config, log: {} })).toEqual(parsed)
+    expect(parseGatewayConfig(config)).toEqual(parsed)
+    expect(parseGatewayConfig({ ...config, log: {} })).toEqual(parsed)
     const off = {
       ...config,
       runtime: { ...config.runtime, mediaArtifacts: false },
     }
-    expect(parseProxyConfig(off)).toEqual(off)
+    expect(parseGatewayConfig(off)).toEqual(off)
   })
 
   it("accepts the exact private OpenCode runtime configuration", () => {
@@ -83,7 +83,7 @@ describe("proxy configuration and secret boundary", () => {
       },
     }
 
-    expect(parseProxyConfig(input).runtime).toEqual({
+    expect(parseGatewayConfig(input).runtime).toEqual({
       ...input.runtime,
       baseUrl: "http://127.0.0.1:4096",
       mediaArtifacts: true,
@@ -102,7 +102,7 @@ describe("proxy configuration and secret boundary", () => {
       },
     }
 
-    expect(parseProxyConfig(input).runtime).toEqual({
+    expect(parseGatewayConfig(input).runtime).toEqual({
       ...input.runtime,
       baseUrl: "wss://gateway.example.test",
       mediaArtifacts: true,
@@ -141,7 +141,7 @@ describe("proxy configuration and secret boundary", () => {
         deviceTokenFile: "/run/secrets/openclaw-token",
       },
     ])
-      expect(() => parseProxyConfig({ ...validConfig(), runtime })).toThrow(
+      expect(() => parseGatewayConfig({ ...validConfig(), runtime })).toThrow(
         "Invalid proxy configuration"
       )
   })
@@ -152,7 +152,7 @@ describe("proxy configuration and secret boundary", () => {
       { hermes: { auth: { mode: "browser-broker" } } },
       { runtimeAuth: { callbackUrl: "https://aos.example.test/callback" } },
     ])
-      expect(() => parseProxyConfig({ ...validConfig(), ...legacy })).toThrow(
+      expect(() => parseGatewayConfig({ ...validConfig(), ...legacy })).toThrow(
         "Invalid proxy configuration"
       )
   })
@@ -166,13 +166,13 @@ describe("proxy configuration and secret boundary", () => {
       },
       { ...validConfig(), extra: true },
     ])
-      expect(() => parseProxyConfig(candidate)).toThrow(
+      expect(() => parseGatewayConfig(candidate)).toThrow(
         "Invalid proxy configuration"
       )
   })
 
   it("accepts a guest listener without a second runtime or token", () => {
-    const configured = parseProxyConfig({
+    const configured = parseGatewayConfig({
       ...validConfig(),
       guest: {
         listen: { host: "127.0.0.1", port: 4101 },
@@ -205,7 +205,7 @@ describe("proxy configuration and secret boundary", () => {
       },
     ])
       expect(() =>
-        parseProxyConfig({
+        parseGatewayConfig({
           ...validConfig(),
           guest: {
             ...guest,
@@ -229,7 +229,7 @@ describe("proxy configuration and secret boundary", () => {
   })
 
   it("lists exact extra origins per listener, each defaulting to its public origin", () => {
-    const config = parseProxyConfig({
+    const config = parseGatewayConfig({
       ...validConfig(),
       allowedOrigins: ["https://aos.example.test", "https://app.example.test"],
       guest: guestOn(),
@@ -253,25 +253,25 @@ describe("proxy configuration and secret boundary", () => {
     ],
   ])("rejects %s as an allowed origin", (_name, override) => {
     expect(() =>
-      parseProxyConfig({ ...validConfig(), guest: guestOn(), ...override })
+      parseGatewayConfig({ ...validConfig(), guest: guestOn(), ...override })
     ).toThrow("Invalid proxy configuration")
   })
 
   it("accepts plain HTTP only for exact loopback application origins", () => {
     expect(
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         publicOrigin: "http://127.0.0.1:3000",
       }).publicOrigin
     ).toBe("http://127.0.0.1:3000")
     expect(
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         publicOrigin: "http://localhost:3000",
       }).publicOrigin
     ).toBe("http://localhost:3000")
     expect(() =>
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         publicOrigin: "http://192.168.1.4:3000",
       })
@@ -280,9 +280,9 @@ describe("proxy configuration and secret boundary", () => {
 
   it("accepts an optional push deployment, and a deployment without one", () => {
     expect(
-      parseProxyConfig({ ...validConfig(), push: validPush() }).push
+      parseGatewayConfig({ ...validConfig(), push: validPush() }).push
     ).toEqual(validPush())
-    expect(parseProxyConfig(validConfig()).push).toBeUndefined()
+    expect(parseGatewayConfig(validConfig()).push).toBeUndefined()
   })
 
   it("rejects push state outside an absolute path, an insecure subject, and configured key material", () => {
@@ -303,14 +303,14 @@ describe("proxy configuration and secret boundary", () => {
       { ...validPush(), publicKey: "A".repeat(87) },
       { ...validPush(), extra: true },
     ])
-      expect(() => parseProxyConfig({ ...validConfig(), push })).toThrow(
+      expect(() => parseGatewayConfig({ ...validConfig(), push })).toThrow(
         "Invalid proxy configuration"
       )
   })
 
   it("requires coherent execution limits", () => {
     expect(() =>
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         limits: { ...validConfig().limits, guestActiveExecutions: 257 },
       })
@@ -384,7 +384,7 @@ describe("voice configuration", () => {
         speech: { ...validSpeech(), mode: "override" as const },
       },
     }
-    const parsed = parseProxyConfig(input)
+    const parsed = parseGatewayConfig(input)
     expect(parsed.voice?.transcription).toMatchObject({
       ...validTranscription(),
       mode: "fallback",
@@ -404,7 +404,7 @@ describe("voice configuration", () => {
   ] as const)(
     "accepts a voice block with only %s",
     (present, absent, child, model) => {
-      const parsed = parseProxyConfig({
+      const parsed = parseGatewayConfig({
         ...validConfig(),
         voice: { [present]: child },
       })
@@ -444,14 +444,14 @@ describe("voice configuration", () => {
       { transcription: { ...validTranscription(), timeoutMs: 500 } },
     ],
   ])("rejects %s", (_case, voice) => {
-    expect(() => parseProxyConfig({ ...validConfig(), voice })).toThrow(
+    expect(() => parseGatewayConfig({ ...validConfig(), voice })).toThrow(
       "Invalid proxy configuration"
     )
   })
 
   it("validates language: rejects 'english', accepts 'he' and 'en-US'", () => {
     expect(() =>
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         voice: {
           transcription: { ...validTranscription(), language: "english" },
@@ -460,7 +460,7 @@ describe("voice configuration", () => {
     ).toThrow("Invalid proxy configuration")
     for (const language of ["he", "en-US"]) {
       expect(
-        parseProxyConfig({
+        parseGatewayConfig({
           ...validConfig(),
           voice: {
             transcription: { ...validTranscription(), language },
@@ -473,7 +473,7 @@ describe("voice configuration", () => {
   it("enforces HTTPS or loopback when apiKeyFile is set", () => {
     // http non-loopback with key → rejected
     expect(() =>
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         voice: {
           transcription: {
@@ -486,7 +486,7 @@ describe("voice configuration", () => {
 
     // http loopback with key → accepted
     expect(
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         voice: {
           transcription: {
@@ -499,7 +499,7 @@ describe("voice configuration", () => {
 
     // http non-loopback without key → accepted
     expect(
-      parseProxyConfig({
+      parseGatewayConfig({
         ...validConfig(),
         voice: {
           transcription: {
@@ -534,7 +534,7 @@ describe("MCP Apps fallback credentials", () => {
   })
 
   it("accepts a header whose value lives in an absolute file", () => {
-    const parsed = parseProxyConfig(
+    const parsed = parseGatewayConfig(
       withHeaders({ Authorization: { file: "/run/secrets/weather-mcp" } })
     )
     expect(parsed.mcpApps?.fallback?.servers.weather?.headers).toEqual({
@@ -548,7 +548,7 @@ describe("MCP Apps fallback credentials", () => {
       { Authorization: "Bearer inline" },
       { "Bad Header": { file: "/run/secrets/weather-mcp" } },
     ])
-      expect(() => parseProxyConfig(withHeaders(headers))).toThrow(
+      expect(() => parseGatewayConfig(withHeaders(headers))).toThrow(
         "Invalid proxy configuration"
       )
   })
@@ -559,7 +559,7 @@ describe("MCP Apps fallback credentials", () => {
   const header = { Authorization: { file: "/run/secrets/aos-ui-mcp" } }
 
   it("accepts a URL override alone, including a plain-HTTP Compose service", () => {
-    const parsed = parseProxyConfig(
+    const parsed = parseGatewayConfig(
       withServer({ url: "http://tools-mcp:4110/mcp" })
     )
     expect(parsed.mcpApps?.fallback?.servers["aos-ui"]).toEqual({
@@ -573,7 +573,7 @@ describe("MCP Apps fallback credentials", () => {
       "http://127.0.0.1:4110/mcp",
     ])
       expect(
-        parseProxyConfig(withServer({ url, headers: header })).mcpApps?.fallback
+        parseGatewayConfig(withServer({ url, headers: header })).mcpApps?.fallback
           ?.servers["aos-ui"]
       ).toEqual({ url, headers: header })
   })
@@ -585,7 +585,7 @@ describe("MCP Apps fallback credentials", () => {
       { url: "http://tools-mcp:4110/mcp", headers: header },
       {},
     ])
-      expect(() => parseProxyConfig(withServer(server))).toThrow(
+      expect(() => parseGatewayConfig(withServer(server))).toThrow(
         "Invalid proxy configuration"
       )
   })
@@ -599,10 +599,10 @@ describe("MCP App files", () => {
 
   it("rejects a relative or home-relative folder", () => {
     expect(
-      parseProxyConfig(withFolder("/srv/shared")).mcpApps?.files?.guest
+      parseGatewayConfig(withFolder("/srv/shared")).mcpApps?.files?.guest
     ).toEqual({ allow: ["/srv/shared"], deny: ["/srv/shared"] })
     for (const folder of ["srv/shared", "~/shared"])
-      expect(() => parseProxyConfig(withFolder(folder))).toThrow(
+      expect(() => parseGatewayConfig(withFolder(folder))).toThrow(
         "Invalid proxy configuration"
       )
   })
@@ -620,7 +620,7 @@ describe("the Artifact viewer", () => {
       resource: "ui://aos-ui/artifact",
     })
     const viewer = { server: "files", resource: "ui://files/viewer" }
-    expect(parseProxyConfig(withViewer(viewer)).mcpApps?.files?.viewer).toEqual(
+    expect(parseGatewayConfig(withViewer(viewer)).mcpApps?.files?.viewer).toEqual(
       viewer
     )
   })
@@ -631,7 +631,7 @@ describe("the Artifact viewer", () => {
     ["no server", { server: "", resource: "ui://aos-ui/artifact" }],
     ["no resource", { server: "aos-ui" }],
   ])("rejects %s", (_, viewer) => {
-    expect(() => parseProxyConfig(withViewer(viewer))).toThrow(
+    expect(() => parseGatewayConfig(withViewer(viewer))).toThrow(
       "Invalid proxy configuration"
     )
   })
@@ -668,7 +668,7 @@ describe("the shipped examples", () => {
           "utf8"
         )
       )
-      const config = parseProxyConfig(example)
+      const config = parseGatewayConfig(example)
       expect(config.push).toBeUndefined()
       const named = JSON.stringify(config).match(/"\/run\/secrets\/[^"]+"/gu)
       expect(named?.map((path) => JSON.parse(path) as string)).toEqual(

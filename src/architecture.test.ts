@@ -79,7 +79,7 @@ describe("runtime adapter boundary", () => {
   it("keeps provider-native code out of common proxy and client modules", async () => {
     const proxyRoot = import.meta.dirname
     const repositoryRoot = join(proxyRoot, "..")
-    const commonProxyFiles = (
+    const commonGatewayFiles = (
       await Promise.all(
         ["acp", "auth", "core", "guest", "mcp-apps", "routes", "voice"].map(
           (directory) => productionSources(join(proxyRoot, directory))
@@ -88,7 +88,7 @@ describe("runtime adapter boundary", () => {
     ).flat()
     const clientFiles = await productionSources(join(repositoryRoot, "client"))
 
-    for (const [path, source] of [...commonProxyFiles, ...clientFiles]) {
+    for (const [path, source] of [...commonGatewayFiles, ...clientFiles]) {
       expect(source, path).not.toMatch(
         /(?:from\s+|import\s*\()["'][^"']*(?:hermes|@opencode-ai\/sdk|@openclaw\/gateway-)[^"']*["']/iu
       )
@@ -117,7 +117,7 @@ describe("runtime adapter boundary", () => {
 
   /**
    * Raw zod issues can quote operator input, so only the loader that formats
-   * them safely may reach the schema; every other caller uses `parseProxyConfig`.
+   * them safely may reach the schema; every other caller uses `parseGatewayConfig`.
    */
   it("keeps the configuration schema behind the configuration loader", async () => {
     const proxyRoot = import.meta.dirname
@@ -130,7 +130,7 @@ describe("runtime adapter boundary", () => {
         /import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']\.\/config["']/gu
       )
       for (const [, names] of specifiers)
-        if (/\bProxyConfigSchema\b/u.test(names)) importers.push(path)
+        if (/\bGatewayConfigSchema\b/u.test(names)) importers.push(path)
     }
 
     expect(importers).toEqual([join(proxyRoot, "config-file.ts")])

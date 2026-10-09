@@ -3,7 +3,7 @@
  * from the gateway over its WebSocket, proven over each adapter's own native
  * fake. An adapter's `wire-contract.test.ts` calls `runWireContract` with the
  * runtime it composes; the real gateway is built around it by
- * `createConfiguredProxy`, and the SDK's own client reaches its ACP services
+ * `createConfiguredGateway`, and the SDK's own client reaches its ACP services
  * through `acpBridge`, the calls the network listener makes. A row the runtime
  * cannot express is named in `gaps` with its reason and listed as skipped.
  *
@@ -48,7 +48,7 @@ import {
   hgwAcpAgentPath,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
-import { createConfiguredProxy } from "../composition"
+import { createConfiguredGateway } from "../composition"
 import { stubUnreachableTransports, until } from "../core/runtime-contract"
 import { CredentialValues } from "../redaction"
 
@@ -156,7 +156,7 @@ const OPERATOR_ORIGIN = "https://aos.example.test"
 const GUEST_ORIGIN = "https://guest.example.test"
 
 type Clock = ReturnType<typeof useFakeClock>
-type Proxy = Awaited<ReturnType<typeof createConfiguredProxy>>
+type Gateway = Awaited<ReturnType<typeof createConfiguredGateway>>
 /** The bounds one subscriber's stream and replay keep. */
 type SubscriberLimits = { subscriberEvents: number; subscriberBytes: number }
 
@@ -167,7 +167,7 @@ const SUBSCRIBER_LIMITS: SubscriberLimits = {
 
 /** What one case holds: the proxy, the Agent, and whatever it opened. */
 type WireHarness = Readonly<{
-  proxy: Proxy
+  proxy: Gateway
   agentId: string
   /** The Agent's folder, the one `cwd` its Sessions take. */
   folder: string
@@ -195,7 +195,7 @@ type ClientOptions = {
  * Awaited directly, not on the fake clock: composing reads that key from
  * disk, and real I/O takes no fixed count of clock steps.
  */
-async function composeProxy(runtime: WireRuntime, limits: SubscriberLimits) {
+async function composeGateway(runtime: WireRuntime, limits: SubscriberLimits) {
   const directory = await mkdtemp(join(tmpdir(), "aos-wire-contract-"))
   const invitationKey = join(directory, "invitation-key")
   await writeFile(
@@ -205,7 +205,7 @@ async function composeProxy(runtime: WireRuntime, limits: SubscriberLimits) {
   )
   const release = () => rm(directory, { recursive: true })
   try {
-    const proxy = await createConfiguredProxy(
+    const proxy = await createConfiguredGateway(
       {
         version: 1,
         deploymentId: "wire-contract",
@@ -670,7 +670,7 @@ function wireCase(
   return async () => {
     const clock = useFakeClock()
     const runtime = createRuntime()
-    const { proxy, release } = await composeProxy(runtime, limits)
+    const { proxy, release } = await composeGateway(runtime, limits)
     const clients: WireClient[] = []
     const connect: WireHarness["connect"] = (
       service,

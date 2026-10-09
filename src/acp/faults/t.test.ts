@@ -42,7 +42,7 @@ import {
 import type { FaultOperation } from "../test-faults"
 
 type Test = Awaited<ReturnType<typeof harness>>
-type Proxy = ReturnType<Test["restart"]>
+type Gateway = ReturnType<Test["restart"]>
 type Agent = Test["agent"]
 
 const GUEST_REF = "guest-ref"
@@ -100,7 +100,7 @@ type Member = {
 }
 
 /** A guest browser that redeemed an invitation to the seeded Session. */
-async function connectGuest(proxy: Proxy): Promise<Member> {
+async function connectGuest(proxy: Gateway): Promise<Member> {
   const invitations = createGuestInvitationService({
     issuer: "aos-invite",
     audience: "aos-guest",
@@ -142,7 +142,7 @@ async function connectGuest(proxy: Proxy): Promise<Member> {
 }
 
 /** An operator browser on `proxy`, registered with the Session's Agent. */
-async function connectOperator(proxy: Proxy, connectionId: string) {
+async function connectOperator(proxy: Gateway, connectionId: string) {
   const browser = await proxy.connect(connectionId)
   await browser.list()
   return { ...browser, sessionId: SESSION }
@@ -181,7 +181,7 @@ function foreignTurns() {
 type Table = {
   test: Test
   /** The proxy process the members are connected to now. */
-  proxy: Proxy
+  proxy: Gateway
   clock: ReturnType<typeof useFakeClock>
   operator: Member
   guest: Member

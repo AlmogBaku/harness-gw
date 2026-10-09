@@ -1,6 +1,6 @@
 import { pino, type DestinationStream } from "pino"
 
-import type { ProxyLogLevel } from "../config"
+import type { GatewayLogLevel } from "../config"
 import { redactForLog, redactText, type CredentialValues } from "../redaction"
 
 /**
@@ -10,12 +10,12 @@ import { redactForLog, redactText, type CredentialValues } from "../redaction"
  * credentials and every credential value the gateway has read, so the message
  * and the error pino copies into it are covered as well.
  */
-export function createProxyLogger({
+export function createGatewayLogger({
   level,
   credentials,
   destination,
 }: {
-  level: ProxyLogLevel
+  level: GatewayLogLevel
   credentials: CredentialValues
   destination?: DestinationStream
 }) {

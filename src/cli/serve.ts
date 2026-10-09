@@ -1,12 +1,12 @@
 import { HGW_ACP_PATH, HGW_API_PREFIX } from "../../protocol/acp"
-import { createConfiguredProxy } from "../composition"
-import { loadProxyConfig, nodeConfigFileAccess } from "../config-file"
+import { createConfiguredGateway } from "../composition"
+import { loadGatewayConfig, nodeConfigFileAccess } from "../config-file"
 import {
-  startProxyServer,
+  startGatewayServer,
   type ShutdownSettlement,
   type SocketUpgrade,
 } from "../server"
-import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
+import type { GatewayCliDependencies, GatewayLifecycle } from "./types"
 
 /** A listener answers its API and nothing else: pages belong to the client. */
 function listenerApp(
@@ -27,9 +27,9 @@ function listenerApp(
 /** The configuration `serve` runs with; `config check` loads it and stops. */
 export function loadServeConfig(
   { config }: { config?: string },
-  dependencies: ProxyCliDependencies
+  dependencies: GatewayCliDependencies
 ) {
-  return loadProxyConfig({
+  return loadGatewayConfig({
     flag: config,
     getenv: dependencies.getenv,
     discover: true,
@@ -37,17 +37,17 @@ export function loadServeConfig(
   })
 }
 
-export async function serveProxy(
+export async function serveGateway(
   { config }: { config?: string },
-  dependencies: ProxyCliDependencies
-): Promise<ProxyLifecycle> {
+  dependencies: GatewayCliDependencies
+): Promise<GatewayLifecycle> {
   const input = await loadServeConfig({ config }, dependencies)
   const logger = dependencies.createLogger(input.log.level)
-  const configured = await createConfiguredProxy(input, {
+  const configured = await createConfiguredGateway(input, {
     ...dependencies,
     logger,
   })
-  const start = dependencies.start ?? startProxyServer
+  const start = dependencies.start ?? startGatewayServer
   const graceMs = configured.config.shutdownGraceMs
   const listenerCount = configured.guest ? 2 : 1
   let runtimeClosed: Promise<void> | undefined

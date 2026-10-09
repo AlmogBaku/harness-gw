@@ -1,7 +1,7 @@
 import { describe, expect, it, onTestFinished } from "vitest"
 
 import { captureLogs } from "../../../test/support/log-capture"
-import { createProxyApp } from "../../app"
+import { createGatewayApp } from "../../app"
 import { createFilePassService } from "../../auth/file-pass"
 import { createAppFileCalls } from "../../core/app-files"
 import { appFileSettings } from "../../routes/app-files"
@@ -101,7 +101,7 @@ describe("Hermes MCP App file reads", () => {
  * The operator gateway serving MCP App files under the default settings, over
  * the Hermes runtime and one fake Hermes; closed when the test ends.
  */
-function hermesProxy() {
+function hermesGateway() {
   const hermes = fakeHermes()
   const { logger } = captureLogs()
   const instance = coordinatedRuntime(
@@ -121,7 +121,7 @@ function hermesProxy() {
     logger
   )
   onTestFinished(() => instance.close())
-  const proxy = createProxyApp({
+  const proxy = createGatewayApp({
     runtimeInstance: instance,
     logger,
     health: () => ({
@@ -154,7 +154,7 @@ function hermesProxy() {
 
 describe("Hermes MCP App files through the proxy", () => {
   it("serves a call's file until its real path leaves the Agent's folder", async () => {
-    const { hermes, file } = hermesProxy()
+    const { hermes, file } = hermesGateway()
     const report = `${PROJECT_FOLDER}/report.txt`
     const outside = "/etc/hermes/report.txt"
     hermes.addMcpServer("aos-ui")

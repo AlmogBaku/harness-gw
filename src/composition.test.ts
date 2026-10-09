@@ -13,7 +13,7 @@ import {
   type HermesGatewayOptions,
 } from "./adapters/hermes/gateway"
 import { CAPABILITIES } from "./acp/test-harness"
-import { createConfiguredProxy } from "./composition"
+import { createConfiguredGateway } from "./composition"
 import { sessionId } from "./core/ids"
 import type { RuntimeInstance, ServerRuntime } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
@@ -155,7 +155,7 @@ describe("configured proxy composition", () => {
     const logger = captureLogs().logger
     const credentials = new CredentialValues()
 
-    const configured = await createConfiguredProxy(input, {
+    const configured = await createConfiguredGateway(input, {
       runtimeFactory,
       logger,
       credentials,
@@ -188,7 +188,7 @@ describe("configured proxy composition", () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [] } : undefined
     )
-    const configured = await createConfiguredProxy(await configuration(), {
+    const configured = await createConfiguredGateway(await configuration(), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -217,7 +217,7 @@ describe("configured proxy composition", () => {
           credentials: options.credentials,
         }) as HermesRpcTransport & { credentials: typeof options.credentials }
     )
-    const configured = await createConfiguredProxy(await configuration(true), {
+    const configured = await createConfiguredGateway(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(transportFactory),
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -244,7 +244,7 @@ describe("configured proxy composition", () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
-    const configured = await createConfiguredProxy(await configuration(true), {
+    const configured = await createConfiguredGateway(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -295,7 +295,7 @@ describe("configured proxy composition", () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
-    const configured = await createConfiguredProxy(await configuration(true), {
+    const configured = await createConfiguredGateway(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -333,7 +333,7 @@ describe("configured proxy composition", () => {
   })
 
   it("names the rejected field when invitation input is invalid", async () => {
-    const configured = await createConfiguredProxy(await configuration(true), {
+    const configured = await createConfiguredGateway(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -377,7 +377,7 @@ describe("configured proxy composition", () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
-    const configured = await createConfiguredProxy(await configuration(true), {
+    const configured = await createConfiguredGateway(await configuration(true), {
       runtimeFactory: hermesRuntimeFactory(() => ({ request })),
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -408,7 +408,7 @@ describe("configured proxy composition", () => {
       push: await pushConfiguration(),
     }
 
-    const configured = await createConfiguredProxy(input, {
+    const configured = await createConfiguredGateway(input, {
       runtimeFactory: async () => runtimeInstance,
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -436,7 +436,7 @@ describe("configured proxy composition", () => {
   it("serves no push capability when a deployment configures none", async () => {
     const { runtimeInstance, subscribeExecutions } = observableRuntime()
 
-    const configured = await createConfiguredProxy(await configuration(), {
+    const configured = await createConfiguredGateway(await configuration(), {
       runtimeFactory: async () => runtimeInstance,
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
@@ -459,7 +459,7 @@ describe("configured proxy composition", () => {
     }
 
     await expect(
-      createConfiguredProxy(input, {
+      createConfiguredGateway(input, {
         runtimeFactory: async () => runtimeInstance,
         logger: captureLogs().logger,
         credentials: new CredentialValues(),
@@ -520,7 +520,7 @@ describe("configured proxy composition", () => {
       ) as unknown as typeof fetch
       const logs = captureLogs()
 
-      const configured = await createConfiguredProxy(
+      const configured = await createConfiguredGateway(
         await voiceConfiguration(await secretFile("voice-key", "tts-secret")),
         {
           runtimeFactory: async () => runtimeInstance,
@@ -584,7 +584,7 @@ describe("configured proxy composition", () => {
       await chmod(keyFile, 0o644)
 
       await expect(
-        createConfiguredProxy(await voiceConfiguration(keyFile), {
+        createConfiguredGateway(await voiceConfiguration(keyFile), {
           runtimeFactory: async () => runtimeInstance,
           logger: captureLogs().logger,
           credentials: new CredentialValues(),
@@ -594,7 +594,7 @@ describe("configured proxy composition", () => {
   })
 
   it("keeps liveness up with a native link down and reports rejected Hermes credentials as not ready", async () => {
-    const configured = await createConfiguredProxy(await configuration(), {
+    const configured = await createConfiguredGateway(await configuration(), {
       runtimeFactory: hermesRuntimeFactory(() => ({
         request: vi.fn(async () => {
           throw new HermesAuthenticationError()

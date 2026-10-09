@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { createProxyLogger } from "./cli/logger"
+import { createGatewayLogger } from "./cli/logger"
 import { CredentialValues, redactForLog } from "./redaction"
 
 describe("log redaction", () => {
@@ -118,7 +118,7 @@ describe("log redaction", () => {
     stored = "tok-test-2"
     await readPassword()
     const lines: string[] = []
-    const logger = createProxyLogger({
+    const logger = createGatewayLogger({
       level: "info",
       credentials,
       destination: { write: (line) => void lines.push(line) },

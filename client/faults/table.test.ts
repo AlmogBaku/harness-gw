@@ -124,7 +124,7 @@ const ROWS: Row[] = [
   },
   {
     fault: "the proxy closes at capacity (1013)",
-    inject: (pipe) => pipe.sockets[0]!.closeFromProxy(1013),
+    inject: (pipe) => pipe.sockets[0]!.closeFromGateway(1013),
     holds: { ms: CAPACITY_BACKOFF.minMs, status: "capacity" },
     bound: CAPACITY_BACKOFF.maxMs,
     status: "ready",
@@ -134,7 +134,7 @@ const ROWS: Row[] = [
   },
   {
     fault: "the proxy closes on a policy violation (1008)",
-    inject: (pipe) => pipe.sockets[0]!.closeFromProxy(1008),
+    inject: (pipe) => pipe.sockets[0]!.closeFromGateway(1008),
     bound: 0,
     status: "closed",
     session: undefined,

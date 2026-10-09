@@ -86,7 +86,7 @@ export class PipedSocket extends EventTarget {
   }
 
   /** The proxy closes the socket with `code`. */
-  closeFromProxy(code: number, reason = "") {
+  closeFromGateway(code: number, reason = "") {
     this.#end(code, reason, true)
   }
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { createProxyLogger } from "../../cli/logger"
+import { createGatewayLogger } from "../../cli/logger"
 import { CredentialValues } from "../../redaction"
 import {
   HermesAuthenticationError,
@@ -852,7 +852,7 @@ describe("Hermes gateway heartbeat and redial", () => {
   it("logs a refused socket factory apart from a failed handshake, without its token", async () => {
     vi.useFakeTimers()
     const lines: string[] = []
-    const log = createProxyLogger({
+    const log = createGatewayLogger({
       level: "warn",
       credentials: new CredentialValues(),
       destination: { write: (line) => void lines.push(line) },

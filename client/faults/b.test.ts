@@ -195,7 +195,7 @@ describe("browser connection faults", () => {
     await clock.advance(125)
     expect(connection.outage).toBe("reconnecting")
 
-    pipe.sockets[1]!.closeFromProxy(1008)
+    pipe.sockets[1]!.closeFromGateway(1008)
     await clock.advance(0)
     expect(connection.status).toBe("closed")
     expect(connection.outage).toBeUndefined()

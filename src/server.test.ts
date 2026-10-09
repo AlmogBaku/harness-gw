@@ -5,7 +5,7 @@ import { useFakeClock } from "../test/support/fake-clock"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext } from "./acp/types"
 import { HANDSHAKE_BUDGET, SPEECH_CALL_MS } from "./core/limits"
-import { startProxyServer, type ShutdownSettlement } from "./server"
+import { startGatewayServer, type ShutdownSettlement } from "./server"
 
 const ORIGINS = { allowedOrigins: ["https://aos.example.test"] }
 
@@ -40,7 +40,7 @@ describe("Bun proxy server lifecycle", () => {
     const close = vi.fn(listener.close ?? (async () => undefined))
     const settlements: ShutdownSettlement[] = []
     let served: Record<string, unknown> | undefined
-    const lifecycle = startProxyServer({
+    const lifecycle = startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
@@ -181,7 +181,7 @@ describe("Bun proxy server lifecycle", () => {
     const stop = vi.fn(async () => undefined)
     const close = vi.fn(async () => undefined)
     const serve = vi.fn(() => ({ stop }))
-    const server = startProxyServer({
+    const server = startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       host: "127.0.0.1",
@@ -225,7 +225,7 @@ describe("Bun proxy server lifecycle", () => {
       return { stop: vi.fn() }
     })
     const app = { fetch: vi.fn(() => new Response(null, { status: 204 })) }
-    startProxyServer({
+    startGatewayServer({
       origins: ORIGINS,
       app,
       sockets: [{ path: "/api/v1/acp", subpaths: true, service: acpService }],
@@ -327,7 +327,7 @@ describe("Bun proxy server lifecycle", () => {
       headers?: Record<string, string>
     }> = []
     let served: Record<string, unknown> | undefined
-    startProxyServer({
+    startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
@@ -413,7 +413,7 @@ describe("Bun proxy server lifecycle", () => {
     const socket = { receive: vi.fn(), close: vi.fn() }
     let refuse = true
     let served: Record<string, unknown> | undefined
-    startProxyServer({
+    startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
@@ -476,7 +476,7 @@ describe("Bun proxy server lifecycle", () => {
     const origin = "https://aos.example.test"
     const contexts: AcpConnectionContext[] = []
     let served: Record<string, unknown> | undefined
-    startProxyServer({
+    startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
@@ -590,7 +590,7 @@ describe("Bun proxy server lifecycle", () => {
     }
     let served: Record<string, unknown> | undefined
     let data: unknown
-    startProxyServer({
+    startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
@@ -641,7 +641,7 @@ describe("Bun proxy server lifecycle", () => {
 
   it("sets Bun WebSocket limits on the mounted websocket options", () => {
     let served: Record<string, unknown> | undefined
-    startProxyServer({
+    startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [
@@ -689,7 +689,7 @@ describe("Bun proxy server lifecycle", () => {
     }
     let served: Record<string, unknown> | undefined
     let data: unknown
-    startProxyServer({
+    startGatewayServer({
       origins: ORIGINS,
       app: { fetch: vi.fn() },
       sockets: [

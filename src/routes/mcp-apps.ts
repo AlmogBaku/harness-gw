@@ -6,7 +6,7 @@ import {
   ReadResourceResultSchema,
   viewerFileResult,
 } from "../../protocol/mcp-apps"
-import type { ProxyAppOptions } from "../app"
+import type { GatewayAppOptions } from "../app"
 import { coreFailure } from "../core/failures"
 import * as ids from "../core/ids"
 import type { ServerMcpApps, ServerRuntime } from "../core/runtime"
@@ -25,7 +25,7 @@ import {
   type AppTarget,
 } from "./app-files"
 import { boundedJson, errorResponse } from "./http"
-import type { ProxyRouteApp } from "./types"
+import type { GatewayRouteApp } from "./types"
 
 /**
  * MCP App views, keyed by the tool call that opened them. The browser names no
@@ -287,8 +287,8 @@ export function mcpAppRoutes(
 }
 
 export function registerMcpAppRoutes(
-  app: ProxyRouteApp,
-  options: ProxyAppOptions,
+  app: GatewayRouteApp,
+  options: GatewayAppOptions,
   requireRuntime: (request: Request) => Promise<ServerRuntime>,
   requireScopedSession: (
     runtime: ServerRuntime,

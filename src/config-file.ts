@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path"
 import { parseAllDocuments } from "yaml"
 import type { z } from "zod"
 
-import { ProxyConfigSchema, type ProxyConfig } from "./config"
+import { GatewayConfigSchema, type GatewayConfig } from "./config"
 
 /**
  * The private gateway configuration file: where it is found, how it is read, and
@@ -27,26 +27,26 @@ export class GatewayConfigurationError extends Error {
   }
 }
 
-export type ProxyEnvReader = (name: string) => string | undefined
+export type GatewayEnvReader = (name: string) => string | undefined
 
-export type ProxyConfigPathSource = {
+export type GatewayConfigPathSource = {
   /** `--config`, the only source that outranks the environment. */
   flag?: string
-  getenv: ProxyEnvReader
+  getenv: GatewayEnvReader
   /** `invite` resolves no default path, because minting a bearer link is opt-in. */
   discover?: boolean
 }
 
 /** Only the facts the loader checks, so a test can state them as literals. */
-export type ProxyConfigFileFacts = {
+export type GatewayConfigFileFacts = {
   isFile(): boolean
   mode: number
   uid: number
   size: number
 }
 
-export type ProxyConfigFileAccess = {
-  stat: (path: string) => Promise<ProxyConfigFileFacts>
+export type GatewayConfigFileAccess = {
+  stat: (path: string) => Promise<GatewayConfigFileFacts>
   readFile: (path: string, encoding: "utf8") => Promise<string>
   /** Absent on a platform without uids, which fails the ownership check. */
   getuid?: () => number
@@ -58,11 +58,11 @@ function trimmed(value: string | undefined) {
   return text === undefined || text === "" ? undefined : text
 }
 
-export function resolveProxyConfigPath({
+export function resolveGatewayConfigPath({
   flag,
   getenv,
   discover = true,
-}: ProxyConfigPathSource): { path: string; explicit: boolean } {
+}: GatewayConfigPathSource): { path: string; explicit: boolean } {
   const explicitPath = trimmed(flag) ?? trimmed(getenv(PATH_VARIABLE))
   if (explicitPath !== undefined) return { path: explicitPath, explicit: true }
   if (!discover)
@@ -89,8 +89,8 @@ export function resolveProxyConfigPath({
 
 /** The real file access `serve` and `invite` read configuration through. */
 export function nodeConfigFileAccess(
-  overrides: Partial<ProxyConfigFileAccess> = {}
-): ProxyConfigFileAccess {
+  overrides: Partial<GatewayConfigFileAccess> = {}
+): GatewayConfigFileAccess {
   return {
     stat: overrides.stat ?? stat,
     readFile: overrides.readFile ?? readFile,
@@ -115,9 +115,9 @@ function failureCode(error: unknown) {
 async function readConfigFile(
   path: string,
   explicit: boolean,
-  access: ProxyConfigFileAccess
+  access: GatewayConfigFileAccess
 ): Promise<string | undefined> {
-  let facts: ProxyConfigFileFacts
+  let facts: GatewayConfigFileFacts
   try {
     // Symlinks are followed on purpose: a dotfile manager links `~/.config`.
     facts = await access.stat(path)
@@ -265,7 +265,7 @@ const RUNTIME_KINDS = ["hermes", "opencode", "openclaw"] as const
 
 type RuntimeKind = (typeof RUNTIME_KINDS)[number]
 
-export type ProxyEnvOverride = {
+export type GatewayEnvOverride = {
   path: string[]
   /** Appended to `HARNESS_GW_` to form the variable an operator exports. */
   suffix: string
@@ -283,7 +283,7 @@ export type ProxyEnvOverride = {
  * the whole `mcpApps` block are file-only, and `HARNESS_GW_CONFIG_FILE` names
  * the file itself.
  */
-export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
+export const PROXY_ENV_OVERRIDES: readonly GatewayEnvOverride[] = [
   { path: ["deploymentId"], suffix: "DEPLOYMENT_ID", type: "string" },
   { path: ["publicOrigin"], suffix: "PUBLIC_ORIGIN", type: "string" },
   { path: ["listen", "host"], suffix: "LISTEN_HOST", type: "string" },
@@ -487,7 +487,7 @@ export const PROXY_ENV_OVERRIDES: readonly ProxyEnvOverride[] = [
 /** The environment outranks the file here too, so a row knows its branch. */
 function resolveRuntimeKind(
   document: Record<string, unknown>,
-  getenv: ProxyEnvReader
+  getenv: GatewayEnvReader
 ): RuntimeKind | undefined {
   const configured =
     trimmed(getenv(`${PROXY_ENV_PREFIX}RUNTIME_KIND`)) ??
@@ -498,7 +498,7 @@ function resolveRuntimeKind(
 function overrideValue(
   variable: string,
   raw: string,
-  type: ProxyEnvOverride["type"]
+  type: GatewayEnvOverride["type"]
 ) {
   if (type === "string") return raw
   if (type === "boolean") {
@@ -514,7 +514,7 @@ function overrideValue(
 }
 
 function assertOverrideApplies(
-  override: ProxyEnvOverride,
+  override: GatewayEnvOverride,
   variable: string,
   runtimeKind: RuntimeKind | undefined,
   guestConfigured: boolean
@@ -559,7 +559,7 @@ function setLeaf(
  */
 function applyEnvOverrides(
   config: Record<string, unknown>,
-  getenv: ProxyEnvReader,
+  getenv: GatewayEnvReader,
   runtimeKind: RuntimeKind | undefined,
   guestConfigured: boolean
 ) {
@@ -614,10 +614,10 @@ function invalidConfiguration(
   )
 }
 
-export async function loadProxyConfig(
-  options: ProxyConfigPathSource & ProxyConfigFileAccess
-): Promise<ProxyConfig> {
-  const { path, explicit } = resolveProxyConfigPath(options)
+export async function loadGatewayConfig(
+  options: GatewayConfigPathSource & GatewayConfigFileAccess
+): Promise<GatewayConfig> {
+  const { path, explicit } = resolveGatewayConfigPath(options)
   const source = await readConfigFile(path, explicit, options)
   const document = source === undefined ? {} : parseConfigDocument(path, source)
   // The runtime branch resolves first, because it decides which rows apply.
@@ -636,7 +636,7 @@ export async function loadProxyConfig(
     runtimeKind,
     isRecord(document.guest)
   )
-  const result = ProxyConfigSchema.safeParse(merged)
+  const result = GatewayConfigSchema.safeParse(merged)
   if (result.success) return result.data
   throw invalidConfiguration(
     source === undefined

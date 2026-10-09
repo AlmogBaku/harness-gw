@@ -1,15 +1,15 @@
-import type { ConfiguredProxyDependencies } from "../composition"
-import type { ProxyLogLevel } from "../config"
-import type { ProxyConfigFileAccess } from "../config-file"
-import type { startProxyServer } from "../server"
+import type { ConfiguredGatewayDependencies } from "../composition"
+import type { GatewayLogLevel } from "../config"
+import type { GatewayConfigFileAccess } from "../config-file"
+import type { startGatewayServer } from "../server"
 
-export type ProxyCliDependencies = Omit<ConfiguredProxyDependencies, "logger"> &
-  Partial<ProxyConfigFileAccess> & {
+export type GatewayCliDependencies = Omit<ConfiguredGatewayDependencies, "logger"> &
+  Partial<GatewayConfigFileAccess> & {
     /** Builds the proxy log once the configuration has named its level. */
     createLogger: (
-      level: ProxyLogLevel
-    ) => ConfiguredProxyDependencies["logger"]
-    start?: typeof startProxyServer
+      level: GatewayLogLevel
+    ) => ConfiguredGatewayDependencies["logger"]
+    start?: typeof startGatewayServer
     /**
      * Required: the only `process.env`-backed reader is built in `cli.ts`, so a
      * test can never discover the operator's own configuration file.
@@ -23,7 +23,7 @@ export type ProxyCliDependencies = Omit<ConfiguredProxyDependencies, "logger"> &
     exit?: (code: number) => void
   }
 
-export type ProxyLifecycle = {
+export type GatewayLifecycle = {
   server: unknown
   guestServer?: unknown
   shutdown(): Promise<void>

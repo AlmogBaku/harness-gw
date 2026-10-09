@@ -2,14 +2,14 @@ import { Command, CommanderError } from "commander"
 
 import { createInvitationLink, type InviteFlags } from "./invite"
 import { checkConfiguredSecrets } from "../composition"
-import { loadServeConfig, serveProxy } from "./serve"
-import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
+import { loadServeConfig, serveGateway } from "./serve"
+import type { GatewayCliDependencies, GatewayLifecycle } from "./types"
 
-export async function runProxyCli(
+export async function runGatewayCli(
   argv: string[],
-  dependencies: ProxyCliDependencies
-): Promise<ProxyLifecycle | undefined> {
-  let result: ProxyLifecycle | undefined
+  dependencies: GatewayCliDependencies
+): Promise<GatewayLifecycle | undefined> {
+  let result: GatewayLifecycle | undefined
   const writeOut =
     dependencies.writeOut ?? ((value: string) => process.stdout.write(value))
   const command = new Command()
@@ -33,7 +33,7 @@ export async function runProxyCli(
       "configuration file; discovered under XDG_CONFIG_HOME when omitted"
     )
     .action(async ({ config }: { config?: string }) => {
-      result = await serveProxy({ config }, dependencies)
+      result = await serveGateway({ config }, dependencies)
     })
 
   command

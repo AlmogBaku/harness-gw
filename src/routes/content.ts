@@ -5,11 +5,11 @@ import {
   SessionTranscriptionRequestSchema,
   SessionTranscriptionResponseSchema,
 } from "../../protocol"
-import type { ProxyAppOptions } from "../app"
+import type { GatewayAppOptions } from "../app"
 import { MAXIMUM_STAGE_REQUEST_BYTES } from "../core/attachment-stages"
 import type { ServerAttachmentStages, ServerRuntime } from "../core/runtime"
 import { boundedJson, errorResponse } from "./http"
-import type { ProxyRouteApp } from "./types"
+import type { GatewayRouteApp } from "./types"
 
 export async function loadSessionArtifact(
   runtime: ServerRuntime,
@@ -46,8 +46,8 @@ export function recordingBytes(dataUrl: string, mimeType: string) {
 }
 
 export function registerContentRoutes(
-  app: ProxyRouteApp,
-  options: ProxyAppOptions,
+  app: GatewayRouteApp,
+  options: GatewayAppOptions,
   attachmentStages: ServerAttachmentStages,
   requireRuntime: (request: Request) => Promise<ServerRuntime>,
   requireScopedSession: (

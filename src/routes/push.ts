@@ -3,11 +3,11 @@ import {
   PushRegistrationSchema,
   PushUnregistrationSchema,
 } from "../../protocol/push"
-import type { ProxyAppOptions } from "../app"
+import type { GatewayAppOptions } from "../app"
 import { parsePushEndpoint } from "../push/endpoint"
 import { PushRegistrationLimitError } from "../push/registrations"
 import { boundedJson, errorResponse } from "./http"
-import type { ProxyRouteApp } from "./types"
+import type { GatewayRouteApp } from "./types"
 
 const PUSH_PATH = "/api/v1/push"
 const SUBSCRIPTIONS_PATH = `${PUSH_PATH}/subscriptions`
@@ -18,8 +18,8 @@ const SUBSCRIPTIONS_PATH = `${PUSH_PATH}/subscriptions`
  * capability it does not have, and refuses the writes outright.
  */
 export function registerPushRoutes(
-  app: ProxyRouteApp,
-  options: ProxyAppOptions,
+  app: GatewayRouteApp,
+  options: GatewayAppOptions,
   resolvePrincipal: (request: Request) => string
 ) {
   const { push } = options
