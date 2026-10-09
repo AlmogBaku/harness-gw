@@ -1,6 +1,6 @@
 /**
  * The process-level fault handlers over a real Bun process. Runs under `bun test` (not vitest) because the relevant
- * behavior — Bun 1.3.10 exiting on an unhandled rejection before the handler
+ * behavior — Bun exiting on an unhandled rejection before the handler
  * intercepts it — can only be verified in a real process.
  */
 import { afterEach, describe, expect, it } from "bun:test"

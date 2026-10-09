@@ -125,9 +125,8 @@ describe("@harness-gw/sdk package", () => {
   })
 
   /**
-   * The bundle keeps every value its entry exports. Bun before 1.4.1 drops a
-   * module an entry re-exports by name from a side-effect-free package, which
-   * is why `sideEffects` names the two entries.
+   * The bundle keeps every value its entry exports, though the package is
+   * side-effect-free: Bun before 1.4.1 dropped a module an entry re-exports.
    */
   it.each([
     ["client/index.js", clientSource],

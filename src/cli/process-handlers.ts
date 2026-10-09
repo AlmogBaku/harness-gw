@@ -16,7 +16,7 @@ export type ProcessLike = {
  * - `uncaughtException`: logs one error line and exits 1 so the supervisor
  *   restarts the process.
  *
- * An unhandled rejection in Bun 1.3.10 terminates the process and drops every
+ * An unhandled rejection in Bun terminates the process and drops every
  * socket; this handler intercepts it before Bun's default action.
  */
 export function installProcessHandlers(

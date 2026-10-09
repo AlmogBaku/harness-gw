@@ -4,10 +4,7 @@
   "description": "A gateway that puts Hermes, OpenClaw, and OpenCode behind one ACP WebSocket, and the browser client and protocol SDK for it.",
   "license": "Apache-2.0",
   "type": "module",
-  "sideEffects": [
-    "./client/index.ts",
-    "./protocol/sdk.ts"
-  ],
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./dist/client/index.d.ts",
