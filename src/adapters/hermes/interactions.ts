@@ -99,6 +99,9 @@ export type HermesInteractionAttachments = {
  * generated contract is 176 KB of unrelated methods and is deliberately not
  * vendored. Hermes owns the wire, so every field is validated before use; the
  * declarations only name the upstream field set.
+ *
+ * Copyright (c) 2025 Nous Research, MIT License; see
+ * `vendor/hermes-shared/LICENSE`.
  */
 
 type ClarifyQuestion = {

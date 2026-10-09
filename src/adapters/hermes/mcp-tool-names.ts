@@ -7,6 +7,9 @@ import type { McpToolNameScheme } from "../../mcp-apps/tool-names"
  * (`sanitize_mcp_name_component`, `mcp_prefixed_tool_name`): the raw name is
  * `mcp__<server>__<tool>` with both parts sanitized, clamped to 64 characters
  * by a stable hash suffix.
+ *
+ * Copyright (c) 2025 Nous Research, MIT License; see
+ * `vendor/hermes-shared/LICENSE`.
  */
 
 const PREFIX = "mcp__"

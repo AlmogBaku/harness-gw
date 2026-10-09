@@ -62,3 +62,14 @@ A `v*` tag matching `package.json`'s version runs `release.yml`: after a
 reviewer approves the `release` environment, it publishes `@harness-gw/sdk` to
 npm through trusted publishing with provenance, and pushes the gateway image to
 GHCR with a build attestation.
+
+## Licence
+
+Apache-2.0; see [LICENSE](LICENSE). The Hermes adapter carries code from
+[Hermes](https://github.com/NousResearch/hermes-agent), Copyright (c) 2025 Nous
+Research, under the MIT License in
+[`src/adapters/hermes/vendor/hermes-shared/LICENSE`](src/adapters/hermes/vendor/hermes-shared/LICENSE):
+the vendored `vendor/hermes-shared/` modules, the MCP tool naming in
+`src/adapters/hermes/mcp-tool-names.ts`, the gateway contract shapes in
+`src/adapters/hermes/interactions.ts`, and the sensitive file names in
+`src/core/artifact-path.ts`.

@@ -7,6 +7,9 @@ const MAX_PATH_BYTES = 4_096
  * Names that hold credentials or pairing state, ported from the retired Hermes
  * artifact publisher. Every path component is held to them, so neither a file
  * nor a directory by one of these names can be published.
+ *
+ * Copyright (c) 2025 Nous Research, MIT License; see
+ * `src/adapters/hermes/vendor/hermes-shared/LICENSE`.
  */
 const SENSITIVE_NAMES: ReadonlySet<string> = new Set([
   "auth.json",
