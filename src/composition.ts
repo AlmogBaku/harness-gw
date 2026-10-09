@@ -38,7 +38,6 @@ import { deriveVapidPublicKey } from "./push/vapid"
 import type { OriginPolicy } from "./origins"
 import { CredentialValues } from "./redaction"
 import { appFileSettings, type AppFileOptions } from "./routes/app-files"
-import { isInvitationCreation } from "./routes/invitations"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import {
   createOpenAiCompatibleSynthesizer,
@@ -419,7 +418,6 @@ export async function createConfiguredProxy(
     app,
     origins: {
       allowedOrigins: listenerOrigins(config),
-      admitsMissing: isInvitationCreation,
     } satisfies OriginPolicy,
     config,
     runtimeInstance,

@@ -6,8 +6,6 @@
 export type OriginPolicy = {
   /** The exact origins this listener's pages are served from. */
   allowedOrigins: readonly string[]
-  /** A request admitted with no Origin at all, from a script that is no browser. */
-  admitsMissing?: (request: Request) => boolean
 }
 
 /** The methods a page reads with; every other one changes state. */
@@ -20,7 +18,9 @@ function refused() {
 
 /**
  * Serves `request` through `next` only when its Origin may send it. A socket
- * upgrade or a state change needs a listed Origin; a read is never checked, so
+ * upgrade or a state change from a browser needs a listed Origin; one with no
+ * Origin at all comes from no browser page, so it passes, as a script or a
+ * non-browser ACP client sends it. A read is never checked, so
  * a view in an opaque-origin frame still reads the file its pass names. CORS
  * answers listed origins alone, and never with credentials.
  */
@@ -50,12 +50,7 @@ export async function guardOrigins(
   }
   const checked =
     !READ_METHODS.has(request.method) || request.headers.has("upgrade")
-  if (
-    checked &&
-    !listed &&
-    !(origin === null && policy.admitsMissing?.(request) === true)
-  )
-    return refused()
+  if (checked && origin !== null && !listed) return refused()
   const response = await next()
   if (!response) return response
   const answered = new Response(response.body, response)

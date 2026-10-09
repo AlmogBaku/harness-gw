@@ -291,7 +291,7 @@ describe("configured proxy composition", () => {
     })
   })
 
-  it("issues invitations without an Origin header, but never to a foreign page or on the guest listener", async () => {
+  it("issues invitations without an Origin header, but never to a foreign page, and not at all on the guest listener", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
@@ -329,7 +329,7 @@ describe("configured proxy composition", () => {
           configured.guest!.app.fetch(invite())
         )
       )?.status
-    ).toBe(403)
+    ).toBe(404)
   })
 
   it("names the rejected field when invitation input is invalid", async () => {

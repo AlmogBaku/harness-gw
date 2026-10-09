@@ -9,14 +9,6 @@ import type { ProxyRouteApp } from "./types"
 
 export const GUEST_INVITATIONS_PATH = "/api/v1/guest-invitations"
 
-/** The invite skill's `curl` sends no Origin, and no browser page creates an invitation. */
-export function isInvitationCreation(request: Request) {
-  return (
-    request.method === "POST" &&
-    new URL(request.url).pathname === GUEST_INVITATIONS_PATH
-  )
-}
-
 export function registerInvitationRoutes(
   app: ProxyRouteApp,
   options: {

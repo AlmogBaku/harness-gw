@@ -56,10 +56,9 @@ defaulting to its `publicOrigin`; the two listeners may not share one. Before
 any socket or route is reached:
 
 - a WebSocket upgrade, or any request other than GET, HEAD and OPTIONS, needs
-  an `Origin` on that list; a missing, `null` or foreign one gets 403. A client
-  that is no browser must still send a listed `Origin`. The one exception is
-  `POST /api/v1/guest-invitations` on the operator listener, which admits a
-  request with no `Origin`, for scripts.
+  an `Origin` on that list when it carries one; a `null` or foreign one gets
+  403. A request with no `Origin` comes from no browser page, so it is
+  admitted: a script or a non-browser ACP client needs no `Origin`.
 - a GET or HEAD is never checked, so a view in an opaque-origin frame can read
   the file its pass names.
 - CORS answers listed origins only (`Access-Control-Allow-Origin` with

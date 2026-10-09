@@ -3,14 +3,13 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { guardOrigins, type OriginPolicy } from "./origins"
-import { isInvitationCreation } from "./routes/invitations"
 
 const OPERATOR = "https://aos.example.test"
 const GUEST = "https://guest.example.test"
 const FOREIGN = "https://attacker.example.test"
 /** Each lane's policy, as the composition builds it. */
 const LANES: Record<"operator" | "guest", OriginPolicy> = {
-  operator: { allowedOrigins: [OPERATOR], admitsMissing: isInvitationCreation },
+  operator: { allowedOrigins: [OPERATOR] },
   guest: { allowedOrigins: [GUEST] },
 }
 
@@ -48,7 +47,7 @@ describe("origin guard", () => {
     ["operator", OPERATOR],
     ["guest", GUEST],
   ] as const)(
-    "on the %s listener admits a state change or upgrade from a listed page only",
+    "on the %s listener admits a state change or upgrade from a listed page or from no page",
     async (lane, own) => {
       const other = lane === "operator" ? GUEST : OPERATOR
       const outcomes: Record<string, number | "reached"> = {}
@@ -74,8 +73,8 @@ describe("origin guard", () => {
       expect(outcomes).toEqual({
         "post own": "reached",
         "upgrade own": "reached",
-        "post missing": 403,
-        "upgrade missing": 403,
+        "post missing": "reached",
+        "upgrade missing": "reached",
         "post null": 403,
         "upgrade null": 403,
         "post foreign": 403,
@@ -85,24 +84,6 @@ describe("origin guard", () => {
       })
     }
   )
-
-  it("admits a missing Origin only on the operator's invitation creation", async () => {
-    const invite = { method: "POST" }
-    expect(
-      (await served("operator", "/api/v1/guest-invitations", invite)).reached
-    ).toBe(true)
-    expect(
-      (await served("guest", "/api/v1/guest-invitations", invite)).reached
-    ).toBe(false)
-    expect(
-      (
-        await served("operator", "/api/v1/guest-invitations", {
-          ...invite,
-          origin: FOREIGN,
-        })
-      ).reached
-    ).toBe(false)
-  })
 
   it("answers CORS for a listed origin alone, varying by Origin and never with credentials", async () => {
     const preflight = {
