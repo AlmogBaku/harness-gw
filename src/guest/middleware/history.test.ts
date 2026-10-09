@@ -126,7 +126,7 @@ describe("guest history projection", () => {
             content: [
               {
                 type: "data",
-                name: "aos-notice",
+                name: "hgw-notice",
                 data: { severity: "info", title: "/loop wakeup #1" },
               },
               { type: "reasoning", text: "Check it" },
@@ -182,7 +182,7 @@ describe("guest history projection", () => {
               error:
                 "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
             },
-            turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
+            turnErrorCode: "HGW_PROVIDER_RETRYABLE_FAILURE",
           },
         ],
         total: 2,
@@ -259,7 +259,7 @@ describe("guest history projection", () => {
               error:
                 "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
             },
-            turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
+            turnErrorCode: "HGW_PROVIDER_RETRYABLE_FAILURE",
           },
         ],
         total: 1,

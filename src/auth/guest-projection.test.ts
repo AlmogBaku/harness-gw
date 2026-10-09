@@ -6,7 +6,7 @@ import { projectGuestOutbound } from "./guest-projection"
 const authorization: GuestAuthorization = {
   version: 1,
   role: "guest",
-  issuer: "https://aos.example.test",
+  issuer: "aos-invite",
   audience: "aos-guest",
   deploymentId: "aos-prod-il1",
   principalId: "guest_4Ez4k6W5",
@@ -14,6 +14,7 @@ const authorization: GuestAuthorization = {
   runtimeId: "hermes-primary",
   agentId: "agent_planner",
   sessionId: "session_launch",
+  ref: "launch",
   operation: "messages:read",
   capabilities: [
     "artifact-metadata",

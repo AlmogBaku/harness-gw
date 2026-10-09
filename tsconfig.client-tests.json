@@ -4,5 +4,5 @@
     "lib": ["DOM", "DOM.Iterable", "ES2024", "ESNext.Disposable"],
     "types": ["node"]
   },
-  "include": ["client/**/*.ts"]
+  "include": ["client/**/*.ts", "test/architecture/package-contents.test.ts"]
 }

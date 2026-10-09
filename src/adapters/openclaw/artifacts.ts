@@ -126,7 +126,7 @@ function base64Bytes(value: string) {
 /**
  * The bytes `artifacts.download` answered with: inline base64, or a ticketed
  * gateway media URL fetched from the gateway's own origin. Any other URL is
- * refused rather than fetched, so a transcript cannot aim the proxy elsewhere.
+ * refused rather than fetched, so a transcript cannot aim the gateway elsewhere.
  */
 export async function downloadBytes(
   download: OpenClawArtifactDownload,

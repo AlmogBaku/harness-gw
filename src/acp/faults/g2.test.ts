@@ -35,7 +35,7 @@ const reads = (test: Test) =>
     ).length
 
 /** A turn `test` started, which every member follows. */
-async function running(test: Test, members: readonly Test[]) {
+async function running(test: Test, members: readonly Pick<Test, "recorder">[]) {
   await prompt(test, "Summarize")
   test.sources[0]?.emit(turnStarted())
   chunk(test.sources[0], "Live")

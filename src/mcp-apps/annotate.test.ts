@@ -9,6 +9,7 @@ import type {
   ServerRuntime,
   SessionScope,
 } from "../core/runtime"
+import { providerSessionId, sessionId } from "../core/ids"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
 import { withMcpApps } from "./annotate"
@@ -61,8 +62,8 @@ class NativeTurn implements ServerTurnHandle {
 
 const scope: SessionScope = {
   agentId: "aos-test",
-  providerSessionId: "stored-1",
-  sessionId: "stored-1",
+  providerSessionId: providerSessionId("stored-1"),
+  sessionId: sessionId("stored-1"),
 }
 
 const access = {

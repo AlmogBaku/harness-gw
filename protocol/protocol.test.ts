@@ -645,7 +645,7 @@ describe("AOS v1 normalized protocol", () => {
             },
             {
               type: "data",
-              name: "aos.artifact",
+              name: "hgw.artifact",
               data: { id: "artifact-1", filename: "report.md" },
             },
             { type: "text", text: "Done" },
@@ -963,7 +963,7 @@ describe("AOS v1 normalized protocol", () => {
 
   it("keeps every AOS error code clear of the codes ACP defines", () => {
     // Each static builder the SDK ships is one ACP error, so an SDK that adds a
-    // code inside the AOS block fails here.
+    // code inside the hgw block fails here.
     const builders = RequestError as unknown as Record<string, unknown>
     const acpCodes = Object.getOwnPropertyNames(RequestError).flatMap(
       (name) => {

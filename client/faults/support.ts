@@ -1,7 +1,7 @@
 /**
  * The browser fault rows' shared setup: a browser connection to the harness
- * proxy over piped sockets, the frames it sends, and the transcript it holds.
- * Only a test file may import the proxy, so each row hands its harness in.
+ * gateway over piped sockets, the frames it sends, and the transcript it holds.
+ * Only a test file may import the gateway, so each row hands its harness in.
  */
 import { onTestFinished, vi } from "vitest"
 
@@ -11,7 +11,7 @@ import { createAcpConnection } from "../connection"
 import type { AcpConnection } from "../types"
 import { PipedSocket, pipedSockets } from "../test-socket"
 
-/** What a browser connection needs of the harness proxy. */
+/** What a browser connection needs of the harness gateway. */
 type Harness = {
   agentApp: Parameters<typeof pipedSockets>[0]
   catalog: { agents(): Promise<AgentCatalogResponse> }
@@ -20,7 +20,7 @@ type Harness = {
 }
 
 /**
- * A browser connection to the harness proxy over piped sockets, not started.
+ * A browser connection to the harness gateway over piped sockets, not started.
  * The test fakes the clock first, so every deadline runs on it. The catalog
  * lists the harness's Agent, as the roster a browser opens a Session from
  * does, so the browser names that Agent's folder.
@@ -63,7 +63,7 @@ export type Frame = {
 
 /**
  * Every frame the browser sends, in order. `fault` sees each as it leaves and
- * may fault its socket instead, so the proxy never receives that frame.
+ * may fault its socket instead, so the gateway never receives that frame.
  */
 export function sentFrames(
   fault?: (frame: Frame, socket: PipedSocket) => boolean

@@ -25,12 +25,12 @@ import type {
 } from "../protocol/acp"
 
 /**
- * The browser-side seam over one ACP v2 WebSocket connection to the proxy.
+ * The browser-side seam over one ACP v2 WebSocket connection to the gateway.
  * `connection.ts` implements it; the runtime, thread list, interactions, and
  * workspace client consume it and are tested against a fake.
  */
 
-/** `capacity` is a reconnect the proxy asked to wait out, being full. */
+/** `capacity` is a reconnect the gateway asked to wait out, being full. */
 export type AcpConnectionStatus =
   "connecting" | "ready" | "reconnecting" | "capacity" | "closed"
 
@@ -79,7 +79,7 @@ export type AcpSessionReplayListener = () =>
   ((replayed: boolean) => void) | void
 
 /**
- * Where one opened Session stands: `joining` until the proxy has joined it,
+ * Where one opened Session stands: `joining` until the gateway has joined it,
  * `joined` while it follows the Session, `unavailable` while a failed join
  * waits out its backoff or one the transport refuses waits for the next, and
  * `gone` once the provider no longer has it.
@@ -198,7 +198,7 @@ export interface AcpConnection {
     request: HgwAgentUpdateRequest
   ): Promise<z.infer<typeof HgwAgentUpdateResponseSchema>>
 
-  /** Extension notifications by method name (`AOS_METHODS.notify.*`). */
+  /** Extension notifications by method name (`HGW_METHODS.notify.*`). */
   subscribeNotification(
     method: string,
     listener: (params: unknown) => void

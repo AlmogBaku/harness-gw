@@ -1,4 +1,4 @@
-# AOS runtime gateway architecture
+# Gateway architecture
 
 This document describes the shipped gateway. Every H2 is tagged
 `Status: Implemented` or `Status: Target (not implemented)`. All target
@@ -494,7 +494,7 @@ secrets is never logged. The startup path is different. `loadProxyConfig` in
 discovered `${XDG_CONFIG_HOME:-$HOME/.config}/harness-gw/config.yaml`), checks
 the file, parses the YAML, merges defaults and `HARNESS_GW_*` overrides, and
 validates with the exported schema directly; a failure becomes a
-`ProxyConfigurationError` carrying the file path and the field paths (never a
+`GatewayConfigurationError` carrying the file path and the field paths (never a
 value), and `src/cli.ts` logs it through `describeStartFailure`, which unwraps
 only that class into a plain object. `redactForLog` therefore keeps its
 every-`Error`-is-opaque invariant for every other failure while a configuration
@@ -603,7 +603,7 @@ implementation:
 - **Operator authentication cookies.** Server-side cookie jars or trusted
   identity assertions for the operator listener.
 
-Until these are implemented the proxy runs as a single-process, single-runtime,
+Until these are implemented the gateway runs as a single-process, single-runtime,
 no-application-login server.
 
 ---

@@ -17,13 +17,17 @@ import {
   HermesRpcUncertainError,
 } from "./gateway"
 import { createHermesHttp } from "./http"
+import { asFetch, type FetchInput } from "./test-utils/fetcher"
+import { jsonObject } from "./test-utils/json-object"
 import { rpcRouter } from "./test-utils/rpc-router"
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import { PendingRequestKind } from "../../core/events"
+import { providerSessionId, sessionId } from "../../core/ids"
 import {
   ServerAgentUpdateUnsupportedError,
   ServerTurnSteerUncertainError,
+  type SessionScope,
 } from "../../core/runtime"
 import { HermesTurnPublicError, HermesTurnRewindConflictError } from "./run"
 import { HermesInteractionPublicError } from "./interactions"
@@ -36,6 +40,15 @@ import {
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
 } from "./workspace"
+
+/** The researcher's Session scope whose public and provider ids are both `id`. */
+function researcherScope(id: string): SessionScope {
+  return {
+    agentId: "researcher",
+    providerSessionId: providerSessionId(id),
+    sessionId: sessionId(id),
+  }
+}
 
 function profile(
   hidden = false,
@@ -174,11 +187,7 @@ describe("Hermes server adapter", () => {
       http: ownedSessionHttp(),
     })
 
-    await adapter.native.resume({
-      agentId: "researcher",
-      providerSessionId: "stored",
-      sessionId: "stored",
-    })
+    await adapter.native.resume(researcherScope("stored"))
     await adapter.native.subscribeLive("live-secret", vi.fn())
     await expect(adapter.models("researcher", "stored")).resolves.toMatchObject(
       { selectedId: '["native","small"]' }
@@ -271,14 +280,18 @@ describe("Hermes server adapter", () => {
     const adapter = new HermesServerAdapter({ ...rpcRouter(), http })
     const history = await adapter.history("researcher", "stored", 200, 0)
     const artifacts = history.messages.flatMap((message) =>
-      message.content.flatMap((part) =>
-        part.type === "data" &&
-        part.name === "aos.artifact" &&
-        typeof part.data.id === "string" &&
-        typeof part.data.filename === "string"
-          ? [{ id: part.data.id, filename: part.data.filename }]
-          : []
-      )
+      message.role === "activity"
+        ? []
+        : message.content.flatMap((part) => {
+            const data =
+              part.type === "data" && part.name === "hgw.artifact"
+                ? jsonObject(part.data)
+                : undefined
+            return typeof data?.id === "string" &&
+              typeof data.filename === "string"
+              ? [{ id: data.id, filename: data.filename }]
+              : []
+          })
     )
 
     expect(artifacts.map(({ filename }) => filename)).toEqual(["chart.png"])
@@ -295,7 +308,7 @@ describe("Hermes server adapter", () => {
       { media: { mediaArtifacts: false } }
     )
     const plain = await off.history("researcher", "stored", 200, 0)
-    expect(plain.messages.flatMap(({ content }) => content)).toEqual([
+    expect(plain.messages.flatMap<unknown>(({ content }) => content)).toEqual([
       { type: "text", text: messages[0]!.content },
     ])
   })
@@ -358,14 +371,16 @@ describe("Hermes server adapter", () => {
       .find(
         (part) =>
           part.type === "data" &&
-          part.name === "aos.artifact" &&
-          part.data.mimeType === "audio/mpeg"
+          part.name === "hgw.artifact" &&
+          jsonObject(part.data)?.mimeType === "audio/mpeg"
       )
-    if (mediaId?.type !== "data" || typeof mediaId.data.id !== "string")
+    const mediaArtifactId =
+      mediaId?.type === "data" ? jsonObject(mediaId.data)?.id : undefined
+    if (typeof mediaArtifactId !== "string")
       throw new Error("Expected a projected TTS artifact")
 
     const unreadable = await adapter
-      .artifact("researcher", "stored", mediaId.data.id)
+      .artifact("researcher", "stored", mediaArtifactId)
       .then(() => undefined)
       .catch((error: unknown) => error)
     expect(unreadable).toBeInstanceOf(HermesContentUnreadableError)
@@ -377,7 +392,7 @@ describe("Hermes server adapter", () => {
     // token that is working.
     audioFailure = new HermesHttpError(403)
     const refused = await adapter
-      .artifact("researcher", "stored", mediaId.data.id)
+      .artifact("researcher", "stored", mediaArtifactId)
       .then(() => undefined)
       .catch((error: unknown) => error)
     expect(refused).toBeInstanceOf(HermesContentUnreadableError)
@@ -386,14 +401,14 @@ describe("Hermes server adapter", () => {
     // An output grown past the read bound is gone the same way.
     audioFailure = new HermesHttpError(413)
     await expect(
-      adapter.artifact("researcher", "stored", mediaId.data.id)
+      adapter.artifact("researcher", "stored", mediaArtifactId)
     ).rejects.toBeInstanceOf(HermesContentUnreadableError)
 
     // A provider outage stays retryable: only a refusal of the file itself is
     // reported as the output being gone.
     audioFailure = new HermesHttpError(500)
     const outage = await adapter
-      .artifact("researcher", "stored", mediaId.data.id)
+      .artifact("researcher", "stored", mediaArtifactId)
       .then(() => undefined)
       .catch((error: unknown) => error)
     expect(outage).toBeInstanceOf(HermesContentUnavailableError)
@@ -439,7 +454,7 @@ describe("Hermes server adapter", () => {
         { requestId: "srq-00000000000c", kind: PendingRequestKind.Elicitation },
       ],
     })
-    // The re-delivered request is never answered on AOS' behalf.
+    // The re-delivered request is never answered on the gateway's behalf.
     expect(router.requests.answer("srq-00000000000c")).toBeUndefined()
     expect(router.requests.refusal("srq-00000000000c")).toBeUndefined()
   })
@@ -533,11 +548,7 @@ describe("Hermes server adapter", () => {
         throw new Error(`unexpected ${path}`)
       },
     })
-    const scope = {
-      agentId: "researcher",
-      providerSessionId: "stored",
-      sessionId: "stored",
-    }
+    const scope = researcherScope("stored")
 
     await adapter.native.submit("live-secret", {
       scope,
@@ -1096,14 +1107,12 @@ describe("Hermes server adapter", () => {
       status: "streaming",
     })
 
-    // A live record this proxy never bound proves nothing.
+    // A live record this gateway never bound proves nothing.
     await expect(
       adapter.getSession("researcher", "stored/1")
     ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
     await adapter.native.inspectExecution({
-      agentId: "researcher",
-      providerSessionId: "stored/1",
-      sessionId: "stored/1",
+      ...researcherScope("stored/1"),
       turnId: "run-1",
     })
     await expect(
@@ -2448,7 +2457,9 @@ describe("Hermes server adapter", () => {
       ui_meta: { aos: { role: "creator" } },
       ui_meta_revisions: {},
     }
-    const request = vi.fn(async () => ({ profiles: [creator] }))
+    const request = vi.fn<
+      (method: string) => Promise<{ profiles: (typeof creator)[] }>
+    >(async () => ({ profiles: [creator] }))
     const adapter = new HermesServerAdapter({ request })
 
     expect((await adapter.listAgents()).agents[0]).toMatchObject({
@@ -2492,11 +2503,7 @@ describe("Hermes server adapter", () => {
     })
 
     await expect(
-      adapter.native.resume({
-        agentId: "researcher",
-        providerSessionId: "stored",
-        sessionId: "stored",
-      })
+      adapter.native.resume(researcherScope("stored"))
     ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 
@@ -2519,11 +2526,7 @@ describe("Hermes server adapter", () => {
     })
 
     await expect(
-      adapter.native.resume({
-        agentId: "researcher",
-        providerSessionId: "stored",
-        sessionId: "stored",
-      })
+      adapter.native.resume(researcherScope("stored"))
     ).resolves.toMatchObject({ liveSessionId: "live-secret" })
     expect(wait).toHaveBeenCalledTimes(2)
   })
@@ -2547,11 +2550,7 @@ describe("Hermes server adapter", () => {
       })
 
       await expect(
-        adapter.native.resume({
-          agentId: "researcher",
-          providerSessionId: "stored",
-          sessionId: "stored",
-        })
+        adapter.native.resume(researcherScope("stored"))
       ).rejects.toBeInstanceOf(HermesUnavailableError)
       expect(router.calls("session.resume")).toHaveLength(attempts)
     }
@@ -2568,11 +2567,7 @@ describe("Hermes server adapter", () => {
       },
     })
     const adapter = new HermesServerAdapter(router)
-    const scope = {
-      agentId: "researcher",
-      providerSessionId: "stored",
-      sessionId: "stored",
-    }
+    const scope = researcherScope("stored")
     await expect(adapter.native.resume(scope)).resolves.toMatchObject({
       liveSessionId: "live-first",
     })
@@ -2614,14 +2609,10 @@ describe("Hermes server adapter", () => {
       })
       const adapter = new HermesServerAdapter(router)
       const onError = vi.fn()
-      const stop = adapter.turns.subscribeTurns(
-        {
-          agentId: "researcher",
-          providerSessionId: "stored",
-          sessionId: "stored",
-        },
-        { onTurn: vi.fn(), onError }
-      )
+      const stop = adapter.turns.subscribeTurns(researcherScope("stored"), {
+        onTurn: vi.fn(),
+        onError,
+      })
       await clock.advance(60_000)
 
       expect(router.calls("session.resume")).toHaveLength(1)
@@ -2642,11 +2633,7 @@ describe("Hermes server adapter", () => {
       },
     })
     const adapter = new HermesServerAdapter(router, { log: logs.logger })
-    const scope = {
-      agentId: "researcher",
-      providerSessionId: "stored",
-      sessionId: "stored",
-    }
+    const scope = researcherScope("stored")
     await adapter.native.resume(scope)
     await adapter.native.subscribeLive("live-first", vi.fn())
 
@@ -2676,7 +2663,7 @@ describe("Hermes server adapter", () => {
       new HermesWorkspaceScopeError(),
       new HermesContentScopeError(),
       new HermesContentUnreadableError(),
-      new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND"),
+      new HermesInteractionPublicError("HGW_INTERACTION_NOT_FOUND"),
     ])
       expect(kindOf(cause)).toBe("gone")
     for (const cause of [
@@ -2688,7 +2675,7 @@ describe("Hermes server adapter", () => {
     expect(
       kindOf(
         new HermesTurnPublicError(
-          "AOS_STOP_UNCERTAIN",
+          "HGW_STOP_UNCERTAIN",
           "Stop was not confirmed."
         )
       )
@@ -2698,14 +2685,14 @@ describe("Hermes server adapter", () => {
       new HermesWorkspaceUnavailableError(),
       new HermesContentUnavailableError(),
       new HermesTurnPublicError(
-        "AOS_PROVIDER_UNAVAILABLE",
+        "HGW_PROVIDER_UNAVAILABLE",
         "Hermes is unavailable."
       ),
-      new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE"),
+      new HermesInteractionPublicError("HGW_PROVIDER_UNAVAILABLE"),
     ])
       expect(kindOf(cause)).toBe("unavailable")
     expect(
-      kindOf(new HermesInteractionPublicError("AOS_INVALID_INTERACTION"))
+      kindOf(new HermesInteractionPublicError("HGW_INVALID_INTERACTION"))
     ).toBe("invalid_request")
     expect(adapter.publicError(new Error("unclassified"))).toBeUndefined()
   })
@@ -2756,15 +2743,15 @@ describe("Hermes server adapter", () => {
         http: createHermesHttp({
           baseUrl: "http://hermes.test",
           credentials: async () => ({}),
-          fetcher: vi.fn(
-            async (_url: RequestInfo | URL, init?: RequestInit) => {
+          fetcher: asFetch(
+            vi.fn(async (_url: FetchInput, init?: RequestInit) => {
               if (init?.method === "PATCH") throw new TypeError("fetch failed")
               return Response.json({
                 id: "stored",
                 profile: "researcher",
                 title: "Owned",
               })
-            }
+            })
           ),
         }).http,
       })
@@ -2815,9 +2802,7 @@ describe("Hermes server adapter", () => {
       })
       const adapter = new HermesServerAdapter(router, { sessionIdleMs: 1_000 })
       const scope = {
-        agentId: "researcher",
-        providerSessionId: "stored",
-        sessionId: "stored",
+        ...researcherScope("stored"),
         turnId: "run-1",
       }
 
@@ -2852,8 +2837,7 @@ describe("Hermes server adapter", () => {
       // never close it natively.
       await adapter.native.inspectExecution({
         ...scope,
-        providerSessionId: "draft",
-        sessionId: "draft",
+        ...researcherScope("draft"),
       })
       await vi.advanceTimersByTimeAsync(1_000)
 
@@ -2960,7 +2944,7 @@ describe("Hermes server adapter", () => {
             error:
               "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
           },
-          turnErrorCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
+          turnErrorCode: "HGW_PROVIDER_RETRYABLE_FAILURE",
         })
         // This retained cause names a credential and an internal host, so the
         // detail is dropped whole and the headline stands alone.

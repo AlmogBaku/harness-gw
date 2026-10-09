@@ -156,7 +156,7 @@ function projectHermesUserContent(text: string, messageId: string) {
     ...projectHermesFileReferences(attached.text, messageId),
     artifacts: attached.artifacts.map(({ descriptor }) => ({
       type: "data" as const,
-      name: "aos.artifact",
+      name: "hgw.artifact",
       data: descriptor,
     })),
   }
@@ -225,7 +225,7 @@ function leadOf(
   opening: { notice?: SessionNotice } | undefined
 ): MessagePart[] {
   const notice = opening?.notice
-  return notice ? [{ type: "data", name: "aos-notice", data: notice }] : []
+  return notice ? [{ type: "data", name: "hgw-notice", data: notice }] : []
 }
 
 /** Converts provider-native durable rows into the strict public history shape. */
@@ -436,7 +436,7 @@ export function projectHermesHistory(
             part.data.id === descriptor.id
         )
       )
-        content.push({ type: "data", name: "aos.artifact", data: descriptor })
+        content.push({ type: "data", name: "hgw.artifact", data: descriptor })
     const inlineImages =
       role === "user" && Array.isArray(rawContent)
         ? rawContent.flatMap((part) => {

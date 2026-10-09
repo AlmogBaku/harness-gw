@@ -21,8 +21,22 @@ function message(id: string, created: number) {
   }
 }
 
-function client(): OpenCodeAdapterClient {
+type Writable<T> = { -readonly [K in keyof T]: T[K] }
+
+/** The adapter's client, with methods a test may replace after building it. */
+type FakeAdapterClient = Omit<OpenCodeAdapterClient, "catalog" | "sessions"> & {
+  catalog: Writable<OpenCodeAdapterClient["catalog"]>
+  sessions: Writable<OpenCodeAdapterClient["sessions"]>
+}
+
+/** A native call none of these adapter tests reaches. */
+async function unexercised(): Promise<never> {
+  throw new Error("not exercised by this adapter test")
+}
+
+function client(): FakeAdapterClient {
   return {
+    directory: "/workspace/project",
     catalog: {
       agents: async () => ({
         data: [
@@ -101,14 +115,21 @@ function client(): OpenCodeAdapterClient {
         },
         { content: "Write the test", status: "cancelled", priority: "low" },
       ]),
-      questions: { reply: async () => {}, reject: async () => {} },
-      permissions: { reply: async () => {} },
+      events: unexercised,
+      active: unexercised,
+      history: unexercised,
+      prompt: unexercised,
+      interrupt: unexercised,
+      wait: unexercised,
+      questions: {
+        list: unexercised,
+        reply: async () => {},
+        reject: async () => {},
+      },
+      permissions: { list: unexercised, reply: async () => {} },
     },
-    files: {
-      read: vi.fn(async () => {
-        throw new Error("files are not read by this test")
-      }),
-    },
+    events: unexercised,
+    credentialRefused: unexercised,
     close: vi.fn(async () => {}),
   }
 }

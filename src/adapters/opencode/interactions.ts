@@ -40,19 +40,19 @@ export type OpenCodeInteractionTransport = {
 export class OpenCodeInteractionPublicError extends Error {
   constructor(
     readonly code:
-      | "AOS_INVALID_INTERACTION"
-      | "AOS_INTERACTION_NOT_FOUND"
-      | "AOS_LIMIT_EXCEEDED"
-      | "AOS_PROVIDER_INVALID_RESPONSE"
-      | "AOS_PROVIDER_UNAVAILABLE"
-      | "AOS_MUTATION_UNCERTAIN"
+      | "HGW_INVALID_INTERACTION"
+      | "HGW_INTERACTION_NOT_FOUND"
+      | "HGW_LIMIT_EXCEEDED"
+      | "HGW_PROVIDER_INVALID_RESPONSE"
+      | "HGW_PROVIDER_UNAVAILABLE"
+      | "HGW_MUTATION_UNCERTAIN"
   ) {
     super(
-      code === "AOS_INTERACTION_NOT_FOUND"
+      code === "HGW_INTERACTION_NOT_FOUND"
         ? "Interaction not found"
-        : code === "AOS_MUTATION_UNCERTAIN"
+        : code === "HGW_MUTATION_UNCERTAIN"
           ? "The interaction response may have been accepted"
-          : code === "AOS_PROVIDER_INVALID_RESPONSE"
+          : code === "HGW_PROVIDER_INVALID_RESPONSE"
             ? "OpenCode returned invalid interaction data"
             : "Invalid interaction response"
     )
@@ -110,7 +110,7 @@ function parseQuestions(native: unknown, sessionId: string): Question[] {
     !request.questions.length ||
     request.questions.length > MAX_QUESTIONS
   )
-    throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+    throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
   return request.questions.map((raw) => {
     const row = record(raw)
     if (
@@ -121,18 +121,18 @@ function parseQuestions(native: unknown, sessionId: string): Question[] {
       (row.multiple !== undefined && typeof row.multiple !== "boolean") ||
       (row.custom !== undefined && typeof row.custom !== "boolean")
     )
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+      throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
     const choices = row.options.map((option) => {
       const value = record(option)
       const label = text(value?.label, 256)
       if (!label || !text(value?.description))
         throw new OpenCodeInteractionPublicError(
-          "AOS_PROVIDER_INVALID_RESPONSE"
+          "HGW_PROVIDER_INVALID_RESPONSE"
         )
       return label
     })
     if (new Set(choices).size !== choices.length)
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+      throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
     // OpenCode offers free text unless the question turns it off.
     return {
       label: row.header as string,
@@ -168,7 +168,7 @@ export class OpenCodeInteractions {
   async validate(scope: OpenCodeInteractionScope, replies: unknown) {
     const { s, entries } = this.#entries(scope, replies)
     if (entries.some((entry) => entry.p.state === "dispatching"))
-      throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+      throw new OpenCodeInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     this.#prepared.set(identity(s), {
       fingerprint: this.#fingerprint(replies),
       entries,
@@ -192,7 +192,7 @@ export class OpenCodeInteractions {
           this.#pending.get(key(s, entry.p.id)) !== entry.p
       )
     )
-      throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+      throw new OpenCodeInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     this.#prepared.delete(identity(s))
     await this.#dispatch(s, prepared.entries)
   }
@@ -203,17 +203,17 @@ export class OpenCodeInteractions {
   ): PendingRequest[] {
     const id = text(record(native)?.id, 512)
     if (!id)
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+      throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
       sessionId: scope.sessionId,
     }
     if (!this.#pending.has(key(s, id)) && this.#pending.size >= MAX_PENDING)
-      throw new OpenCodeInteractionPublicError("AOS_LIMIT_EXCEEDED")
+      throw new OpenCodeInteractionPublicError("HGW_LIMIT_EXCEEDED")
     const existing = this.#pending.get(key(s, id))
     if (existing && existing.kind !== "question")
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+      throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
     if (existing) return this.snapshot(scope)!
     this.#pending.set(key(s, id), {
       id,
@@ -238,7 +238,7 @@ export class OpenCodeInteractions {
       row.resources.length > 64 ||
       row.resources.some((x) => !text(x))
     )
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+      throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
     const s: Scope = {
       agentId: scope.agentId,
       providerSessionId: scope.providerSessionId,
@@ -250,7 +250,7 @@ export class OpenCodeInteractions {
       (existing && existing.kind !== "permission")
     )
       throw new OpenCodeInteractionPublicError(
-        existing ? "AOS_PROVIDER_INVALID_RESPONSE" : "AOS_LIMIT_EXCEEDED"
+        existing ? "HGW_PROVIDER_INVALID_RESPONSE" : "HGW_LIMIT_EXCEEDED"
       )
     if (existing) return this.snapshot(scope)!
     const source = record(row.source)
@@ -285,7 +285,7 @@ export class OpenCodeInteractions {
       ? native.permissions
       : record(native.permissions)?.data
     if (!Array.isArray(qs) || !Array.isArray(ps))
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+      throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
     const previous = new Map(this.#pending)
     this.#prepared.delete(identity(s))
     const dispatching = new Set(
@@ -372,7 +372,7 @@ export class OpenCodeInteractions {
       !Array.isArray(replies) ||
       replies.length !== pending.length
     )
-      throw new OpenCodeInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+      throw new OpenCodeInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     const entries: DispatchEntry[] = replies.map((raw) => {
       const e = record(raw)
       if (
@@ -380,10 +380,10 @@ export class OpenCodeInteractions {
         !text(e.requestId, 512) ||
         (e.status !== "resolved" && e.status !== "cancelled")
       )
-        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+        throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
       const p = pending.find((x) => x.id === e.requestId)
       if (!p)
-        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+        throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
       return {
         p,
         status: e.status,
@@ -395,7 +395,7 @@ export class OpenCodeInteractions {
       }
     })
     if (new Set(entries.map((e) => e.p.id)).size !== entries.length)
-      throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+      throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
     return { s, entries }
   }
 
@@ -413,7 +413,7 @@ export class OpenCodeInteractions {
         } else {
           const choice = e.status === "cancelled" ? "deny" : e.payload
           if (choice !== "once" && choice !== "always" && choice !== "deny")
-            throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+            throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
           await this.transport.permissions.reply(
             s.providerSessionId,
             e.p.id,
@@ -424,11 +424,11 @@ export class OpenCodeInteractions {
       }
     } catch (error) {
       if (error instanceof OpenCodeMutationUncertainError)
-        throw new OpenCodeInteractionPublicError("AOS_MUTATION_UNCERTAIN")
+        throw new OpenCodeInteractionPublicError("HGW_MUTATION_UNCERTAIN")
       for (const e of entries)
         if (e.p.state === "dispatching") e.p.state = "pending"
       if (error instanceof OpenCodeInteractionPublicError) throw error
-      throw new OpenCodeInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
+      throw new OpenCodeInteractionPublicError("HGW_PROVIDER_UNAVAILABLE")
     }
     for (const e of entries) this.#pending.delete(key(s, e.p.id))
   }
@@ -437,31 +437,31 @@ export class OpenCodeInteractions {
     try {
       const fingerprint = JSON.stringify(replies)
       if (typeof fingerprint !== "string")
-        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+        throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
       return fingerprint
     } catch {
-      throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+      throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
     }
   }
   /** The normalized `{ answers: string[][] }`, in question order. */
   #answers(questions: Question[], input: unknown) {
     const answers = record(input)?.answers
     if (!Array.isArray(answers) || answers.length !== questions.length)
-      throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+      throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
     return answers.map((answer, index) => {
       const q = questions[index]!
       if (
         !Array.isArray(answer) ||
         answer.length > (q.multiple ? q.choices.length : 1)
       )
-        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+        throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
       const selected = answer.map((raw) => {
         const value = text(raw)
         if (value && (q.custom || q.choices.includes(value))) return value
-        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+        throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
       })
       if (new Set(selected).size !== selected.length)
-        throw new OpenCodeInteractionPublicError("AOS_INVALID_INTERACTION")
+        throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
       return selected
     })
   }

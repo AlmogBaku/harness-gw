@@ -107,33 +107,33 @@ export function projectGuestCapabilities(value: unknown) {
 const guestTurnErrors: Readonly<
   Record<string, { code: GuestPublicErrorCode; retryable: boolean }>
 > = {
-  AOS_CONNECTION_INTERRUPTED: {
-    code: "AOS_CONNECTION_INTERRUPTED",
+  HGW_CONNECTION_INTERRUPTED: {
+    code: "HGW_CONNECTION_INTERRUPTED",
     retryable: true,
   },
-  AOS_SEND_UNCERTAIN: { code: "AOS_SEND_UNCERTAIN", retryable: true },
-  AOS_INTERACTION_UNCERTAIN: {
-    code: "AOS_INTERACTION_UNCERTAIN",
+  HGW_SEND_UNCERTAIN: { code: "HGW_SEND_UNCERTAIN", retryable: true },
+  HGW_INTERACTION_UNCERTAIN: {
+    code: "HGW_INTERACTION_UNCERTAIN",
     retryable: true,
   },
-  AOS_STOP_UNCERTAIN: { code: "AOS_STOP_UNCERTAIN", retryable: true },
-  AOS_RESET_REQUIRED: { code: "temporarily_unavailable", retryable: true },
-  AOS_STREAM_OVERFLOW: { code: "temporarily_unavailable", retryable: true },
-  AOS_PROVIDER_RETRYABLE_FAILURE: {
+  HGW_STOP_UNCERTAIN: { code: "HGW_STOP_UNCERTAIN", retryable: true },
+  HGW_RESET_REQUIRED: { code: "temporarily_unavailable", retryable: true },
+  HGW_STREAM_OVERFLOW: { code: "temporarily_unavailable", retryable: true },
+  HGW_PROVIDER_RETRYABLE_FAILURE: {
     code: "temporarily_unavailable",
     retryable: true,
   },
-  AOS_PROVIDER_AGENT_UNAVAILABLE: {
+  HGW_PROVIDER_AGENT_UNAVAILABLE: {
     code: "temporarily_unavailable",
     retryable: true,
   },
-  AOS_PROVIDER_UNAVAILABLE: {
+  HGW_PROVIDER_UNAVAILABLE: {
     code: "temporarily_unavailable",
     retryable: true,
   },
-  AOS_SESSION_BUSY: { code: "rate_limited", retryable: true },
-  AOS_SESSION_LIMIT: { code: "rate_limited", retryable: true },
-  AOS_OUTCOME_UNKNOWN: { code: "AOS_OUTCOME_UNKNOWN", retryable: false },
+  HGW_SESSION_BUSY: { code: "rate_limited", retryable: true },
+  HGW_SESSION_LIMIT: { code: "rate_limited", retryable: true },
+  HGW_OUTCOME_UNKNOWN: { code: "HGW_OUTCOME_UNKNOWN", retryable: false },
 }
 
 export function publicTurnError(code: string | undefined) {

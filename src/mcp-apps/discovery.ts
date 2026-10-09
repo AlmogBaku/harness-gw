@@ -1,7 +1,7 @@
 import type { McpAppServer } from "./fallback"
 
 /**
- * Which of a runtime's native MCP servers the proxy may dial itself, for
+ * Which of a runtime's native MCP servers the gateway may dial itself, for
  * runtimes that keep no UI resources of their own. Each adapter reduces its
  * native entry to a `NativeMcpServer`; the reachability rule is shared.
  */
@@ -9,7 +9,7 @@ import type { McpAppServer } from "./fallback"
 /** One native MCP server entry, reduced to what decides reachability. */
 export type NativeMcpServer = {
   name: string
-  /** On, and on the Streamable HTTP transport the proxy speaks. */
+  /** On, and on the Streamable HTTP transport the gateway speaks. */
   dialable: boolean
   url?: string | null
   /** The native entry sends credentials of its own (auth, headers, OAuth). */
@@ -18,7 +18,7 @@ export type NativeMcpServer = {
 
 /**
  * A dialable server that asks for no credentials, or whose credentials the
- * operator configured for the proxy, at an HTTP(S) URL.
+ * operator configured for the gateway, at an HTTP(S) URL.
  */
 export function reachableUrl(
   server: NativeMcpServer,

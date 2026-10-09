@@ -3,6 +3,7 @@
 import {
   methods,
   RequestError,
+  SessionUpdate,
   type CreateElicitationResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
@@ -35,6 +36,11 @@ import {
 } from "../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { createCatalog } from "../core/catalog"
+import {
+  providerSessionId,
+  sessionId,
+  type ProviderSessionId,
+} from "../core/ids"
 import {
   PendingRequestKind,
   TurnEventKind,
@@ -165,7 +171,7 @@ function appCards(recorder: Recorder) {
 }
 
 /** A stored conversation whose reasoning, edit, and setup turn are operator-only. */
-const HISTORY = {
+const HISTORY: SessionHistoryResponse = {
   sessionId: STORED,
   messages: [
     {
@@ -200,7 +206,7 @@ const HISTORY = {
           locations: [{ path: OPERATOR_PATH }],
           diffs: [OPERATOR_DIFF],
         },
-        { type: "data" as const, name: "aos.artifact", data: ARTIFACT },
+        { type: "data" as const, name: "hgw.artifact", data: ARTIFACT },
         {
           type: "tool-call" as const,
           toolCallId: "stored-app",
@@ -388,7 +394,7 @@ type HarnessOptions = {
   resolveProviderSessionId?: (
     agentId: string,
     sessionId: string
-  ) => string | undefined
+  ) => ProviderSessionId | undefined
   /** What the invited lookup or a run's start throws instead. */
   fails?: { lookup?: unknown; start?: unknown }
   /** How many turns every guest together may hold; four by default. */
@@ -397,7 +403,7 @@ type HarnessOptions = {
 
 function harness(options: HarnessOptions = {}) {
   const handles: ServerTurnHandle[] = []
-  const start = vi.fn(async (): Promise<ServerTurnHandle> => {
+  const start = vi.fn<ServerTurnEngine["start"]>(async () => {
     if (options.fails?.start) throw options.fails.start
     const handle = options.handle
       ? options.handle()
@@ -410,11 +416,14 @@ function harness(options: HarnessOptions = {}) {
     recover: vi.fn(unsupported),
     discover: vi.fn(async () => undefined),
   }
-  const resolveInvitedSession = vi.fn(
-    async (_agentId: string, _ref: string, create?: object) => {
+  const resolveInvitedSession = vi.fn<ServerRuntime["resolveInvitedSession"]>(
+    async (_agentId, _ref, create) => {
       if (options.fails?.lookup) throw options.fails.lookup
       return options.existing || (create && options.creates !== false)
-        ? { providerSessionId: STORED, created: !options.existing }
+        ? {
+            providerSessionId: providerSessionId(STORED),
+            created: !options.existing,
+          }
         : undefined
     }
   )
@@ -422,8 +431,8 @@ function harness(options: HarnessOptions = {}) {
   const deleteSession = vi.fn(async () => undefined)
   const runtimeInfo = vi.fn(unsupported)
   const workspaceCapabilities = vi.fn(async () => CAPABILITIES)
-  const history = vi.fn(
-    async (_agentId: string, _sessionId: string, _limit: number, offset = 0) =>
+  const history = vi.fn<ServerRuntime["history"]>(
+    async (_agentId, _providerSessionId, _limit, offset = 0) =>
       options.history?.(offset) ?? HISTORY
   )
   const listAllSessions = vi.fn(async (limit: number, offset: number) => ({
@@ -565,7 +574,7 @@ function harness(options: HarnessOptions = {}) {
       watcher.onNotice?.({ severity: "info", title: "Heartbeat" })
     },
     /**
-     * Advertises paging older history, as the AOS browser does, by default,
+     * Advertises paging older history, as the aos-ui browser does, by default,
      * and answering questions.
      */
     initialize: (pagesHistory = true) =>
@@ -625,7 +634,8 @@ async function wire(listener: GuestAcpServiceOptions) {
   const upgrade = await service.authorizeUpgrade(
     new Request(`${ORIGIN}/api/v1/acp`, { headers: { origin: ORIGIN } })
   )
-  if (!upgrade) throw new Error("The guest upgrade was refused")
+  if (!upgrade || "refused" in upgrade)
+    throw new Error("The guest upgrade was refused")
   const frames: Frame[] = []
   const closed: Array<{ code: number; reason: string }> = []
   const replies = new Map<Frame["id"], (reply: Frame) => void>()
@@ -636,6 +646,7 @@ async function wire(listener: GuestAcpServiceOptions) {
       if (frame.method === undefined) replies.get(frame.id)?.(frame)
       return sent
     },
+    isOpen: () => closed.length === 0,
     close: (code, reason) => closed.push({ code, reason }),
   })
   let nextId = 0
@@ -761,7 +772,7 @@ describe("guest ACP listener", () => {
         },
       },
     })
-    expect(initialize.capabilities.session?.delete).toBeUndefined()
+    expect(initialize.capabilities?.session?.delete).toBeUndefined()
     // The deployment itself stays unnamed, before and after a redemption.
     expect(initialize.info?.title).toBeUndefined()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
@@ -801,8 +812,8 @@ describe("guest ACP listener", () => {
     })
     const invited = {
       agentId: AGENT,
-      providerSessionId: STORED,
-      sessionId: REF,
+      providerSessionId: providerSessionId(STORED),
+      sessionId: sessionId(REF),
     }
     await test.coordinator.start(
       invited,
@@ -977,9 +988,9 @@ describe("guest ACP listener", () => {
     )
 
     const links = updates(test.recorder).flatMap(({ update }) =>
-      "content" in update &&
-      !Array.isArray(update.content) &&
-      update.content?.type === "resource_link"
+      (SessionUpdate.isAgentMessageChunk(update) ||
+        SessionUpdate.isUserMessageChunk(update)) &&
+      update.content.type === "resource_link"
         ? [update.content]
         : []
     )
@@ -1175,7 +1186,10 @@ describe("guest ACP listener", () => {
     // The operator's answer names the Session by its provider scope alone,
     // and brings the channel into the turn it continues, as the operator's
     // membership does.
-    const scope = { agentId: AGENT, providerSessionId: STORED }
+    const scope = {
+      agentId: AGENT,
+      providerSessionId: providerSessionId(STORED),
+    }
     const continued = await test.coordinator.answer(scope, {
       requestId: QUESTION.requestId,
       status: "resolved",
@@ -1253,8 +1267,8 @@ describe("guest ACP listener", () => {
     })
     const operatorScope = {
       agentId: AGENT,
-      providerSessionId: "operator-session",
-      sessionId: "operator",
+      providerSessionId: providerSessionId("operator-session"),
+      sessionId: sessionId("operator"),
     }
     await test.coordinator.start(
       operatorScope,
@@ -1270,10 +1284,10 @@ describe("guest ACP listener", () => {
     )
     const before = socket.frames.length
 
-    for (const sessionId of ["operator", "operator-session"])
+    for (const other of ["operator", "operator-session"])
       socket.send({
         method: methods.agent.session.cancel,
-        params: { sessionId },
+        params: { sessionId: other },
       })
     await settled()
 
@@ -1559,7 +1573,8 @@ describe("guest scope and commands", () => {
   it("reaches the invited conversation when its reference names another native Session", async () => {
     const test = harness({
       existing: true,
-      resolveProviderSessionId: (_agentId, sessionId) => sessionId,
+      resolveProviderSessionId: (_agentId, publicSessionId) =>
+        providerSessionId(publicSessionId),
     })
     await test.initialize()
     await test.login(await invite(test.invitations, "operator-native"))
@@ -1883,14 +1898,14 @@ describe("guest scope and commands", () => {
     })
     // Each invitation's conversation is its own native Session.
     test.resolveInvitedSession.mockImplementation(async (_agentId, ref) => ({
-      providerSessionId: `stored-${ref}`,
+      providerSessionId: providerSessionId(`stored-${ref}`),
       created: false,
     }))
     await test.coordinator.start(
       {
         agentId: AGENT,
-        providerSessionId: "operator-session",
-        sessionId: "operator",
+        providerSessionId: providerSessionId("operator-session"),
+        sessionId: sessionId("operator"),
       },
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       { membershipId: "operator", principalId: "operator" }
@@ -1956,8 +1971,8 @@ describe("guest scope and commands", () => {
     const other = await test.coordinator.start(
       {
         agentId: AGENT,
-        providerSessionId: "operator-session",
-        sessionId: "operator",
+        providerSessionId: providerSessionId("operator-session"),
+        sessionId: sessionId("operator"),
       },
       { turnId: "operator-turn", messageId: "operator-message", prompt: "Hi" },
       {

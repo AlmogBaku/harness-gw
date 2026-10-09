@@ -134,7 +134,7 @@ const REFUSAL_FAILURES: Record<
 
 /**
  * How long a discovered turn Hermes reports `waiting` has for its open request
- * to be re-delivered before AOS reports the question lost.
+ * to be re-delivered before the gateway reports the question lost.
  */
 const LOST_INTERACTION_GRACE_MS = 2_000
 const MAX_USER_TURN_BYTES = 1_048_576
@@ -285,7 +285,7 @@ export class HermesTurnEngine {
     try {
       // An uncertain run holds the Session until Hermes says its turn is over.
       if (stale) await settleStale(this.#host, stale)
-      // The Session stays busy for AOS while Hermes finishes the previous turn,
+      // The Session stays busy for the gateway while Hermes finishes the previous turn,
       // and only the barrier makes it this run's: a turn Hermes starts by
       // itself meanwhile is not.
       await this.#settling.get(key)?.done
@@ -535,7 +535,7 @@ export class HermesTurnEngine {
   /**
    * A discovered turn Hermes holds `waiting` is blocked on a request. Hermes
    * re-delivers every open request on resume, so one that has not arrived
-   * within the grace, while the Session did nothing else, is one AOS can no
+   * within the grace, while the Session did nothing else, is one the gateway can no
    * longer answer: only Stop ends that turn, and the failure says so.
    */
   #watchLostInteraction(scope: HermesTurnScope) {
@@ -1091,7 +1091,7 @@ export class HermesTurnEngine {
     const finalText = boundedText(payload.text)
     // A failed turn's `text` is the model's own prose only while `partial` marks
     // it as such. Without that flag Hermes composed the copy explaining the
-    // failure, which AOS publishes as a failure and never as an assistant
+    // failure, which the gateway publishes as a failure and never as an assistant
     // message.
     if (finalText && (active.turn !== "failed" || payload.partial === true)) {
       this.#responseId(active)
@@ -1345,7 +1345,7 @@ export class HermesTurnEngine {
       active.resumed?.()
       return
     }
-    // A prompt AOS holds or lost ended too, unless a Stop withdrew it.
+    // A prompt the gateway holds or lost ended too, unless a Stop withdrew it.
     if (!active.awaitingStop || active.stopping) return
     active.awaitingStop = false
     this.#emit(active, { kind: TurnEventKind.TurnStarted })

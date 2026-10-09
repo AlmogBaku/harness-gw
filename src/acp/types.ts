@@ -60,7 +60,7 @@ type AcpConnectionBase = {
   /** Server-staged attachment batches, shared with the REST upload route. */
   attachmentStages: ServerAttachmentStages
   /**
-   * The one set of channels per proxy process, shared by both listeners so an
+   * The one set of channels per gateway process, shared by both listeners so an
    * operator and a guest on the same provider Session land in one channel.
    */
   channels: Channels

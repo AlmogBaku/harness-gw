@@ -224,7 +224,7 @@ describe("browser connection faults", () => {
     vi.spyOn(Math, "random").mockReturnValue(0.5)
     const clock = useFakeClock()
     const { pipe, connection } = connectBrowser(await harness())
-    // The network drops as the first prompt leaves, before the proxy has it.
+    // The network drops as the first prompt leaves, before the gateway has it.
     let dropped = false
     const frames = sentFrames((frame, socket) => {
       if (dropped || frame.method !== "session/prompt") return false

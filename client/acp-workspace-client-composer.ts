@@ -32,7 +32,7 @@ import type { AcpConnection } from "./types"
  * The composer's provider-authoritative Session projection over ACP config
  * options, usage, and commands. ACP config options describe the Session's
  * current configuration, so reasoning efforts belong to the model the Session
- * runs: the proxy re-sends the config options after every model change, which
+ * runs: the gateway re-sends the config options after every model change, which
  * is the only moment the effort list can change.
  */
 

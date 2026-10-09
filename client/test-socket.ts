@@ -50,7 +50,7 @@ export class PipedSocket extends EventTarget {
   async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
     for (;;) {
       const next = await reader.read().catch(() => undefined)
-      // The agent ending its side is the proxy closing the socket.
+      // The agent ending its side is the gateway closing the socket.
       if (!next || next.done) {
         this.#end(1000, "", true)
         return

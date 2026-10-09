@@ -179,7 +179,7 @@ describe("guest turn projection", () => {
     expect(
       project({
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_ERROR",
+        code: "HGW_PROVIDER_ERROR",
         message: "private",
         provider: "private-provider",
         model: "private-model",
@@ -264,22 +264,22 @@ describe("guest turn projection", () => {
   })
 
   it.each([
-    ["AOS_CONNECTION_INTERRUPTED", "AOS_CONNECTION_INTERRUPTED"],
-    ["AOS_SEND_UNCERTAIN", "AOS_SEND_UNCERTAIN"],
-    ["AOS_INTERACTION_UNCERTAIN", "AOS_INTERACTION_UNCERTAIN"],
-    ["AOS_STOP_UNCERTAIN", "AOS_STOP_UNCERTAIN"],
-    ["AOS_RESET_REQUIRED", "temporarily_unavailable"],
-    ["AOS_STREAM_OVERFLOW", "temporarily_unavailable"],
-    ["AOS_PROVIDER_RETRYABLE_FAILURE", "temporarily_unavailable"],
-    ["AOS_PROVIDER_AGENT_UNAVAILABLE", "temporarily_unavailable"],
-    ["AOS_SESSION_BUSY", "rate_limited"],
-    ["AOS_SESSION_LIMIT", "rate_limited"],
-    ["AOS_PROVIDER_RUN_FAILED", "request_failed"],
-    ["AOS_PROVIDER_BILLING_FAILED", "request_failed"],
-    ["AOS_INTERACTION_EXPIRED", "request_failed"],
-    ["AOS_INTERACTION_LOST", "request_failed"],
-    ["AOS_SESSION_IN_USE", "request_failed"],
-    ["AOS_UNKNOWN_TO_THIS_BUILD", "request_failed"],
+    ["HGW_CONNECTION_INTERRUPTED", "HGW_CONNECTION_INTERRUPTED"],
+    ["HGW_SEND_UNCERTAIN", "HGW_SEND_UNCERTAIN"],
+    ["HGW_INTERACTION_UNCERTAIN", "HGW_INTERACTION_UNCERTAIN"],
+    ["HGW_STOP_UNCERTAIN", "HGW_STOP_UNCERTAIN"],
+    ["HGW_RESET_REQUIRED", "temporarily_unavailable"],
+    ["HGW_STREAM_OVERFLOW", "temporarily_unavailable"],
+    ["HGW_PROVIDER_RETRYABLE_FAILURE", "temporarily_unavailable"],
+    ["HGW_PROVIDER_AGENT_UNAVAILABLE", "temporarily_unavailable"],
+    ["HGW_SESSION_BUSY", "rate_limited"],
+    ["HGW_SESSION_LIMIT", "rate_limited"],
+    ["HGW_PROVIDER_RUN_FAILED", "request_failed"],
+    ["HGW_PROVIDER_BILLING_FAILED", "request_failed"],
+    ["HGW_INTERACTION_EXPIRED", "request_failed"],
+    ["HGW_INTERACTION_LOST", "request_failed"],
+    ["HGW_SESSION_IN_USE", "request_failed"],
+    ["HGW_UNKNOWN_TO_THIS_BUILD", "request_failed"],
     ["constructor", "request_failed"],
     ["toString", "request_failed"],
   ])("projects the run error code %s as %s", (code, expected) => {
@@ -302,7 +302,7 @@ describe("guest turn projection", () => {
     expect(
       project({
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_INTERACTION_LOST",
+        code: "HGW_INTERACTION_LOST",
         message: "Hermes lost the question",
         awaitingStop: true,
       })
@@ -368,7 +368,7 @@ describe("a tool call flagged an MCP App only at its finish", () => {
       "a failure it recovers from",
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_CONNECTION_INTERRUPTED",
+        code: "HGW_CONNECTION_INTERRUPTED",
         message: "The connection dropped.",
       },
     ],
@@ -376,7 +376,7 @@ describe("a tool call flagged an MCP App only at its finish", () => {
       "a failure still awaiting Stop",
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
         message: "The run failed.",
         awaitingStop: true,
       },
@@ -437,7 +437,7 @@ describe("a tool call flagged an MCP App only at its finish", () => {
       { kind: TurnEventKind.TurnEnded },
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
         message: "The run failed.",
       },
     ] as TurnEvent[]) {

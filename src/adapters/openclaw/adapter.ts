@@ -102,7 +102,7 @@ export function openClawPublicError(cause: unknown) {
     // unlike a 503, "not found" never invites a retry that cannot succeed.
     cause instanceof OpenClawArtifactUnreadableError ||
     (cause instanceof OpenClawInteractionPublicError &&
-      cause.code === "AOS_INTERACTION_NOT_FOUND")
+      cause.code === "HGW_INTERACTION_NOT_FOUND")
   )
     return failureOf("gone", cause)
   if (cause instanceof OpenClawWorkspaceRevisionConflictError)
@@ -110,7 +110,7 @@ export function openClawPublicError(cause: unknown) {
   if (
     cause instanceof OpenClawContentPublicError ||
     (cause instanceof OpenClawInteractionPublicError &&
-      cause.code === "AOS_INVALID_INTERACTION")
+      cause.code === "HGW_INVALID_INTERACTION")
   )
     return failureOf("invalid_request", cause)
   if (
@@ -121,7 +121,7 @@ export function openClawPublicError(cause: unknown) {
     cause instanceof OpenClawAdapterUnavailableError ||
     cause instanceof OpenClawArtifactUnavailableError ||
     (cause instanceof OpenClawInteractionPublicError &&
-      cause.code === "AOS_PROVIDER_INVALID_RESPONSE")
+      cause.code === "HGW_PROVIDER_INVALID_RESPONSE")
   )
     return failureOf("unavailable", cause)
   return undefined
@@ -294,7 +294,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
     patch: SessionPatch
   ): Promise<void> {
     await this.#start()
-    // The native patch owns each flag's side effects; AOS sends one at a time.
+    // The native patch owns each flag's side effects; the gateway sends one at a time.
     await this.#workspace.updateSession(agentId, providerSessionId, patch)
   }
 

@@ -1,5 +1,5 @@
 /**
- * The in-process ACP harness the proxy's ACP tests share: an SDK client that
+ * The in-process ACP harness the gateway's ACP tests share: an SDK client that
  * records what it receives, connected to the real ACP agent and Session
  * coordinator over a fake provider runtime whose turns the test drives.
  */
@@ -10,6 +10,7 @@ import {
   type CreateElicitationResponse,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
+  type UpdateSessionNotification,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import { expect, vi } from "vitest"
 import { z } from "zod"
@@ -51,7 +52,7 @@ import { createCatalog, type Catalog } from "../core/catalog"
 import type { Activity } from "../core/member"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { createSessionRows } from "../core/session-rows"
-import { createAosAcpAgent } from "./agent"
+import { createHgwAcpAgent } from "./agent"
 import { createChannels, type HistoryReach } from "../core/channel"
 import { withFaults, type Faults } from "./test-faults"
 import type {
@@ -516,7 +517,7 @@ export type ClientAnswers = {
 }
 
 /**
- * An SDK client connected in process to one proxy connection, recording every
+ * An SDK client connected in process to one gateway connection, recording every
  * notification and request it receives. Unanswered permission requests allow
  * once and unanswered questions accept, as an attentive browser would.
  */
@@ -563,7 +564,7 @@ export function connectClient(
         recorder.add({ method, params })
       }
     )
-  return { connection: clientApp.connect(createAosAcpAgent(context)), recorder }
+  return { connection: clientApp.connect(createHgwAcpAgent(context)), recorder }
 }
 
 export type HarnessOptions = {
@@ -647,13 +648,15 @@ export type HarnessOptions = {
 
 export async function harness(options: HarnessOptions = {}) {
   const sources: EventSource[] = []
-  const start = vi.fn(async () => {
+  const start = vi.fn<ServerTurnEngine["start"]>(async () => {
     const source = new EventSource()
     sources.push(source)
     await options.onStart?.(source)
     return source
   })
-  const recover = vi.fn(async () => sources.at(-1) ?? new EventSource())
+  const recover = vi.fn<ServerTurnEngine["recover"]>(
+    async () => sources.at(-1) ?? new EventSource()
+  )
   const discover = vi.fn(options.discover ?? (async () => undefined))
   const engine: ServerTurnEngine = {
     start,
@@ -829,7 +832,7 @@ export async function harness(options: HarnessOptions = {}) {
   let browsers = 0
 
   /**
-   * One proxy process: its own coordinator, catalog, and channels over the
+   * One gateway process: its own coordinator, catalog, and channels over the
    * runtime, which a restart builds again while the provider stays up.
    */
   function serve() {
@@ -890,7 +893,7 @@ export async function harness(options: HarnessOptions = {}) {
     })
 
     /**
-     * One browser connection's side of the proxy. Every connection shares the
+     * One browser connection's side of the gateway. Every connection shares the
      * one coordinator, engine, and channels, as one deployment's listeners do.
      */
     function contextFor(connectionId: string): AcpConnectionContext {
@@ -972,7 +975,7 @@ export async function harness(options: HarnessOptions = {}) {
        * A fresh agent app on a connection of its own, for each socket a real
        * browser connection opens, so every reconnection is a new connection.
        */
-      agentApp: () => createAosAcpAgent(contextFor(`browser-${++browsers}`)),
+      agentApp: () => createHgwAcpAgent(contextFor(`browser-${++browsers}`)),
       coordinator,
       runtimeInstance,
       channels,
@@ -996,7 +999,7 @@ export async function harness(options: HarnessOptions = {}) {
     ...primary,
     ...proxy,
     /**
-     * A new proxy process over the same runtime, as a restart starts one: the
+     * A new gateway process over the same runtime, as a restart starts one: the
      * provider and its turns carry on, and nothing of the old process is kept.
      */
     restart: serve,
@@ -1031,8 +1034,11 @@ export function turnStarted(): TurnEvent {
   return { kind: TurnEventKind.TurnStarted }
 }
 
+/** Every `session/update` the client received, as the SDK typed it on receipt. */
 export function updates(recorder: Recorder) {
-  return recorder.of(methods.client.session.update).map((entry) => entry.params)
+  return recorder
+    .of(methods.client.session.update)
+    .map((entry) => entry.params as UpdateSessionNotification)
 }
 
 export type Browser = Pick<

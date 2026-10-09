@@ -25,10 +25,14 @@ import { GatewayClientRequestError } from "@openclaw/gateway-client"
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol"
 import { vi } from "vitest"
 
+import type {
+  SessionHistoryResponse,
+  SessionMessage,
+} from "../../../../protocol"
 import type { TurnEvent } from "../../../core/events"
 import type { CallerError } from "../../../core/failures"
 import * as ids from "../../../core/ids"
-import { READY_LINK } from "../../../core/link"
+import { READY_LINK, type ServerLink } from "../../../core/link"
 import type { ServerTurnEngine, ServerTurnHandle } from "../../../core/runtime"
 import {
   OpenClawClient,
@@ -57,7 +61,10 @@ export const RESEARCH_AGENTS = {
  */
 export function stubOpenClawClient<
   Request extends (method: string, params?: never) => Promise<unknown>,
->(request: Request, overrides: Partial<OpenClawGatewayClient> = {}) {
+>(
+  request: Request,
+  overrides: Partial<OpenClawGatewayClient & { link: ServerLink }> = {}
+) {
   return {
     link: READY_LINK,
     start: vi.fn(async () => undefined),
@@ -66,8 +73,22 @@ export function stubOpenClawClient<
     ...overrides,
   } as unknown as OpenClawGatewayClient & {
     request: Request
-    link: typeof READY_LINK
+    link: ServerLink
   }
+}
+
+/**
+ * The `index`th row of a history page as a stored message; a missing row or a
+ * Todos plan row fails the test.
+ */
+export function storedMessage(
+  page: SessionHistoryResponse,
+  index: number
+): SessionMessage {
+  const message = page.messages[index]
+  if (!message || message.role === "activity")
+    throw new Error(`Expected a stored message at ${index}`)
+  return message
 }
 
 /** A turn engine whose every started or recovered turn is already idle. */
@@ -97,7 +118,7 @@ type Connection = {
 /**
  * The real client over `openclaw`, as every contract composes it: synthetic
  * device credentials, a client factory, and the start that brings its link up
- * as the proxy's first catalog read does.
+ * as the gateway's first catalog read does.
  */
 export function fakeOpenClawClient(openclaw: FakeOpenClaw) {
   let client: OpenClawClient | undefined

@@ -4,6 +4,7 @@ import { createCatalog } from "./core/catalog"
 import { createChannels } from "./core/channel"
 import {
   createRuntimeInstance,
+  readRuntimeCredentials,
   type RuntimeFactory,
 } from "./adapters/create-runtime"
 import { createProxyApp } from "./app"
@@ -35,7 +36,7 @@ import { openPushRegistrations } from "./push/registrations"
 import { createPushSender } from "./push/sender"
 import { deriveVapidPublicKey } from "./push/vapid"
 import type { OriginPolicy } from "./origins"
-import type { CredentialValues } from "./redaction"
+import { CredentialValues } from "./redaction"
 import { appFileSettings, type AppFileOptions } from "./routes/app-files"
 import { isInvitationCreation } from "./routes/invitations"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
@@ -144,7 +145,7 @@ async function readMcpServerOverrides(
  * Everything one push-enabled deployment needs: the public key derived from the
  * configured private one, the stored devices, the presence the ACP listener
  * reports into, and the dispatcher that subscribes to the runtime. A state directory
- * the proxy cannot write fails startup here rather than at the first
+ * the gateway cannot write fails startup here rather than at the first
  * notification.
  */
 async function createPushDelivery(
@@ -176,6 +177,33 @@ async function createPushDelivery(
     ...clock,
   })
   return { publicKey, registrations, presence, dispatcher }
+}
+
+/**
+ * Reads every secret file the configuration names, with the reader its start
+ * uses, and constructs nothing: `config check` fails on a file `serve` would.
+ */
+export async function checkConfiguredSecrets(input: unknown) {
+  const config = parseProxyConfig(input)
+  const credentials = new CredentialValues()
+  const readers: SecretReaders = {
+    secret: readSecretFile,
+    key: readSecretKeyFile,
+  }
+  await Promise.all([
+    readMcpServerOverrides(config.mcpApps, readers),
+    readRuntimeCredentials(config.runtime, credentials),
+    ...(config.guest?.invitations.keys ?? []).map(({ secretFile }) =>
+      readers.key(secretFile)
+    ),
+    ...[config.voice?.transcription, config.voice?.speech].map((direction) =>
+      direction?.apiKeyFile === undefined
+        ? undefined
+        : readers.secret(direction.apiKeyFile)
+    ),
+    config.push &&
+      readers.key(config.push.vapid.privateKeyFile).then(deriveVapidPublicKey),
+  ])
 }
 
 /** Loads secrets once and constructs one runtime shared by every listener. */
@@ -219,7 +247,7 @@ export async function createConfiguredProxy(
       ? createVoiceProviders(config.voice, dependencies.fetch ?? fetch, readers)
       : Promise.resolve(undefined),
   ])
-  // Proxy speech sits in front of the adapter for every listener at once, so the
+  // Gateway speech sits in front of the adapter for every listener at once, so the
   // wrapped runtime is the only one any listener or ACP service ever sees.
   const runtimeInstance: RuntimeInstance = voiceProviders
     ? {

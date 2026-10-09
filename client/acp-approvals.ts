@@ -10,12 +10,12 @@ import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**
  * Keeps ACP's `session/request_permission` requests as Assistant UI tool
- * approvals, answered on the card of the tool call they guard. The proxy sends
+ * approvals, answered on the card of the tool call they guard. The gateway sends
  * an open request once, so a request still waiting outlives the thread that
  * showed it, and a thread that remounts reads it here rather than on the wire.
  *
  * Every UI with the Session open receives the same request. When another UI
- * answers it, or Stop ends the wait, the proxy withdraws this UI's copy with
+ * answers it, or Stop ends the wait, the gateway withdraws this UI's copy with
  * `$/cancel_request`, which aborts the request's own signal. A withdrawn
  * request that guards a tool call leaves it, since the tool may still run; one
  * that stands alone reads as cancelled. The chosen option stays for as long as

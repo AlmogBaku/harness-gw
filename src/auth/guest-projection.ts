@@ -86,11 +86,11 @@ type Transport = "rest" | "turn" | "artifact" | "error"
 const TRANSPORTS: readonly Transport[] = ["rest", "turn", "artifact", "error"]
 
 const publicErrorCodes = [
-  "AOS_CONNECTION_INTERRUPTED",
-  "AOS_INTERACTION_UNCERTAIN",
-  "AOS_OUTCOME_UNKNOWN",
-  "AOS_SEND_UNCERTAIN",
-  "AOS_STOP_UNCERTAIN",
+  "HGW_CONNECTION_INTERRUPTED",
+  "HGW_INTERACTION_UNCERTAIN",
+  "HGW_OUTCOME_UNKNOWN",
+  "HGW_SEND_UNCERTAIN",
+  "HGW_STOP_UNCERTAIN",
   "forbidden",
   "not_found",
   "rate_limited",
@@ -101,15 +101,15 @@ const publicErrorCodes = [
 export type GuestPublicErrorCode = (typeof publicErrorCodes)[number]
 
 const publicErrorDescriptions: Record<GuestPublicErrorCode, string> = {
-  AOS_CONNECTION_INTERRUPTED:
+  HGW_CONNECTION_INTERRUPTED:
     "The connection was interrupted. Reconnect to continue.",
-  AOS_INTERACTION_UNCERTAIN:
+  HGW_INTERACTION_UNCERTAIN:
     "The response may have been accepted. Reconnect to confirm.",
-  AOS_OUTCOME_UNKNOWN:
+  HGW_OUTCOME_UNKNOWN:
     "AOS could not confirm how the run ended. Its work may be incomplete.",
-  AOS_SEND_UNCERTAIN:
+  HGW_SEND_UNCERTAIN:
     "The message may have been accepted. Reconnect to confirm.",
-  AOS_STOP_UNCERTAIN: "Stop may have been accepted. Reconnect to confirm.",
+  HGW_STOP_UNCERTAIN: "Stop may have been accepted. Reconnect to confirm.",
   forbidden: "You do not have permission to do that.",
   not_found: "The requested item was not found.",
   rate_limited: "Too many requests. Please try again shortly.",

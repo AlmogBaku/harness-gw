@@ -7,7 +7,7 @@ import {
 } from "../../protocol/mcp-apps"
 
 /**
- * The MCP Apps rules the proxy enforces for a view (spec 2026-01-26). Pure, so
+ * The MCP Apps rules the gateway enforces for a view (spec 2026-01-26). Pure, so
  * every rule reads the same whichever runtime and transport a call came from.
  */
 

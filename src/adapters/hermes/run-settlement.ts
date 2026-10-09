@@ -134,7 +134,7 @@ export function settleFrom(
   // Hermes admitted this turn and went idle without ever running it, so no
   // assistant turn exists: report a failure the user can retry, not an empty
   // success. Anything observed while it waited belongs to the turn ahead of
-  // it, so the failure is AOS' own rather than a native classification.
+  // it, so the failure is the gateway's own rather than a native classification.
   else if (edge === "unstarted")
     failTurn(host, active, { failureReason: "queued-turn-not-started" })
   else if (active.turn === "failed" || active.errorObserved)
@@ -271,7 +271,7 @@ export async function stopTurn(
     try {
       outcome = await host.native.interrupt(active.liveSessionId)
     } catch {
-      // AOS cannot say whether Hermes accepted the cancel, so this run stops
+      // The gateway cannot say whether Hermes accepted the cancel, so this run stops
       // consuming exactly like every other uncertain outcome: its cursor
       // freezes at the last delivered frame and the browser reconciles from
       // there. Following further frames would strand the turn's own end.

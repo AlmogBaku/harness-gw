@@ -27,6 +27,7 @@ import {
   type ChannelScope,
   type ChannelTurn,
 } from "./channel"
+import { providerSessionId, sessionId } from "./ids"
 import type { SessionCoordinator } from "./session-coordinator"
 
 /** No test here reads history; a channel that did would fail loudly. */
@@ -43,8 +44,8 @@ function reporting(
 
 const SCOPE: SessionScope = {
   agentId: "researcher",
-  providerSessionId: "session-1",
-  sessionId: "thread-operator",
+  providerSessionId: providerSessionId("session-1"),
+  sessionId: sessionId("thread-operator"),
 }
 
 function turn(turnId: string, at = 0): ChannelTurn {
@@ -168,9 +169,13 @@ describe("createChannel", () => {
     const operator = member()
     const guest = member()
     channels.add(SCOPE, operator.fake, { hasPrompt: false })
-    channels.add({ ...SCOPE, sessionId: "thread-guest" }, guest.fake, {
-      hasPrompt: false,
-    })
+    channels.add(
+      { ...SCOPE, sessionId: sessionId("thread-guest") },
+      guest.fake,
+      {
+        hasPrompt: false,
+      }
+    )
     setSnapshot({ state: "running", turnId: "turn-1" })
 
     await channels.broadcastTurn(SCOPE, turn("turn-1"), operator.fake)
@@ -180,7 +185,10 @@ describe("createChannel", () => {
 
   it("keeps another sessionId in another channel", async () => {
     const { channels, setSnapshot } = harness()
-    const other = { ...SCOPE, providerSessionId: "session-2" }
+    const other = {
+      ...SCOPE,
+      providerSessionId: providerSessionId("session-2"),
+    }
     const sender = member()
     const elsewhere = member()
     channels.add(SCOPE, sender.fake, { hasPrompt: false })
@@ -518,7 +526,10 @@ function adoptingHarness() {
   }
 }
 
-const GUEST_SCOPE: SessionScope = { ...SCOPE, sessionId: "thread-guest" }
+const GUEST_SCOPE: SessionScope = {
+  ...SCOPE,
+  sessionId: sessionId("thread-guest"),
+}
 
 describe("createChannel adopting runtime-started turns", () => {
   it("subscribes while the channel has members and stops when the last parts", () => {

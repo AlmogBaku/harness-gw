@@ -5,15 +5,17 @@ import { inspect } from "node:util"
 import { describe, expect, it, onTestFinished } from "vitest"
 
 import { captureLogs } from "../../../test/support/log-capture"
+import { providerSessionId, sessionId } from "../../core/ids"
+import type { SessionScope } from "../../core/runtime"
 import { OpenClawClientUnavailableError } from "./client"
 import { composeOpenClawRuntime } from "./factory"
 import { OpenClawNativePayloadError } from "./native-schemas"
 import { AGENT_WORKSPACE, stubOpenClawClient } from "./test-utils/fake-openclaw"
 
-const scope = {
+const scope: SessionScope = {
   agentId: "research",
-  providerSessionId: "agent:research:main",
-  sessionId: "t1",
+  providerSessionId: providerSessionId("agent:research:main"),
+  sessionId: sessionId("t1"),
 }
 const REPORT = `${AGENT_WORKSPACE}/report.md`
 const MISSING = `${AGENT_WORKSPACE}/missing.md`

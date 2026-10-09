@@ -273,7 +273,7 @@ async function dropLink(t: Table) {
   const dropped = t.source()
   dropped.emit({
     kind: TurnEventKind.TurnFailed,
-    code: "AOS_CONNECTION_INTERRUPTED",
+    code: "HGW_CONNECTION_INTERRUPTED",
   })
   dropped.finish()
   await t.clock.advance(0)
@@ -759,7 +759,7 @@ const ROWS: Row[] = [
     bound: UNCERTAINTY_DEADLINE_MS,
     recovered(t) {
       for (const member of members(t))
-        expect(endings(member).at(-1)).toBe("AOS_OUTCOME_UNKNOWN")
+        expect(endings(member).at(-1)).toBe("HGW_OUTCOME_UNKNOWN")
     },
     // Each reconcile asks on a jittered backoff, so no count is fixed.
     calls: {},
@@ -979,7 +979,7 @@ const ROWS: Row[] = [
  * answered after both, at the admission deadline the row's bound names.
  */
 function nestedDeadlines(): Row {
-  // How many lines the proxy had logged when each happened.
+  // How many lines the gateway had logged when each happened.
   const marks: { aborted?: number; answered?: number } = {}
   const mark = (t: Table) => t.test.logs.records().length
   const reconciled = new EventSource()

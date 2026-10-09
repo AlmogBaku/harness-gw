@@ -12,6 +12,7 @@ import {
 } from "./gateway"
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { FakeSocket } from "./test-utils/fake-socket"
+import { asFetch } from "./test-utils/fetcher"
 import { nativeTurn } from "./test-utils/native-events"
 
 const TOKEN = "native-secret"
@@ -60,7 +61,7 @@ function harness(
   const gateway = new HermesGateway({
     baseUrl: BASE_URL,
     credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
-    fetcher: vi.fn(),
+    fetcher: asFetch(vi.fn()),
     socketFactory: factory,
     connectTimeoutMs: 1_000,
     requestTimeoutMs: 1_000,
@@ -131,7 +132,7 @@ describe("Hermes gateway dial and authentication", () => {
       const factory = vi.fn()
       const gateway = new HermesGateway({
         baseUrl: BASE_URL,
-        credentials: async () =>
+        credentials: async (): Promise<Readonly<Record<string, string>>> =>
           token === undefined ? {} : { "X-Hermes-Session-Token": token },
         socketFactory: factory,
         connectTimeoutMs: 50,
@@ -827,7 +828,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     const gateway = new HermesGateway({
       baseUrl: BASE_URL,
       credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
-      fetcher: vi.fn(),
+      fetcher: asFetch(vi.fn()),
       socketFactory: factory,
       backoff: { jitter: false },
       connectTimeoutMs: 1_000,
@@ -862,7 +863,7 @@ describe("Hermes gateway heartbeat and redial", () => {
     const gateway = new HermesGateway({
       baseUrl: BASE_URL,
       credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
-      fetcher: vi.fn(),
+      fetcher: asFetch(vi.fn()),
       socketFactory: factory,
       backoff: { jitter: false },
       connectTimeoutMs: 1_000,
@@ -1080,7 +1081,7 @@ describe("Hermes gateway lifecycle and server requests", () => {
     const gateway = new HermesGateway({
       baseUrl: BASE_URL,
       credentials: async () => ({ "X-Hermes-Session-Token": TOKEN }),
-      fetcher,
+      fetcher: asFetch(fetcher),
       socketFactory: vi.fn(),
     })
 

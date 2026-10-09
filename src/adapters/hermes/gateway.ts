@@ -196,7 +196,7 @@ const AUTH_CLOSE_CODE = 4401
 const REFUSED_CLOSE_CODE = 4403
 
 // Private sentinels the vendored client rejects with, so classification can
-// compare by message. Mapped to a typed AOS error before any caller sees them.
+// compare by message. Mapped to a typed gateway error before any caller sees them.
 const NOT_CONNECTED = "aos-gateway:not-connected"
 const GENERATION_CLOSED = "aos-gateway:generation-closed"
 const CONNECT_FAILED = "aos-gateway:connect-failed"

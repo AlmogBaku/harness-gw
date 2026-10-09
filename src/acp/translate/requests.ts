@@ -122,7 +122,7 @@ function pendingQuestionsOf(request: PendingRequest): PendingQuestion[] {
 
 /**
  * A header is the provider's short label and only that: a provider without one
- * leaves it unset rather than have the proxy invent English copy the browser
+ * leaves it unset rather than have the gateway invent English copy the browser
  * would show a Hebrew reader, and the browser labels that question by its place.
  */
 function questionsOf(request: PendingRequest): HgwQuestion[] {

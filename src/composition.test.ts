@@ -125,8 +125,13 @@ function hermesRuntimeFactory(
     Parameters<typeof createHermesRuntime>[2]
   >["transportFactory"]
 ): RuntimeFactory {
-  return (config, limits, services) =>
-    createHermesRuntime(config, limits, { ...services, transportFactory })
+  return (config, limits, services) => {
+    if (config.kind !== "hermes") throw new Error("a Hermes runtime only")
+    return createHermesRuntime(config, limits, {
+      ...services,
+      transportFactory,
+    })
+  }
 }
 
 describe("configured proxy composition", () => {
@@ -333,7 +338,7 @@ describe("configured proxy composition", () => {
       logger: captureLogs().logger,
       credentials: new CredentialValues(),
     })
-    const post = (body: unknown) =>
+    const post = (body: Record<string, unknown>) =>
       configured.app.request(
         "https://aos.example.test/api/v1/guest-invitations",
         {
@@ -547,8 +552,8 @@ describe("configured proxy composition", () => {
         fields: expect.objectContaining({ direction: "speech" }),
       })
       expect(JSON.stringify(logs.records())).not.toContain("Hello")
-      const [url, init] = (fetchImpl as ReturnType<typeof vi.fn>).mock
-        .calls[0] as [string, RequestInit]
+      const [url, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>)
+        .mock.calls[0] as [string, RequestInit]
       expect(url).toBe("https://tts.example.test/v1/audio/speech")
       expect(new Headers(init.headers).get("authorization")).toBe(
         "Bearer tts-secret"

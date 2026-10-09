@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../test/support/log-capture"
 import { createCatalog } from "../core/catalog"
 import type { ExecutionEvent } from "../core/events"
 import type { ServerRuntime } from "../core/runtime"
@@ -62,8 +63,9 @@ function harness(
   const readState = createReadState({
     catalog: createCatalog({
       runtime,
-      coordinator: { state: () => "idle" },
+      coordinator: { state: () => "idle", endIfGone: () => false },
       rows: sessionRows,
+      logger: captureLogs().logger,
     }),
     ...(options.neutral ? {} : { relighting: RELIGHTING }),
     onUnreadChanged,

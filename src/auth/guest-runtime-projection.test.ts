@@ -8,8 +8,8 @@ import {
 
 describe("guest runtime projection", () => {
   it("keeps a turn whose outcome is unknown distinct from a failed one, and final", () => {
-    expect(publicTurnError("AOS_OUTCOME_UNKNOWN")).toEqual({
-      code: "AOS_OUTCOME_UNKNOWN",
+    expect(publicTurnError("HGW_OUTCOME_UNKNOWN")).toEqual({
+      code: "HGW_OUTCOME_UNKNOWN",
       retryable: false,
     })
   })

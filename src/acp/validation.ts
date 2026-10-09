@@ -16,9 +16,9 @@ import type { AcpConnectionContext } from "./types"
 
 /**
  * The two things the ACP v2 SDK cannot validate for us: the `_meta.hgw`
- * payloads the shared contract defines, and the JSON-RPC error a proxy
+ * payloads the shared contract defines, and the JSON-RPC error a gateway
  * failure travels as. An error ACP defines is the SDK's own `RequestError`;
- * only the rest take their code from `AOS_JSONRPC_ERRORS`.
+ * only the rest take their code from `HGW_JSONRPC_ERRORS`.
  */
 
 type AcpMeta = { readonly [key: string]: unknown } | null | undefined
@@ -26,7 +26,7 @@ type AcpMeta = { readonly [key: string]: unknown } | null | undefined
 /**
  * Parses `_meta.hgw` with its contract schema. An absent envelope parses as an
  * empty object, so a schema whose fields are all optional accepts a request
- * that carries no AOS metadata at all.
+ * that carries no hgw metadata at all.
  */
 export function parseMeta<Schema extends z.ZodType>(
   schema: Schema,
@@ -175,7 +175,7 @@ function channelFailure(cause: unknown) {
 }
 
 /**
- * The JSON-RPC error a proxy failure travels as, or the failure itself;
+ * The JSON-RPC error a gateway failure travels as, or the failure itself;
  * `publicError` is the runtime's classifier. A turn's own control answers
  * are ACP's; every other failure travels as its kind.
  */
@@ -201,7 +201,7 @@ export function publicCodeOf(error: unknown) {
 
 /**
  * The code and message an `_hgw/error` notification reports a failure with.
- * The proxy has no operator-facing copy: a public failure travels as its
+ * The gateway has no operator-facing copy: a public failure travels as its
  * machine code, and the browser owns the localized sentence.
  */
 export function errorNotificationOf(

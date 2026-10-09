@@ -19,14 +19,14 @@ import type { Role } from "../core/member"
 /**
  * The 101 response header that tells the client which connection it got. The
  * SDK reads it back only on its Streamable HTTP transport, which this listener
- * does not host: the proxy mints the id so one value identifies the connection
- * in the header, in the connection context, and in proxy logs.
+ * does not host: the gateway mints the id so one value identifies the connection
+ * in the header, in the connection context, and in gateway logs.
  */
 const CONNECTION_ID_HEADER = "Acp-Connection-Id"
 
 /**
  * The SDK's `close` tears down its inbound and outbound streams, which can wait
- * on a handler that is still running, so the proxy bounds that wait instead of
+ * on a handler that is still running, so the gateway bounds that wait instead of
  * letting one connection delay a peer close or a listener shutdown.
  */
 const SERVER_CLOSE_GRACE_MS = 1_000
@@ -61,7 +61,7 @@ export type AcpServiceOptions = {
   /** Builds the per-connection ACP agent app. */
   agent: HgwAcpAgentFactory
   /**
-   * Builds the per-connection proxy state the agent app runs against, for the
+   * Builds the per-connection gateway state the agent app runs against, for the
    * Agent its address names, if any.
    */
   connection(
@@ -83,7 +83,7 @@ export type AcpServiceOptions = {
   logger?: Logger
   /**
    * Who every connection on this listener belongs to. It keys per-operator
-   * state the proxy holds outside one connection, so each listener states it
+   * state the gateway holds outside one connection, so each listener states it
    * rather than letting a role stand in for an identity.
    */
   principalId: string

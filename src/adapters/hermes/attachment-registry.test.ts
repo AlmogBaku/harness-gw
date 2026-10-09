@@ -5,7 +5,7 @@ import {
   HermesAttachmentRegistry,
   HermesSessionGoneError,
   REBIND_BACKOFF,
-  type AttachmentSignal,
+  type AttachmentObserver,
 } from "./attachment-registry"
 import { HermesUnavailableError, type HermesConnectionHandler } from "./gateway"
 import { nativeTurn } from "./test-utils/native-events"
@@ -155,7 +155,7 @@ describe("HermesAttachmentRegistry", () => {
 
   it("holds one native event subscription and delivers each frame once per observer across two heals", async () => {
     const { gateway, registry } = attach(liveStored())
-    const observer = vi.fn()
+    const observer = vi.fn<AttachmentObserver>()
     const stop = await registry.subscribe(scope, observer)
     const turn = nativeTurn("live-stored")
 
@@ -167,9 +167,7 @@ describe("HermesAttachmentRegistry", () => {
     expect(gateway.eventSubscriptions).toBe(1)
     expect(gateway.connectionSubscriptions).toBe(1)
     expect(
-      observer.mock.calls.filter(
-        ([signal]: [AttachmentSignal]) => signal.kind === "event"
-      )
+      observer.mock.calls.filter(([signal]) => signal.kind === "event")
     ).toHaveLength(2)
     stop()
     await registry.close()

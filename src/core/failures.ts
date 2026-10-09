@@ -72,13 +72,13 @@ export function publicFailure(
 
 /** The turn failure codes a public client may act on, by kind. */
 export const TURN_FAILURES = {
-  AOS_SEND_UNCERTAIN: { kind: "uncertain" },
-  AOS_INTERACTION_UNCERTAIN: { kind: "uncertain" },
-  AOS_STOP_UNCERTAIN: { kind: "uncertain" },
-  AOS_CONNECTION_INTERRUPTED: { kind: "uncertain" },
-  AOS_RESET_REQUIRED: { kind: "uncertain" },
+  HGW_SEND_UNCERTAIN: { kind: "uncertain" },
+  HGW_INTERACTION_UNCERTAIN: { kind: "uncertain" },
+  HGW_STOP_UNCERTAIN: { kind: "uncertain" },
+  HGW_CONNECTION_INTERRUPTED: { kind: "uncertain" },
+  HGW_RESET_REQUIRED: { kind: "uncertain" },
   // No reconcile confirmed the turn before its deadline: it may have run.
-  AOS_OUTCOME_UNKNOWN: { kind: "uncertain" },
+  HGW_OUTCOME_UNKNOWN: { kind: "uncertain" },
 } as const satisfies FailureTable
 
 /** The failure a proxy-core error is, whatever the runtime behind it. */

@@ -406,7 +406,7 @@ function createChannelTable({
       await adoption.discover(scope)
     } catch (cause) {
       if (channel.generation !== generation) return
-      // A proxy turn still starting refuses it; that turn's end asks again.
+      // A gateway turn still starting refuses it; that turn's end asks again.
       if (cause instanceof ServerTurnConflictError) return
       retryAdoption(channel)
       member.report(cause)
@@ -448,7 +448,7 @@ function createChannelTable({
 
   /**
    * Every turn's end asks the runtime once more, which finds a turn it started
-   * while the proxy's own ran. An adopted turn's end rebuilds every member's
+   * while the gateway's own ran. An adopted turn's end rebuilds every member's
    * view from history, which holds the prompt none of them was shown.
    */
   function onExecution(channel: Channel, event: ExecutionEvent) {

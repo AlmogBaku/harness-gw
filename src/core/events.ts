@@ -25,7 +25,7 @@ export {
 } from "../../protocol"
 
 /**
- * Proxy-owned turn vocabulary.
+ * Gateway-owned turn vocabulary.
  *
  * Adapters report what a provider turn did in these transport-free facts, the
  * coordinator journals and replays them, and only the ACP translator knows how
@@ -435,10 +435,10 @@ export function isUncertainFailure(event: TurnEvent): boolean {
  * journal must not be retained.
  */
 export const REDIALABLE_ERROR_CODES = [
-  "AOS_SEND_UNCERTAIN",
-  "AOS_INTERACTION_UNCERTAIN",
-  "AOS_STOP_UNCERTAIN",
-  "AOS_CONNECTION_INTERRUPTED",
+  "HGW_SEND_UNCERTAIN",
+  "HGW_INTERACTION_UNCERTAIN",
+  "HGW_STOP_UNCERTAIN",
+  "HGW_CONNECTION_INTERRUPTED",
 ] as const
 
 export function isRedialableFailure(event: TurnEvent): boolean {

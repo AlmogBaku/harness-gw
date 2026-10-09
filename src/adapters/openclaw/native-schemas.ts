@@ -258,7 +258,7 @@ export function openClawAgentAvatarPatchParams(
 }
 
 /**
- * What AOS keeps from `config.get`: its hash and the ids with their own
+ * What the gateway keeps from `config.get`: its hash and the ids with their own
  * authored `agents.list` entry. The payload carries credentials, so nothing
  * else survives this call, and an unusable payload reads as no entries.
  */
@@ -280,7 +280,7 @@ export function parseOpenClawConfiguredAgents(
   const ids = Array.isArray(list)
     ? list.map((entry) => (isRecord(entry) ? string(entry.id) : undefined))
     : []
-  // A roster the gateway cannot merge by id is one AOS never patches.
+  // A roster the gateway cannot merge by id is one the gateway never patches.
   const mergeable =
     ids.length <= MAX_NATIVE_COLLECTION && ids.every((id) => id !== undefined)
   return { hash, agentIds: new Set(mergeable ? (ids as string[]) : []) }

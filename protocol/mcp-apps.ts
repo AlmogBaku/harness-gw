@@ -7,8 +7,8 @@ import {
 import { z } from "zod"
 
 /**
- * MCP Apps (spec 2026-01-26) as the proxy hands them to the browser. A tool
- * declares its view with `_meta.ui.resourceUri`; the proxy resolves that
+ * MCP Apps (spec 2026-01-26) as the gateway hands them to the browser. A tool
+ * declares its view with `_meta.ui.resourceUri`; the gateway resolves that
  * resource server-side and the browser only ever sees the view below, keyed
  * by the tool call that opened it, never the resource URI.
  */

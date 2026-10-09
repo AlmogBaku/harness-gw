@@ -150,7 +150,7 @@ const ROWS: Row[] = [
       test.faults.gone(test.scope)
       test.sources[0]!.emit({
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_CONNECTION_INTERRUPTED",
+        code: "HGW_CONNECTION_INTERRUPTED",
       })
       test.sources[0]!.finish()
     },

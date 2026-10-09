@@ -62,7 +62,7 @@ export async function serveProxy(
   const announceShutdown = () => {
     if (shutdownAnnounced) return
     shutdownAnnounced = true
-    logger.info({ graceMs }, "proxy.shutdown.started")
+    logger.info({ graceMs }, "gateway.shutdown.started")
   }
   const exit = dependencies.exit ?? ((code: number) => process.exit(code))
   let settledListeners = 0
@@ -76,8 +76,8 @@ export async function serveProxy(
     forcedShutdown ||= forced
     settledListeners += 1
     if (settledListeners < listenerCount) return
-    if (forcedShutdown) logger.error({ graceMs }, "proxy.shutdown.forced")
-    logger.info({ forced: forcedShutdown }, "proxy.shutdown.completed")
+    if (forcedShutdown) logger.error({ graceMs }, "gateway.shutdown.forced")
+    logger.info({ forced: forcedShutdown }, "gateway.shutdown.completed")
     exit(forcedShutdown ? 1 : 0)
   }
   const lifecycle = start<SocketUpgrade>({
@@ -130,7 +130,7 @@ export async function serveProxy(
           }
         : {}),
     },
-    "proxy.started"
+    "gateway.started"
   )
 
   let shutdownPromise: Promise<void> | undefined

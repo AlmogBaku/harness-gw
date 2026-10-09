@@ -1,10 +1,13 @@
 {
   "name": "@harness-gw/sdk",
   "version": "0.0.0",
-  "private": true,
   "description": "A gateway that puts Hermes, OpenClaw, and OpenCode behind one ACP WebSocket, and the browser client and protocol SDK for it.",
-  "license": "UNLICENSED",
+  "license": "Apache-2.0",
   "type": "module",
+  "sideEffects": [
+    "./client/index.ts",
+    "./protocol/sdk.ts"
+  ],
   "exports": {
     ".": {
       "types": "./dist/client/index.d.ts",
@@ -29,12 +32,12 @@
     "serve": "bun run src/cli.ts serve",
     "lint": "eslint",
     "format": "prettier --write \"**/*.ts\"",
-    "typecheck": "tsc -p tsconfig.gateway.json && tsc -p tsconfig.lifecycle.json && tsc -p tsconfig.client.json && tsc -p tsconfig.client-tests.json",
+    "typecheck": "tsc -p tsconfig.gateway.json && tsc -p tsconfig.gateway-tests.json && tsc -p tsconfig.lifecycle.json && tsc -p tsconfig.client.json && tsc -p tsconfig.client-tests.json",
     "test": "vitest run --project !gate",
     "test:gate": "vitest run --project gate",
     "test:bun": "bun test ./src/cli.bun-spec.ts ./src/server.bun-spec.ts ./src/shutdown.bun-spec.ts",
     "test:watch": "vitest --project !gate",
-    "build": "rm -rf dist && bun build client/index.ts protocol/sdk.ts --root . --outdir dist --splitting --format esm --target browser --packages external --chunk-naming 'chunks/[name].[ext]' && tsc -p tsconfig.build.json"
+    "build": "rm -rf dist && bun build client/index.ts protocol/sdk.ts --root . --outdir dist --splitting --format esm --target browser --packages external --chunk-naming 'chunks/[name].[ext]' && tsc -p tsconfig.build.json && bun scripts/declaration-extensions.mjs dist"
   },
   "dependencies": {
     "cockatiel": "4.0.0",

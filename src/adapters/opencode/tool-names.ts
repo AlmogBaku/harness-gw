@@ -14,7 +14,7 @@ const NO_MCP_TOOLS: McpToolNameResolver = () => undefined
 
 /**
  * The public name of a native tool: the `aos-ui` MCP server's tools read under
- * their bare AOS names, and another MCP tool `resolve` recognizes reads as
+ * their bare gateway names, and another MCP tool `resolve` recognizes reads as
  * `mcp__<server>__<tool>` under its original names.
  */
 export function canonicalOpenCodeToolName(
@@ -41,7 +41,7 @@ export const OPENCODE_MCP_TOOL_NAMES: McpToolNameScheme = {
 }
 
 /**
- * The name AOS gives a command the operator ran in the Session's own shell,
+ * The name the gateway gives a command the operator ran in the Session's own shell,
  * which OpenCode reports apart from the model's tool calls.
  */
 export const OPENCODE_SHELL_TOOL = "shell"
@@ -67,7 +67,7 @@ export function openCodeToolKind(canonicalName: string) {
 }
 
 /**
- * Projects one native tool call onto the canonical vocabulary AOS emits.
+ * Projects one native tool call onto the canonical vocabulary the gateway emits.
  *
  * Renaming alone is not enough for the delegation tool: OpenCode reports the
  * child's outcome as plain text, while the canonical activity result carries a

@@ -1,7 +1,7 @@
 import { SessionPlatformSchema, type SessionPlatform } from "../../protocol"
 
 /**
- * The platform a native Session came from, or `undefined` for anything AOS
+ * The platform a native Session came from, or `undefined` for anything the gateway
  * does not draw: its own Sessions, CLI, cron, and unlisted platforms.
  */
 export function sessionPlatform(native: unknown): SessionPlatform | undefined {

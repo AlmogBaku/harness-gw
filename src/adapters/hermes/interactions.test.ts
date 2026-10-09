@@ -352,8 +352,8 @@ describe("HermesInteractions server requests", () => {
       command: "sudo apt install",
     })
 
-    // Hermes raised this prompt on a Session AOS may share with its own
-    // renderer, and `-32601` would cancel it there: AOS claims the request,
+    // Hermes raised this prompt on a Session the gateway may share with its own
+    // renderer, and `-32601` would cancel it there: the gateway claims the request,
     // answers nothing, and presents nothing.
     expect(requests.refusal(id)).toBeUndefined()
     expect(requests.frames()).toEqual([])
@@ -411,7 +411,7 @@ describe("HermesInteractions server requests", () => {
       question: "Which region now?",
     })
 
-    // A full AOS may not answer for the user: `-32601` would cancel this prompt
+    // A full gateway may not answer for the user: `-32601` would cancel this prompt
     // for every renderer of a shared Session.
     expect(requests.refusal(overflowing)).toBeUndefined()
     expect(requests.frames()).toEqual([])
@@ -564,7 +564,7 @@ describe("HermesInteractions server requests", () => {
     const notified = vi.fn()
     interactions.subscribePendingRequests(scope, notified)
 
-    // A `clarify` frame written while the socket was detached reaches AOS only
+    // A `clarify` frame written while the socket was detached reaches the gateway only
     // as an `open_requests` re-delivery of the heal that rebound the Session.
     const redelivered = {
       open_requests: [
@@ -684,7 +684,7 @@ describe("HermesInteractions server requests", () => {
     })
     await expect(
       interactions.respond(scope, { ...response, payload: "deny" })
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     expect(requests.frames()).toHaveLength(1)
   })
 
@@ -733,7 +733,7 @@ describe("HermesInteractions server requests", () => {
           status: "resolved",
           payload: "once",
         })
-      ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+      ).rejects.toMatchObject({ code: "HGW_INTERACTION_NOT_FOUND" })
     expect(requests.frames()).toEqual([])
   })
 
@@ -760,7 +760,7 @@ describe("HermesInteractions server requests", () => {
           status: "resolved",
           payload,
         })
-      ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+      ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     await expect(
       interactions.respond(scope, {
         requestId: id,
@@ -768,7 +768,7 @@ describe("HermesInteractions server requests", () => {
         payload: { answers: [["eu"]] },
         extra: true,
       })
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     expect(requests.frames()).toEqual([])
   })
 
@@ -903,7 +903,7 @@ describe("HermesInteractions server requests", () => {
           status: "resolved",
           payload: { answers },
         })
-      ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+      ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     expect(requests.frames()).toEqual([])
 
     await interactions.respond(scope, {
@@ -964,14 +964,14 @@ describe("HermesInteractions server requests", () => {
         status: "resolved",
         payload: { answers: [["x".repeat(4_097)]] },
       })
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     await expect(
       interactions.respond(scope, {
         requestId: id,
         status: "resolved",
         payload: { answers: [["x".repeat(70_000)]] },
       })
-    ).rejects.toMatchObject({ code: "AOS_LIMIT_EXCEEDED" })
+    ).rejects.toMatchObject({ code: "HGW_LIMIT_EXCEEDED" })
     expect(requests.answer(id)).toBeUndefined()
   })
 
@@ -1063,7 +1063,7 @@ describe("HermesInteractions server requests", () => {
         status: "resolved",
         payload: { answers: [["eu"]] },
       })
-    ).rejects.toMatchObject({ code: "AOS_PROVIDER_UNAVAILABLE" })
+    ).rejects.toMatchObject({ code: "HGW_PROVIDER_UNAVAILABLE" })
 
     expect(requests.answer(id)).toBeUndefined()
     expect(interactions.pending(scope)).toHaveLength(1)
@@ -1134,11 +1134,12 @@ describe("HermesInteractions server requests", () => {
       ensure: async () => {
         throw new Error("token=secret https://hermes.internal /home/operator")
       },
+      retain: async () => () => {},
       scopeFor: () => undefined,
     })
 
     await expect(interactions.resume(scope)).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
+      code: "HGW_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable",
     })
   })

@@ -1,5 +1,5 @@
 /**
- * 4.31 Generated state×event rows from every proxy owner machine, each built
+ * 4.31 Generated state×event rows from every gateway owner machine, each built
  * by its production builder over stub dependencies: every state is final or
  * has a way out, so no owner is held for good.
  */

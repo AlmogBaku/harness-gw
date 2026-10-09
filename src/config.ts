@@ -3,7 +3,7 @@ import { z } from "zod"
 
 import { isUiResourceUri } from "./mcp-apps/policy"
 
-/** The proxy log's levels, quietest last; `info` is the default. */
+/** The gateway log's levels, quietest last; `info` is the default. */
 export const PROXY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
 export type ProxyLogLevel = (typeof PROXY_LOG_LEVELS)[number]
 
@@ -159,7 +159,7 @@ const RuntimeFields = {
    * Whether the media a runtime's Agent delivers natively (a Hermes `MEDIA:`
    * line or TTS receipt, an OpenClaw media block) becomes an Artifact record.
    * Off, none does, and a `MEDIA:` line stays in the text as written. Images
-   * the operator uploads are AOS's own attachments and stay either way.
+   * the operator uploads are aos-ui's own attachments and stay either way.
    */
   mediaArtifacts: z.boolean().default(true),
 }

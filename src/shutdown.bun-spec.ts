@@ -9,7 +9,7 @@ import { HGW_ACP_PATH } from "../protocol/acp"
 
 /**
  * A real `serve` process, a real ACP peer, and a real provider socket: only a
- * spawned Bun process can show that SIGTERM ends the proxy inside its grace.
+ * spawned Bun process can show that SIGTERM ends the gateway inside its grace.
  */
 const SHUTDOWN_GRACE_MS = 1_000
 const EXIT_MARGIN_MS = 2_000
@@ -107,7 +107,7 @@ async function proxyConfig(port: number, hermesBaseUrl: string) {
 }
 
 /**
- * The spawned proxy reads the real environment, so the spec hands it one with
+ * The spawned gateway reads the real environment, so the spec hands it one with
  * every configuration override removed and points it at the spec's own file.
  */
 function scrubbedEnvironment() {
@@ -165,7 +165,7 @@ describe("proxy shutdown under SIGTERM", () => {
     collect(child.stderr, errors)
 
     expect(
-      await waitFor(() => output.text.includes("proxy.started"), 10_000),
+      await waitFor(() => output.text.includes("gateway.started"), 10_000),
       `${output.text}${errors.text}`
     ).toBe(true)
 
@@ -210,8 +210,8 @@ describe("proxy shutdown under SIGTERM", () => {
 
     expect(exitCode, `${output.text}${errors.text}`).not.toBe("timed-out")
     expect(elapsedMs).toBeLessThan(SHUTDOWN_GRACE_MS + EXIT_MARGIN_MS)
-    expect(output.text).toContain("proxy.shutdown.started")
-    expect(output.text).toContain("proxy.shutdown.completed")
+    expect(output.text).toContain("gateway.shutdown.started")
+    expect(output.text).toContain("gateway.shutdown.completed")
     expect(exitCode, `${output.text}${errors.text}`).toBe(0)
   })
 })

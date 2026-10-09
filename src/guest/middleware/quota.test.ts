@@ -22,6 +22,7 @@ function coordinator() {
     readings: {
       context: vi.fn(),
       models: vi.fn(),
+      updateModel: vi.fn(),
       createSession: vi.fn(),
       publicError: () => undefined,
       link: READY_LINK,

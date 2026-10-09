@@ -37,13 +37,14 @@ import {
   type CoordinatedTurnSubscription,
   type SessionCoordinatorOptions,
 } from "./session-coordinator"
+import { providerSessionId, sessionId } from "./ids"
 import { READY_LINK } from "./link"
 import { FanoutOverflowError } from "./subscriber-fanout"
 
 class EventSource implements ServerTurnHandle {
   readonly #values: TurnEvent[] = []
   readonly #waiters: Array<(value: IteratorResult<TurnEvent>) => void> = []
-  readonly stop = vi.fn(async () => "stopping" as const)
+  readonly stop = vi.fn<ServerTurnHandle["stop"]>(async () => "stopping")
   readonly steer = vi.fn(async () => "steered" as const)
   readonly settled: Promise<void>
   #resolveSettled!: () => void
@@ -100,14 +101,14 @@ class EventSource implements ServerTurnHandle {
 
 const scope: SessionScope = {
   agentId: "researcher",
-  providerSessionId: "stored-1",
-  sessionId: "stored-1",
+  providerSessionId: providerSessionId("stored-1"),
+  sessionId: sessionId("stored-1"),
 }
 
 const otherScope: SessionScope = {
   agentId: "researcher",
-  providerSessionId: "stored-2",
-  sessionId: "stored-2",
+  providerSessionId: providerSessionId("stored-2"),
+  sessionId: sessionId("stored-2"),
 }
 
 function input(turnId: string): PromptTurnInput {
@@ -159,6 +160,21 @@ function reader(subscription: CoordinatedTurnSubscription) {
   return () => iterator.next()
 }
 
+type Readings = SessionCoordinatorOptions["readings"]
+
+/** Runtime readings no test calls unless it overrides them. */
+function readings(overrides: Partial<Readings> = {}): Readings {
+  return {
+    context: vi.fn(),
+    models: vi.fn(),
+    updateModel: vi.fn(),
+    createSession: vi.fn(),
+    publicError: () => undefined,
+    link: READY_LINK,
+    ...overrides,
+  }
+}
+
 function coordinator(
   engine: ServerTurnEngine,
   limits: Partial<Omit<SessionCoordinatorOptions, "engine">> = {}
@@ -166,12 +182,7 @@ function coordinator(
   return new SessionCoordinator({
     engine,
     // No test here subscribes anything to a reading.
-    readings: {
-      context: vi.fn(),
-      models: vi.fn(),
-      publicError: () => undefined,
-      link: READY_LINK,
-    },
+    readings: readings(),
     maxActiveExecutions: 8,
     maxSubscriberEvents: 8,
     maxSubscriberBytes: 64 * 1024,
@@ -247,13 +258,13 @@ const turnEnded = { kind: TurnEventKind.TurnEnded } as const
 
 const interruptedError = {
   kind: TurnEventKind.TurnFailed,
-  code: "AOS_CONNECTION_INTERRUPTED",
+  code: "HGW_CONNECTION_INTERRUPTED",
   message: "The provider connection was interrupted.",
 } as const
 
 /**
  * The first event a reload recovery replays: a journaled run replays its own
- * beginning, and a run without a journal answers `AOS_RESET_REQUIRED`.
+ * beginning, and a run without a journal answers `HGW_RESET_REQUIRED`.
  */
 async function reloadedHead(
   sessions: SessionCoordinator,
@@ -285,7 +296,7 @@ async function expectOneReset(sessions: SessionCoordinator, turnId = "run-1") {
     done: false,
     value: {
       sequence: expect.any(Number),
-      event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
+      event: { kind: TurnEventKind.TurnFailed, code: "HGW_RESET_REQUIRED" },
     },
   })
   await expect(read()).resolves.toMatchObject({ done: true })
@@ -618,8 +629,8 @@ describe("SessionCoordinator", () => {
         const id = index + 1
         const sessionScope = {
           agentId: "researcher",
-          providerSessionId: `stored-${id}`,
-          sessionId: `stored-${id}`,
+          providerSessionId: providerSessionId(`stored-${id}`),
+          sessionId: sessionId(`stored-${id}`),
         }
         const runInput = input(`run-${id}`)
         const subscription = await sessions.start(
@@ -683,7 +694,7 @@ describe("SessionCoordinator", () => {
 
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
       {
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "HGW_RESET_REQUIRED" },
       }
     )
     await expect(
@@ -959,7 +970,7 @@ describe("SessionCoordinator", () => {
     source.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
     // Provider history owns a run that ended, so a redial that missed the last
-    // events reloads it instead of replaying a journal AOS no longer keeps.
+    // events reloads it instead of replaying a journal the gateway no longer keeps.
     await expect(
       sessions.recover(
         scope,
@@ -983,12 +994,12 @@ describe("SessionCoordinator", () => {
       {
         agentId: "writer",
         providerSessionId: scope.providerSessionId,
-        sessionId: "writer-1",
+        sessionId: sessionId("writer-1"),
       },
       {
         agentId: scope.agentId,
-        providerSessionId: "stored-2",
-        sessionId: "stored-2",
+        providerSessionId: providerSessionId("stored-2"),
+        sessionId: sessionId("stored-2"),
       },
     ]
     for (const [index, sessionScope] of scopes.entries()) {
@@ -1107,13 +1118,7 @@ describe("SessionCoordinator", () => {
         .mockResolvedValueOnce({ session: { id: "created-1" } })
         .mockResolvedValue({ session: { id: "created-2" } })
       const sessions = coordinator(engine(), {
-        readings: {
-          context: vi.fn(),
-          models: vi.fn(),
-          createSession,
-          publicError: () => undefined,
-          link: READY_LINK,
-        },
+        readings: readings({ createSession }),
       })
       const create = { title: "Plans", clientId: "client-1" }
 
@@ -1142,13 +1147,7 @@ describe("SessionCoordinator", () => {
       const clock = useFakeClock()
       const createSession = vi.fn(async () => ({}))
       const sessions = coordinator(engine(), {
-        readings: {
-          context: vi.fn(),
-          models: vi.fn(),
-          createSession,
-          publicError: () => undefined,
-          link: READY_LINK,
-        },
+        readings: readings({ createSession }),
       })
       const create = (clientId: string, principalId = "operator") =>
         sessions.createSession("researcher", { clientId }, principalId)
@@ -1346,7 +1345,7 @@ describe("SessionCoordinator", () => {
     )
     const lost = {
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_INTERACTION_LOST",
+      code: "HGW_INTERACTION_LOST",
       message:
         "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
       awaitingStop: true,
@@ -1652,8 +1651,8 @@ describe("SessionCoordinator", () => {
     await expect(
       sessions.discover({
         agentId: "researcher",
-        providerSessionId: "stored-3",
-        sessionId: "stored-3",
+        providerSessionId: providerSessionId("stored-3"),
+        sessionId: sessionId("stored-3"),
       })
     ).resolves.toBeDefined()
   })
@@ -1769,7 +1768,7 @@ describe("SessionCoordinator", () => {
     initial.emit({
       kind: TurnEventKind.TurnFailed,
       message: "Delivery uncertain",
-      code: "AOS_SEND_UNCERTAIN",
+      code: "HGW_SEND_UNCERTAIN",
     })
     initial.finish()
     await advance(0)
@@ -1777,7 +1776,7 @@ describe("SessionCoordinator", () => {
     const terminal = {
       kind: TurnEventKind.TurnFailed,
       message: "Slash commands cannot be sent with attachments.",
-      code: "AOS_COMMAND_WITH_ATTACHMENTS",
+      code: "HGW_COMMAND_WITH_ATTACHMENTS",
     } as const
     recovered.emit(terminal)
     recovered.finish()
@@ -1791,7 +1790,10 @@ describe("SessionCoordinator", () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {
       ...fakeEngine([source]),
-      discover: vi.fn(async () => ({ handle: source, state: "running" })),
+      discover: vi.fn(async () => ({
+        handle: source,
+        state: "running" as const,
+      })),
     }
     const sessions = coordinator(engine)
 
@@ -2005,7 +2007,10 @@ describe("SessionCoordinator", () => {
     const source = new EventSource()
     const engine: ServerTurnEngine = {
       ...fakeEngine([source]),
-      discover: vi.fn(async () => ({ handle: source, state: "running" })),
+      discover: vi.fn(async () => ({
+        handle: source,
+        state: "running" as const,
+      })),
     }
     const sessions = coordinator(engine)
     await sessions.discover(scope)
@@ -2019,7 +2024,7 @@ describe("SessionCoordinator", () => {
 
     await expect(reader(refreshed)()).resolves.toMatchObject({
       value: {
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "HGW_RESET_REQUIRED" },
       },
     })
     expect(engine.recover).not.toHaveBeenCalled()
@@ -2285,7 +2290,7 @@ describe("SessionCoordinator", () => {
     ])
     await expect(reloadedHead(sessions, scope, "run-1")).resolves.toMatchObject(
       {
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_OUTCOME_UNKNOWN" },
+        event: { kind: TurnEventKind.TurnFailed, code: "HGW_OUTCOME_UNKNOWN" },
       }
     )
     await expect(
@@ -2476,7 +2481,7 @@ describe("SessionCoordinator", () => {
     // finds the run still going.
     stopped.emit({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_STOP_UNCERTAIN",
+      code: "HGW_STOP_UNCERTAIN",
       message: "Stop could not be confirmed.",
     })
     await readLive()
@@ -2498,7 +2503,7 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, input("run-1"), access("one"))
     reset.emit({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_RESET_REQUIRED",
+      code: "HGW_RESET_REQUIRED",
       message: "AOS turn history must be reloaded before continuing.",
     })
     reset.finish()
@@ -2619,11 +2624,11 @@ describe("SessionCoordinator", () => {
         value: { sequence: 1, event: { kind: TurnEventKind.MessageChunk } },
       })
 
-      // AOS never saw this run start, so there is nothing to replay.
+      // The gateway never saw this run start, so there is nothing to replay.
       await expect(
         reloadedHead(sessions, scope, turnId!)
       ).resolves.toMatchObject({
-        event: { kind: TurnEventKind.TurnFailed, code: "AOS_RESET_REQUIRED" },
+        event: { kind: TurnEventKind.TurnFailed, code: "HGW_RESET_REQUIRED" },
       })
       await expect(reloadNeighbor()).resolves.toMatchObject({
         sequence: 1,
@@ -2827,7 +2832,7 @@ describe("SessionCoordinator", () => {
 
     // A guest's thread names the same Session under another public id.
     await sessions.start(
-      { ...scope, sessionId: "guest-ref" },
+      { ...scope, sessionId: sessionId("guest-ref") },
       input("run-1"),
       access("one")
     )
@@ -2858,7 +2863,7 @@ describe("SessionCoordinator", () => {
     await sessions.start(scope, input("run-1"), access("one"))
     first.emit({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_PROVIDER_FAILED",
+      code: "HGW_PROVIDER_FAILED",
       message: "The provider rejected the turn.",
     })
     first.finish()
@@ -2896,21 +2901,20 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(
       { start: vi.fn(), recover: vi.fn() },
       {
-        readings: {
-          context: vi.fn(),
-          models,
-          publicError: () => undefined,
-          link: READY_LINK,
-        },
+        readings: readings({ models }),
       }
     )
     const guest: unknown[] = []
     const operator: unknown[] = []
 
     // The guest joins first, so the Session's one cell reads for its scope.
-    sessions.subscribeReadings({ ...scope, sessionId: "invite-1" }, "guest", {
-      model: async (reading) => void guest.push(reading),
-    })
+    sessions.subscribeReadings(
+      { ...scope, sessionId: sessionId("invite-1") },
+      "guest",
+      {
+        model: async (reading) => void guest.push(reading),
+      }
+    )
     sessions.subscribeReadings(scope, "operator", {
       model: async (reading) => void operator.push(reading),
     })
@@ -3072,7 +3076,7 @@ describe("SessionCoordinator", () => {
         "turn-failed",
       ])
       expect(onTerminal).toHaveBeenLastCalledWith(
-        expect.objectContaining({ code: "AOS_OUTCOME_UNKNOWN" })
+        expect.objectContaining({ code: "HGW_OUTCOME_UNKNOWN" })
       )
       expect(sessions.gauges()).toMatchObject({
         executions: 0,

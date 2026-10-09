@@ -52,7 +52,9 @@ docker run --rm -v /etc/harness-gw:/config:ro harness-gw \
 schema, and starts nothing; it does not read the secret files, which `serve`
 reads at start. The operator listener has no authentication of its own: keep
 it on loopback or a trusted private network, behind the client's own web
-server. The wire and HTTP API are specified in [docs/protocol.md](docs/protocol.md).
+server. The wire and HTTP API are specified in [docs/protocol.md](docs/protocol.md). Every
+config field and environment override is documented in
+[docs/configuration.md](docs/configuration.md).
 
 ## Release
 

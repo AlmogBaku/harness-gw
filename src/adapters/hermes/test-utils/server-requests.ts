@@ -2,7 +2,7 @@
  * serverRequests — the server→client request half of a Hermes gateway, driven
  * by the vendored `JsonRpcRequestChannel` itself.
  *
- * Using the real channel keeps a test honest about the parts AOS does not own:
+ * Using the real channel keeps a test honest about the parts the gateway does not own:
  * handlers run in registration order, a declined request is answered `-32601`
  * by the channel, `respond` is idempotent and swallows a dead socket, and an
  * `open_requests` entry is re-delivered with `replayed: true`.

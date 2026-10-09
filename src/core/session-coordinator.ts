@@ -93,11 +93,11 @@ export type SessionSnapshot = {
   turnId?: string
   /** The requests the turn still waits on: those nobody has answered. */
   requests: PendingRequest[]
-  /** The principal that admitted the turn, when this proxy admitted it. */
+  /** The principal that admitted the turn, when this gateway admitted it. */
   startedBy?: string
   /** The running turn waits on a prompt no client here answers: only Stop ends it. */
   awaitingStop?: true
-  /** When the live turn began, where the runtime or this proxy dated it. */
+  /** When the live turn began, where the runtime or this gateway dated it. */
   startedAt?: string
 }
 
@@ -298,7 +298,7 @@ type TurnSignal =
   | { type: "cleared" }
   | { type: "ended" }
   | { type: "paused" }
-  /** The provider may still be working on a turn this proxy lost sight of. */
+  /** The provider may still be working on a turn this gateway lost sight of. */
   | { type: "lost" }
   | { type: "stopped" }
   | { type: "stopping" }
@@ -465,7 +465,7 @@ type Turn = {
   admission?: string
   /**
    * The principal whose admission started the turn, kept across every segment
-   * whoever answers. A turn this proxy recovered or adopted has no starter.
+   * whoever answers. A turn this gateway recovered or adopted has no starter.
    */
   startedBy?: string
   /** The capability key for this session, used when evicting its cells. */
@@ -556,7 +556,7 @@ type SegmentHistory =
   | { journal: "start"; at: number | undefined }
   /** Later segment of the same turn: continues the replaced segment's journal. */
   | { journal: "continue"; previous?: Segment }
-  /** A provider turn AOS never streamed from its beginning. */
+  /** A provider turn the gateway never streamed from its beginning. */
   | { journal: "none" }
 
 function freshJournal(fromStart: boolean): SegmentJournal {
@@ -930,7 +930,7 @@ function settledNow(settled: Promise<void>) {
 /** How an uncertain turn ends once no recover confirmed it by its deadline. */
 const OUTCOME_UNKNOWN = {
   kind: TurnEventKind.TurnFailed,
-  code: "AOS_OUTCOME_UNKNOWN",
+  code: "HGW_OUTCOME_UNKNOWN",
 } as const
 
 export class SessionCoordinator {
@@ -1318,7 +1318,7 @@ export class SessionCoordinator {
       existing?.segment.turnId ?? `aos-recovered-${crypto.randomUUID()}`
     const { turn, generation } = this.#admit(scope, turnId)
     try {
-      // Adopting a turn the runtime started after one this proxy ran is a
+      // Adopting a turn the runtime started after one this gateway ran is a
       // turn start; a turn lost to a restart, or a wait refreshed, is not.
       if (!existing && this.#executions.has(key)) this.#assertCapacity(key)
       const discovered = await this.#deadline().run((signal) =>
@@ -2104,7 +2104,7 @@ export class SessionCoordinator {
   }
 
   /**
-   * Lands a turn this proxy started. One that can no longer land has nobody to
+   * Lands a turn this gateway started. One that can no longer land has nobody to
    * stop it later, so its handle is stopped here.
    */
   #landedStart(
@@ -2725,7 +2725,7 @@ export class SessionCoordinator {
       sequence: segment.nextSequence + 1,
       event: {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     }
     const events: AsyncIterable<SequencedTurnEvent> = {
@@ -2742,7 +2742,7 @@ export class SessionCoordinator {
    * one still admitting included, so two starts never take one last place; a
    * recovery or discovery still asking the runtime holds a place meanwhile.
    * `quota` counts, besides, the held turns whose starter it picks, so no quota
-   * counts a turn this proxy recovered or adopted: it has no starter.
+   * counts a turn this gateway recovered or adopted: it has no starter.
    */
   #assertCapacity(key: string, quota?: TurnQuota) {
     const held = [...this.#turns]

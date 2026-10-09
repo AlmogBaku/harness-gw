@@ -111,7 +111,7 @@ export function redactForLog(
 }
 
 /**
- * Every credential value the proxy has read, which no log line carries
+ * Every credential value the gateway has read, which no log line carries
  * verbatim, whatever field, message, or error it arrives in. A value is known
  * in each form it travels in (a password and its Basic header form, say) and
  * in its JSON-escaped spelling, and a rotated value joins its predecessor

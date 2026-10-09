@@ -493,7 +493,7 @@ describe("logging", () => {
 
 describe("ServerRuntime interface", () => {
   /**
-   * D8: the proxy calls neither `authState` nor `subscribeSessionInvalidation`;
+   * D8: the gateway calls neither `authState` nor `subscribeSessionInvalidation`;
    * each adapter retains its own implementation but the interface exposes
    * neither.
    */

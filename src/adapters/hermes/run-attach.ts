@@ -3,7 +3,7 @@
  *
  * A run publishes only frames that are its own and only in Hermes' own order: a
  * new turn starts past Hermes' watermark, a reconnect continues from the cursor
- * the run published, and a proxy restart can claim nothing but Hermes' own open
+ * the run published, and a gateway restart can claim nothing but Hermes' own open
  * turn. Whenever a sequence is missing, one bounded read of Hermes' ring decides
  * whether the run can continue or the browser has to reconcile.
  */
@@ -41,7 +41,7 @@ const MAX_RECOVERY_BYTES = 4_194_304
 /**
  * `barrier`: a new turn, so only frames past Hermes' watermark are its own.
  * `position`: a browser reconnect from the cursor the run already published.
- * `discover`: a proxy restart where only Hermes' own open turn is this run's.
+ * `discover`: a gateway restart where only Hermes' own open turn is this run's.
  * `adopt`: a turn Hermes started on its own, which ending first leaves nothing
  * to join.
  */
@@ -93,7 +93,7 @@ export async function attachTurn(
   let cursor: AttachCursor
   safelyUnsubscribe(active.unsubscribe)
   // Hermes asks the user through server→client requests, not through the
-  // event stream: a request pauses this turn wherever it landed. A prompt AOS
+  // event stream: a request pauses this turn wherever it landed. A prompt the gateway
   // holds unrendered pauses it too, and only Stop ends that wait.
   const stopRequests = host.native.subscribePendingRequests(
     active.scope,

@@ -108,15 +108,19 @@ function appServer(authorization?: string) {
       await server.close()
     }
   }
-  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) =>
-    handle(new Request(input, init))) as typeof globalThis.fetch
+  const fetch = (async (input: string | URL | Request, init?: RequestInit) =>
+    handle(
+      input instanceof Request
+        ? new Request(input, init)
+        : new Request(String(input), init)
+    )) as typeof globalThis.fetch
   return { seen, fetch }
 }
 
 const scope: SessionScope = {
   agentId: "agent-1",
-  providerSessionId: "session-1",
-  sessionId: "session-1",
+  providerSessionId: ids.providerSessionId("session-1"),
+  sessionId: ids.sessionId("session-1"),
 }
 
 const stored: Record<string, StoredMcpToolCall> = {

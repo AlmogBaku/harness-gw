@@ -78,12 +78,12 @@ import type {
 } from "./types"
 
 /**
- * The browser end of one ACP v2 connection to the proxy: the AOS extension
+ * The browser end of one ACP v2 connection to the gateway: the hgw extension
  * handlers, the handshake, the agent-side calls, and transport recovery.
  * Everything above this module consumes `AcpConnection`, never the SDK.
  */
 
-/** The close codes the proxy ends a connection with on purpose. */
+/** The close codes the gateway ends a connection with on purpose. */
 const TRY_AGAIN_LATER = 1013
 const POLICY_VIOLATION = 1008
 
@@ -97,7 +97,7 @@ export const SILENT_LOGGER: Logger = {
 }
 
 /**
- * The `cwd` every new or resumed Session names: empty, which the proxy reads
+ * The `cwd` every new or resumed Session names: empty, which the gateway reads
  * as the Agent's own folder, the only one a Session may run in.
  */
 const AGENT_CWD = ""
@@ -194,7 +194,7 @@ function isGone(error: unknown) {
 
 /**
  * The codes of a join refusal that resending on the same transport cannot
- * change: a request the proxy rejects as malformed or not permitted, or a
+ * change: a request the gateway rejects as malformed or not permitted, or a
  * member or runtime that needs authenticating again.
  */
 const REFUSED_ON_TRANSPORT = new Set<unknown>([
@@ -352,7 +352,7 @@ export type ConnectionMachineDeps = {
 /**
  * One connection's lifecycle: opening a transport, its handshake, ready while
  * it serves, and after a close, reconnecting on backoff, waiting out a full
- * proxy, or closed for good.
+ * gateway, or closed for good.
  */
 export function connectionMachine({
   open,
@@ -454,7 +454,7 @@ export function connectionMachine({
             reconnect: { target: "connecting", actions: "countAttempt" },
           },
         },
-        // The proxy is full: the wait is long, and the status says why.
+        // The gateway is full: the wait is long, and the status says why.
         capacity: {
           meta: { log: "info" },
           entry: { type: "lose", params: { status: "capacity" } },
@@ -623,7 +623,7 @@ export function createAcpConnection(
     grace?: unknown
   }
   const sessions = new Map<string, OpenSession>()
-  // The proxy answers `notFound` for a Session a fresh connection has not
+  // The gateway answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
 
@@ -684,7 +684,7 @@ export function createAcpConnection(
         listener(request)
       } catch {
         // A consumer that cannot show one request must not fail it for the
-        // others: an unanswered request stays pending for the proxy to
+        // others: an unanswered request stays pending for the gateway to
         // re-issue, which never answers the runtime on the operator's behalf.
       }
   }
@@ -840,7 +840,7 @@ export function createAcpConnection(
   /**
    * Sends one request under its tier's deadline. A reply that never comes
    * fails the request and checks the transport in with a liveness probe; only
-   * an unanswered probe closes it, so a slow proxy costs no reconnect. A
+   * an unanswered probe closes it, so a slow gateway costs no reconnect. A
    * request `parent` aborts leaves the transport as it is.
    */
   async function request<Response>(tier: RequestTier, send: Send<Response>) {
@@ -898,7 +898,7 @@ export function createAcpConnection(
   }
 
   /**
-   * Notifications have no reply; the proxy reports failures as `_hgw/error`.
+   * Notifications have no reply; the gateway reports failures as `_hgw/error`.
    * One for an open Session waits until it is joined.
    */
   function notifyAgent(
@@ -919,7 +919,7 @@ export function createAcpConnection(
     const response = await connection.agent.request(methods.agent.initialize, {
       protocolVersion: ACP_PROTOCOL_VERSION,
       info: clientInfo,
-      // The question composer answers form elicitations, so the proxy asks
+      // The question composer answers form elicitations, so the gateway asks
       // this client its Session's questions. This client pages older history
       // itself, so a from-start resume may replay only the newest page.
       capabilities: {
@@ -1169,7 +1169,7 @@ export function createAcpConnection(
   }
 
   /**
-   * Drops a Session no listener came back to, and tells the proxy so. Its
+   * Drops a Session no listener came back to, and tells the gateway so. Its
    * work goes on: `session/close` would stop it.
    */
   function part(sessionId: string, open: OpenSession) {
@@ -1191,7 +1191,7 @@ export function createAcpConnection(
     sessionId: string,
     cursor: string
   ): Promise<AcpHistoryPage> {
-    // The proxy reads a page only for a Session this connection has joined,
+    // The gateway reads a page only for a Session this connection has joined,
     // which a recovered transport has not done until it rejoins.
     await joined(sessionId)
     const open = sessions.get(sessionId)

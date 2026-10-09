@@ -41,7 +41,7 @@ export type McpAppResource = Pick<
 export type McpAppEndpoint = { name: string; url: string }
 
 /**
- * What the operator configured for one MCP server: a `url` the proxy connects
+ * What the operator configured for one MCP server: a `url` the gateway connects
  * to instead of the one the runtime reports, and request headers that replace
  * whatever credentials the runtime holds.
  */
@@ -156,7 +156,7 @@ export function createMcpAppClient(
     const headers = override?.headers
     if (headers && !isHttpsOrLoopback(target))
       throw new McpAppConnectionRefusedError()
-    const client = new Client({ name: "aos-ui-proxy", version: "1.0.0" })
+    const client = new Client({ name: "harness-gw", version: "1.0.0" })
     await client.connect(
       new StreamableHTTPClientTransport(target, {
         ...(options.fetch ? { fetch: options.fetch } : {}),

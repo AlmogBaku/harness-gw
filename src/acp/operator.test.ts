@@ -14,6 +14,7 @@ import {
   TurnEventKind,
   type TurnEvent,
 } from "../core/events"
+import { providerSessionId, sessionId } from "../core/ids"
 import { createActivityFeed } from "./activity-feed"
 import { createReadState } from "./read-state"
 import {
@@ -222,7 +223,11 @@ function unreadChanges(recorder: Recorder) {
 }
 
 /** The Session the seeded row names, as the coordinator and the routes see it. */
-const SCOPE = { agentId: AGENT, providerSessionId: SESSION, sessionId: SESSION }
+const SCOPE = {
+  agentId: AGENT,
+  providerSessionId: providerSessionId(SESSION),
+  sessionId: sessionId(SESSION),
+}
 
 /**
  * A steered run this connection does not own: the coordinator holds it for a

@@ -1,6 +1,7 @@
 import { Command, CommanderError } from "commander"
 
 import { createInvitationLink, type InviteFlags } from "./invite"
+import { checkConfiguredSecrets } from "../composition"
 import { loadServeConfig, serveProxy } from "./serve"
 import type { ProxyCliDependencies, ProxyLifecycle } from "./types"
 
@@ -40,14 +41,16 @@ export async function runProxyCli(
     .description("Inspect the gateway configuration")
     .command("check")
     .description(
-      "Validate the configuration file and its overrides, then exit; secret files are read only at start"
+      "Validate the configuration file, its overrides, and every secret file it names, then exit"
     )
     .option(
       "--config <path>",
       "configuration file; discovered under XDG_CONFIG_HOME when omitted"
     )
     .action(async ({ config }: { config?: string }) => {
-      await loadServeConfig({ config }, dependencies)
+      await checkConfiguredSecrets(
+        await loadServeConfig({ config }, dependencies)
+      )
       writeOut("configuration is valid\n")
     })
 
@@ -63,14 +66,17 @@ private: it is a reusable bearer credential until it expires.
 
 Examples:
   harness-gw invite --config /etc/harness-gw/config.yaml --agent interviewer \
-    --expires-in 72h --prefill "Hey, Almog sent me here!" \
-    --instruction "Load the interview skill for Dan." --lang en
+    --expires-in 72h --prefill "Hi, I was sent an invitation." \
+    --instruction "Load the interview skill." --lang en
 
   harness-gw invite --agent interviewer --ref returning-guest \
     --instruction "Continue the scheduled interview."
 `
     )
-    .option("--config <path>", "proxy configuration file (required)")
+    .option(
+      "--config <path>",
+      "configuration file; never discovered, so name it here or in HARNESS_GW_CONFIG_FILE"
+    )
     .requiredOption("--agent <name>", "Native Agent ID (required)")
     .option(
       "--ref <reference>",

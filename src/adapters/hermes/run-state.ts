@@ -115,7 +115,7 @@ export type ActiveTurn = {
   deferredEdge?: SettlementEdge
   /**
    * The user message this run's own prompt became. Only such a run can name
-   * its turn's saved rows: AOS submits its prompt as a visible user row, so
+   * its turn's saved rows: the client submits its prompt as a visible user row, so
    * history opens the turn with it.
    */
   promptMessageId?: string
@@ -254,7 +254,7 @@ export function safelyUnsubscribe(unsubscribe: (() => void) | undefined) {
   try {
     unsubscribe?.()
   } catch {
-    // Native cleanup errors are intentionally not exposed across the proxy.
+    // Native cleanup errors are intentionally not exposed across the gateway.
   }
 }
 

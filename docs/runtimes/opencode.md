@@ -81,7 +81,7 @@ at `.opencode/skills/aos-invite-link/SKILL.md` in the worktree. The creator may
 write only a new `.opencode/agents/<id>.md` file. The OpenCode adapter does not
 yet report it as the creator, so AOS does not offer **New Agent** on OpenCode.
 
-Set `AOS_RUNTIME_PROXY_URL` for an Agent using `aos-invite-link` to the
+Set `AOS_GATEWAY_URL` for an Agent using `aos-invite-link` to the
 configured operator gateway origin. The skill prefers the operator invitation
 endpoint over the local CLI, so it needs network access but no signing key.
 

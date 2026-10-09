@@ -29,10 +29,10 @@ const DATA_URL = /^data:([^;,]+);base64,(.+)$/u
 const HISTORY_TURN_ID = "history"
 
 /** The `data` part name a published artifact travels under, live and stored. */
-const ARTIFACT_PART_NAME = "aos.artifact"
+const ARTIFACT_PART_NAME = "hgw.artifact"
 
 /** The `data` part name of the notice a stored turn leads with. */
-const NOTICE_PART_NAME = "aos-notice"
+const NOTICE_PART_NAME = "hgw-notice"
 
 /**
  * The turn identity the shared builders ask for, given a replay has no live turn

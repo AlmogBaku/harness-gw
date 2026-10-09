@@ -40,7 +40,7 @@ runWireContract(
       runtimeFactory: async (config, limits, { logger }) =>
         coordinatedRuntime(
           config.id,
-          // Unstarted, as the real factory leaves it: the proxy's first read
+          // Unstarted, as the real factory leaves it: the gateway's first read
           // brings the link up.
           composeOpenClawRuntime({
             ...fakeOpenClawClient(openclaw),
@@ -63,7 +63,7 @@ runWireContract(
       catchUpWithStandardUpdates: LIVE_IDS_ADAPTER_MADE,
       // Every approval carries a reviewer-safe presentation, so the adapter
       // holds none back, and `sessions.messages.subscribe` replays each
-      // pending one (`SessionApprovalReplaySchema`), so a restarted proxy
+      // pending one (`SessionApprovalReplaySchema`), so a restarted gateway
       // presents it again rather than losing it.
       heldAndLostQuestions:
         "OpenClaw holds no approval back and replays every pending one on subscribe",

@@ -8,7 +8,7 @@ describe("log redaction", () => {
     expect(
       redactForLog({
         event: "hermes.turn.failed",
-        publicCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
+        publicCode: "HGW_PROVIDER_RETRYABLE_FAILURE",
         code: "validation_exception",
         url: "https://example.test/oauth/callback?code=native'secret",
         detail:
@@ -18,7 +18,7 @@ describe("log redaction", () => {
       })
     ).toEqual({
       event: "hermes.turn.failed",
-      publicCode: "AOS_PROVIDER_RETRYABLE_FAILURE",
+      publicCode: "HGW_PROVIDER_RETRYABLE_FAILURE",
       code: "validation_exception",
       url: "https://example.test/oauth/callback",
       detail: "dial wss://hermes.example.test/api/ws refused",

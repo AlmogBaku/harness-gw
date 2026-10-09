@@ -397,7 +397,7 @@ export const SessionMessageSchema = z.strictObject({
    * Present on the first assistant message of a turn the provider started on
    * its own, with no user message ahead of it: the thread shows it as a turn of
    * its own rather than more of the reply before it. Hermes sets this, and
-   * leads the message with an `aos-notice` data part naming what started it
+   * leads the message with an `hgw-notice` data part naming what started it
    * when the stored row names it.
    */
   opensTurn: z.literal(true).optional(),

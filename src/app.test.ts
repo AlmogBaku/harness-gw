@@ -141,6 +141,7 @@ describe("AOS V1 proxy", () => {
     vi.spyOn(runtime, "stageAttachments").mockResolvedValue({
       public: [{ type: "file", filename: "notes.txt", mimeType: "text/plain" }],
       appendTo: (text) => `${text}\n\n[attachment]`,
+      artifactIds: () => [undefined],
       cleanup,
     })
 
@@ -261,7 +262,7 @@ describe("AOS V1 proxy", () => {
     // 503, under the code that says to reconcile first.
     const uncertain = new HermesServerAdapter({ request: vi.fn() })
     vi.spyOn(uncertain, "getSession").mockRejectedValue(
-      new HermesTurnPublicError("AOS_STOP_UNCERTAIN", "Stop was not confirmed.")
+      new HermesTurnPublicError("HGW_STOP_UNCERTAIN", "Stop was not confirmed.")
     )
     const reconcile = await app(uncertain).request(path, stageRequest)
     expect(reconcile.status).toBe(503)
@@ -1048,7 +1049,14 @@ describe("Published Artifact views", () => {
     expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
   })
 
-  it.each<[string, Parameters<typeof fileProxy>[0], string, "get" | "post"]>([
+  it.each<
+    [
+      string,
+      NonNullable<Parameters<typeof fileProxy>[0]>,
+      string,
+      "get" | "post",
+    ]
+  >([
     ["a view's tool call", {}, `${artifactPath()}/tools/call`, "post"],
     [
       "an Artifact the Session lacks",

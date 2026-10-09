@@ -84,7 +84,7 @@ setTimeout(() => process.exit(0), 200)
 
     expect(exitCode, `stdout: ${out.text}\nstderr: ${err.text}`).toBe(0)
     // The combined output carries the warn line the handler wrote.
-    expect(out.text + err.text).toContain("proxy.unhandled_rejection")
+    expect(out.text + err.text).toContain("gateway.unhandled_rejection")
   })
 
   it("uncaughtException: process logs and exits 1", async () => {
@@ -122,6 +122,6 @@ setTimeout(() => { throw new Error("test-exception") }, 0)
     ])
 
     expect(exitCode, `stdout: ${out.text}\nstderr: ${err.text}`).toBe(1)
-    expect(out.text + err.text).toContain("proxy.uncaught_exception")
+    expect(out.text + err.text).toContain("gateway.uncaught_exception")
   })
 })

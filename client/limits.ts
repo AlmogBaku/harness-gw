@@ -1,6 +1,6 @@
 /**
  * The browser ACP client's deadlines and backoff. Each request tier outlasts
- * the proxy deadline its work waits on, so a slow but healthy proxy answers
+ * the gateway deadline its work waits on, so a slow but healthy gateway answers
  * before the browser gives the transport up.
  */
 

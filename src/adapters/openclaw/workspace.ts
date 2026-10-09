@@ -77,7 +77,7 @@ function agentName(agent: OpenClawAgent) {
 
 /**
  * OpenClaw's closed Agent summary has no field for a role, so the operator
- * installs the AOS creator under this reserved Agent id.
+ * installs the gateway's creator under this reserved Agent id.
  */
 export const OPENCLAW_CREATOR_AGENT_ID = "aos-agent-creator"
 

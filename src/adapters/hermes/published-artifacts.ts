@@ -1,8 +1,8 @@
 /**
- * The artifacts this proxy published live, before Hermes saved the row that
+ * The artifacts this gateway published live, before Hermes saved the row that
  * grants them. An uploaded image's id reaches the browser before its user row
  * persists, and a MEDIA line's id before the assistant row does, so a read in
- * that window finds nothing in history. Publishing is the grant: the proxy saw
+ * that window finds nothing in history. Publishing is the grant: the gateway saw
  * this Session deliver the path. History stays the authority for anything
  * older; the oldest entries leave once the bound is reached, long after their
  * rows persisted.

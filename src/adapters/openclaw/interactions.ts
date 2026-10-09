@@ -52,14 +52,14 @@ export type OpenClawInteractionResult = Readonly<{
 export class OpenClawInteractionPublicError extends Error {
   constructor(
     readonly code:
-      | "AOS_INVALID_INTERACTION"
-      | "AOS_INTERACTION_NOT_FOUND"
-      | "AOS_PROVIDER_INVALID_RESPONSE"
+      | "HGW_INVALID_INTERACTION"
+      | "HGW_INTERACTION_NOT_FOUND"
+      | "HGW_PROVIDER_INVALID_RESPONSE"
   ) {
     super(
-      code === "AOS_INTERACTION_NOT_FOUND"
+      code === "HGW_INTERACTION_NOT_FOUND"
         ? "Interaction not found"
-        : code === "AOS_PROVIDER_INVALID_RESPONSE"
+        : code === "HGW_PROVIDER_INVALID_RESPONSE"
           ? "OpenClaw returned invalid interaction data"
           : "Invalid interaction response"
     )
@@ -121,10 +121,10 @@ const encoder = new TextEncoder(),
   bindingKey = (s: OpenClawRepliesScope, i: string) =>
     `${repliesScopeKey(s)}\0${i}`
 function invalid(): never {
-  throw new OpenClawInteractionPublicError("AOS_INVALID_INTERACTION")
+  throw new OpenClawInteractionPublicError("HGW_INVALID_INTERACTION")
 }
 function bad(): never {
-  throw new OpenClawInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+  throw new OpenClawInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
 }
 function record(
   scope: OpenClawInteractionScope,
@@ -457,7 +457,7 @@ export class OpenClawInteractions {
       if (current) this.complete(match.key, match.pending, fingerprint, current)
       const confirmed = this.find(scope, entry.requestId)
       if (confirmed.key !== match.key)
-        throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+        throw new OpenClawInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     } else if (!match.done.fingerprint) match.done.fingerprint = fingerprint
     this.#bindings.set(boundKey, {
       scope: match.pending.scope,
@@ -474,7 +474,7 @@ export class OpenClawInteractions {
       boundKey = bindingKey(scope, entry.requestId),
       bound = this.#bindings.get(boundKey)
     if (!bound)
-      throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+      throw new OpenClawInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     if (bound.fingerprint !== fingerprint) invalid()
     if (bound.state === "dispatching") return { status: "in-progress" }
     bound.state = "dispatching"
@@ -499,7 +499,7 @@ export class OpenClawInteractions {
     }
     const p = this.#pending.get(k)
     if (!p)
-      throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+      throw new OpenClawInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     const resolution = this.resolution(p, r)
     const current = await this.current(p)
     if (current) return this.complete(k, p, fingerprint, current)
@@ -540,7 +540,7 @@ export class OpenClawInteractions {
       )
         candidates.push({ key: candidateKey, pending: done.pending, done })
     if (candidates.length !== 1)
-      throw new OpenClawInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+      throw new OpenClawInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     return candidates[0]!
   }
   private resolution(p: Pending, r: RequestReply) {

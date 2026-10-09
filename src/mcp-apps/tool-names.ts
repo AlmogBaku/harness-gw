@@ -10,11 +10,11 @@ import type { McpAppServer } from "./fallback"
 /**
  * Maps a harness's raw MCP tool names back to their server and tool. A harness
  * folds both into one sanitized name, so only the server's own `tools/list`
- * recovers a tool's original name; a server the proxy cannot list resolves to
+ * recovers a tool's original name; a server the gateway cannot list resolves to
  * whatever follows its prefix.
  */
 
-/** One configured server, with its tool names when the proxy could list them. */
+/** One configured server, with its tool names when the gateway could list them. */
 export type McpToolCatalogEntry = { name: string; tools?: readonly string[] }
 
 /** How one harness spells an MCP tool's name. */
@@ -140,7 +140,7 @@ export function createMcpToolNames(
 
 /**
  * The catalog of one key's servers: every configured server, and the tool
- * names of each one the proxy may connect to. A server that fails to list
+ * names of each one the gateway may connect to. A server that fails to list
  * still resolves by its prefix.
  */
 export function mcpToolCatalog(

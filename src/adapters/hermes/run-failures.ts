@@ -1,8 +1,8 @@
 /**
  * What a Hermes turn may say about a failure, and to whom.
  *
- * Every public failure is one of the entries below: a stable AOS code and the
- * headline AOS authored for it. A failure the operator has to act on also needs
+ * Every public failure is one of the entries below: a stable gateway code and the
+ * headline the gateway authored for it. A failure the operator has to act on also needs
  * the provider's own words, so Hermes' error text follows the headline as a
  * second line — bounded, and dropped whole when it carries anything the
  * adapter's redaction rule keeps private. The server log keeps its own shorter,
@@ -32,7 +32,7 @@ export type DetachedTurnFailure = TurnFailure & {
 }
 
 /**
- * The parts of a terminal Hermes failure AOS may act on. `nativeMessage` is the
+ * The parts of a terminal Hermes failure the gateway may act on. `nativeMessage` is the
  * longer copy only the redacted server log sees; `detail` is the bounded,
  * redaction-checked cause a public failure may carry.
  */
@@ -46,10 +46,10 @@ export type NativeFailure = {
 }
 
 export class HermesTurnPublicError extends Error {
-  readonly code: "AOS_PROVIDER_UNAVAILABLE" | "AOS_STOP_UNCERTAIN"
+  readonly code: "HGW_PROVIDER_UNAVAILABLE" | "HGW_STOP_UNCERTAIN"
 
   constructor(
-    code: "AOS_PROVIDER_UNAVAILABLE" | "AOS_STOP_UNCERTAIN",
+    code: "HGW_PROVIDER_UNAVAILABLE" | "HGW_STOP_UNCERTAIN",
     message: string,
     options?: ErrorOptions
   ) {
@@ -76,85 +76,85 @@ export const TURN_RESET_LOG = "hermes.turn.reset_required"
 /** Every public turn failure the Hermes adapter can publish. */
 export const TURN_FAILURES = {
   resetRequired: {
-    code: "AOS_RESET_REQUIRED",
+    code: "HGW_RESET_REQUIRED",
     message: "Hermes history must be reconciled before this turn can continue.",
   },
   connectionInterrupted: {
-    code: "AOS_CONNECTION_INTERRUPTED",
+    code: "HGW_CONNECTION_INTERRUPTED",
     message:
       "The Hermes connection was interrupted; reconnect to reconcile this turn.",
   },
   sendUncertain: {
-    code: "AOS_SEND_UNCERTAIN",
+    code: "HGW_SEND_UNCERTAIN",
     message:
       "Hermes may have accepted this turn; reconcile before sending again.",
   },
   interactionUncertain: {
-    code: "AOS_INTERACTION_UNCERTAIN",
+    code: "HGW_INTERACTION_UNCERTAIN",
     message:
       "Hermes may have applied this interaction response; reconcile before responding again.",
   },
   interactionFailed: {
-    code: "AOS_INTERACTION_FAILED",
+    code: "HGW_INTERACTION_FAILED",
     message: "Hermes could not apply this interaction response.",
   },
   interactionExpired: {
-    code: "AOS_INTERACTION_EXPIRED",
+    code: "HGW_INTERACTION_EXPIRED",
     message: "This Hermes interaction is no longer pending.",
   },
   interactionLost: {
-    code: "AOS_INTERACTION_LOST",
+    code: "HGW_INTERACTION_LOST",
     message:
       "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
   },
   sessionInUse: {
-    code: "AOS_SESSION_IN_USE",
+    code: "HGW_SESSION_IN_USE",
     message:
       "This Session is open in another app. Use it there, or start a new Session.",
   },
   sessionLimit: {
-    code: "AOS_SESSION_LIMIT",
+    code: "HGW_SESSION_LIMIT",
     message: "Hermes has reached its limit of active Sessions.",
   },
   rewindConflict: {
-    code: "AOS_REWIND_CONFLICT",
+    code: "HGW_REWIND_CONFLICT",
     message:
       "This response can no longer be regenerated because Hermes history changed.",
   },
   commandWithAttachments: {
-    code: "AOS_COMMAND_WITH_ATTACHMENTS",
+    code: "HGW_COMMAND_WITH_ATTACHMENTS",
     message: "Slash commands cannot be sent with attachments.",
   },
   commandRejected: {
-    code: "AOS_PROVIDER_RUN_FAILED",
+    code: "HGW_PROVIDER_RUN_FAILED",
     message: "Hermes rejected this command.",
   },
   stopUncertain: {
-    code: "AOS_STOP_UNCERTAIN",
+    code: "HGW_STOP_UNCERTAIN",
     message: "Hermes could not confirm Stop; reconcile before sending again.",
   },
   streamOverflow: {
-    code: "AOS_STREAM_OVERFLOW",
+    code: "HGW_STREAM_OVERFLOW",
     message: "Hermes produced more events than AOS can safely buffer.",
   },
   agentUnavailable: {
-    code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
+    code: "HGW_PROVIDER_AGENT_UNAVAILABLE",
     message: "Hermes could not start the agent for this Session.",
   },
   billingFailed: {
-    code: "AOS_PROVIDER_BILLING_FAILED",
+    code: "HGW_PROVIDER_BILLING_FAILED",
     message: "Hermes reported a billing or quota problem.",
   },
   // Hermes marks a rejection retryable without knowing whether it is
   // deterministic (a model that refuses this request shape rejects it again),
   // so the copy instructs rather than promising a successful retry.
   retryableFailure: {
-    code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+    code: "HGW_PROVIDER_RETRYABLE_FAILURE",
     message:
       "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
   },
   turnFailed: {
-    code: "AOS_PROVIDER_RUN_FAILED",
+    code: "HGW_PROVIDER_RUN_FAILED",
     message: "Hermes could not complete this turn.",
   },
 } as const satisfies Record<string, TurnFailure>
@@ -162,7 +162,7 @@ export const TURN_FAILURES = {
 /** `cause` is the native failure that kept the turn from starting, if known. */
 export function providerUnavailable(cause?: unknown) {
   return new HermesTurnPublicError(
-    "AOS_PROVIDER_UNAVAILABLE",
+    "HGW_PROVIDER_UNAVAILABLE",
     "Hermes is temporarily unavailable.",
     { cause }
   )

@@ -77,7 +77,7 @@ bun run gateway invite --config /absolute/private/path/config.yaml --agent defau
 ```
 
 The installed `aos-invite-link` skill uses `curl` against the operator gateway's
-`/api/v1/guest-invitations` endpoint. Set `AOS_RUNTIME_PROXY_URL` to a
+`/api/v1/guest-invitations` endpoint. Set `AOS_GATEWAY_URL` to a
 reachable configured operator origin in the Hermes environment. This works
 for native Hermes without exposing the invitation signing key.
 
@@ -316,19 +316,19 @@ visibility uses.
   immediate WebSocket close after dial with either code as an authentication
   problem and check the Hermes server log.
 - Hermes refusals keep Hermes' own words as the failure's second line. A
-  Session another Hermes window owns fails with `AOS_SESSION_IN_USE`; Hermes'
-  active-Session limit fails with `AOS_SESSION_LIMIT`; a prompt sent while a
+  Session another Hermes window owns fails with `HGW_SESSION_IN_USE`; Hermes'
+  active-Session limit fails with `HGW_SESSION_LIMIT`; a prompt sent while a
   turn still runs is refused with the ACP turn-in-progress error, before
   Hermes stores it. A reattach Hermes fences while it settles a
   disconnect, and an unreadable ownership registry, are retried for a few
-  seconds without a visible error, then fail with `AOS_PROVIDER_UNAVAILABLE`.
-  A question Hermes no longer holds open fails with `AOS_INTERACTION_EXPIRED`.
+  seconds without a visible error, then fail with `HGW_PROVIDER_UNAVAILABLE`.
+  A question Hermes no longer holds open fails with `HGW_INTERACTION_EXPIRED`.
 - A Session AOS finds `waiting` whose open request Hermes does not re-deliver
   within about two seconds, while nothing else changes, reports
-  `AOS_INTERACTION_LOST`. The turn stays running so Stop remains available;
+  `HGW_INTERACTION_LOST`. The turn stays running so Stop remains available;
   Stop interrupts it natively and the Session then accepts a new prompt.
 - A Hermes restart resets every active run once: the next attach produces
-  `AOS_RESET_REQUIRED`, which clears the in-progress indicator and reloads
+  `HGW_RESET_REQUIRED`, which clears the in-progress indicator and reloads
   history from the Hermes transcript. No prompt is re-sent.
 
 ## Native routes the gateway calls
@@ -353,13 +353,13 @@ against a new pin or before confirming a deployment.
 - **Network cut 5 s mid-turn**: sever the gateway-to-Hermes connection for 5
   seconds while a long run is in progress, then restore it. The client should
   show no error; the run should resume and complete normally. The
-  `AOS_CONNECTION_INTERRUPTED` event should not reach the client.
+  `HGW_CONNECTION_INTERRUPTED` event should not reach the client.
 - **Network cut 30 s mid-turn**: sever for 30 seconds (beyond the 20 s heal
-  grace). The adapter should produce one `AOS_RESET_REQUIRED` and reload
+  grace). The adapter should produce one `HGW_RESET_REQUIRED` and reload
   history. No prompt should be re-sent.
 - **Hermes restart mid-turn**: stop and restart `hermes serve` while a run is
   active. The adapter should attach to the restarted instance and emit
-  `AOS_RESET_REQUIRED` exactly once. The run indicator should clear; history
+  `HGW_RESET_REQUIRED` exactly once. The run indicator should clear; history
   should reload.
 - **Clarify and approval with mid-question reload**: start a Session that asks
   a question or approval. Reload the client mid-question. The interrupt

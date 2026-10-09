@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
-import { GatewayClientRequestError } from "@openclaw/gateway-client"
+import {
+  GatewayClientRequestError,
+  type GatewayClientOptions,
+} from "@openclaw/gateway-client"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
@@ -36,9 +39,10 @@ class ControlledGatewayClient implements OpenClawGatewayClient {
   readonly stopAndWait = vi.fn(async () => undefined)
   requestResult: unknown = { ok: true }
   requestError: unknown
-  requestHandler?: <T>(
+  /** Answers a call with untyped wire data, as the official client does. */
+  requestHandler?: (
     options: OpenClawRequestOptions | undefined
-  ) => Promise<T>
+  ) => Promise<unknown>
 
   constructor(readonly options: OpenClawGatewayClientOptions) {}
 
@@ -48,7 +52,7 @@ class ControlledGatewayClient implements OpenClawGatewayClient {
     options?: OpenClawRequestOptions
   ) {
     this.requests.push({ method, params, options })
-    if (this.requestHandler) return this.requestHandler<T>(options)
+    if (this.requestHandler) return this.requestHandler(options) as Promise<T>
     if (this.requestError) return Promise.reject(this.requestError)
     return Promise.resolve(this.requestResult as T)
   }
@@ -149,8 +153,11 @@ describe("OpenClaw client", () => {
       scopes: ["sessions.read", "sessions.write"],
       caps: ["tool-events"],
     })
-    expect(native.options.bootstrapToken).toBeUndefined()
-    expect(native.options.token).toBeUndefined()
+    // The narrowed options type names neither shared-secret credential, so
+    // read the dial's options as the official client takes them.
+    const dialed: Partial<GatewayClientOptions> = native.options
+    expect(dialed.bootstrapToken).toBeUndefined()
+    expect(dialed.token).toBeUndefined()
     native.options.onHelloOk?.({ protocol: 4 } as never)
 
     await expect(started).resolves.toBeUndefined()

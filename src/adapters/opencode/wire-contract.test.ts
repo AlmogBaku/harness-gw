@@ -41,7 +41,7 @@ runWireContract(
       // Every question and permission carries a presentable form, so the
       // adapter holds none back, and OpenCode lists each pending one
       // (`GET /api/session/{sessionID}/question` and `…/permission`), so a
-      // restarted proxy presents it again rather than losing it.
+      // restarted gateway presents it again rather than losing it.
       heldAndLostQuestions:
         "OpenCode holds no question back and lists every pending one",
       // OpenCode reports edits as `patch` parts and `session.diff` events

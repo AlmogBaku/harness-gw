@@ -2,7 +2,7 @@
  * The audio envelope every voice implementation answers for: which recording
  * container a browser may upload, which codec parameter it may name, which
  * container speech may come back in, and how large each side may be. A native
- * adapter and a proxy-side provider advertise the same envelope, so the values
+ * adapter and a gateway-side provider advertise the same envelope, so the values
  * live here rather than beside either one.
  */
 

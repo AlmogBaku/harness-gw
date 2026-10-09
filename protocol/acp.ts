@@ -16,17 +16,17 @@ import {
 } from "./index"
 
 /**
- * The AOS extension contract carried over ACP v2 between the Bun proxy (agent
- * side) and the browser (client side). ACP defines the turn stream, sessions,
- * config options, permissions, and plans; everything AOS needs beyond that
- * travels as underscore-prefixed extension methods and `_meta.hgw` payloads
- * defined here. Both ends import this module and nothing else defines these
- * shapes.
+ * The gateway's extension contract carried over ACP v2 between the gateway
+ * (agent side) and the browser (client side). ACP defines the turn stream,
+ * sessions, config options, permissions, and plans; everything the gateway
+ * needs beyond that travels as underscore-prefixed extension methods and
+ * `_meta.hgw` payloads defined here. Both ends import this module and nothing
+ * else defines these shapes.
  *
- * Client-to-agent shapes are strict: the proxy rejects what it does not
+ * Client-to-agent shapes are strict: the gateway rejects what it does not
  * define. Agent-to-client shapes are read leniently (`readObject`): the
- * browser validates every key it knows and drops the rest, so a proxy that
- * adds a key never costs the browser the whole payload. The proxy's builders
+ * browser validates every key it knows and drops the rest, so a gateway that
+ * adds a key never costs the browser the whole payload. The gateway's builders
  * stay exact through the inferred types.
  */
 
@@ -136,7 +136,7 @@ export const HgwExtensionsSchema = readObject({
 export type HgwExtensions = z.infer<typeof HgwExtensionsSchema>
 
 /**
- * `ClientCapabilities._meta.hgw` on `initialize`: the AOS extensions this
+ * `ClientCapabilities._meta.hgw` on `initialize`: the hgw extensions this
  * client understands. Without `historyPages`, a from-start resume replays the
  * whole Session, as ACP's `replayFrom: { type: "start" }` requires.
  */

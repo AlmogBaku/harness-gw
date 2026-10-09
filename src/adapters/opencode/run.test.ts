@@ -5,7 +5,6 @@ import {
   TurnEventKind,
   TurnEventSchema,
   type PromptTurnInput,
-  type TurnInput,
 } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
@@ -14,19 +13,26 @@ import type {
   OpenCodeDurableEvent,
   OpenCodeSessionEvents,
 } from "./client"
-import { ServerTurnConflictError } from "../../core/runtime"
+import { providerSessionId, sessionId } from "../../core/ids"
+import { ServerTurnConflictError, type SessionScope } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { READY_LINK } from "../../core/link"
 import { OpenCodeClientError, OpenCodeMutationUncertainError } from "./client"
 import { OpenCodeContent } from "./content"
-import { OpenCodeTurnEngine, openCodeRecoveryToken } from "./run"
+import {
+  OpenCodeTurnEngine,
+  openCodeRecoveryToken,
+  type OpenCodeBoundReplies,
+} from "./run"
 
 const { logger } = captureLogs()
 
-const scope = {
+type Discover = NonNullable<OpenCodeBoundReplies["discover"]>
+
+const scope: SessionScope = {
   agentId: "writer",
-  providerSessionId: "session-1",
-  sessionId: "thread-1",
+  providerSessionId: providerSessionId("session-1"),
+  sessionId: sessionId("thread-1"),
 }
 const admission = {
   "run-1":
@@ -35,7 +41,7 @@ const admission = {
     "aos_957d880ef3fdbdf4c7672021817c07ee7a619ed7e18b557da7e9b07adad0b12c",
 }
 
-function input(overrides: Partial<PromptTurnInput> = {}): TurnInput {
+function input(overrides: Partial<PromptTurnInput> = {}): PromptTurnInput {
   return {
     turnId: "run-1",
     messageId: "user-1",
@@ -195,7 +201,10 @@ function client(overrides: Record<string, unknown> = {}) {
     ),
     interrupt: vi.fn(async () => undefined),
     wait: vi.fn(async () => undefined),
-    history: vi.fn(async () => ({ data: [], hasMore: false })),
+    history: vi.fn<OpenCodeClient["sessions"]["history"]>(async () => ({
+      data: [],
+      hasMore: false,
+    })),
     events: vi.fn(async () => observation.source),
     ...overrides,
   }
@@ -211,8 +220,8 @@ function client(overrides: Record<string, unknown> = {}) {
   }
 }
 
-async function collect(handle: { events: AsyncIterable<unknown> }) {
-  const values: unknown[] = []
+async function collect<T>(handle: { events: AsyncIterable<T> }) {
+  const values: T[] = []
   for await (const value of handle.events) values.push(value)
   return values
 }
@@ -325,7 +334,7 @@ describe("OpenCodeRunEngine", () => {
       responseSchema: { type: "string", enum: ["yes", "no"] },
     }
     const discover = vi
-      .fn(async () => {
+      .fn<Discover>(async () => {
         order.push("interactions")
         return [request]
       })
@@ -363,6 +372,7 @@ describe("OpenCodeRunEngine", () => {
     const waiting = await engine.discover(scope, "aos-recovered-1")
 
     expect(waiting?.state).toBe("waiting-for-input")
+    if (waiting?.state !== "waiting-for-input") throw new Error("not waiting")
     expect(waiting?.requests).toEqual([request])
     // A restored wait was never streamed, so it names no position: a fabricated
     // one would force the next recovery to reset.
@@ -798,8 +808,8 @@ describe("OpenCodeRunEngine", () => {
     let calls = 0
     const raced = textEnded(1, "Won the race", "assistant-race")
     const state = client()
-    state.sessions.history = vi.fn(
-      async (_id: string, options?: { after?: number }) => {
+    state.sessions.history = vi.fn<OpenCodeClient["sessions"]["history"]>(
+      async (_id, options) => {
         calls += 1
         if (calls === 1) {
           state.observation.publish(live(raced))
@@ -977,6 +987,8 @@ describe("OpenCodeRunEngine", () => {
       readings: {
         context: vi.fn(),
         models: vi.fn(),
+        updateModel: vi.fn(),
+        createSession: vi.fn(),
         publicError: () => undefined,
         link: READY_LINK,
       },
@@ -1205,7 +1217,7 @@ describe("OpenCodeRunEngine", () => {
     expect(events).toHaveLength(2)
     expect(events.at(-1)).toMatchObject({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_RESET_REQUIRED",
+      code: "HGW_RESET_REQUIRED",
     })
   })
 
@@ -1591,7 +1603,7 @@ describe("OpenCodeRunEngine foreign turns", () => {
     expect(state.sessions.prompt).not.toHaveBeenCalled()
   })
 
-  // A turn AOS starts is the runtime contract's settledTurnsFreeRecords row.
+  // A turn the gateway starts is the runtime contract's settledTurnsFreeRecords row.
   it("frees an adopted foreign turn's records once it settles", async () => {
     // A turn the TUI started, adopted while it runs.
     const log = nativeLog([

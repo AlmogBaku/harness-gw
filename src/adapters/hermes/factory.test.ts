@@ -35,6 +35,7 @@ describe("Hermes runtime shutdown", () => {
       baseUrl: "http://127.0.0.1:9119",
       tokenFile,
       sessionIdleMs: 300_000,
+      mediaArtifacts: true,
     } as const
   }
 
@@ -134,7 +135,7 @@ describe("Hermes runtime shutdown", () => {
     )
 
     expect(runtime.runtime.turns.subscribeTurns).toBeTypeOf("function")
-    // The operator rotates the token file under a running proxy.
+    // The operator rotates the token file under a running gateway.
     await writeFile(config.tokenFile, "tok-test-2")
     await expect(gateway.credentials()).resolves.toEqual({
       "X-Hermes-Session-Token": "tok-test-2",

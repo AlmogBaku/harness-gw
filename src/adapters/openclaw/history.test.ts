@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { createOpenClawHistory } from "./history"
+import { wireRequest } from "./test-utils/wire-request"
 
 function authority() {
   return {
@@ -23,7 +24,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async (method, params) => {
+        request: wireRequest(async (method, params) => {
           requests.push({ method, params })
           reads++
           if (reads === 1) changed?.()
@@ -39,7 +40,7 @@ describe("OpenClaw authoritative history", () => {
             sessionInfo: { activeRunIds: [] },
             tasks: [{ id: "native-task", title: "Do not project" }],
           }
-        },
+        }),
       },
       subscribeSession: async (_agentId, _sessionKey, listener) => {
         changed = listener
@@ -93,7 +94,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async (method, params) => {
+        request: wireRequest(async (method, params) => {
           if (method === "models.list")
             return {
               models: [
@@ -120,7 +121,7 @@ describe("OpenClaw authoritative history", () => {
               },
             ],
           }
-        },
+        }),
       },
       subscribeSession: async () => () => undefined,
     })
@@ -146,7 +147,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async (method) =>
+        request: wireRequest(async (method) =>
           method === "models.list"
             ? { models: [] }
             : {
@@ -158,7 +159,8 @@ describe("OpenClaw authoritative history", () => {
                     modelProvider: "anthropic",
                   },
                 ],
-              },
+              }
+        ),
       },
       subscribeSession: async () => () => undefined,
     })
@@ -176,7 +178,7 @@ describe("OpenClaw authoritative history", () => {
   it("[CL1-HISTORY-003] fails closed when the official scoped subscription is unavailable", async () => {
     const history = createOpenClawHistory({
       authority: authority(),
-      client: { request: async () => ({ messages: [] }) },
+      client: { request: wireRequest(async () => ({ messages: [] })) },
     })
 
     await expect(
@@ -191,7 +193,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async () => ({
+        request: wireRequest(async () => ({
           messages: [
             { id: "user-1", role: "user", content: "Read it" },
             {
@@ -212,7 +214,7 @@ describe("OpenClaw authoritative history", () => {
               content: "token=secret",
             },
           ],
-        }),
+        })),
       },
       subscribeSession: async () => () => undefined,
     })
@@ -232,14 +234,14 @@ describe("OpenClaw authoritative history", () => {
       return createOpenClawHistory({
         authority: authority(),
         client: {
-          request: async (_method, params) => {
+          request: wireRequest(async (_method, params) => {
             const { limit, offset } = params as {
               limit: number
               offset: number
             }
             const end = Math.max(0, rows.length - offset)
             return { messages: rows.slice(Math.max(0, end - limit), end) }
-          },
+          }),
         },
         subscribeSession: async () => () => undefined,
       })
@@ -314,7 +316,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async () => ({
+        request: wireRequest(async () => ({
           messages: [
             {
               id: "system",
@@ -344,7 +346,7 @@ describe("OpenClaw authoritative history", () => {
               content: "token=secret /private/result",
             },
           ],
-        }),
+        })),
       },
       subscribeSession: async () => () => undefined,
     })
@@ -367,7 +369,7 @@ describe("OpenClaw authoritative history", () => {
     const history = createOpenClawHistory({
       authority: authority(),
       client: {
-        request: async () => {
+        request: wireRequest(async () => {
           reads++
           if (reads === 1) changed?.()
           return reads === 1
@@ -376,7 +378,7 @@ describe("OpenClaw authoritative history", () => {
                 messages: [],
                 sessionInfo: { activeRunIds: ["native-run"] },
               }
-        },
+        }),
       },
       subscribeSession: async (_agentId, _sessionKey, listener) => {
         changed = listener
@@ -397,7 +399,7 @@ describe("OpenClaw history AOS tools and artifacts", () => {
   function historyOf(messages: unknown[], mediaArtifacts?: boolean) {
     return createOpenClawHistory({
       authority: authority(),
-      client: { request: async () => ({ messages }) },
+      client: { request: wireRequest(async () => ({ messages })) },
       subscribeSession: async () => () => undefined,
       ...(mediaArtifacts === undefined ? {} : { mediaArtifacts }),
     })
@@ -426,7 +428,7 @@ describe("OpenClaw history AOS tools and artifacts", () => {
       { type: "text", text: "Here it is" },
       {
         type: "data",
-        name: "aos.artifact",
+        name: "hgw.artifact",
         data: {
           id: "artifact_managed_image_abc",
           filename: "chart.png",
@@ -464,7 +466,7 @@ describe("OpenClaw history AOS tools and artifacts", () => {
           "user",
           [
             expect.objectContaining({
-              name: "aos.artifact",
+              name: "hgw.artifact",
               data: expect.objectContaining({
                 id: "artifact_managed_image_abc",
               }),

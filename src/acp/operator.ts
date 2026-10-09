@@ -5,7 +5,7 @@ import { OPERATOR_PRINCIPAL } from "../core/principal"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import type { PresenceRegistry } from "../push/presence"
 import { createActivityFeed } from "./activity-feed"
-import { createAosAcpAgent } from "./agent"
+import { createHgwAcpAgent } from "./agent"
 import { createReadState } from "./read-state"
 import { createAcpService } from "./service"
 import type { Channels } from "../core/channel"
@@ -50,7 +50,7 @@ export function createOperatorAcpService({
   const service = createAcpService({
     role,
     principalId: OPERATOR_PRINCIPAL,
-    agent: createAosAcpAgent,
+    agent: createHgwAcpAgent,
     agentAddress: {
       path: HGW_ACP_PATH,
       exists: async (agentId) =>

@@ -100,7 +100,7 @@ const withoutParams = () => undefined
 const undecoded = (params: unknown) => params
 
 /**
- * The operator listener's extensions. The proxy implements each of them itself,
+ * The operator listener's extensions. The gateway implements each of them itself,
  * except the provider catalog invalidation a runtime may not signal.
  */
 function operatorExtensions(catalog: Catalog): HgwExtensions {
@@ -168,7 +168,7 @@ export function connectionMachine(logger: Logger, clock: Clock) {
   })
 }
 
-export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
+export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   const { role, translators, readState, activityFeed, catalog } = context
   const { maxOffset } = context.channels.historyReach
   /** The extensions this connection is served, which `initialize` reports. */
@@ -292,7 +292,7 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return context.agentId
   }
 
-  /** The Agent's folder as the proxy compares it, or `undefined`. */
+  /** The Agent's folder as the gateway compares it, or `undefined`. */
   async function folderOf(agentId: string) {
     const folder = await catalog.folder(agentId)
     return folder === undefined ? undefined : normalizeFolder(folder)
@@ -303,8 +303,8 @@ export const createAosAcpAgent = ((context: AcpConnectionContext): AgentApp => {
    * Agent's folder, and anything the client asks the runtime to attach:
    * every runtime works out its own folder and servers, and never gets the
    * client's. A Session its stack scopes, as an invitation's, names none.
-   * An empty `cwd` takes the Agent's folder, so AOS's own browser need not
-   * echo a folder the proxy already knows.
+   * An empty `cwd` takes the Agent's folder, so aos-ui's own browser need not
+   * echo a folder the gateway already knows.
    */
   async function requireFolder(
     agentId: string,

@@ -6,8 +6,14 @@ import {
   OpenClawSessionSubscriptions,
   type OpenClawSubscriptionRequestClient,
 } from "./subscriptions"
+import { wireRequest } from "./test-utils/wire-request"
 
 const logger = captureLogs().logger
+
+/** What a lease hears once its subscription is renewed after a reconnect. */
+type Reconcile = NonNullable<
+  Parameters<OpenClawSessionSubscriptions["acquire"]>[2]
+>
 
 function requestClient() {
   const calls: Array<{ method: string; params: Record<string, unknown> }> = []
@@ -149,7 +155,10 @@ describe("OpenClaw Session subscriptions", () => {
           ? acknowledgement.promise
           : { key: params.key }
     )
-    const subscriptions = new OpenClawSessionSubscriptions({ request }, logger)
+    const subscriptions = new OpenClawSessionSubscriptions(
+      { request: wireRequest(request) },
+      logger
+    )
     const listener = vi.fn()
     const acquiring = subscriptions.acquire(
       { agentId: "research", sessionKey: "global" },
@@ -271,7 +280,7 @@ describe("OpenClaw Session subscriptions", () => {
     const firstReconcile = new Promise<void>((resolve) => {
       releaseFirstReconcile = resolve
     })
-    const reconcile = vi.fn(async () => {
+    const reconcile = vi.fn<Reconcile>(async () => {
       if (reconcile.mock.calls.length === 1) await firstReconcile
     })
     await subscriptions.acquire(
@@ -445,10 +454,12 @@ describe("OpenClaw Session subscriptions", () => {
       truncated: true,
     }
     const client: OpenClawSubscriptionRequestClient = {
-      request: vi.fn(async (method, params) =>
-        method === "sessions.messages.subscribe"
-          ? { key: params.key, approvalReplay: replay }
-          : {}
+      request: wireRequest(
+        vi.fn(async (method: string, params: Record<string, unknown>) =>
+          method === "sessions.messages.subscribe"
+            ? { key: params.key, approvalReplay: replay }
+            : {}
+        )
       ),
     }
     const subscriptions = new OpenClawSessionSubscriptions(client, logger)
@@ -479,10 +490,12 @@ describe("OpenClaw Session subscriptions", () => {
     ] as const) {
       const invalid = new OpenClawSessionSubscriptions(
         {
-          request: vi.fn(async () => ({
-            key,
-            approvalReplay: { ...replay, sessionKey: replayKey },
-          })),
+          request: wireRequest(
+            vi.fn(async () => ({
+              key,
+              approvalReplay: { ...replay, sessionKey: replayKey },
+            }))
+          ),
         },
         logger
       )
@@ -515,7 +528,11 @@ describe("OpenClaw Session subscriptions", () => {
         truncated: false,
       }
       const subscriptions = new OpenClawSessionSubscriptions(
-        { request: vi.fn(async () => ({ key, approvalReplay: replay })) },
+        {
+          request: wireRequest(
+            vi.fn(async () => ({ key, approvalReplay: replay }))
+          ),
+        },
         logger
       )
 

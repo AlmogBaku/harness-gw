@@ -3,7 +3,7 @@ import { z } from "zod"
 import { IdentifierSchema } from "./acp"
 
 /**
- * Web Push contract shared by the browser, the service worker, and the proxy.
+ * Web Push contract shared by the browser, the service worker, and the gateway.
  * Content-free by construction: a category, a count, opaque ids when exactly
  * one Session is meant, a timestamp, and the device locale.
  */

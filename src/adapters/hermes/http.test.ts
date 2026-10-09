@@ -7,6 +7,7 @@ import {
   HermesHttpError,
   type HermesHttp,
 } from "./http"
+import { asFetch, type FetchInput } from "./test-utils/fetcher"
 
 describe("bounded Hermes HTTP", () => {
   it.each([403, 404, 409])(
@@ -15,8 +16,10 @@ describe("bounded Hermes HTTP", () => {
       const { http } = createHermesHttp({
         baseUrl: "http://hermes.test",
         credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
-        fetcher: vi.fn(
-          async () => new Response("/private/path token=secret", { status })
+        fetcher: asFetch(
+          vi.fn(
+            async () => new Response("/private/path token=secret", { status })
+          )
         ),
       })
 
@@ -35,14 +38,16 @@ describe("bounded Hermes HTTP", () => {
       createHermesHttp({
         baseUrl: "http://hermes.test",
         credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
-        fetcher: vi.fn(
-          async () =>
-            new Response(
-              JSON.stringify({
-                detail: "Access to sensitive files is not allowed",
-              }),
-              { status }
-            )
+        fetcher: asFetch(
+          vi.fn(
+            async () =>
+              new Response(
+                JSON.stringify({
+                  detail: "Access to sensitive files is not allowed",
+                }),
+                { status }
+              )
+          )
         ),
       }).http("/api/fs/read-data-url?path=%2Fsynthetic%2Fcache%2Ftts.mp3")
 
@@ -60,7 +65,7 @@ describe("bounded Hermes HTTP", () => {
     const { http } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
-      fetcher,
+      fetcher: asFetch(fetcher),
     })
 
     await expect(http("/api/sessions?profile=researcher")).resolves.toEqual({
@@ -114,7 +119,7 @@ describe("bounded Hermes HTTP", () => {
     const { http } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
-      fetcher: vi.fn(async () => response()),
+      fetcher: asFetch(vi.fn(async () => response())),
       timeoutMs: 20,
     })
 
@@ -148,7 +153,7 @@ describe("bounded Hermes HTTP", () => {
     const { http } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
-      fetcher: vi.fn(async () => response),
+      fetcher: asFetch(vi.fn(async () => response)),
       timeoutMs: 1_000,
     })
 
@@ -180,7 +185,7 @@ describe("bounded Hermes HTTP", () => {
     const { http } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "native-secret" }),
-      fetcher: vi.fn(async () => response),
+      fetcher: asFetch(vi.fn(async () => response)),
       timeoutMs: 1_000,
     })
 
@@ -205,7 +210,7 @@ describe("bounded Hermes HTTP", () => {
       credentials: vi.fn(async () => {
         throw new Error("token=native-secret from /srv/hermes/private")
       }),
-      fetcher: vi.fn(),
+      fetcher: asFetch(vi.fn()),
       timeoutMs: 1_000,
     })
 
@@ -229,7 +234,7 @@ describe("bounded Hermes HTTP", () => {
         await credentialsReady
         return { "X-Hermes-Session-Token": "late-secret" }
       },
-      fetcher,
+      fetcher: asFetch(fetcher),
       timeoutMs: 20,
     })
 
@@ -258,10 +263,10 @@ describe("bounded Hermes HTTP", () => {
     const { http } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
-      fetcher: ((_input: string | URL | Request, init?: RequestInit) => {
+      fetcher: asFetch((_input: FetchInput, init?: RequestInit) => {
         sent.push(init!.signal!)
         return new Promise<Response>(() => undefined)
-      }) as typeof fetch,
+      }),
       timeoutMs: 1_000,
     })
 
@@ -284,7 +289,7 @@ describe("bounded Hermes HTTP", () => {
     const { http } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
-      fetcher,
+      fetcher: asFetch(fetcher),
     })
 
     await expect(
@@ -298,7 +303,7 @@ describe("bounded Hermes HTTP", () => {
     const { stream } = createHermesHttp({
       baseUrl: "http://hermes.test",
       credentials: async () => ({ "X-Hermes-Session-Token": "secret" }),
-      fetcher: (async (input: string | URL | Request, init?: RequestInit) => {
+      fetcher: asFetch(async (input: FetchInput, init?: RequestInit) => {
         sent.push(init!.signal!)
         // A Hermes that never answers, then a body that never ends.
         if (String(input).endsWith("/stalled"))
@@ -309,7 +314,7 @@ describe("bounded Hermes HTTP", () => {
           }),
           { status: 206 }
         )
-      }) as typeof fetch,
+      }),
       timeoutMs: 1_000,
     })
     const caller = new AbortController()

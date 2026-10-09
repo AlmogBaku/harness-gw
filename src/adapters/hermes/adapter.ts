@@ -147,7 +147,7 @@ type NativeRecord = Record<string, unknown>
  * 401 for a rejected credential. None of these change on a retry.
  */
 /**
- * The platform every Session AOS creates is recorded under, so Hermes can tell
+ * The platform every Session the gateway creates is recorded under, so Hermes can tell
  * AOS Sessions apart and scope the `aos-ui` tools to them.
  */
 const HERMES_SESSION_SOURCE = "aos-ui"
@@ -269,7 +269,7 @@ type UiMetaKey = (typeof UI_META_KEYS)[number]
 type UiMetaRevisions = Record<UiMetaKey, number>
 
 /**
- * The CAS revision of each namespace AOS writes on one profile-list row.
+ * The CAS revision of each namespace the gateway writes on one profile-list row.
  * Hermes always sends `ui_meta_revisions` on a list row — that map is how it
  * feature-detects its own gateway-owned CAS — but a namespace that has never
  * been written through it has no key, and the gateway then compares against
@@ -451,7 +451,7 @@ export class HermesServerAdapter implements ServerRuntime {
       /** When a transient Hermes refusal is tried again. */
       retry?: HermesRetrySchedule
       /**
-       * The proxy's own MCP client and the log of what it reaches upstream;
+       * The gateway's own MCP client and the log of what it reaches upstream;
        * without one, no tool opens a view.
        */
       mcp?: { client: McpAppClient; logger: Logger }
@@ -784,7 +784,7 @@ export class HermesServerAdapter implements ServerRuntime {
                 },
                 // Hermes merges consecutive user rows, which would erase the
                 // guest's first message id and so its Edit target. A hidden
-                // row is model-facing only: no client, AOS included, shows it.
+                // row is model-facing only: no client, the gateway included, shows it.
                 {
                   role: "assistant",
                   content: "Understood.",
@@ -856,12 +856,12 @@ export class HermesServerAdapter implements ServerRuntime {
       cause instanceof HermesContentUnavailableError ||
       cause instanceof HermesUnavailableError ||
       (cause instanceof HermesInteractionPublicError &&
-        cause.code === "AOS_PROVIDER_UNAVAILABLE")
+        cause.code === "HGW_PROVIDER_UNAVAILABLE")
     )
       return failureOf("unavailable", cause)
     if (cause instanceof HermesInteractionPublicError)
       return failureOf(
-        cause.code === "AOS_INTERACTION_NOT_FOUND" ? "gone" : "invalid_request",
+        cause.code === "HGW_INTERACTION_NOT_FOUND" ? "gone" : "invalid_request",
         cause
       )
     return undefined
@@ -1764,7 +1764,7 @@ export class HermesServerAdapter implements ServerRuntime {
 
   /**
    * A Session Hermes has not stored yet: a draft never prompted, or one this
-   * proxy holds live while Hermes stores its first turn.
+   * gateway holds live while Hermes stores its first turn.
    */
   async #unpersistedDraft(profile: string, storedId: string) {
     let payload: unknown
@@ -1799,7 +1799,7 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   /**
-   * Whether Hermes resumed the live Session this proxy bound to that stored
+   * Whether Hermes resumed the live Session this gateway bound to that stored
    * id. Until the first turn is stored, Hermes answers from the live record,
    * which names no stored id or profile.
    */

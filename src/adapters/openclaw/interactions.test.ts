@@ -4,6 +4,7 @@ import * as GatewayProtocol from "@openclaw/gateway-protocol"
 import {
   OpenClawInteractions,
   OpenClawInteractionPublicError,
+  type OpenClawInteractionTransport,
 } from "./interactions"
 const scope = {
   agentId: "agent-a",
@@ -99,7 +100,7 @@ describe("OpenClaw interactions", () => {
     expect(() =>
       interactions.acceptQuestion(scope, alter(question))
     ).toThrowError(
-      expect.objectContaining({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+      expect.objectContaining({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     )
   })
 
@@ -116,7 +117,7 @@ describe("OpenClaw interactions", () => {
         { ...repliesScope, nativeRunId: "run-a" },
         approvalReplay
       )
-    ).rejects.toMatchObject({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    ).rejects.toMatchObject({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
   })
 
   it("rejects a malformed authoritative question get result before resolve", async () => {
@@ -128,7 +129,7 @@ describe("OpenClaw interactions", () => {
 
     await expect(
       interactions.respond(scope, resolvedQuestion)
-    ).rejects.toMatchObject({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    ).rejects.toMatchObject({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     expect(request).toHaveBeenCalledTimes(1)
   })
 
@@ -147,7 +148,7 @@ describe("OpenClaw interactions", () => {
 
     await expect(
       interactions.respond(scope, resolvedQuestion)
-    ).rejects.toMatchObject({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+    ).rejects.toMatchObject({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     expect(request).toHaveBeenCalledTimes(2)
   })
 
@@ -263,7 +264,7 @@ describe("OpenClaw interactions", () => {
       ).resolves.toBeUndefined()
       await expect(
         interactions.validate(repliesScope, resolvedQuestion)
-      ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+      ).rejects.toMatchObject({ code: "HGW_INTERACTION_NOT_FOUND" })
       expect(request).not.toHaveBeenCalled()
     }
   )
@@ -337,7 +338,7 @@ describe("OpenClaw interactions", () => {
             payload: nativeDecision,
           },
         ])
-      ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+      ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
       expect(request).not.toHaveBeenCalled()
     }
   )
@@ -349,20 +350,21 @@ describe("OpenClaw interactions", () => {
   ] as const)(
     "maps normalized %s to native %s only at resolve dispatch",
     async (normalized, native, status) => {
-      const request = vi.fn(async (method: string) =>
-        method === "approval.get"
-          ? { approval }
-          : {
-              applied: true,
-              approval: {
-                ...approvalRecord,
-                status,
-                decision: native,
-                resolvedAtMs: 2,
-                reason: "user",
-                resolver: { kind: "device", id: "reviewer-a" },
-              },
-            }
+      const request = vi.fn<OpenClawInteractionTransport["request"]>(
+        async (method) =>
+          method === "approval.get"
+            ? { approval }
+            : {
+                applied: true,
+                approval: {
+                  ...approvalRecord,
+                  status,
+                  decision: native,
+                  resolvedAtMs: 2,
+                  reason: "user",
+                  resolver: { kind: "device", id: "reviewer-a" },
+                },
+              }
       )
       const interactions = new OpenClawInteractions({ request })
       interactions.acceptApproval(scope, approval)
@@ -401,7 +403,7 @@ describe("OpenClaw interactions", () => {
         },
       })
     ).toThrowError(
-      expect.objectContaining({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+      expect.objectContaining({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     )
   })
 
@@ -459,7 +461,7 @@ describe("OpenClaw interactions", () => {
       ).resolves.toBeUndefined()
       await expect(
         interactions.validate(repliesScope, resolvedQuestion)
-      ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+      ).rejects.toMatchObject({ code: "HGW_INTERACTION_NOT_FOUND" })
       expect(request).toHaveBeenCalledTimes(reads)
     }
   )
@@ -497,7 +499,7 @@ describe("OpenClaw interactions", () => {
 
     await expect(interactions.validate(repliesScope, [])).rejects.toMatchObject(
       {
-        code: "AOS_INVALID_INTERACTION",
+        code: "HGW_INVALID_INTERACTION",
       }
     )
     await expect(
@@ -505,24 +507,25 @@ describe("OpenClaw interactions", () => {
         { ...repliesScope, sessionId: "foreign" },
         resolvedQuestion
       )
-    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+    ).rejects.toMatchObject({ code: "HGW_INTERACTION_NOT_FOUND" })
     await expect(
       interactions.validate(repliesScope, [
         ...resolvedQuestion,
         { requestId: "other", status: "cancelled" },
       ])
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     await expect(
       interactions.validate(repliesScope, [
+        // @ts-expect-error A reply carrying an unknown field is the invalid input.
         { ...resolvedQuestion[0], extra: "not-part-of-reply" },
       ])
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
 
     const otherRun = { ...scope, runId: "run-b" }
     interactions.acceptQuestion(otherRun, { ...question, runId: "run-b" })
     await expect(
       interactions.validate(repliesScope, resolvedQuestion)
-    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+    ).rejects.toMatchObject({ code: "HGW_INTERACTION_NOT_FOUND" })
     expect(request).not.toHaveBeenCalled()
   })
 
@@ -541,7 +544,7 @@ describe("OpenClaw interactions", () => {
     await interactions.validate(repliesScope, allowed)
     await expect(
       interactions.dispatch(repliesScope, [{ ...allowed[0], payload: "deny" }])
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     expect(request).toHaveBeenCalledTimes(1)
     expect(request).toHaveBeenCalledWith("approval.get", { id: "approval-a" })
   })
@@ -634,7 +637,7 @@ describe("OpenClaw interactions", () => {
     expect(() =>
       interactions.acceptQuestion(scope, { ...question, id: "question-64" })
     ).toThrowError(
-      expect.objectContaining({ code: "AOS_PROVIDER_INVALID_RESPONSE" })
+      expect.objectContaining({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     )
     expect(request).not.toHaveBeenCalled()
   })
@@ -660,7 +663,7 @@ describe("OpenClaw interactions", () => {
       interactions.respond(scope, [
         { ...resolvedQuestion[0], requestId: "question-0" },
       ])
-    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+    ).rejects.toMatchObject({ code: "HGW_INTERACTION_NOT_FOUND" })
   })
 
   it("requires authoritative source identities and rejects over-limit batches", () => {

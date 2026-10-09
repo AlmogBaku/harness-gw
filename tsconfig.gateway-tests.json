@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["bun", "node"]
+  },
+  "include": ["protocol/**/*.ts", "src/**/*.ts", "test/**/*.ts"],
+  // The package test imports the browser client, so the client's tests
+  // config checks it.
+  "exclude": ["test/architecture/package-contents.test.ts"]
+}

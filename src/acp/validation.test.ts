@@ -11,12 +11,12 @@ describe("a prompt whose turn ended before its storage receipt", () => {
     ["a stop", new ServerTurnEndedError("stopped"), "request_cancelled"],
     [
       "a failure",
-      new ServerTurnEndedError("failed", "AOS_PROVIDER_RUN_FAILED"),
+      new ServerTurnEndedError("failed", "HGW_PROVIDER_RUN_FAILED"),
       "temporarily_unavailable",
     ],
     [
       "a detach that may leave the turn alive",
-      new ServerTurnEndedError("failed", "AOS_CONNECTION_INTERRUPTED"),
+      new ServerTurnEndedError("failed", "HGW_CONNECTION_INTERRUPTED"),
       "uncertain_mutation",
     ],
   ])("answers %s as what happened", (_, cause, reply) => {

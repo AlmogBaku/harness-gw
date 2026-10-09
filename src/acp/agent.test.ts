@@ -41,6 +41,7 @@ import {
   type ServerTurnListener,
   type ServerRuntime,
 } from "../core/runtime"
+import { providerSessionId } from "../core/ids"
 import { translateHistory } from "./translate/history"
 import { invalidParams, notFound } from "./validation"
 import {
@@ -276,7 +277,7 @@ describe("AOS ACP agent", () => {
           used: 1_200,
           size: 20_000,
           // ACP carries the counts; the provider's attribution of them and how
-          // it arrived at them travel in the AOS extension's own meta.
+          // it arrived at them travel in the gateway extension's own meta.
           _meta: {
             [HGW_META_KEY]: {
               source: "provider-usage",
@@ -585,7 +586,7 @@ describe("AOS ACP agent", () => {
         },
       },
     ])
-    // Only the proxy-minted user turn is unsequenced; the run stream is not.
+    // Only the gateway-minted user turn is unsequenced; the run stream is not.
     const sequences = sequencesOf(test.recorder)
     expect(sequences).toHaveLength(3)
     expect(sequences.every((value) => Number.isInteger(value))).toBe(true)
@@ -1114,7 +1115,10 @@ describe("AOS ACP agent", () => {
     test.sources[0]?.emit(turnStarted())
     await waitFor(() =>
       expect(
-        test.coordinator.state({ agentId: AGENT, providerSessionId: CREATED })
+        test.coordinator.state({
+          agentId: AGENT,
+          providerSessionId: providerSessionId(CREATED),
+        })
       ).toBe("running")
     )
     // A browser still opening the Session follows no turn, so it steers none.
@@ -1283,7 +1287,7 @@ describe("AOS ACP agent", () => {
     lost?.emit({
       kind: TurnEventKind.TurnFailed,
       message: "the transport dropped",
-      code: "AOS_CONNECTION_INTERRUPTED",
+      code: "HGW_CONNECTION_INTERRUPTED",
     })
     lost?.finish()
     await waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
@@ -1461,11 +1465,11 @@ describe("AOS ACP agent", () => {
     source?.emit({
       kind: TurnEventKind.TurnFailed,
       message: "the transport dropped",
-      code: "AOS_CONNECTION_INTERRUPTED",
+      code: "HGW_CONNECTION_INTERRUPTED",
     })
     source?.finish()
 
-    // The proxy mints the run id the browser sees, so the line reports that one.
+    // The gateway mints the run id the browser sees, so the line reports that one.
     await waitFor(() =>
       expect(test.logged()).toEqual(
         expect.arrayContaining([
@@ -1474,7 +1478,7 @@ describe("AOS ACP agent", () => {
             connectionId: "connection-1",
             sessionId: CREATED,
             stopReason: HGW_STOP_REASONS.uncertain,
-            errorCode: "AOS_CONNECTION_INTERRUPTED",
+            errorCode: "HGW_CONNECTION_INTERRUPTED",
             message: "the transport dropped",
             turnId: expect.any(String),
           }),
@@ -1783,7 +1787,7 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  // Incident 2026-09-27: a question Hermes still held across a proxy restart
+  // Incident 2026-09-27: a question Hermes still held across a gateway restart
   // was discovered, and each open browser followed a turn whose journal could
   // not replay the wait, so none of them was asked it.
   it("asks every open browser a question the runtime was already waiting on", async () => {
@@ -2697,7 +2701,7 @@ describe("Session rooms", () => {
     await other.recorder.wait(endedTurn, "the turn to end")
 
     const seen = other.recorder.entries.slice(from)
-    expect(JSON.stringify(seen)).not.toContain("AOS_RESET_REQUIRED")
+    expect(JSON.stringify(seen)).not.toContain("HGW_RESET_REQUIRED")
     expect(
       flow(other.recorder, SESSION, from).filter((item) =>
         item.startsWith("chunk")
@@ -2882,7 +2886,7 @@ describe("Session rooms", () => {
     await test.list()
     await open(test)
     const other = await openInSecondTab(test)
-    // An earlier turn of this proxy's own, as a Session that ran one has.
+    // An earlier turn of this gateway's own, as a Session that ran one has.
     await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     await replyWhileWatched(test.sources[0], "Done", [other, test])
@@ -3053,7 +3057,7 @@ describe("Reloading a running turn", () => {
   it("shows a reload a turn the runtime started by itself once", async () => {
     const watchers: ServerTurnListener[] = []
     const background = new EventSource()
-    // The turn stored rows before this proxy adopted it.
+    // The turn stored rows before this gateway adopted it.
     const startedAt = Date.now() - 60_000
     const turns = [adopted(background, startedAt)]
     const test = await harness({
@@ -3189,7 +3193,13 @@ describe("Reloading a running turn", () => {
 })
 
 /** A Session of `count` messages, oldest first, alternating prompt and reply. */
-function conversation(count: number): SessionHistoryResponse["messages"] {
+/** A stored message a conversation holds, as against a Session activity. */
+type ConversationMessage = Exclude<
+  SessionHistoryResponse["messages"][number],
+  { role: "activity" }
+>
+
+function conversation(count: number): ConversationMessage[] {
   return Array.from({ length: count }, (_, index) => ({
     id: `message-${index}`,
     role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
@@ -3443,17 +3453,14 @@ describe("History pages", () => {
 
     await older(test, cursorOf(5))
 
-    const expected = translateHistory(
-      {
-        sessionId: SESSION,
-        messages: special,
-        total: transcript.length,
-        limit: 5,
-        offset: 5,
-        nextOffset: transcript.length,
-      },
-      "operator"
-    ).flatMap((outbound) =>
+    const expected = translateHistory({
+      sessionId: SESSION,
+      messages: special,
+      total: transcript.length,
+      limit: 5,
+      offset: 5,
+      nextOffset: transcript.length,
+    }).flatMap((outbound) =>
       outbound.kind === "update" &&
       outbound.update.sessionUpdate !== "plan_update"
         ? [outbound.update]
@@ -3461,16 +3468,19 @@ describe("History pages", () => {
     )
     const sent = pageUpdates(test.recorder, from)
     expect(sent).toEqual(
-      expected.map((update) => ({
-        ...update,
-        _meta: {
-          ...update._meta,
-          [HGW_META_KEY]: {
-            ...(update._meta?.[HGW_META_KEY] as object | undefined),
-            historyPage: { cursor: cursorOf(5) },
+      expected.map((update) => {
+        const meta = update._meta as Record<string, unknown> | undefined
+        return {
+          ...update,
+          _meta: {
+            ...meta,
+            [HGW_META_KEY]: {
+              ...(meta?.[HGW_META_KEY] as object | undefined),
+              historyPage: { cursor: cursorOf(5) },
+            },
           },
-        },
-      }))
+        }
+      })
     )
     expect(JSON.stringify(sent)).toContain("Provider failed")
     expect(JSON.stringify(sent)).not.toContain("plan_update")

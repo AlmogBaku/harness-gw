@@ -7,11 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { captureLogs } from "../../../test/support/log-capture"
 import type { RuntimeLimits } from "../../config"
+import { providerSessionId } from "../../core/ids"
 import type { LinkState, ServerLink } from "../../core/link"
 import { CredentialValues } from "../../redaction"
 import type { OpenClawClientOptions } from "./client"
 import { createOpenClawRuntime } from "./factory"
-import { RESEARCH_AGENTS, stubOpenClawClient } from "./test-utils/fake-openclaw"
+import {
+  RESEARCH_AGENTS,
+  storedMessage,
+  stubOpenClawClient,
+} from "./test-utils/fake-openclaw"
 
 /** The services the proxy hands a runtime, logging to a capture. */
 const services = () => ({
@@ -239,14 +244,19 @@ describe("OpenClaw runtime factory", () => {
       }
     )
 
-    const read = instance.runtime.history("research", sessionKey, 200, 0)
+    const read = instance.runtime.history(
+      "research",
+      providerSessionId(sessionKey),
+      200,
+      0
+    )
     await reading.promise
     setLink("lost")
     setLink("ready")
     await resubscribed.promise
     readable.resolve()
     const page = await read
-    expect(page.messages[0]!.content[0]).toMatchObject({
+    expect(storedMessage(page, 0).content[0]).toMatchObject({
       toolName: "mcp__excalidraw__create_view",
       app: true,
     })

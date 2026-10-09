@@ -14,11 +14,16 @@ const scope = {
 
 const settles = () => vi.fn(async (): Promise<void> => undefined)
 
+/** A native list the tests that only reply never read. */
+async function unlisted(): Promise<never> {
+  throw new Error("not listed")
+}
+
 /** Interactions over a native client that answers every mutation. */
 function newInteractions(reply = settles(), permissionReply = settles()) {
   return new OpenCodeInteractions({
-    questions: { reply, reject: settles() },
-    permissions: { reply: permissionReply },
+    questions: { list: unlisted, reply, reject: settles() },
+    permissions: { list: unlisted, reply: permissionReply },
   })
 }
 
@@ -109,7 +114,7 @@ describe("OpenCodeInteractions", () => {
     await interactions.dispatch(scope, replies)
     expect(reply).toHaveBeenCalledOnce()
     await expect(interactions.dispatch(scope, replies)).rejects.toMatchObject({
-      code: "AOS_INTERACTION_NOT_FOUND",
+      code: "HGW_INTERACTION_NOT_FOUND",
     })
   })
 
@@ -214,7 +219,7 @@ describe("OpenCodeInteractions", () => {
           payload: { answers: [["Europe"]] },
         },
       ])
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     await expect(
       interactions.respond(scope, [
         {
@@ -223,7 +228,7 @@ describe("OpenCodeInteractions", () => {
           payload: { answers: [["Outside"], ["Lint"]] },
         },
       ])
-    ).rejects.toMatchObject({ code: "AOS_INVALID_INTERACTION" })
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     expect(reply).not.toHaveBeenCalled()
   })
 
@@ -362,7 +367,7 @@ describe("OpenCodeInteractions", () => {
           payload: { answers: [["Yes"]] },
         },
       ])
-    ).rejects.toMatchObject({ code: "AOS_INTERACTION_NOT_FOUND" })
+    ).rejects.toMatchObject({ code: "HGW_INTERACTION_NOT_FOUND" })
     expect(reply).not.toHaveBeenCalled()
   })
 
@@ -392,7 +397,7 @@ describe("OpenCodeInteractions", () => {
     interactions.acceptQuestion(scope, question)
 
     await expect(interactions.respond(scope, response)).rejects.toMatchObject({
-      code: "AOS_MUTATION_UNCERTAIN",
+      code: "HGW_MUTATION_UNCERTAIN",
     })
     interactions.reconcile(scope, { questions: [question], permissions: [] })
 

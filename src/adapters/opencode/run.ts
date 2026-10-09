@@ -404,7 +404,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
   readonly #turns = new Map<string, ActiveTurn>()
   readonly #nativeSettlements = new Map<string, ScopedNativeSettlement>()
   /**
-   * The admission each Session's latest AOS start submits, recorded before the
+   * The admission each Session's latest gateway start submits, recorded before the
    * submit so neither a turn subscription nor a discovery takes it for a
    * foreign turn.
    */
@@ -701,7 +701,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       const kept = this.#turns.get(turnKey(scope))
       if (kept?.waitingOn) return this.#answer(kept, replies)
     } else if (await this.#active(scope.providerSessionId, signal)) {
-      // The native Session owns a turn AOS did not admit, which the browser
+      // The native Session owns a turn the gateway did not admit, which the browser
       // resolves by reloading this run rather than by reading a failure.
       throw new ServerTurnConflictError()
     }
@@ -938,7 +938,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       this.#abortSource(prior)
       this.#segmentFail(
         prior,
-        "AOS_CONNECTION_INTERRUPTED",
+        "HGW_CONNECTION_INTERRUPTED",
         "This OpenCode observation was replaced by a newer scoped connection."
       )
     }
@@ -970,7 +970,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         if (!run.sourceAborted && !run.abandoned && !run.nativeTerminal)
           this.#segmentFail(
             run,
-            "AOS_CONNECTION_INTERRUPTED",
+            "HGW_CONNECTION_INTERRUPTED",
             "The OpenCode connection was interrupted; reconnect to reconcile this turn."
           )
       } catch (error) {
@@ -978,8 +978,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         this.#segmentFail(
           run,
           error instanceof OpenCodeEventValidationError
-            ? "AOS_RESET_REQUIRED"
-            : "AOS_CONNECTION_INTERRUPTED",
+            ? "HGW_RESET_REQUIRED"
+            : "HGW_CONNECTION_INTERRUPTED",
           error instanceof OpenCodeEventValidationError
             ? "OpenCode history must be reconciled before this turn can continue."
             : "The OpenCode connection was interrupted; reconnect to reconcile this turn."
@@ -1177,7 +1177,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     } catch {
       this.#segmentFail(
         run,
-        "AOS_INTERACTION_FAILED",
+        "HGW_INTERACTION_FAILED",
         "OpenCode could not apply this interaction response."
       )
     }
@@ -1188,8 +1188,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     this.#segmentFail(
       run,
       error instanceof OpenCodeEventValidationError
-        ? "AOS_RESET_REQUIRED"
-        : "AOS_CONNECTION_INTERRUPTED",
+        ? "HGW_RESET_REQUIRED"
+        : "HGW_CONNECTION_INTERRUPTED",
       error instanceof OpenCodeEventValidationError
         ? "OpenCode history must be reconciled before this turn can continue."
         : "The OpenCode connection was interrupted; reconnect to reconcile this turn."
@@ -1203,7 +1203,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       stop: () => this.#stop(run),
       recoveryPosition: () =>
         openCodeRecoveryToken.mint(run.projector.recoveryPosition()),
-      // OpenCode stores a prompt within its answer, under the id AOS sent.
+      // OpenCode stores a prompt within its answer, under the id the gateway sent.
       ...(run.expectedAdmission === undefined
         ? {}
         : { stored: Promise.resolve(run.expectedAdmission) }),
@@ -1244,7 +1244,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       if (!run.queue.push(event)) {
         this.#segmentFail(
           run,
-          "AOS_RESET_REQUIRED",
+          "HGW_RESET_REQUIRED",
           "The OpenCode event buffer was exceeded; reconnect to reconcile this turn.",
           true
         )
@@ -1274,7 +1274,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     if (!run.admissionObserved) {
       this.#segmentFail(
         run,
-        "AOS_RESET_REQUIRED",
+        "HGW_RESET_REQUIRED",
         "OpenCode became idle before its stable prompt admission could be reconciled."
       )
       if (this.#turns.get(run.key) === run) this.#turns.delete(run.key)

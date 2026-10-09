@@ -62,7 +62,7 @@ function hasMode(request: Elicitation): request is ModedElicitation {
 }
 
 /** The vendor stop reasons that mean the turn failed rather than finished. */
-const AOS_STOP_CODES: ReadonlySet<string> = new Set(
+const HGW_STOP_CODES: ReadonlySet<string> = new Set(
   Object.values(HGW_STOP_REASONS)
 )
 
@@ -81,7 +81,7 @@ function turnFailureOf(update: SessionUpdate) {
   if (!SessionUpdate.isStateUpdate(update) || !StateUpdate.isIdle(update))
     return undefined
   const stopReason = update.stopReason
-  if (typeof stopReason !== "string" || !AOS_STOP_CODES.has(stopReason))
+  if (typeof stopReason !== "string" || !HGW_STOP_CODES.has(stopReason))
     return undefined
   const meta = HgwStateMetaSchema.safeParse(update._meta?.[HGW_META_KEY])
   if (!meta.success) return { stopReason }

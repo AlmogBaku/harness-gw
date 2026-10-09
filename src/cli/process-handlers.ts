@@ -24,10 +24,10 @@ export function installProcessHandlers(
   proc: ProcessLike = process
 ): void {
   proc.on("unhandledRejection", (reason: unknown) => {
-    logger.warn({ err: reason }, "proxy.unhandled_rejection")
+    logger.warn({ err: reason }, "gateway.unhandled_rejection")
   })
   proc.on("uncaughtException", (error: unknown) => {
-    logger.error({ err: error }, "proxy.uncaught_exception")
+    logger.error({ err: error }, "gateway.uncaught_exception")
     proc.exit(1)
   })
 }

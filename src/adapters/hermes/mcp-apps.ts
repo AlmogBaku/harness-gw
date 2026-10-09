@@ -22,7 +22,7 @@ import { isRecord, parseJson, trimmedText, unwrappedToolText } from "./native"
 import { projectHermesToolCall, unwrapToolCall } from "./tool-data"
 
 /**
- * MCP Apps for Hermes, which keeps no UI resources of its own: the proxy
+ * MCP Apps for Hermes, which keeps no UI resources of its own: the gateway
  * reaches a profile's MCP servers itself, and only those it can reach without
  * credentials or with headers the operator configured. Names are keyed by
  * profile, which is the Agent id.

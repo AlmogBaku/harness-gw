@@ -1,8 +1,8 @@
 /**
  * The wire contract every runtime meets: what a plain ACP v2 client reads
- * from the proxy over its WebSocket, proven over each adapter's own native
+ * from the gateway over its WebSocket, proven over each adapter's own native
  * fake. An adapter's `wire-contract.test.ts` calls `runWireContract` with the
- * runtime it composes; the real proxy is built around it by
+ * runtime it composes; the real gateway is built around it by
  * `createConfiguredProxy`, and the SDK's own client reaches its ACP services
  * through `acpBridge`, the calls the network listener makes. A row the runtime
  * cannot express is named in `gaps` with its reason and listed as skipped.
@@ -122,13 +122,13 @@ export type WireQuestions = Readonly<{
   /** The runtime confirms the interrupt: its turn ends interrupted. */
   confirmInterrupt(): Promise<void>
   /**
-   * Each asks one prompt the proxy holds back, and resolves with a value the
+   * Each asks one prompt the gateway holds back, and resolves with a value the
    * prompt carries that must never reach a client.
    */
   held: Readonly<Record<string, () => Promise<string>>>
   /**
-   * The Session already waits on a question no proxy can present again, as
-   * after a proxy restart.
+   * The Session already waits on a question no gateway can present again, as
+   * after a gateway restart.
    */
   lose(): Promise<void>
 }>
@@ -190,7 +190,7 @@ type ClientOptions = {
 }
 
 /**
- * The real proxy over `runtime`, an operator and a guest listener, with its
+ * The real gateway over `runtime`, an operator and a guest listener, with its
  * invitation key written to a private directory as a deployment keeps it.
  * Awaited directly, not on the fake clock: composing reads that key from
  * disk, and real I/O takes no fixed count of clock steps.
@@ -358,7 +358,7 @@ function connectClient(
 }
 
 /**
- * One thing a client read: an update, a request the proxy `asked` it, or the
+ * One thing a client read: an update, a request the gateway `asked` it, or the
  * `answer` to a request the case marked.
  */
 type TimelineEntry = SessionUpdate | "asked" | "answer"

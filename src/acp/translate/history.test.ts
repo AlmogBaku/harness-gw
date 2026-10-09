@@ -90,7 +90,7 @@ const history: SessionHistoryResponse = {
         },
         {
           type: "data",
-          name: "aos.artifact",
+          name: "hgw.artifact",
           data: ARTIFACT,
         },
       ],
@@ -172,7 +172,7 @@ describe("translateHistory", () => {
           role: "user",
           content: [
             { type: "text", text: "do u see it?" },
-            { type: "data", name: "aos.artifact", data: attached },
+            { type: "data", name: "hgw.artifact", data: attached },
           ],
           createdAt: "2026-09-19T09:00:03.000Z",
         },
@@ -394,7 +394,7 @@ describe("translateHistory", () => {
             id: "a2",
             role: "assistant",
             content: [
-              { type: "data", name: "aos.artifact", data: { id: "art-2" } },
+              { type: "data", name: "hgw.artifact", data: { id: "art-2" } },
             ],
             createdAt: "2026-09-19T09:00:03.000Z",
           },
@@ -406,7 +406,10 @@ describe("translateHistory", () => {
   it("opens a turn the provider started on its own ahead of its parts, with its notice", () => {
     const notice = { severity: "info", title: "/loop wakeup #1", kind: "loop" }
     const opened = (
-      lead: SessionHistoryResponse["messages"][number]["content"]
+      lead: Exclude<
+        SessionHistoryResponse["messages"][number],
+        { role: "activity" }
+      >["content"]
     ) =>
       translateHistory({
         ...history,
@@ -422,7 +425,7 @@ describe("translateHistory", () => {
       })
     const noticePart = {
       type: "data" as const,
-      name: "aos-notice",
+      name: "hgw-notice",
       data: notice,
     }
 

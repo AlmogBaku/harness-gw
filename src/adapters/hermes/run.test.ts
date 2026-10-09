@@ -11,7 +11,12 @@ import {
   type RequestReply,
   type TurnEvent,
 } from "../../core/events"
-import { ServerTurnConflictError } from "../../core/runtime"
+import { providerSessionId, sessionId } from "../../core/ids"
+import {
+  ServerTurnConflictError,
+  type ServerTurnEngine,
+  type SessionScope,
+} from "../../core/runtime"
 import { describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../../../test/support/fake-clock"
@@ -43,10 +48,10 @@ import {
 } from "./test-utils/native-events"
 import { assistantToolCall, toolRow } from "./test-utils/history-rows"
 
-const scope = {
+const scope: SessionScope = {
   agentId: "research",
-  providerSessionId: "stored-session",
-  sessionId: "hermes:research:stored-session",
+  providerSessionId: providerSessionId("stored-session"),
+  sessionId: sessionId("hermes:research:stored-session"),
 }
 
 function input(overrides: Partial<PromptTurnInput> = {}): PromptTurnInput {
@@ -181,8 +186,17 @@ function pendingRequests() {
   }
 }
 
-function ofKind(events: readonly unknown[], kind: TurnEventKind) {
-  return events.filter((event) => (event as { kind?: unknown }).kind === kind)
+/** What a turn engine's `discover` reports, as the shared contract types it. */
+type Discovered = Awaited<ReturnType<NonNullable<ServerTurnEngine["discover"]>>>
+
+function ofKind<K extends TurnEventKind>(
+  events: readonly unknown[],
+  kind: K
+): Extract<TurnEvent, { kind: K }>[] {
+  return events.filter(
+    (event): event is Extract<TurnEvent, { kind: K }> =>
+      (event as { kind?: unknown }).kind === kind
+  )
 }
 
 function eventKinds(events: readonly unknown[]) {
@@ -200,15 +214,15 @@ function messageIds(events: readonly unknown[]) {
   ]
 }
 
-async function collect(handle: { events: AsyncIterable<unknown> }) {
-  const events: unknown[] = []
+async function collect<T>(handle: { events: AsyncIterable<T> }) {
+  const events: T[] = []
   for await (const event of handle.events) events.push(event)
   return events
 }
 
 /** A turn's events up to the wait it pauses on; the turn runs on after it. */
-async function collectToWait(handle: { events: AsyncIterable<unknown> }) {
-  const events: unknown[] = []
+async function collectToWait<T>(handle: { events: AsyncIterable<T> }) {
+  const events: T[] = []
   for await (const event of handle.events) {
     events.push(event)
     if ((event as TurnEvent).kind === TurnEventKind.TurnRequiresAction) break
@@ -423,7 +437,7 @@ describe("HermesRunEngine", () => {
         (await turnOf(undefined, { status: "error" })).stored
       ).rejects.toMatchObject({
         ending: "failed",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       })
     })
 
@@ -906,7 +920,7 @@ describe("HermesRunEngine", () => {
 
   /**
    * The run that answers a question no run of this engine asked, as after a
-   * proxy restart. It attaches past the frames Hermes already sent, so a test
+   * gateway restart. It attaches past the frames Hermes already sent, so a test
    * publishes whatever Hermes does next through the returned `publish`.
    */
   async function resumedRun(
@@ -999,7 +1013,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
         message: "Hermes could not complete this turn.",
       },
     ])
@@ -1019,7 +1033,7 @@ describe("HermesRunEngine", () => {
     expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_INTERACTION_EXPIRED",
+        code: "HGW_INTERACTION_EXPIRED",
         message: "This Hermes interaction is no longer pending.",
       },
     ])
@@ -1046,7 +1060,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes may have accepted this turn; reconcile before sending again.",
-        code: "AOS_SEND_UNCERTAIN",
+        code: "HGW_SEND_UNCERTAIN",
       },
     ])
     await expect(
@@ -1056,11 +1070,11 @@ describe("HermesRunEngine", () => {
   })
 
   it.each([
-    ["unknown", "AOS_PROVIDER_RUN_FAILED", "Hermes rejected this command."],
+    ["unknown", "HGW_PROVIDER_RUN_FAILED", "Hermes rejected this command."],
     [
-      // A recognized slash command with attachments: AOS explains why.
+      // A recognized slash command with attachments: the gateway explains why.
       "command-with-attachments",
-      "AOS_COMMAND_WITH_ATTACHMENTS",
+      "HGW_COMMAND_WITH_ATTACHMENTS",
       "Slash commands cannot be sent with attachments.",
     ],
   ] as const)(
@@ -1380,7 +1394,7 @@ describe("HermesRunEngine", () => {
     expect(events.at(-1)).toEqual({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes could not complete this turn.\nterminal provider crash",
-      code: "AOS_PROVIDER_RUN_FAILED",
+      code: "HGW_PROVIDER_RUN_FAILED",
     })
     expect(
       log.warn.mock.calls.filter(([, event]) => event === "hermes.turn.failed")
@@ -1407,7 +1421,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this turn.\nprovider stream closed before the first token",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       },
     ])
   })
@@ -1441,7 +1455,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
     expect(submissions).toBe(0)
@@ -1511,7 +1525,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.TurnFailed,
       message:
         "Hermes history must be reconciled before this turn can continue.",
-      code: "AOS_RESET_REQUIRED",
+      code: "HGW_RESET_REQUIRED",
     })
     expect(submissions).toBe(0)
   })
@@ -1605,7 +1619,7 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(engine.start(scope, input())).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
+      code: "HGW_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable.",
     })
     await expect(
@@ -1638,7 +1652,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "The Hermes connection was interrupted; reconnect to reconcile this turn.",
-        code: "AOS_CONNECTION_INTERRUPTED",
+        code: "HGW_CONNECTION_INTERRUPTED",
       },
     ])
     await expect(
@@ -1845,7 +1859,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this turn.\nprovider rejected the request",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       },
     ])
   })
@@ -1874,7 +1888,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this turn.\nprovider rejected the request",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       },
     ])
   })
@@ -1909,7 +1923,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes could not complete this turn.\nprovider rejected the request",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       },
     ])
   })
@@ -2202,7 +2216,7 @@ describe("HermesRunEngine", () => {
       expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
         {
           kind: TurnEventKind.TurnFailed,
-          code: "AOS_INTERACTION_LOST",
+          code: "HGW_INTERACTION_LOST",
           message:
             "This Session is waiting on a question that can no longer be answered here. Stop the turn to continue.",
           awaitingStop: true,
@@ -2292,7 +2306,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
   })
@@ -2362,7 +2376,7 @@ describe("HermesRunEngine", () => {
     }
 
     await expect(engine.recover(scope, request)).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
+      code: "HGW_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable.",
     })
     await expect(engine.recover(scope, request)).resolves.toBeDefined()
@@ -2414,7 +2428,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
   })
@@ -2436,7 +2450,7 @@ describe("HermesRunEngine", () => {
     )
 
     await expect(engine.start(scope, input())).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
+      code: "HGW_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable.",
     })
     await expect(
@@ -2456,7 +2470,7 @@ describe("HermesRunEngine", () => {
     )
     const handle = await stopping.start(scope, input())
     await expect(handle.stop()).rejects.toMatchObject({
-      code: "AOS_STOP_UNCERTAIN",
+      code: "HGW_STOP_UNCERTAIN",
       message: "Hermes could not confirm Stop; reconcile before sending again.",
     })
   })
@@ -2486,7 +2500,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
     expect(submissions).toBe(0)
@@ -2514,7 +2528,7 @@ describe("HermesRunEngine", () => {
 
     expect(events.at(-1)).toMatchObject({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_RESET_REQUIRED",
+      code: "HGW_RESET_REQUIRED",
     })
     expect(submissions).toBe(0)
   })
@@ -2549,7 +2563,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
 
@@ -2575,7 +2589,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
     expect(submissions).toBe(0)
@@ -2607,7 +2621,7 @@ describe("HermesRunEngine", () => {
       {
         kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
-        code: "AOS_STREAM_OVERFLOW",
+        code: "HGW_STREAM_OVERFLOW",
       },
     ])
   })
@@ -2703,7 +2717,7 @@ describe("HermesRunEngine", () => {
     expect(events.at(-1)).toEqual({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes produced more events than AOS can safely buffer.",
-      code: "AOS_STREAM_OVERFLOW",
+      code: "HGW_STREAM_OVERFLOW",
     })
     expect(events).toHaveLength(2)
     await expect(
@@ -2851,7 +2865,7 @@ describe("HermesRunEngine", () => {
       {
         kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
-        code: "AOS_STREAM_OVERFLOW",
+        code: "HGW_STREAM_OVERFLOW",
       },
     ])
   })
@@ -2875,7 +2889,7 @@ describe("HermesRunEngine", () => {
       value: {
         kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
-        code: "AOS_STREAM_OVERFLOW",
+        code: "HGW_STREAM_OVERFLOW",
       },
     })
     await expect(iterator.next()).resolves.toEqual({
@@ -2967,7 +2981,7 @@ describe("HermesRunEngine", () => {
       },
     })
 
-    const discovered = await engine.discover(scope, "recovered-run")
+    const discovered: Discovered = await engine.discover(scope, "recovered-run")
     expect(discovered?.state).toBe("running")
     // The ring still holds the open turn's own start, so a reload can replay it.
     expect(discovered?.fromStart).toBe(true)
@@ -3044,7 +3058,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
   })
@@ -3066,7 +3080,7 @@ describe("HermesRunEngine", () => {
       }),
     })
 
-    const discovered = await engine.discover(scope, "recovered-run")
+    const discovered: Discovered = await engine.discover(scope, "recovered-run")
     // Joined from the live cursor, so the turn's own start was never read.
     expect(discovered?.fromStart).toBe(false)
     const live = nativeTurn("live-secret", 43)
@@ -3229,7 +3243,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
   })
@@ -3256,7 +3270,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.TurnFailed,
       message:
         "Hermes history must be reconciled before this turn can continue.",
-      code: "AOS_RESET_REQUIRED",
+      code: "HGW_RESET_REQUIRED",
     })
     expect(JSON.stringify(events)).not.toContain("evicted")
   })
@@ -3295,7 +3309,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "The Hermes connection was interrupted; reconnect to reconcile this turn.",
-        code: "AOS_CONNECTION_INTERRUPTED",
+        code: "HGW_CONNECTION_INTERRUPTED",
       },
     ])
     expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
@@ -3333,7 +3347,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
   })
@@ -3392,10 +3406,10 @@ describe("HermesRunEngine", () => {
 
   it("catches up two interleaved live Sessions independently", async () => {
     const attachment = observation()
-    const other = {
+    const other: SessionScope = {
       agentId: "research",
-      providerSessionId: "stored-other",
-      sessionId: "hermes:research:stored-other",
+      providerSessionId: providerSessionId("stored-other"),
+      sessionId: sessionId("hermes:research:stored-other"),
     }
     const first = nativeTurn("live-a", 1)
     const second = nativeTurn("live-b", 1)
@@ -3489,7 +3503,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes may have accepted this turn; reconcile before sending again.",
-        code: "AOS_SEND_UNCERTAIN",
+        code: "HGW_SEND_UNCERTAIN",
       },
     ])
     expect(submissions).toBe(1)
@@ -3573,7 +3587,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes may have accepted this turn; reconcile before sending again.",
-        code: "AOS_SEND_UNCERTAIN",
+        code: "HGW_SEND_UNCERTAIN",
       },
     ])
     expect(hermesRecoveryToken.read(handle.recoveryPosition())).toEqual({
@@ -3679,19 +3693,19 @@ describe("HermesRunEngine", () => {
   it.each([
     [
       "in-use",
-      "AOS_SESSION_IN_USE",
+      "HGW_SESSION_IN_USE",
       "This Session is open in another app. Use it there, or start a new Session.",
       "This chat is open in another Hermes window/terminal. Use it there, or start a new chat here.",
     ],
     [
       "session-limit",
-      "AOS_SESSION_LIMIT",
+      "HGW_SESSION_LIMIT",
       "Hermes has reached its limit of active Sessions.",
       "Hermes is at the active session limit (4/4). Try again when another session finishes.",
     ],
     [
       "unknown",
-      "AOS_PROVIDER_RUN_FAILED",
+      "HGW_PROVIDER_RUN_FAILED",
       "Hermes rejected this command.",
       "Hermes refused this prompt.",
     ],
@@ -3776,7 +3790,7 @@ describe("HermesRunEngine", () => {
         kind: TurnEventKind.TurnFailed,
         message:
           "Hermes history must be reconciled before this turn can continue.",
-        code: "AOS_RESET_REQUIRED",
+        code: "HGW_RESET_REQUIRED",
       },
     ])
     expect(submitted).toEqual(["live-1", "live-2"])
@@ -3820,7 +3834,7 @@ describe("HermesRunEngine", () => {
     abandoned.abort()
 
     await expect(engine.start(scope, input())).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
+      code: "HGW_PROVIDER_UNAVAILABLE",
       message: "Hermes is temporarily unavailable.",
     })
     await expect(
@@ -3830,7 +3844,7 @@ describe("HermesRunEngine", () => {
         undefined,
         abandoned.signal
       )
-    ).rejects.toMatchObject({ code: "AOS_PROVIDER_UNAVAILABLE" })
+    ).rejects.toMatchObject({ code: "HGW_PROVIDER_UNAVAILABLE" })
     await expect(
       engine.start(scope, input({ turnId: "run-3" }))
     ).resolves.toBeDefined()
@@ -4010,7 +4024,7 @@ describe("HermesRunEngine", () => {
   })
 
   it("reports a native interruption AOS never requested as stopped", async () => {
-    // Another client stopped the turn: AOS asked for nothing, so only Hermes'
+    // Another client stopped the turn: the gateway asked for nothing, so only Hermes'
     // own `interrupted` outcome says the open tools were cut short.
     const { engine, publish } = settlement()
     const handle = await engine.start(scope, input())
@@ -4085,7 +4099,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.TurnFailed,
       message:
         "Hermes could not complete this turn.\nprovider rejected the request",
-      code: "AOS_PROVIDER_RUN_FAILED",
+      code: "HGW_PROVIDER_RUN_FAILED",
     })
   })
 
@@ -4120,7 +4134,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.TurnFailed,
       message:
         "Hermes could not start the agent for this Session.\nagent build timed out",
-      code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
+      code: "HGW_PROVIDER_AGENT_UNAVAILABLE",
     })
     expect(
       log.warn.mock.calls.filter(([, event]) => event === "hermes.turn.failed")
@@ -4174,7 +4188,7 @@ describe("HermesRunEngine", () => {
       })
       const handle = await engine.start(scope, input())
       const turn = nativeTurn("live-secret", 1)
-      // Hermes always ends the turn AOS was admitted behind before it reports
+      // Hermes always ends the turn the gateway was admitted behind before it reports
       // idle, so neither frame describes the turn this run is waiting for.
       publish(turn.complete("previous-reply", "Previous answer"))
       publish(turn.idle())
@@ -4227,7 +4241,7 @@ describe("HermesRunEngine", () => {
         {
           kind: TurnEventKind.TurnFailed,
           message: "Hermes could not complete this turn.",
-          code: "AOS_PROVIDER_RUN_FAILED",
+          code: "HGW_PROVIDER_RUN_FAILED",
         },
       ])
     } finally {
@@ -4260,7 +4274,7 @@ describe("HermesRunEngine", () => {
       expect(events.at(-1)).toEqual({
         kind: TurnEventKind.TurnFailed,
         message: "Hermes could not complete this turn.",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       })
       expect(status).toHaveBeenCalledTimes(4)
     } finally {
@@ -4278,7 +4292,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.TurnFailed,
       message:
         "Hermes could not start the agent for this Session.\nagent build timed out",
-      code: "AOS_PROVIDER_AGENT_UNAVAILABLE",
+      code: "HGW_PROVIDER_AGENT_UNAVAILABLE",
     })
   })
 
@@ -4288,14 +4302,14 @@ describe("HermesRunEngine", () => {
     ).resolves.toContainEqual({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes reported a billing or quota problem.",
-      code: "AOS_PROVIDER_BILLING_FAILED",
+      code: "HGW_PROVIDER_BILLING_FAILED",
     })
     await expect(
       failedTurn({ error_surface: { code: "insufficient_quota" } })
     ).resolves.toContainEqual({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes reported a billing or quota problem.",
-      code: "AOS_PROVIDER_BILLING_FAILED",
+      code: "HGW_PROVIDER_BILLING_FAILED",
     })
   })
 
@@ -4312,7 +4326,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.TurnFailed,
       message:
         "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
-      code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+      code: "HGW_PROVIDER_RETRYABLE_FAILURE",
     })
   })
 
@@ -4337,7 +4351,7 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.TurnFailed,
       message:
         "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\nAn error occurred (ValidationException) when calling the InvokeModel operation",
-      code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+      code: "HGW_PROVIDER_RETRYABLE_FAILURE",
     })
   })
 
@@ -4358,7 +4372,7 @@ describe("HermesRunEngine", () => {
     expect(events.at(-1)).toEqual({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes could not complete this turn.\nconnection reset by peer",
-      code: "AOS_PROVIDER_RUN_FAILED",
+      code: "HGW_PROVIDER_RUN_FAILED",
     })
   })
 
@@ -4384,7 +4398,7 @@ describe("HermesRunEngine", () => {
     expect(events.at(-1)).toEqual({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes could not complete this turn.",
-      code: "AOS_PROVIDER_RUN_FAILED",
+      code: "HGW_PROVIDER_RUN_FAILED",
     })
   })
 
@@ -4593,7 +4607,7 @@ describe("HermesRunEngine", () => {
       {
         kind: TurnEventKind.TurnFailed,
         message: "Hermes could not complete this turn.",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       },
     ])
   })
@@ -4626,7 +4640,7 @@ describe("HermesRunEngine", () => {
         {
           kind: TurnEventKind.TurnFailed,
           message: "Hermes could not complete this turn.",
-          code: "AOS_PROVIDER_RUN_FAILED",
+          code: "HGW_PROVIDER_RUN_FAILED",
         },
       ])
       expect(log.warn).toHaveBeenCalledWith(
@@ -4749,7 +4763,7 @@ describe("HermesRunEngine", () => {
     })
 
     await expect(handle.stop()).rejects.toMatchObject({
-      code: "AOS_STOP_UNCERTAIN",
+      code: "HGW_STOP_UNCERTAIN",
     })
     const turn = nativeTurn("live-secret", 1)
     publish(turn.messageStart("msg-1"))
@@ -4790,7 +4804,7 @@ describe("HermesRunEngine", () => {
     const handle = await engine.start(scope, input())
 
     await expect(handle.stop()).rejects.toMatchObject({
-      code: "AOS_STOP_UNCERTAIN",
+      code: "HGW_STOP_UNCERTAIN",
     })
     for (const frame of frames) publish(frame)
 
@@ -4954,7 +4968,7 @@ describe("live and refreshed Hermes tool projection agree", () => {
       artifacts: parts
         .filter(
           (candidate) =>
-            candidate.type === "data" && candidate.name === "aos.artifact"
+            candidate.type === "data" && candidate.name === "hgw.artifact"
         )
         .map((candidate) => candidate.data),
       isError: part?.isError === true,
@@ -5239,7 +5253,7 @@ describe("live and refreshed Hermes tool projection agree", () => {
     expect(streamed).toBe("Your chart:\nDone.")
     expect(message?.content).toEqual([
       { type: "text", text: "Your chart:\nDone." },
-      { type: "data", name: "aos.artifact", data: live[0] },
+      { type: "data", name: "hgw.artifact", data: live[0] },
     ])
     expect(live).toMatchObject([
       { filename: "chart.png", mimeType: "image/png" },

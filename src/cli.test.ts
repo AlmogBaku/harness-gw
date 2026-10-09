@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -79,7 +79,7 @@ async function proxyConfig() {
     }),
     { mode: 0o600 }
   )
-  return { configFile, configHome }
+  return { configFile, configHome, tokenFile, invitationKey }
 }
 
 /** The lines a start wrote at `error`, which a clean one writes none of. */
@@ -147,14 +147,16 @@ describe("proxy executable", () => {
     const lifecycle = await runProxyCli(
       ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
       {
-        runtimeFactory: (config, limits, services) =>
-          createHermesRuntime(config, limits, {
+        runtimeFactory: (config, limits, services) => {
+          if (config.kind !== "hermes") throw new Error("a Hermes runtime only")
+          return createHermesRuntime(config, limits, {
             ...services,
             transportFactory: () => ({
               request: vi.fn(),
               close: transportClose,
             }),
-          }),
+          })
+        },
         createLogger: () => logs.logger,
         credentials: new CredentialValues(),
         getenv: () => undefined,
@@ -207,16 +209,16 @@ describe("proxy executable", () => {
     expect(transportClose).toHaveBeenCalledOnce()
     const shutdownLines = logs
       .records()
-      .filter(({ message }) => message.startsWith("proxy.shutdown."))
+      .filter(({ message }) => message.startsWith("gateway.shutdown."))
     expect(shutdownLines).toEqual([
       {
         level: "info",
-        message: "proxy.shutdown.started",
+        message: "gateway.shutdown.started",
         fields: { graceMs: 5_000 },
       },
       {
         level: "info",
-        message: "proxy.shutdown.completed",
+        message: "gateway.shutdown.completed",
         fields: { forced: false },
       },
     ])
@@ -370,7 +372,7 @@ describe("proxy executable", () => {
       Buffer.from(token.split(".")[1]!, "base64url").toString("utf8")
     ) as Record<string, unknown>
     expect(payload.ref).toBe("returning-guest")
-    expect(payload.exp - payload.iat).toBe(72 * 60 * 60)
+    expect(Number(payload.exp) - Number(payload.iat)).toBe(72 * 60 * 60)
     expect(payload).not.toHaveProperty("firstTurn")
   })
 
@@ -396,8 +398,8 @@ describe("proxy executable", () => {
     await lifecycle!.shutdown()
   })
 
-  it("checks a configuration without starting anything, and names a file it rejects", async () => {
-    const { configFile } = await proxyConfig()
+  it("checks a configuration and its secret files without starting anything, and names a file it rejects", async () => {
+    const { configFile, tokenFile, invitationKey } = await proxyConfig()
     const start = vi.fn()
     const missing = join(tmpdir(), "aos-proxy-absent", "config.yaml")
     const check = (path: string, writeOut = vi.fn()) =>
@@ -413,6 +415,11 @@ describe("proxy executable", () => {
     await check(configFile, writeOut)
     expect(writeOut).toHaveBeenCalledWith("configuration is valid\n")
     await expect(check(missing)).rejects.toThrow(missing)
+    await writeFile(invitationKey, "not-a-key", { mode: 0o600 })
+    await expect(check(configFile)).rejects.toThrow(invitationKey)
+    await writeFile(invitationKey, Buffer.alloc(32, 7).toString("base64url"))
+    await chmod(tokenFile, 0o644)
+    await expect(check(configFile)).rejects.toThrow(tokenFile)
     expect(start).not.toHaveBeenCalled()
   })
 
@@ -442,7 +449,7 @@ describe("proxy executable", () => {
 
     expect(start).not.toHaveBeenCalled()
     expect(redactForLog(failure)).toEqual({
-      name: "ProxyConfigurationError",
+      name: "GatewayConfigurationError",
       message: expect.stringContaining(missing),
     })
   })
@@ -468,7 +475,7 @@ describe("process handlers", () => {
     expect(exit).not.toHaveBeenCalled()
     const warns = logs.records().filter(({ level }) => level === "warn")
     expect(warns).toHaveLength(1)
-    expect(warns[0]!.message).toBe("proxy.unhandled_rejection")
+    expect(warns[0]!.message).toBe("gateway.unhandled_rejection")
     expect(warns[0]!.fields.err).toMatchObject({
       message: "something went wrong",
     })
@@ -493,7 +500,7 @@ describe("process handlers", () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(1)
     const errorLines = logs.records().filter(({ level }) => level === "error")
     expect(errorLines).toHaveLength(1)
-    expect(errorLines[0]!.message).toBe("proxy.uncaught_exception")
+    expect(errorLines[0]!.message).toBe("gateway.uncaught_exception")
     expect(errorLines[0]!.fields.err).toMatchObject({ message: "fatal error" })
   })
 })

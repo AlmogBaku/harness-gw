@@ -65,7 +65,9 @@ function client(overrides: Partial<OpenClawGatewayClient> = {}) {
 }
 
 /** The adapter over `gateway`, with idle turns and no-op subscriptions. */
-function adapterOver(gateway: OpenClawGatewayClient) {
+function adapterOver(
+  gateway: ConstructorParameters<typeof OpenClawServerAdapter>[0]["client"]
+) {
   return new OpenClawServerAdapter({
     client: gateway,
     turns: idleTurns(),

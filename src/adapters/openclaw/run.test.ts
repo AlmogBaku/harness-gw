@@ -5,13 +5,18 @@ import {
   StopReason,
   ToolKind,
   TurnEventKind,
+  type PromptTurnInput,
   type RepliesTurnInput,
   type RequestReply,
-  type TurnInput,
+  type TurnEventOf,
 } from "../../core/events"
 import { describe, expect, it, vi } from "vitest"
 
-import { ServerTurnStopNotDispatchedError } from "../../core/runtime"
+import { providerSessionId, sessionId } from "../../core/ids"
+import {
+  ServerTurnStopNotDispatchedError,
+  type SessionScope,
+} from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { READY_LINK } from "../../core/link"
 import { openClawPublicError } from "./adapter"
@@ -124,10 +129,10 @@ class ControlledNative implements OpenClawRunRequestClient {
   }
 }
 
-const scope = {
+const scope: SessionScope = {
   agentId: "research",
-  providerSessionId: "agent:research:main",
-  sessionId: "thread-public",
+  providerSessionId: providerSessionId("agent:research:main"),
+  sessionId: sessionId("thread-public"),
 }
 
 const pendingQuestion = {
@@ -175,7 +180,7 @@ function approvalReplay(approvals: unknown[] = [], truncated = false) {
   }
 }
 
-function input(turnId = "run-a"): TurnInput {
+function input(turnId = "run-a"): PromptTurnInput {
   return { turnId, messageId: "user-a", prompt: "Investigate this" }
 }
 
@@ -201,6 +206,8 @@ function coordinator(engine: OpenClawTurnEngine) {
     readings: {
       context: vi.fn(),
       models: vi.fn(),
+      updateModel: vi.fn(),
+      createSession: vi.fn(),
       publicError: () => undefined,
       link: READY_LINK,
     },
@@ -488,7 +495,7 @@ describe("OpenClaw run engine", () => {
 
     await expect(engine.start(scope, input())).rejects.toMatchObject({
       name: "OpenClawRunPublicError",
-      code: "AOS_PROVIDER_UNAVAILABLE",
+      code: "HGW_PROVIDER_UNAVAILABLE",
     })
     expect(native.sent("chat.send")).toHaveLength(0)
   })
@@ -597,7 +604,7 @@ describe("OpenClaw run engine", () => {
     const events = await drain(handle.events)
     expect(events.at(-1)).toMatchObject({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_INTERACTION_UNCERTAIN",
+      code: "HGW_INTERACTION_UNCERTAIN",
     })
 
     const recovered = await engine.recover(scope, {
@@ -744,7 +751,10 @@ describe("OpenClaw run engine", () => {
   })
 
   it("uses an acknowledged approval replay key to recover and reply on a canonical Session alias", async () => {
-    const publicScope = { ...scope, providerSessionId: "global" }
+    const publicScope = {
+      ...scope,
+      providerSessionId: providerSessionId("global"),
+    }
     const replayKey = "agent:research:global"
     const approval = {
       ...pendingApproval,
@@ -1460,7 +1470,7 @@ describe("OpenClaw run engine", () => {
 
     await expect(handle.stop()).rejects.toMatchObject({
       name: "OpenClawRunPublicError",
-      code: "AOS_STOP_UNCERTAIN",
+      code: "HGW_STOP_UNCERTAIN",
     })
     expect(native.sent("sessions.abort")).toHaveLength(1)
   })
@@ -1506,7 +1516,7 @@ describe("OpenClaw run engine", () => {
     expect(error).toMatchObject({
       failure: {
         name: "OpenClawRunPublicError",
-        code: "AOS_PROVIDER_UNAVAILABLE",
+        code: "HGW_PROVIDER_UNAVAILABLE",
         cause: native.abortError,
       },
     })
@@ -1521,7 +1531,7 @@ describe("OpenClaw run engine", () => {
     const events = await drain(handle.events)
     expect(events).toMatchObject([
       { kind: TurnEventKind.TurnStarted },
-      { kind: TurnEventKind.TurnFailed, code: "AOS_SEND_UNCERTAIN" },
+      { kind: TurnEventKind.TurnFailed, code: "HGW_SEND_UNCERTAIN" },
     ])
     expect(native.sent("chat.send")).toHaveLength(1)
 
@@ -1624,7 +1634,15 @@ describe("OpenClaw run engine", () => {
     expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
   })
 
-  it.each([
+  it.each<
+    [
+      string,
+      Record<string, unknown>,
+      TurnEventOf<
+        typeof TurnEventKind.TurnEnded | typeof TurnEventKind.TurnFailed
+      >,
+    ]
+  >([
     [
       "a clean final",
       { state: "final", stopReason: "stop" },
@@ -1655,7 +1673,7 @@ describe("OpenClaw run engine", () => {
       },
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
         message: "This conversation no longer fits the model's context window.",
         provider: "anthropic",
         model: "claude-sonnet",
@@ -1670,7 +1688,7 @@ describe("OpenClaw run engine", () => {
       },
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+        code: "HGW_PROVIDER_RETRYABLE_FAILURE",
         message: "OpenClaw's model provider is rate limiting this turn.",
         provider: "openai",
         model: "gpt-5",
@@ -1681,7 +1699,7 @@ describe("OpenClaw run engine", () => {
       { state: "error" },
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
         message: "OpenClaw could not complete this turn.",
       },
     ],
@@ -1755,7 +1773,7 @@ describe("OpenClaw run engine", () => {
     const events = await drain(handle.events)
     expect(events.at(-1)).toMatchObject({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_SEND_UNCERTAIN",
+      code: "HGW_SEND_UNCERTAIN",
     })
   })
 
@@ -2008,7 +2026,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
 
     expect((await drain(handle.events)).at(-1)).toMatchObject({
       kind: TurnEventKind.TurnFailed,
-      code: "AOS_SEND_UNCERTAIN",
+      code: "HGW_SEND_UNCERTAIN",
     })
     await clock.advance(125)
     expect(native.sent("sessions.messages.subscribe")).toHaveLength(failed + 1)
@@ -2195,7 +2213,7 @@ describe("OpenClaw run engine AOS tools", () => {
     const { engine } = engineOver(native)
 
     await expect(engine.start(scope, input())).rejects.toMatchObject({
-      code: "AOS_PROVIDER_UNAVAILABLE",
+      code: "HGW_PROVIDER_UNAVAILABLE",
     })
     expect(native.sent("chat.send")).toHaveLength(0)
   })

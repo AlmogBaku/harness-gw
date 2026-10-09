@@ -266,7 +266,7 @@ function bytesToBase64(bytes: Uint8Array) {
 /**
  * Decode a bounded native `data:` URL into its bytes and MIME type. Shared with
  * the adapter's artifact reader so one bound and one base64 validator cover
- * every native data URL the proxy accepts.
+ * every native data URL the gateway accepts.
  */
 export function decodeDataUrl(value: unknown, maxBytes: number) {
   const parsed = parseDataUrl(value, maxBytes)

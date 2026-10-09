@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../../test/support/fake-clock"
+import { captureLogs } from "../../test/support/log-capture"
 import type { Session } from "../../protocol"
 import { createCatalog } from "../core/catalog"
 import type { ExecutionEvent, PendingRequest } from "../core/events"
@@ -60,6 +61,7 @@ function harness(
   const coordinator = {
     state: (scope: { providerSessionId: string }) => execution(scope).state,
     snapshot: execution,
+    endIfGone: () => false,
     subscribeExecutions: (listener: (event: ExecutionEvent) => void) => {
       deliver = listener
       return unsubscribe
@@ -67,7 +69,12 @@ function harness(
   }
   const sessionRows = createSessionRows()
   const feed = createActivityFeed({
-    catalog: createCatalog({ runtime, coordinator, rows: sessionRows }),
+    catalog: createCatalog({
+      runtime,
+      coordinator,
+      rows: sessionRows,
+      logger: captureLogs().logger,
+    }),
     coordinator,
     ...(options.now ? { now: options.now } : {}),
   })

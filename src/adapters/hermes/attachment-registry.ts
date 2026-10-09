@@ -182,7 +182,7 @@ export class HermesAttachmentRegistry {
   }
 
   /**
-   * The live Session behind a durable one, resuming it when AOS has no usable
+   * The live Session behind a durable one, resuming it when the gateway has no usable
    * binding. `refresh` asks Hermes again even when one exists: a caller that
    * needs the authoritative Session state (what is still waiting on it, whether
    * it is running) cannot read it from a cached binding. `freshForMs` bounds
@@ -255,7 +255,7 @@ export class HermesAttachmentRegistry {
   }
 
   /**
-   * The durable Session a live Hermes Session id is bound to, if AOS bound it.
+   * The durable Session a live Hermes Session id is bound to, if the gateway bound it.
    * A native frame or server request addresses the volatile id, so this is how
    * a Session-scoped concern routes one without keeping its own binding map.
    */
@@ -308,7 +308,7 @@ export class HermesAttachmentRegistry {
       clearTimeout(entry.rebindRetry)
       // Shutdown detaches work. A retained or running Session can still be
       // working, stopping, waiting for input, or reconciling; never issue
-      // native Stop or close it as a side effect of AOS going away.
+      // native Stop or close it as a side effect of the gateway going away.
       if (
         entry.retainers.size === 0 &&
         !entry.running &&
@@ -505,7 +505,7 @@ export class HermesAttachmentRegistry {
   }
 
   /**
-   * Track whether Hermes is running a turn on this live Session. AOS only holds
+   * Track whether Hermes is running a turn on this live Session. The gateway only holds
    * a retainer while it observes a run; a turn started elsewhere (or queued
    * after a steer) must still survive the idle close.
    */
@@ -561,9 +561,9 @@ export class HermesAttachmentRegistry {
       const liveSessionId = entry.attachment.liveSessionId
       if (entry.running || !entry.saved) {
         // Drop only the local binding; the next ensure() resumes the Session.
-        // A turn silent for a whole grace window is one AOS cannot see any more
+        // A turn silent for a whole grace window is one the gateway cannot see any more
         // (typically a socket that never healed): Hermes reaps that orphan, so
-        // AOS neither re-arms forever nor closes it. An unsaved draft exists
+        // The gateway neither re-arms forever nor closes it. An unsaved draft exists
         // only in its live Session, which Hermes keeps while the socket lives;
         // closing it natively would delete the draft.
         this.invalidate(liveSessionId)

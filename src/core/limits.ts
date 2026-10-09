@@ -61,7 +61,7 @@ export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
 export const PAUSED_DEADLINE_MS = 30_000
 
 /**
- * How long a peer may take to send its first `initialize` before the proxy
+ * How long a peer may take to send its first `initialize` before the gateway
  * closes the connection; code 4408.
  */
 export const HANDSHAKE_DEADLINE_MS = 15_000

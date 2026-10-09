@@ -171,7 +171,7 @@ export function boundedNativeBytes(
 // Bounded JSON-graph walk
 // ---------------------------------------------------------------------------
 //
-// The entry-bounded walk. Only a payload AOS unwraps for public output needs it
+// The entry-bounded walk. Only a payload the gateway unwraps for public output needs it
 // (`tool-data.ts` reads a tool-search bridge envelope this way); everything a
 // native frame merely has to stay within uses `boundedNativeBytes`, which
 // refuses nothing for its width.

@@ -11,7 +11,7 @@ export type ComposedRuntime = Readonly<{
 }>
 
 /**
- * The instance the proxy serves: the composed runtime behind the one Session
+ * The instance the gateway serves: the composed runtime behind the one Session
  * coordinator its turns run through, bound by the deployment's limits. Compose
  * the runtime already wrapped by `withMcpApps`, since the coordinator runs
  * turns through `runtime.turns`. Closing stops the coordinator, then releases

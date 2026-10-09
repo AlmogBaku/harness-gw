@@ -441,7 +441,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         can_change_path: true,
       })
     }
-    // Each server as `_mcp_server_summary` reports it: one the proxy cannot
+    // Each server as `_mcp_server_summary` reports it: one the gateway cannot
     // dial, so only its name resolves a call's server
     // (`hermes_cli/web_routers/mcp.py:94`, `web_server_mcp.py:84`).
     if (url.pathname === "/api/mcp/servers")

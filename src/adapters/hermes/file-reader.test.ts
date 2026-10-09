@@ -98,7 +98,7 @@ describe("Hermes MCP App file reads", () => {
 })
 
 /**
- * The operator proxy serving MCP App files under the default settings, over
+ * The operator gateway serving MCP App files under the default settings, over
  * the Hermes runtime and one fake Hermes; closed when the test ends.
  */
 function hermesProxy() {

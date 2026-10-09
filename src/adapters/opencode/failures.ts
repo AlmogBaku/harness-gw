@@ -35,13 +35,13 @@ export function openCodeFailure(cause: unknown): PublicFailure | undefined {
   if (cause instanceof OpenCodeContentUnavailableError)
     return failureOf("unavailable", cause)
   if (cause instanceof OpenCodeInteractionPublicError) {
-    if (cause.code === "AOS_INTERACTION_NOT_FOUND")
+    if (cause.code === "HGW_INTERACTION_NOT_FOUND")
       return failureOf("gone", cause)
-    if (cause.code === "AOS_MUTATION_UNCERTAIN")
+    if (cause.code === "HGW_MUTATION_UNCERTAIN")
       return failureOf("uncertain", cause)
     if (
-      cause.code === "AOS_PROVIDER_UNAVAILABLE" ||
-      cause.code === "AOS_PROVIDER_INVALID_RESPONSE"
+      cause.code === "HGW_PROVIDER_UNAVAILABLE" ||
+      cause.code === "HGW_PROVIDER_INVALID_RESPONSE"
     )
       return failureOf("unavailable", cause)
     return failureOf("invalid_request", cause)

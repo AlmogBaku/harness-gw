@@ -699,7 +699,7 @@ describe("OpenCodeEventProjector", () => {
       events: [
         {
           kind: TurnEventKind.TurnFailed,
-          code: "AOS_PROVIDER_RUN_FAILED",
+          code: "HGW_PROVIDER_RUN_FAILED",
           message: "OpenCode could not complete this turn.",
           provider: "openai",
           model: "gpt-5",

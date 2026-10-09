@@ -7,7 +7,7 @@ import type { z } from "zod"
 import { ProxyConfigSchema, type ProxyConfig } from "./config"
 
 /**
- * The private proxy configuration file: where it is found, how it is read, and
+ * The private gateway configuration file: where it is found, how it is read, and
  * how a rejected one is reported. Operator configuration is checked rather than
  * trusted, and no error it raises ever carries an input value: the file holds
  * paths, but the same file is what points the runtime at a host and can widen
@@ -20,10 +20,10 @@ const MAXIMUM_SIZE_BYTES = 1_024 * 1_024
 /** A merge writes into these, which is where pollution would be introduced. */
 const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"])
 
-export class ProxyConfigurationError extends Error {
+export class GatewayConfigurationError extends Error {
   constructor(message: string) {
     super(message)
-    this.name = "ProxyConfigurationError"
+    this.name = "GatewayConfigurationError"
   }
 }
 
@@ -66,19 +66,19 @@ export function resolveProxyConfigPath({
   const explicitPath = trimmed(flag) ?? trimmed(getenv(PATH_VARIABLE))
   if (explicitPath !== undefined) return { path: explicitPath, explicit: true }
   if (!discover)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `No proxy configuration file: ${EXPLICIT_PATH_HINT}`
     )
   const configHome = trimmed(getenv("XDG_CONFIG_HOME"))
   if (configHome !== undefined && !isAbsolute(configHome))
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       "XDG_CONFIG_HOME must be an absolute path"
     )
   const home = trimmed(getenv("HOME"))
   const searchRoot =
     configHome ?? (home === undefined ? undefined : join(home, ".config"))
   if (searchRoot === undefined)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `No proxy configuration file: ${EXPLICIT_PATH_HINT}, or set XDG_CONFIG_HOME or HOME so the default configuration path can be resolved`
     )
   return {
@@ -125,38 +125,40 @@ async function readConfigFile(
     const code = failureCode(error)
     if (code === "ENOENT") {
       if (explicit)
-        throw new ProxyConfigurationError(`${path}: no such configuration file`)
+        throw new GatewayConfigurationError(
+          `${path}: no such configuration file`
+        )
       return undefined
     }
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file cannot be read (${code})`
     )
   }
   if (!facts.isFile())
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file must be a regular file`
     )
   if ((facts.mode & 0o022) !== 0)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file must not be group- or world-writable`
     )
   const uid = access.getuid?.()
   if (uid === undefined)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file owner cannot be checked without a process uid`
     )
   if (facts.uid !== uid && facts.uid !== 0)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file must be owned by this user or by root`
     )
   if (facts.size > MAXIMUM_SIZE_BYTES)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file is larger than the ${MAXIMUM_SIZE_BYTES} byte limit`
     )
   try {
     return await access.readFile(path, "utf8")
   } catch (error) {
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file cannot be read (${failureCode(error)})`
     )
   }
@@ -177,14 +179,14 @@ function parseConfigDocument(path: string, source: string) {
     prettyErrors: false,
   })
   if (documents.length > 1)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration file must hold a single YAML document`
     )
   const document = documents[0]
   if (document === undefined) return {}
   const problem = document.errors[0] ?? document.warnings[0]
   if (problem !== undefined)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: invalid YAML (${problem.code} at line ${sourceLine(
         source,
         problem.pos[0]
@@ -195,13 +197,13 @@ function parseConfigDocument(path: string, source: string) {
     // An alias has no legitimate use here and would share objects into the merge.
     content = document.toJS({ maxAliasCount: 0 })
   } catch {
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: YAML anchors and aliases are not allowed in configuration`
     )
   }
   if (content === null || content === undefined) return {}
   if (!isRecord(content))
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${path}: the configuration document must be a mapping`
     )
   assertSafeKeys(path, content)
@@ -216,7 +218,7 @@ function assertSafeKeys(path: string, value: unknown) {
   if (!isRecord(value)) return
   for (const [key, child] of Object.entries(value)) {
     if (UNSAFE_KEYS.has(key))
-      throw new ProxyConfigurationError(
+      throw new GatewayConfigurationError(
         `${path}: the configuration key "${key}" is not allowed`
       )
     assertSafeKeys(path, child)
@@ -501,11 +503,11 @@ function overrideValue(
   if (type === "string") return raw
   if (type === "boolean") {
     if (raw === "true" || raw === "false") return raw === "true"
-    throw new ProxyConfigurationError(`${variable} must be true or false`)
+    throw new GatewayConfigurationError(`${variable} must be true or false`)
   }
   // The value may be anything an operator exported, so only the name is quoted.
   if (!/^\d+$/u.test(raw))
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${variable} must be a whole number of at least one digit`
     )
   return Number(raw)
@@ -521,7 +523,7 @@ function assertOverrideApplies(
   if (override.appliesWhen === "guest") {
     // A stray variable must never open a second listener.
     if (!guestConfigured)
-      throw new ProxyConfigurationError(
+      throw new GatewayConfigurationError(
         `${variable} applies only when the configuration file has a guest block`
       )
     return
@@ -530,7 +532,7 @@ function assertOverrideApplies(
   // the operator at the wrong fix.
   if (runtimeKind === undefined) return
   if (override.appliesWhen !== runtimeKind)
-    throw new ProxyConfigurationError(
+    throw new GatewayConfigurationError(
       `${variable} applies only to a ${override.appliesWhen} runtime, and the configured runtime kind is ${runtimeKind}`
     )
 }
@@ -607,7 +609,7 @@ function invalidConfiguration(
     const variable = sources.get(path)
     return `  ${path}: ${message}${variable === undefined ? "" : ` (set by ${variable})`}`
   })
-  return new ProxyConfigurationError(
+  return new GatewayConfigurationError(
     `Invalid proxy configuration in ${location}:\n${[...new Set(reported)].join("\n")}`
   )
 }

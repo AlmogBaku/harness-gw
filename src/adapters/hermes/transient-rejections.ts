@@ -1,6 +1,6 @@
 /**
  * Refusals Hermes lifts by itself within moments. Each one is issued before the
- * refused call changes anything, so repeating the same call is safe; AOS
+ * refused call changes anything, so repeating the same call is safe; the gateway
  * retries it on a short bounded schedule and reports nothing unless the refusal
  * outlasts that schedule, when the caller treats it as an outage.
  */

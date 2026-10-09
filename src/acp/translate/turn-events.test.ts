@@ -166,8 +166,8 @@ describe("translateTurnEvent lifecycle", () => {
   })
 
   it.each([
-    ["AOS_TOOL_FAILED", HGW_STOP_REASONS.error],
-    ["AOS_CONNECTION_INTERRUPTED", HGW_STOP_REASONS.uncertain],
+    ["HGW_TOOL_FAILED", HGW_STOP_REASONS.error],
+    ["HGW_CONNECTION_INTERRUPTED", HGW_STOP_REASONS.uncertain],
   ])("maps the %s run error to %s", (code, stopReason) => {
     const { state, outbound } = translate([
       { kind: TurnEventKind.TurnFailed, message: "provider refused", code },
@@ -191,7 +191,7 @@ describe("translateTurnEvent lifecycle", () => {
       [
         {
           kind: TurnEventKind.TurnFailed,
-          code: "AOS_INTERACTION_LOST",
+          code: "HGW_INTERACTION_LOST",
           message: "question lost",
           awaitingStop: true,
         },
@@ -210,7 +210,7 @@ describe("translateTurnEvent lifecycle", () => {
       sequence: 7,
       turnId: "run-1",
       at: AT,
-      code: "AOS_INTERACTION_LOST",
+      code: "HGW_INTERACTION_LOST",
       message: "question lost",
     })
     expect(state).toBe(streaming)
@@ -742,7 +742,7 @@ describe("provider facts", () => {
     const update = lastUpdate([
       {
         kind: TurnEventKind.TurnFailed,
-        code: "AOS_PROVIDER_ERROR",
+        code: "HGW_PROVIDER_ERROR",
         message: "overloaded",
         provider: "anthropic",
         model: "claude",

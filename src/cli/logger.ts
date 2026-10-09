@@ -4,10 +4,10 @@ import type { ProxyLogLevel } from "../config"
 import { redactForLog, redactText, type CredentialValues } from "../redaction"
 
 /**
- * The proxy's structured log: one JSON line per record at `level`, on stdout
+ * The gateway's structured log: one JSON line per record at `level`, on stdout
  * unless a destination is given. Every record and every logger's bindings, a
  * child's included, pass `redactForLog`, and every finished line loses its URL
- * credentials and every credential value the proxy has read, so the message
+ * credentials and every credential value the gateway has read, so the message
  * and the error pino copies into it are covered as well.
  */
 export function createProxyLogger({

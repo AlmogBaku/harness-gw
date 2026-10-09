@@ -149,7 +149,7 @@ describe("ACP runtime interactions", () => {
     const shown = elicitation()
     emit(shown.pending)
     const unreadable = elicitation({ requestId: "interrupt-3" })
-    // The proxy carries the questions only here, and this contract rejects an
+    // The gateway carries the questions only here, and this contract rejects an
     // empty header, so there is nothing the composer could render.
     unreadable.pending.request._meta = {
       hgw: { requestId: "interrupt-3", questions: [{ header: "" }] },

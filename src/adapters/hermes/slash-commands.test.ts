@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest"
 import { TurnEventKind } from "../../core/events"
-import type { ServerAttachmentStage } from "../../core/runtime"
+import { providerSessionId, sessionId } from "../../core/ids"
+import type { ServerAttachmentStage, SessionScope } from "../../core/runtime"
 import { HermesServerAdapter } from "./adapter"
 import { nativeSlashCommands } from "./slash-commands"
 import { HermesNativeRuntime } from "./run-native"
@@ -11,10 +12,10 @@ import {
 } from "./gateway"
 import { rpcRouter } from "./test-utils/rpc-router"
 
-const scope = {
+const scope: SessionScope = {
   agentId: "writer",
-  providerSessionId: "stored",
-  sessionId: "stored",
+  providerSessionId: providerSessionId("stored"),
+  sessionId: sessionId("stored"),
 }
 
 /**
@@ -384,7 +385,7 @@ it("rejects recognized commands with attachments before any write and sends unkn
   for await (const event of refused.events) events.push(event)
   expect(events.at(-1)).toMatchObject({
     kind: TurnEventKind.TurnFailed,
-    code: "AOS_COMMAND_WITH_ATTACHMENTS",
+    code: "HGW_COMMAND_WITH_ATTACHMENTS",
   })
   await adapter.turns.start(
     scope,

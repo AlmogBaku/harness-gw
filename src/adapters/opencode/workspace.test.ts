@@ -163,7 +163,8 @@ describe("OpenCode workspace operations", () => {
           cursor: {},
         }),
       }),
-      createInvitedSession: async (agentId, title) => {
+      // @ts-expect-error The operations take no create callback; one offered anyway must be ignored.
+      createInvitedSession: async (agentId: string, title: string) => {
         created = agentId === "research" && title === "aos-invite:guest-2"
       },
     })

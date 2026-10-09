@@ -32,7 +32,7 @@ import {
 import type { StagedAttachment } from "./workspace"
 
 /**
- * The normalized proxy's REST surface, which carries bytes and deployment
+ * The normalized gateway's REST surface, which carries bytes and deployment
  * metadata only: attachments, artifacts, MCP App views, speech, transcription,
  * and the runtime descriptor. Every conversation, Session, and Agent concern travels over ACP.
  */
@@ -242,7 +242,7 @@ export class HgwRemoteClient {
 
   /**
    * The App view a flagged tool call renders, or the viewer a published
-   * Artifact opens in; the proxy resolves its resource. A published Artifact
+   * Artifact opens in; the gateway resolves its resource. A published Artifact
    * the provider has since pruned reads as `artifact-missing`, as its bytes do.
    */
   async openMcpApp(

@@ -15,7 +15,7 @@ import { createMcpToolNames, mcpToolCatalog } from "../../mcp-apps/tool-names"
 import { OPENCODE_MCP_TOOL_NAMES } from "./tool-names"
 
 /**
- * MCP Apps for OpenCode, which keeps no UI resources of its own: the proxy
+ * MCP Apps for OpenCode, which keeps no UI resources of its own: the gateway
  * reaches the project's remote MCP servers itself, and only those it can reach
  * without headers or OAuth, or with headers the operator configured. OpenCode
  * answers one project's configuration, so every Agent reads the same servers.

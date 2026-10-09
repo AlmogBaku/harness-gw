@@ -92,7 +92,7 @@ function harness(options: HarnessOptions = {}) {
     },
   } as unknown as RuntimeInstance
 
-  // The real cache, so every read the gate consults is one the proxy could have
+  // The real cache, so every read the gate consults is one the gateway could have
   // recorded: a provider report through `rememberList`, an acknowledgement
   // through `markRead`.
   const sessionRows = createSessionRows({ now: clock.now })
@@ -110,7 +110,7 @@ function harness(options: HarnessOptions = {}) {
     }),
   }
 
-  const send = vi.fn(
+  const send = vi.fn<PushSender["send"]>(
     options.send ?? (async () => ({ result: "sent" }) as PushSendResult)
   )
   const sender: PushSender = { send }

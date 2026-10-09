@@ -16,7 +16,7 @@ import { translateTurnEvent } from "./turn-events"
 /**
  * One turn, watched live and then replayed from the transcript, must reach the
  * browser as the same ordered stream: the browser projects a Session through one
- * code path, so a reload can only show what the run showed if the proxy says it
+ * code path, so a reload can only show what the run showed if the gateway says it
  * the same way.
  */
 
@@ -144,7 +144,7 @@ const storedHistory: SessionHistoryResponse = {
           result: { written: 1 },
         },
         { type: "text", text: "Wrote it." },
-        { type: "data", name: "aos.artifact", data: ARTIFACT },
+        { type: "data", name: "hgw.artifact", data: ARTIFACT },
       ],
       createdAt: STARTED_AT,
       completedAt: FINISHED_AT,
@@ -224,7 +224,7 @@ function folded(previous: Item | undefined, item: Item) {
   return {
     ...previous.value,
     content: {
-      ...item.value.content,
+      ...(item.value.content as object),
       text: textOf(previous.value) + textOf(item.value),
     },
   }

@@ -701,7 +701,7 @@ export function projectHermesToolOutcome(
     result: publicToolResult(canonicalName, result, isError),
     parts: media.map(({ descriptor }) => ({
       type: "data" as const,
-      name: "aos.artifact",
+      name: "hgw.artifact",
       data: descriptor,
     })),
     trustedMedia: media.map(({ reference }) => reference),

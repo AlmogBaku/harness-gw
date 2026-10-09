@@ -116,7 +116,7 @@ export type OpenClawBoundReplies = Readonly<{
 export class OpenClawTurnPublicError extends Error {
   constructor(
     readonly code:
-      "AOS_PROVIDER_UNAVAILABLE" | "AOS_SEND_UNCERTAIN" | "AOS_STOP_UNCERTAIN",
+      "HGW_PROVIDER_UNAVAILABLE" | "HGW_SEND_UNCERTAIN" | "HGW_STOP_UNCERTAIN",
     message: string,
     options?: ErrorOptions
   ) {
@@ -401,15 +401,15 @@ const NATIVE_FAILURES: Readonly<
   Record<string, { code: string; message: string }>
 > = {
   timeout: {
-    code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+    code: "HGW_PROVIDER_RETRYABLE_FAILURE",
     message: "OpenClaw's model provider timed out on this turn.",
   },
   rate_limit: {
-    code: "AOS_PROVIDER_RETRYABLE_FAILURE",
+    code: "HGW_PROVIDER_RETRYABLE_FAILURE",
     message: "OpenClaw's model provider is rate limiting this turn.",
   },
   context_length: {
-    code: "AOS_PROVIDER_RUN_FAILED",
+    code: "HGW_PROVIDER_RUN_FAILED",
     message: "This conversation no longer fits the model's context window.",
   },
 }
@@ -725,7 +725,7 @@ function mayHaveLanded(error: unknown, sent: boolean) {
 
 function providerUnavailable(cause: unknown) {
   return new OpenClawTurnPublicError(
-    "AOS_PROVIDER_UNAVAILABLE",
+    "HGW_PROVIDER_UNAVAILABLE",
     "OpenClaw is temporarily unavailable.",
     { cause }
   )
@@ -924,7 +924,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         if (holder.active)
           this.#fail(
             holder.active,
-            "AOS_RESET_REQUIRED",
+            "HGW_RESET_REQUIRED",
             "OpenClaw produced more live output than AOS can safely buffer."
           )
       })
@@ -996,7 +996,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         admitted = admittedRun(answer)
         if (admitted?.runId !== active.nativeRunId)
           throw new OpenClawTurnPublicError(
-            "AOS_SEND_UNCERTAIN",
+            "HGW_SEND_UNCERTAIN",
             "OpenClaw may have accepted this turn."
           )
       } catch (error) {
@@ -1004,7 +1004,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           active.uncertain = true
           this.#markUncertain(
             active,
-            "AOS_SEND_UNCERTAIN",
+            "HGW_SEND_UNCERTAIN",
             "OpenClaw may have accepted this turn."
           )
           return this.#handle(active)
@@ -1058,7 +1058,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       existing.queue = new EventQueue(() =>
         this.#fail(
           existing,
-          "AOS_RESET_REQUIRED",
+          "HGW_RESET_REQUIRED",
           "OpenClaw produced more live output than AOS can safely buffer."
         )
       )
@@ -1108,7 +1108,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (!nativeRunId)
         this.#fail(
           active,
-          "AOS_RESET_REQUIRED",
+          "HGW_RESET_REQUIRED",
           "OpenClaw could not authoritatively bind this recovered run."
         )
       else this.#applyHistory(active, baseline)
@@ -1127,7 +1127,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   /**
    * Finds the Session's unique active native run: a wait when a request is
-   * pending on it, and otherwise a running run AOS did not bind. Only bound
+   * pending on it, and otherwise a running run the gateway did not bind. Only bound
    * replies can rule out a wait, so an engine without them discovers nothing.
    */
   async discover(scope: SessionScope, turnId: string) {
@@ -1217,7 +1217,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           },
           approvalReplay.replay
         )
-        // A run nothing waits on is running; one AOS bound is its own.
+        // A run nothing waits on is running; one the gateway bound is its own.
         const adopting = !discovered && !this.#admittedRun(scope, nativeRunId)
         if (adopting)
           await this.#mcpToolNames?.load(scope.agentId, history.sessionKey)
@@ -1297,7 +1297,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   }
 
   /**
-   * Announces the Session's native runs AOS did not bind: each once as its
+   * Announces the Session's native runs the gateway did not bind: each once as its
    * events arrive, and any found running when the subscription is set up or
    * reconciled after a reconnect. The watch is a link: a failed subscription
    * redials on backoff, and one that is gone or refused stays down until the
@@ -1425,7 +1425,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   }
 
   /**
-   * Makes `active` the Session's run and remembers its native run as AOS's.
+   * Makes `active` the Session's run and remembers its native run as the gateway's.
    * Its settlement frees the Session's MCP names; the next turn loads fresh.
    */
   #register(key: string, active: ActiveRun) {
@@ -1453,7 +1453,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   }
 
   /**
-   * Binds and registers a fresh segment for a native run AOS did not just
+   * Binds and registers a fresh segment for a native run the gateway did not just
    * send. `shown` is in-flight progress an earlier segment of the turn already
    * published, which this one continues from instead of repeating.
    */
@@ -1474,7 +1474,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (holder.active)
         this.#fail(
           holder.active,
-          "AOS_RESET_REQUIRED",
+          "HGW_RESET_REQUIRED",
           "OpenClaw produced more live output than AOS can safely buffer."
         )
     })
@@ -1647,7 +1647,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     } catch {
       this.#fail(
         active,
-        "AOS_INTERACTION_FAILED",
+        "HGW_INTERACTION_FAILED",
         "OpenClaw could not apply this interaction response."
       )
       return
@@ -1656,13 +1656,13 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (result.status === "uncertain")
       return this.#markUncertain(
         active,
-        "AOS_INTERACTION_UNCERTAIN",
+        "HGW_INTERACTION_UNCERTAIN",
         "OpenClaw may have accepted this interaction response."
       )
     if (result.status === "expired")
       return this.#fail(
         active,
-        "AOS_INTERACTION_EXPIRED",
+        "HGW_INTERACTION_EXPIRED",
         "This OpenClaw interaction is no longer pending."
       )
     await this.#reconcile(active).catch(() => this.#markStreamLost(active))
@@ -1753,7 +1753,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     } catch (error) {
       if (mayHaveLanded(error, sent))
         throw new OpenClawTurnPublicError(
-          "AOS_STOP_UNCERTAIN",
+          "HGW_STOP_UNCERTAIN",
           "OpenClaw may have accepted the Stop request.",
           { cause: error }
         )
@@ -1833,7 +1833,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       const failure = (typeof payload.errorKind === "string" &&
         Object.hasOwn(NATIVE_FAILURES, payload.errorKind) &&
         NATIVE_FAILURES[payload.errorKind]) || {
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
         message: "OpenClaw could not complete this turn.",
       }
       const detail = record(payload.errorDetail)
@@ -1914,7 +1914,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (encoder.encode(active.reasoning + delta).byteLength > MAX_TEXT_BYTES) {
       this.#fail(
         active,
-        "AOS_RESET_REQUIRED",
+        "HGW_RESET_REQUIRED",
         "OpenClaw reasoning exceeded the safe stream boundary."
       )
       return
@@ -1933,7 +1933,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (encoder.encode(active.text + delta).byteLength > MAX_TEXT_BYTES) {
       this.#fail(
         active,
-        "AOS_RESET_REQUIRED",
+        "HGW_RESET_REQUIRED",
         "OpenClaw text exceeded the safe stream boundary."
       )
       return
@@ -2175,7 +2175,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     }
     this.#fail(
       active,
-      "AOS_RESET_REQUIRED",
+      "HGW_RESET_REQUIRED",
       "OpenClaw history could not authoritatively reconcile this turn."
     )
   }
@@ -2184,7 +2184,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (active.terminal) return "idle"
     if (active.uncertain)
       throw new OpenClawTurnPublicError(
-        "AOS_STOP_UNCERTAIN",
+        "HGW_STOP_UNCERTAIN",
         "OpenClaw may have accepted the Stop request."
       )
     if (active.stopping) {
@@ -2234,7 +2234,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (mayHaveLanded(error, sent)) {
         active.uncertain = true
         throw new OpenClawTurnPublicError(
-          "AOS_STOP_UNCERTAIN",
+          "HGW_STOP_UNCERTAIN",
           "OpenClaw may have accepted the Stop request.",
           { cause: error }
         )
@@ -2258,7 +2258,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (active.terminal || active.uncertain) return
     this.#markUncertain(
       active,
-      "AOS_SEND_UNCERTAIN",
+      "HGW_SEND_UNCERTAIN",
       "OpenClaw may still be running this turn."
     )
   }

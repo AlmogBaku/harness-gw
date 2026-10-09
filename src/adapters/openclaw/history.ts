@@ -107,7 +107,7 @@ function mcpTool(details: unknown) {
 }
 
 /**
- * The canonical name of an AOS or MCP tool call; OpenClaw's native tools are
+ * The canonical name of a gateway or MCP tool call; OpenClaw's native tools are
  * not history.
  */
 function historyToolName(
@@ -146,7 +146,7 @@ function toolOutcomes(rows: readonly unknown[]) {
 }
 
 function artifactPart(descriptor: OpenClawArtifactDescriptor) {
-  return { type: "data" as const, name: "aos.artifact", data: descriptor }
+  return { type: "data" as const, name: "hgw.artifact", data: descriptor }
 }
 
 function toolCallParts(

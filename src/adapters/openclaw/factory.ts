@@ -119,7 +119,7 @@ async function readDeviceIdentity(path: string) {
   }
 }
 
-async function readCredentials(
+export async function readOpenClawCredentials(
   config: OpenClawRuntimeConfig,
   credentials: CredentialValues
 ) {
@@ -265,7 +265,7 @@ export async function createOpenClawRuntime(
   limits: RuntimeLimits,
   dependencies: OpenClawRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
-  const credentials = () => readCredentials(config, dependencies.credentials)
+  const credentials = () => readOpenClawCredentials(config, dependencies.credentials)
   // Read once here so a bad identity fails startup; every dial reads again.
   await credentials()
   const { logger } = dependencies

@@ -217,7 +217,9 @@ describe("Bun proxy server lifecycle", () => {
       open: vi.fn(() => acpSocket),
     }
     let served: Record<string, unknown> | undefined
-    const upgrade = vi.fn(() => true)
+    const upgrade = vi.fn<
+      (request: Request, options: { data: unknown }) => boolean
+    >(() => true)
     const serve = vi.fn((options: Record<string, unknown>) => {
       served = options
       return { stop: vi.fn() }

@@ -8,6 +8,7 @@ import {
   toolRow,
   userRow,
 } from "./test-utils/history-rows"
+import { jsonObject } from "./test-utils/json-object"
 
 describe("server-side Hermes history projection", () => {
   it("replays a failed command with its exit code and hint", () => {
@@ -90,24 +91,22 @@ describe("server-side Hermes history projection", () => {
     // The call's response and the one after it, which still trusts its media.
     expect(messages).toHaveLength(2)
     const artifact = messages[0]?.content.find(
-      (part) => part.type === "data" && part.name === "aos.artifact"
+      (part) => part.type === "data" && part.name === "hgw.artifact"
     )
     expect(artifact).toMatchObject({
       type: "data",
-      name: "aos.artifact",
+      name: "hgw.artifact",
       data: {
         filename: "quick-brief.mp3",
         mimeType: "audio/mpeg",
       },
     })
-    expect(
-      artifact?.type === "data" ? artifact.data.source : undefined
-    ).toEqual({
+    const artifactData =
+      artifact?.type === "data" ? jsonObject(artifact.data) : undefined
+    expect(artifactData?.source).toEqual({
       type: "provider",
       reference:
-        artifact?.type === "data" && typeof artifact.data.id === "string"
-          ? artifact.data.id
-          : undefined,
+        typeof artifactData?.id === "string" ? artifactData.id : undefined,
     })
     expect(messages[1]?.content).toEqual([
       { type: "text", text: "Your brief is ready." },
@@ -128,7 +127,7 @@ describe("server-side Hermes history projection", () => {
     expect(messages).toHaveLength(1)
     expect(messages[0]?.content).toMatchObject([
       { type: "text", text: "Draft:" },
-      { type: "data", name: "aos.artifact", data: { filename: "q3.pdf" } },
+      { type: "data", name: "hgw.artifact", data: { filename: "q3.pdf" } },
       { type: "text", text: "Final:" },
     ])
     expect(JSON.stringify(messages)).not.toContain("/home/alice")
@@ -201,7 +200,7 @@ describe("server-side Hermes history projection", () => {
           { type: "text", text: "do u see it?" },
           {
             type: "data",
-            name: "aos.artifact",
+            name: "hgw.artifact",
             data: {
               id: expect.stringMatching(/^hermes-media-[a-f0-9]{32}$/u),
               filename: "upload_20260920_024035_1.png",
@@ -245,14 +244,16 @@ describe("server-side Hermes history projection", () => {
     ])
     const serialized = JSON.stringify(messages)
     expect(serialized).not.toContain("@image:")
-    expect(serialized).not.toContain("aos.artifact")
+    expect(serialized).not.toContain("hgw.artifact")
   })
 
   const tagged = (displayKind: string, content = "Synthetic payload") =>
     userRow("x", content, { displayKind })
   const untagged = (content: string) => userRow("x", content)
+  /** A row class's name, the native row, and the message ids it projects. */
+  type RowCase = [name: string, row: unknown, ids: string[]]
 
-  it.each([
+  it.each<RowCase>([
     // Shown, and the reply after it is its own turn's.
     ["a prompt", untagged("And the appendix"), ["u1", "u1-1", "x", "x-1"]],
     [
@@ -283,7 +284,11 @@ describe("server-side Hermes history projection", () => {
       "async_delegation_complete",
       "internal_notification",
       "hidden",
-    ].map((kind) => [`${kind} row`, tagged(kind), ["u1", "u1-1", "x-1^"]]),
+    ].map((kind): RowCase => [
+      `${kind} row`,
+      tagged(kind),
+      ["u1", "u1-1", "x-1^"],
+    ]),
     ...[
       "[Continuing toward your standing goal]\nGoal: tidy the notes",
       "[/loop wakeup #2, every 10m]\nRecurring task: check the build",
@@ -291,8 +296,8 @@ describe("server-side Hermes history projection", () => {
       '[IMPORTANT: Background process proc_1 matched watch pattern "ERR".\nCommand: make]',
       "[System note: Your previous turn was interrupted mid-run. Resume it.]",
       "[Background process proc_1 heartbeat #3 — still running after 5m]",
-    ].map((text) => [
-      text.split("\n")[0],
+    ].map((text): RowCase => [
+      text.split("\n")[0]!,
       untagged(text),
       ["u1", "u1-1", "x-1^"],
     ]),
@@ -303,16 +308,14 @@ describe("server-side Hermes history projection", () => {
       "[Your active task list was preserved across context compression]\n- [>] Draft",
       "[Skills pruned during compression — reload before acting on these tasks]",
       "Continue from the compressed conversation context above. No human turn.",
-    ].map((text) => [
-      text.split("\n")[0],
+    ].map((text): RowCase => [
+      text.split("\n")[0]!,
       untagged(text),
       ["u1", "u1-1", "u1-2"],
     ]),
-    ...["model_switch", "personality_switch", "unknown_kind"].map((kind) => [
-      `${kind} row`,
-      tagged(kind),
-      ["u1", "u1-1", "u1-2"],
-    ]),
+    ...["model_switch", "personality_switch", "unknown_kind"].map(
+      (kind): RowCase => [`${kind} row`, tagged(kind), ["u1", "u1-1", "u1-2"]]
+    ),
     [
       "a hidden compaction handoff",
       { ...tagged("hidden"), _compressed_summary: true },
@@ -391,7 +394,7 @@ describe("server-side Hermes history projection", () => {
               ? [
                   {
                     type: "data",
-                    name: "aos-notice",
+                    name: "hgw-notice",
                     data: { severity: "info", ...notice },
                   },
                 ]
@@ -416,7 +419,7 @@ describe("server-side Hermes history projection", () => {
         id: "x-1-thought",
         opensTurn: true,
         content: [
-          expect.objectContaining({ name: "aos-notice" }),
+          expect.objectContaining({ name: "hgw-notice" }),
           { type: "reasoning", text: "Check it" },
         ],
       }),

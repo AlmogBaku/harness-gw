@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { providerSessionId, sessionId } from "../../core/ids"
+import type { SessionScope } from "../../core/runtime"
 import { OpenClawServerAdapter } from "./adapter"
 import {
   OpenClawClientRequestError,
@@ -9,16 +11,17 @@ import {
   AGENT_WORKSPACE,
   RESEARCH_AGENTS,
   idleTurns,
+  storedMessage,
   stubOpenClawClient,
 } from "./test-utils/fake-openclaw"
 
 const sessionKey = "agent:research:main"
 const otherKey = "agent:research:other"
 const viewId = "mcp-app-0b6f3c1e-2f0a-4c4e-9d55-0d3c2a1b9e77"
-const scope = {
+const scope: SessionScope = {
   agentId: "research",
-  providerSessionId: sessionKey,
-  sessionId: "t1",
+  providerSessionId: providerSessionId(sessionKey),
+  sessionId: sessionId("t1"),
 }
 const toolResult = { content: [{ type: "text", text: "drawn" }] }
 
@@ -105,7 +108,7 @@ describe("OpenClaw MCP Apps", () => {
   it("names the stored call canonically and describes it as an app", async () => {
     const { adapter, mcpApps } = gateway()
     const page = await adapter.history("research", sessionKey, 200, 0)
-    expect(page.messages[0]!.content[0]).toMatchObject({
+    expect(storedMessage(page, 0).content[0]).toMatchObject({
       type: "tool-call",
       toolCallId: "call-1",
       toolName: "mcp__excalidraw__create_view",
@@ -173,7 +176,7 @@ describe("OpenClaw MCP Apps", () => {
 
   it("refuses a tool call id from another Session without asking the gateway", async () => {
     const { adapter, mcpApps, request } = gateway()
-    const other = { ...scope, providerSessionId: otherKey }
+    const other = { ...scope, providerSessionId: providerSessionId(otherKey) }
 
     await expect(mcpApps.open(other, "call-1")).rejects.toSatisfy(
       isNotFound(adapter)
@@ -258,7 +261,7 @@ describe("the OpenClaw MCP tool-call lookup", () => {
     ["an id the Session lacks", scope, "call-unknown", [presentArtifact]],
     [
       "another Session's call",
-      { ...scope, providerSessionId: otherKey },
+      { ...scope, providerSessionId: providerSessionId(otherKey) },
       "call-2",
       [presentArtifact],
     ],

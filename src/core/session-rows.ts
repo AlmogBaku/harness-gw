@@ -11,7 +11,7 @@ import type { Session } from "../../protocol"
  * boolean cannot, because it says nothing about when. Only `markRead` knows that
  * moment: a provider reports read as a boolean with no time behind it, so a list
  * page never writes this stamp and can only clear it by reporting the Session
- * unread again. It is proxy-local bookkeeping: no read reports it and nothing
+ * unread again. It is gateway-local bookkeeping: no read reports it and nothing
  * projects it to a browser.
  *
  * The cost is deliberate. A Session read on another device keeps no stamp and
@@ -24,7 +24,7 @@ export type SessionRow = Session & { unread?: boolean; readAt?: number }
 export type SessionRowListener = (row: SessionRow) => void
 
 /**
- * Proxy-owned cache of Session rows for one deployment. It is the single
+ * Gateway-owned cache of Session rows for one deployment. It is the single
  * source the ACP layer projects `session_info_update` from, and the place the
  * read-state write guard lives: after `markRead`, list rows that still report
  * unread for that Session are ignored for `READ_GUARD_MS`.

@@ -106,7 +106,7 @@ export function createAcpWorkspaceClient({
     try {
       rest.adoptSessionOwnership(sessionId, agentId)
     } catch {
-      // The proxy's row is authoritative; REST ownership is only a byte route.
+      // The gateway's row is authoritative; REST ownership is only a byte route.
     }
   }
 

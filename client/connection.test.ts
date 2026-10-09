@@ -618,7 +618,7 @@ describe("ACP connection", () => {
         state: "idle",
         stopReason: HGW_STOP_REASONS.error,
       },
-      { sequence: 7, turnId: "run-1", code: "AOS_SEND_FAILED" }
+      { sequence: 7, turnId: "run-1", code: "HGW_SEND_FAILED" }
     )
 
     await vi.waitFor(() => expect(seen).toHaveLength(1))
@@ -950,7 +950,7 @@ describe("ACP connection", () => {
         [HGW_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
       },
     })
-    // The proxy forgot this connection's presence when the transport dropped, so
+    // The gateway forgot this connection's presence when the transport dropped, so
     // the report goes out again ahead of the rejoin it would otherwise
     // contradict. The wire order is the browser's to keep; the order the agent
     // runs its handlers in is not.

@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest"
 import { OPERATOR_PRINCIPAL } from "../core/principal"
 import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
-import { createAcpService } from "./service"
+import type { SocketRefusal } from "../server"
+import { createAcpService, type AcpUpgrade } from "./service"
 import type { AcpConnectionContext } from "./types"
 
 const ORIGIN = "https://aos.example.test"
@@ -34,6 +35,15 @@ const silentLogger = {
   child: () => silentLogger,
 } as unknown as AcpConnectionContext["logger"]
 
+type OperatorContext = Extract<AcpConnectionContext, { role: "operator" }>
+
+/** The upgrade a test expects authorized; a refusal or none fails it. */
+function accepted(upgrade: AcpUpgrade | SocketRefusal | undefined): AcpUpgrade {
+  if (!upgrade || "refused" in upgrade)
+    throw new Error("The upgrade was not authorized")
+  return upgrade
+}
+
 function connectionContext(
   connectionId: string,
   principalId: string
@@ -44,8 +54,8 @@ function connectionContext(
     role: "operator",
     publicError: unclassified,
     catalog: {} as AcpConnectionContext["catalog"],
-    readState: {} as AcpConnectionContext["readState"],
-    activityFeed: {} as AcpConnectionContext["activityFeed"],
+    readState: {} as OperatorContext["readState"],
+    activityFeed: {} as OperatorContext["activityFeed"],
     translators: {} as AcpConnectionContext["translators"],
     channels: {} as AcpConnectionContext["channels"],
     logger: silentLogger,
@@ -55,7 +65,7 @@ function connectionContext(
 
 /**
  * A minimal test agent that handles initialize and signals handshake-complete
- * via the context callback, mirroring what `createAosAcpAgent` does.
+ * via the context callback, mirroring what `createHgwAcpAgent` does.
  */
 function testAgent(context: AcpConnectionContext) {
   return agent({ name: "spec" })
@@ -116,15 +126,17 @@ describe("ACP WebSocket service", () => {
   it("mints a connection id for each upgrade it authorizes", async () => {
     const { acp } = service()
 
-    const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
     )
 
-    expect(upgrade?.principalId).toBe("operator")
-    expect(upgrade?.role).toBe("operator")
-    expect(upgrade?.connectionId).toEqual(expect.any(String))
-    expect(upgrade?.headers).toEqual({
-      "Acp-Connection-Id": upgrade?.connectionId,
+    expect(upgrade.principalId).toBe("operator")
+    expect(upgrade.role).toBe("operator")
+    expect(upgrade.connectionId).toEqual(expect.any(String))
+    expect(upgrade.headers).toEqual({
+      "Acp-Connection-Id": upgrade.connectionId,
     })
   })
 
@@ -157,12 +169,14 @@ describe("ACP WebSocket service", () => {
 
   it("answers the first initialize frame through the prepared connection", async () => {
     const { acp, contexts } = service()
-    const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
     )
     const transport = peer()
 
-    const socket = acp.open(upgrade!, transport.peer)
+    const socket = acp.open(upgrade, transport.peer)
     const initialized = transport.nextFrame()
     socket.receive(initializeFrame(7))
     await initialized
@@ -178,7 +192,7 @@ describe("ACP WebSocket service", () => {
     // The service sets clock and handshakeComplete on the context; check
     // identity fields without asserting on those injected properties.
     expect(contexts[0]).toMatchObject(
-      connectionContext(upgrade!.connectionId, "operator")
+      connectionContext(upgrade.connectionId, "operator")
     )
     expect(transport.closed).toEqual([])
     expect(acp.sockets()).toBe(1)
@@ -200,14 +214,16 @@ describe("ACP WebSocket service", () => {
         logger: logs.logger.child({ connectionId }),
       }),
     })
-    const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
     )
     // Bun answers -1 for a frame it queued and 0 for one it dropped.
     let sent = 0
     let open = true
     let written: (() => void) | undefined
-    const socket = acp.open(upgrade!, {
+    const socket = acp.open(upgrade, {
       send() {
         written?.()
         return sent
@@ -232,7 +248,7 @@ describe("ACP WebSocket service", () => {
     open = false
     await exchange(3, "spec/unknown")
 
-    const connectionId = upgrade!.connectionId
+    const connectionId = upgrade.connectionId
     expect(
       logs.records().filter(({ message }) => message.startsWith("acp.send."))
     ).toEqual([
@@ -258,18 +274,20 @@ describe("ACP WebSocket service", () => {
       },
       connection: connectionContext,
     })
-    const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}/api/v1/acp`, { headers: { origin: ORIGIN } })
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}/api/v1/acp`, { headers: { origin: ORIGIN } })
+      )
     )
     const transport = peer()
 
-    const socket = acp.open(upgrade!, transport.peer)
+    const socket = acp.open(upgrade, transport.peer)
     const initialized = transport.nextFrame()
     socket.receive(initializeFrame(1))
     await initialized
 
     expect(contexts[0]).toMatchObject(
-      connectionContext(upgrade!.connectionId, "invite-42")
+      connectionContext(upgrade.connectionId, "invite-42")
     )
     socket.close()
   })
@@ -277,11 +295,13 @@ describe("ACP WebSocket service", () => {
   it("closes the peer with 4408 when initialize is not received within 15 s", async () => {
     const clock = useFakeClock()
     const { acp } = service()
-    const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
     )
     const transport = peer()
-    acp.open(upgrade!, transport.peer)
+    acp.open(upgrade, transport.peer)
 
     // No initialize sent — advance past the 15 s deadline.
     await clock.advance(15_000)
@@ -294,11 +314,13 @@ describe("ACP WebSocket service", () => {
   it("keeps the connection when initialize arrives before the 15 s deadline", async () => {
     const clock = useFakeClock()
     const { acp } = service()
-    const upgrade = await acp.authorizeUpgrade(
-      new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
     )
     const transport = peer()
-    const socket = acp.open(upgrade!, transport.peer)
+    const socket = acp.open(upgrade, transport.peer)
 
     // Advance to just before the deadline, then send initialize.
     await clock.advance(14_000)

@@ -57,7 +57,10 @@ function harness(
   const rows = createSessionRows()
   const catalog = createCatalog({
     runtime,
-    coordinator: { state: () => options.state ?? "idle" },
+    coordinator: {
+      state: () => options.state ?? "idle",
+      endIfGone: () => false,
+    },
     rows,
     logger: captureLogs().logger,
   })
@@ -91,7 +94,7 @@ describe("createCatalog", () => {
     const clock = useFakeClock()
     const { catalog } = harness({ held: row({ title: "Renamed elsewhere" }) })
     await catalog.list(undefined, 0)
-    const titles: string[] = []
+    const titles: (string | undefined)[] = []
 
     catalog.subscribe(
       {

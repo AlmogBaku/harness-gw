@@ -914,7 +914,7 @@ class Facade implements OpenCodeClient {
         fetch: hearing(this.#fetch, (response) => {
           if (response.ok) answered(true)
         }),
-        // AOS reconnects, from a durable position where the stream has one.
+        // The gateway reconnects, from a durable position where the stream has one.
         sseMaxRetryAttempts: 1,
         onSseError: (error) => {
           streamError = error

@@ -364,7 +364,7 @@ describe("projectHermesToolOutcome", () => {
     expect(outcome.parts).toMatchObject([
       {
         type: "data",
-        name: "aos.artifact",
+        name: "hgw.artifact",
         data: { filename: "brief.mp3", mimeType: "audio/mpeg" },
       },
     ])
@@ -442,7 +442,7 @@ describe("projectHermesToolOutcome", () => {
       "present_artifact",
       {
         ok: true,
-        type: "aos.artifact",
+        type: "hgw.artifact",
         artifact: { id: "a", filename: "a.md" },
       },
       true

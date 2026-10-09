@@ -18,8 +18,8 @@ import {
 } from "./policy"
 
 /**
- * The proxy-side MCP Apps host for a runtime that keeps no UI resources of its
- * own. It reaches the MCP server itself, so it serves only servers the proxy
+ * The gateway-side MCP Apps host for a runtime that keeps no UI resources of its
+ * own. It reaches the MCP server itself, so it serves only servers the gateway
  * can connect to: one that asks for no credentials, or one the operator
  * configured headers for. An adapter sets `url` for exactly those.
  */

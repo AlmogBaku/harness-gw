@@ -13,12 +13,13 @@ import { HermesTurnEngine } from "./run"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesTurnScope } from "./run"
 import type { PendingRequest } from "../../core/events"
+import { providerSessionId, sessionId } from "../../core/ids"
 import type { ServerAttachmentStage } from "../../core/runtime"
 
 const scope: HermesTurnScope = {
   agentId: "researcher",
-  providerSessionId: "stored",
-  sessionId: "stored",
+  providerSessionId: providerSessionId("stored"),
+  sessionId: sessionId("stored"),
 }
 
 const MAX_REPLAY_RESPONSE_BYTES = 6_291_456

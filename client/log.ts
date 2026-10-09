@@ -18,7 +18,7 @@ import { HGW_META_KEY } from "../protocol/acp"
 const DEBUG_PARAM = "debug"
 const DEBUG_VALUE = "acp"
 /** sessionStorage key that keeps the flag for the tab once a URL set it. */
-const DEBUG_KEY = "aos-debug"
+const DEBUG_KEY = "hgw-debug"
 
 const REDACTED = "[Redacted]"
 
@@ -84,7 +84,7 @@ function redacted(message: Json): Json {
 }
 
 /**
- * One JSON-RPC message as log fields: the ids a proxy log lines up with, and
+ * One JSON-RPC message as log fields: the ids a gateway log lines up with, and
  * the message itself without its credentials.
  */
 export function frameFields(direction: "in" | "out", message: unknown) {

@@ -24,7 +24,7 @@ import {
 } from "./events"
 
 /**
- * The proxy owns its turn vocabulary, so this file is where that vocabulary is
+ * The gateway owns its turn vocabulary, so this file is where that vocabulary is
  * pinned: one fixture per kind carrying every field it may carry, and an
  * explicit table of the fields each kind cannot do without. A table entry
  * changes only when the vocabulary deliberately changes, so drift shows up here
@@ -97,7 +97,7 @@ const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
   },
   [TurnEventKind.TurnFailed]: {
     kind: TurnEventKind.TurnFailed,
-    code: "AOS_SEND_UNCERTAIN",
+    code: "HGW_SEND_UNCERTAIN",
     message: "the provider refused",
     awaitingStop: true,
     provider: "anthropic",
@@ -478,17 +478,17 @@ describe("turn event helpers", () => {
   })
 
   it("names the failures after which nothing may be retried", () => {
-    expect(isUncertainFailure(failed("AOS_SEND_UNCERTAIN"))).toBe(true)
-    expect(isUncertainFailure(failed("AOS_RESET_REQUIRED"))).toBe(true)
-    expect(isUncertainFailure(failed("AOS_OUTCOME_UNKNOWN"))).toBe(true)
-    expect(isUncertainFailure(failed("AOS_PROVIDER_RUN_FAILED"))).toBe(false)
+    expect(isUncertainFailure(failed("HGW_SEND_UNCERTAIN"))).toBe(true)
+    expect(isUncertainFailure(failed("HGW_RESET_REQUIRED"))).toBe(true)
+    expect(isUncertainFailure(failed("HGW_OUTCOME_UNKNOWN"))).toBe(true)
+    expect(isUncertainFailure(failed("HGW_PROVIDER_RUN_FAILED"))).toBe(false)
     expect(isUncertainFailure(failed())).toBe(false)
     expect(isUncertainFailure({ kind: TurnEventKind.TurnEnded })).toBe(false)
   })
 
   it("redials every uncertain failure except a reset", () => {
-    expect(isRedialableFailure(failed("AOS_CONNECTION_INTERRUPTED"))).toBe(true)
-    expect(isRedialableFailure(failed("AOS_RESET_REQUIRED"))).toBe(false)
+    expect(isRedialableFailure(failed("HGW_CONNECTION_INTERRUPTED"))).toBe(true)
+    expect(isRedialableFailure(failed("HGW_RESET_REQUIRED"))).toBe(false)
     expect(isRedialableFailure(failed())).toBe(false)
   })
 

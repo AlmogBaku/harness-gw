@@ -21,7 +21,7 @@ runServerRuntimeContract(
       baseUrl: "ws://127.0.0.1:18789",
       logger: captureLogs().logger,
     })
-    // A runtime whose link is up, as it is once the proxy has read its catalog.
+    // A runtime whose link is up, as it is once the gateway has read its catalog.
     await client.start()
     return {
       ...openclaw,

@@ -2,7 +2,7 @@ import { lookup as dnsLookup } from "node:dns/promises"
 import ipaddr from "ipaddr.js"
 
 /**
- * A push endpoint the proxy refuses to call. The message names the rule, never
+ * A push endpoint the gateway refuses to call. The message names the rule, never
  * the endpoint: an endpoint is a bearer capability to wake one device.
  */
 export class PushEndpointError extends Error {
@@ -15,14 +15,14 @@ export class PushEndpointError extends Error {
 /**
  * Hostnames that name something inside the deployment rather than a service.
  * This is a courtesy check that fails a plainly local name early: what actually
- * keeps the proxy off the deployment's network is `resolvePublicAddresses`,
+ * keeps the gateway off the deployment's network is `resolvePublicAddresses`,
  * which every send waits on.
  */
 const PRIVATE_SUFFIXES = [".local", ".internal", ".home.arpa"] as const
 
 /**
- * One push service endpoint, as a URL the proxy may call. Only a public https
- * name on the default port is accepted: the proxy sends to it unattended, so it
+ * One push service endpoint, as a URL the gateway may call. Only a public https
+ * name on the default port is accepted: the gateway sends to it unattended, so it
  * must never be usable to reach the deployment's own network or to smuggle
  * credentials into a request.
  */
@@ -62,7 +62,7 @@ const defaultLookup: PushHostLookup = (hostname, options) =>
 
 /**
  * Every address one push host resolves to, once they are all public unicast.
- * `unicast` is the single range that excludes everything the proxy must not be
+ * `unicast` is the single range that excludes everything the gateway must not be
  * talked into reaching: loopback, link-local, private, unique-local, multicast,
  * reserved, IPv4-mapped, and the carrier-grade NAT block a tailnet uses.
  */

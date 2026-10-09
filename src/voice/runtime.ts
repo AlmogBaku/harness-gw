@@ -20,7 +20,7 @@ export type VoiceProviders = {
 type VoiceDirection = "transcription" | "speech"
 
 /**
- * Adds proxy-side voice to one server runtime without touching the adapter.
+ * Adds gateway-side voice to one server runtime without touching the adapter.
  * Only the two audio operations, the capabilities they are advertised by, and
  * the classification of a provider failure change; every other member stays the
  * native implementation, called on the native instance.
@@ -49,7 +49,7 @@ export function withVoiceProviders(
     async workspaceCapabilities(agentId, publicSessionId) {
       const value = await native.workspaceCapabilities(agentId, publicSessionId)
       const parsed = SessionWorkspaceCapabilitiesResponseSchema.safeParse(value)
-      // A shape this proxy cannot read is the adapter's to answer for; rewriting
+      // A shape this gateway cannot read is the adapter's to answer for; rewriting
       // part of it would publish a capability nothing else agrees with.
       if (!parsed.success) return value
       const content = { ...parsed.data.content }

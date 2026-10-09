@@ -28,7 +28,7 @@ describe("the bounded turn event queue", () => {
     queue.terminal({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes could not complete this turn.",
-      code: "AOS_PROVIDER_RUN_FAILED",
+      code: "HGW_PROVIDER_RUN_FAILED",
     })
 
     expect(await drain(queue)).toEqual([
@@ -36,7 +36,7 @@ describe("the bounded turn event queue", () => {
       {
         kind: TurnEventKind.TurnFailed,
         message: "Hermes could not complete this turn.",
-        code: "AOS_PROVIDER_RUN_FAILED",
+        code: "HGW_PROVIDER_RUN_FAILED",
       },
     ])
   })
@@ -52,14 +52,14 @@ describe("the bounded turn event queue", () => {
     queue.terminal({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes produced more events than AOS can safely buffer.",
-      code: "AOS_STREAM_OVERFLOW",
+      code: "HGW_STREAM_OVERFLOW",
     })
 
     expect(accepted).toBe(false)
     expect((await drain(queue)).at(-1)).toEqual({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes produced more events than AOS can safely buffer.",
-      code: "AOS_STREAM_OVERFLOW",
+      code: "HGW_STREAM_OVERFLOW",
     })
   })
 
@@ -76,7 +76,7 @@ describe("the bounded turn event queue", () => {
     queue.terminal({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes produced more events than AOS can safely buffer.",
-      code: "AOS_STREAM_OVERFLOW",
+      code: "HGW_STREAM_OVERFLOW",
     })
 
     expect(accepted.filter(Boolean)).toHaveLength(4_095)
@@ -86,7 +86,7 @@ describe("the bounded turn event queue", () => {
       {
         kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
-        code: "AOS_STREAM_OVERFLOW",
+        code: "HGW_STREAM_OVERFLOW",
       },
     ])
   })
@@ -110,7 +110,7 @@ describe("the bounded turn event queue", () => {
     queue.terminal({
       kind: TurnEventKind.TurnFailed,
       message: "Hermes produced more events than AOS can safely buffer.",
-      code: "AOS_STREAM_OVERFLOW",
+      code: "HGW_STREAM_OVERFLOW",
     })
 
     await expect(parked).resolves.toEqual({
@@ -118,7 +118,7 @@ describe("the bounded turn event queue", () => {
       value: {
         kind: TurnEventKind.TurnFailed,
         message: "Hermes produced more events than AOS can safely buffer.",
-        code: "AOS_STREAM_OVERFLOW",
+        code: "HGW_STREAM_OVERFLOW",
       },
     })
     await expect(iterator.next()).resolves.toEqual({

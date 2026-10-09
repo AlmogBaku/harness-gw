@@ -11,6 +11,7 @@ import {
 } from "../../mcp-apps/client"
 import { createMcpToolNames, mcpToolCatalog } from "../../mcp-apps/tool-names"
 import { HERMES_MCP_TOOL_NAMES, hermesMcpToolName } from "./mcp-tool-names"
+import { asFetch, type FetchHandler } from "./test-utils/fetcher"
 
 describe("Hermes MCP tool names", () => {
   it.each([
@@ -48,7 +49,7 @@ describe("Hermes MCP tool names", () => {
         name: "plugin-acme-weather-plugin-acme-weather",
         tools: ["fetch_hourly_forecast_for_station"],
       },
-      // A server the proxy cannot list resolves by its prefix.
+      // A server the gateway cannot list resolves by its prefix.
       { name: "local" },
     ])
 
@@ -75,14 +76,12 @@ describe("Hermes MCP tool names", () => {
   it("resolves an unreachable server's tools by prefix within one bounded wait", async () => {
     const clock = useFakeClock()
     // Accepts the connection and never answers, as a wedged server does.
-    const fetch = vi.fn<typeof globalThis.fetch>(
-      () => new Promise<Response>(() => {})
-    )
+    const fetch = vi.fn<FetchHandler>(() => new Promise<Response>(() => {}))
     const dials = () =>
       fetch.mock.calls.filter(([, init]) =>
         String(init?.body).includes('"initialize"')
       ).length
-    const client = createMcpAppClient({ fetch })
+    const client = createMcpAppClient({ fetch: asFetch(fetch) })
     const servers = createMcpServerCache(async () => [
       { name: "local", url: "http://127.0.0.1:4110/mcp" },
     ])

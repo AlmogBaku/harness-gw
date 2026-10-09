@@ -36,7 +36,7 @@ import {
  */
 
 /**
- * A folder as the proxy compares it, on its string alone: `.`, `..` and
+ * A folder as the gateway compares it, on its string alone: `.`, `..` and
  * repeated or trailing separators fold, and nothing asks the filesystem. A
  * relative path has no reading and is refused.
  */

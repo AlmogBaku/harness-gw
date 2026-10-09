@@ -5,7 +5,7 @@
  * prompt, whatever assistant text it streamed and its own classification in the
  * Session's inflight snapshot. Only `session.resume` returns that snapshot; the
  * authoritative history route does not carry it. Hermes Desktop rebuilds the
- * failed turn from it, so an AOS history load does the same here, publishing the
+ * failed turn from it, so a gateway history load does the same here, publishing the
  * very failure the live turn engine would have published: the same headline and
  * the same bounded native cause.
  *
@@ -177,7 +177,7 @@ export function restoredHermesFailedTurn(
       ...(text ? [{ type: "text" as const, text }] : []),
       ...projected.artifacts.map(({ descriptor }) => ({
         type: "data" as const,
-        name: "aos.artifact",
+        name: "hgw.artifact",
         data: descriptor,
       })),
     ],

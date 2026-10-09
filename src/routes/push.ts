@@ -40,7 +40,7 @@ export function registerPushRoutes(
       await boundedJson(context.req.raw)
     )
     if (!body.success) return errorResponse("invalid_request", 400)
-    // The proxy will post to this endpoint unattended, so it is checked here
+    // The gateway will post to this endpoint unattended, so it is checked here
     // rather than only when the first notification is owed.
     try {
       parsePushEndpoint(body.data.subscription.endpoint)

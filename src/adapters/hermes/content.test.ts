@@ -633,11 +633,11 @@ describe("Hermes content operations", () => {
   ] as const)(
     "ignores a late $name response after cancellation",
     async ({ native, start, late }) => {
-      let resolve: ((value: unknown) => void) | undefined
+      let resolve: ((value: object) => void) | undefined
       const h = harness()
       h[native].mockImplementationOnce(
         async () =>
-          new Promise<unknown>((next) => {
+          new Promise<object>((next) => {
             resolve = next
           })
       )

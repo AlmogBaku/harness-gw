@@ -500,7 +500,7 @@ export type ServerMcpApps = {
    * tool once the server list has loaded, so it works right after a restart.
    * `undefined` for a call this Session lacks or a name no server matches.
    * The input is the call's own, never a shortened copy, and stays in the
-   * proxy. Absent when the runtime cannot look calls up, so no files.
+   * gateway. Absent when the runtime cannot look calls up, so no files.
    */
   toolCall?(
     scope: SessionScope,
@@ -533,7 +533,7 @@ export type ServerMcpApps = {
     signal?: AbortSignal
   ): Promise<ReadResourceResult>
   /**
-   * Frees the running calls `observe` kept for this Session, once the proxy
+   * Frees the running calls `observe` kept for this Session, once the gateway
    * deleted it or a recover found it gone.
    */
   reportSessionGone?(

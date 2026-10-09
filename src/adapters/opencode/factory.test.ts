@@ -36,9 +36,15 @@ const turns: ServerTurnEngine = {
   },
 }
 
+/** A native call the factory never makes while building a runtime. */
+async function notUsed(): Promise<never> {
+  throw new Error("not used")
+}
+
 function client(close = vi.fn(async () => {})): OpenCodeAdapterClient {
   return {
-    catalog: { agents: async () => ({ data: [] }) },
+    directory: "/workspace/runtime",
+    catalog: { agents: async () => ({ data: [] }), models: notUsed },
     sessions: {
       list: async () => ({ data: [], cursor: {} }),
       get: async () => {
@@ -47,10 +53,26 @@ function client(close = vi.fn(async () => {})): OpenCodeAdapterClient {
       create: async () => {
         throw new Error("not used")
       },
+      update: notUsed,
+      delete: notUsed,
+      switchModel: notUsed,
       messages: async () => ({ data: [], cursor: {} }),
-      questions: { reply: async () => {}, reject: async () => {} },
-      permissions: { reply: async () => {} },
+      context: notUsed,
+      todos: notUsed,
+      events: notUsed,
+      active: notUsed,
+      history: notUsed,
+      prompt: notUsed,
+      interrupt: notUsed,
+      wait: notUsed,
+      questions: {
+        list: notUsed,
+        reply: async () => {},
+        reject: async () => {},
+      },
+      permissions: { list: notUsed, reply: async () => {} },
     },
+    events: notUsed,
     credentialRefused: async () => false,
     close,
   }

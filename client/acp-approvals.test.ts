@@ -70,7 +70,7 @@ function permission({
       },
     },
   }
-  // The proxy withdraws a request by aborting its signal.
+  // The gateway withdraws a request by aborting its signal.
   const withdrawal = new AbortController()
   const pending: AcpPendingRequest = {
     kind: "permission",
@@ -372,7 +372,7 @@ describe("ACP permission approvals", () => {
     unsubscribe()
     emit(permission({ requestId: "four" }).pending)
     expect(selected).toHaveBeenCalledTimes(2)
-    // The proxy sends a request once, so one still waiting outlives the thread.
+    // The gateway sends a request once, so one still waiting outlives the thread.
     expect(approvals.list("session-1").map(({ id }) => id)).toEqual([
       "one",
       "two",

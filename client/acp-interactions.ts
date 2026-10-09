@@ -8,13 +8,13 @@ import type { AcpConnection, AcpPendingRequest } from "./types"
 
 /**
  * Projects ACP's elicitations onto the shared question composer, carrying the
- * lossless questions the proxy put in `_meta.hgw`. One pending request per
- * Session, replaced by the next one the proxy sends. Permissions are tool
+ * lossless questions the gateway put in `_meta.hgw`. One pending request per
+ * Session, replaced by the next one the gateway sends. Permissions are tool
  * approvals instead, answered on the card of the call they guard
  * (`acp-approvals.ts`).
  *
  * Every UI with the Session open receives the same request. When another UI
- * answers it, or Stop ends the wait, the proxy withdraws this UI's copy with
+ * answers it, or Stop ends the wait, the gateway withdraws this UI's copy with
  * `$/cancel_request`, which aborts the request's own signal.
  */
 
@@ -26,7 +26,7 @@ type PendingEntry = {
 }
 
 /**
- * Elicitation answers travel under the `q0..qn` property keys the proxy puts
+ * Elicitation answers travel under the `q0..qn` property keys the gateway puts
  * in `requestedSchema`: one string per single-select question, the full array
  * for a multi-select one.
  */
@@ -55,7 +55,7 @@ export function createAcpInteractions({
   }
 
   /**
-   * The composer's view of one elicitation, or `undefined` when the proxy's
+   * The composer's view of one elicitation, or `undefined` when the gateway's
    * projection cannot be read. It carries its questions only in `_meta.hgw`,
    * so a payload this contract rejects has nothing to render; failing here
    * instead would answer the runtime on the operator's behalf.

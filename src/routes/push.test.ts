@@ -166,9 +166,8 @@ describe("push routes", () => {
     const response = await test.put(registration("https://push.example/three"))
 
     expect(response.status).toBe(409)
-    expect((await response.json()).error.code).toBe(
-      "registration_limit_exceeded"
-    )
+    const body = (await response.json()) as { error: { code: string } }
+    expect(body.error.code).toBe("registration_limit_exceeded")
     expect(test.registrations.list("operator")).toHaveLength(2)
   })
 

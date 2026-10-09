@@ -831,7 +831,7 @@ export class OpenCodeEventProjector {
       })
     } else if (type === "session.next.step.failed") {
       return this.fail(
-        "AOS_PROVIDER_RUN_FAILED",
+        "HGW_PROVIDER_RUN_FAILED",
         "OpenCode could not complete this turn."
       )
     }

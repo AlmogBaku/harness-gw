@@ -92,7 +92,7 @@ export type HermesSubmitRejection =
  * admission status; `rejected` is an authoritative refusal with a public reason;
  * `uncertain` means the prompt was written without a known result, either
  * because the acknowledgement was lost in transport or because the reply carried
- * no admission status AOS understands. An uncertain write is never re-sent.
+ * no admission status the gateway understands. An uncertain write is never re-sent.
  */
 export type HermesSubmitOutcome =
   | {

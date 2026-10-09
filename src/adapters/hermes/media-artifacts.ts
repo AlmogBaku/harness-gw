@@ -340,7 +340,7 @@ export function projectHermesMediaText(
 }
 
 // ---------------------------------------------------------------------------
-// Published `aos.artifact` receipts
+// Published `hgw.artifact` receipts
 // ---------------------------------------------------------------------------
 
 function safeArtifactToken(value: string, maxLength: number) {

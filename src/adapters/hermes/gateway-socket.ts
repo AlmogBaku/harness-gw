@@ -2,7 +2,7 @@
  * Wire guard for the socket handed to the vendored `JsonRpcGatewayClient`.
  *
  * The vendored client trusts its socket: `wireFrameText` decodes anything
- * string-ish and `handleFrame` parses it with no bounds. AOS runs that client
+ * string-ish and `handleFrame` parses it with no bounds. The gateway runs that client
  * server-side against a native process, so every inbound frame is validated
  * before the vendored listener ever sees it:
  *
@@ -40,7 +40,7 @@ export interface HermesSocket {
   close(): void
 }
 
-/** The level Hermes modules log at, on the proxy's logger; the gateway adds debug. */
+/** The level Hermes modules log at, on the gateway's logger; the gateway adds debug. */
 export type HermesLog = Pick<Logger, "warn">
 
 export type GuardedSocketOptions = {

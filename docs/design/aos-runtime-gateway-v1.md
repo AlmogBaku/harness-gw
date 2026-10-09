@@ -1,4 +1,4 @@
-# AOS runtime gateway V1 — completion record
+# Gateway V1 — completion record
 
 > **Status: Complete** (delivered 2026-09-15). Wire protocol superseded
 > 2026-09-19 by commits `92a24f2` (browser cutover), `f042380` (run
@@ -10,9 +10,9 @@
 
 ## What V1 shipped
 
-V1 delivered one working Hermes-backed AOS workspace:
+V1 delivered one working Hermes-backed workspace:
 
-- One Bun proxy with an operator listener and an optional guest listener.
+- One gateway with an operator listener and an optional guest listener.
 - One configured `ServerRuntime` selected by `adapters/create-runtime.ts`.
 - Hermes adapter: authenticated JSON-RPC WebSocket + HTTP, Session attachment
   registry, warm-idle release governed by `sessionIdleMs` config, reconnect

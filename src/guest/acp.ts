@@ -1,5 +1,5 @@
 import type { Logger } from "../../lifecycle"
-import { createAosAcpAgent } from "../acp/agent"
+import { createHgwAcpAgent } from "../acp/agent"
 import { createAcpService } from "../acp/service"
 import type { Catalog } from "../core/catalog"
 import type { Channels } from "../core/channel"
@@ -231,7 +231,7 @@ export function createGuestAcpService(options: GuestAcpServiceOptions) {
   const service = createAcpService({
     role,
     principalId: role,
-    agent: createAosAcpAgent,
+    agent: createHgwAcpAgent,
     // A guest reads a failure's public code, never what the host knows of it.
     publicErrors: PUBLIC_ERRORS,
     connection: (connectionId) => createGuestConnection(options, connectionId),

@@ -21,7 +21,7 @@ import type { AcpOutbound, TranslateContext } from "../types"
 import { StopReason, type ToolDiff } from "../../core/events"
 
 /**
- * The `session/update` values the proxy emits, each carrying the `_meta.hgw`
+ * The `session/update` values the gateway emits, each carrying the `_meta.hgw`
  * its schema in `protocol/acp.ts` defines. Run translation and history replay
  * share these builders so one Session speaks one vocabulary.
  */

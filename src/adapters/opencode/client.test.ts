@@ -16,12 +16,20 @@ type NativeRequest = {
   method: string
   url: URL
   authorization: string | null
-  directory: string | null
+  /** Node types a repeated header as an array; these tests never repeat it. */
+  directory: string | string[] | null
   body: string
   signal: AbortSignal
 }
 
 type NativeResponse = Response | Readonly<{ drop: true }>
+
+/** `handler` as the runtime's `fetch`, whose type also carries `preconnect`. */
+function fetcher(
+  handler: (input: Parameters<typeof fetch>[0]) => Promise<Response>
+): typeof fetch {
+  return Object.assign(handler, { preconnect: () => {} })
+}
 
 async function nativeServer(
   handler: (request: NativeRequest) => NativeResponse | Promise<NativeResponse>
@@ -384,7 +392,7 @@ describe("OpenCodeClient", () => {
       username: "operator",
       password: async () => "pw-test-1",
       // An accepted stream that stays open until its request is aborted.
-      fetcher: async (input) => {
+      fetcher: fetcher(async (input) => {
         const { signal } = input as Request
         signal.throwIfAborted()
         const body = new ReadableStream({
@@ -394,7 +402,7 @@ describe("OpenCodeClient", () => {
         return new Response(body, {
           headers: { "content-type": "text/event-stream" },
         })
-      },
+      }),
     })
 
     const stream = await subject.sessions.events("session-1")
@@ -443,11 +451,13 @@ describe("OpenCodeClient", () => {
       directory: "/workspaces/aos",
       username: "operator",
       password: async () => "pw-test-1",
-      fetcher: async (input) =>
-        new Promise<Response>((_resolve, reject) => {
-          const { signal } = input as Request
-          signal.addEventListener("abort", () => reject(signal.reason))
-        }),
+      fetcher: fetcher(
+        async (input) =>
+          new Promise<Response>((_resolve, reject) => {
+            const { signal } = input as Request
+            signal.addEventListener("abort", () => reject(signal.reason))
+          })
+      ),
     })
     const settled = (call: Promise<unknown>) =>
       call.catch((error: unknown) => error)

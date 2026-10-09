@@ -9,6 +9,7 @@ import {
   OpenClawWorkspaceUnavailableError,
   createOpenClawWorkspace,
 } from "./workspace"
+import { wireRequest } from "./test-utils/wire-request"
 
 /** An official `agents.list` payload whose default is the first Agent. */
 function agentCatalog(agents: Array<Record<string, unknown>>) {
@@ -19,10 +20,10 @@ function gateway(responses: Record<string, unknown>) {
   const requests: Array<{ method: string; params: unknown }> = []
   return {
     requests,
-    request: async (method: string, params: unknown) => {
+    request: wireRequest(async (method: string, params: unknown) => {
       requests.push({ method, params })
       return responses[method]
-    },
+    }),
   }
 }
 
@@ -182,7 +183,7 @@ describe("OpenClaw workspace reads", () => {
       { id: "team:beta", name: "Beta", kind: "agent" },
     ]
     const native = gateway({})
-    native.request = async (method: string, params: unknown) => {
+    native.request = wireRequest(async (method: string, params: unknown) => {
       native.requests.push({ method, params })
       if (method === "agents.list") return agentCatalog(agents)
       if (
@@ -213,7 +214,7 @@ describe("OpenClaw workspace reads", () => {
           })
         ),
       }
-    }
+    })
     const workspace = createOpenClawWorkspace({ client: native })
 
     const result = await workspace.listAllSessions(10, 210)
@@ -454,7 +455,7 @@ function configuredGateway(input: {
   return {
     requests,
     methods: () => requests.map((request) => request.method),
-    request: async (method: string, params: unknown) => {
+    request: wireRequest(async (method: string, params: unknown) => {
       requests.push({ method, params })
       if (method === "agents.list") return agentCatalog(agents)
       if (method === "config.get")
@@ -495,7 +496,7 @@ function configuredGateway(input: {
         return { ok: true }
       }
       throw new Error(`Unexpected method ${method} ${SECRET}`)
-    },
+    }),
   }
 }
 
@@ -582,10 +583,10 @@ describe("OpenClaw Agent avatars", () => {
 
     const failing = createOpenClawWorkspace({
       client: {
-        request: async (method: string) => {
+        request: wireRequest(async (method: string) => {
           if (method === "config.get") throw new Error(`denied ${SECRET}`)
           return agentCatalog([{ id: "agent-a", kind: "agent" }])
-        },
+        }),
       },
     })
     const catalog = await failing.listAgents()
@@ -656,7 +657,7 @@ describe("OpenClaw Agent avatars", () => {
       configured: ["agent-a"],
     })
     const vanishClient = {
-      request: async (method: string, params: unknown) => {
+      request: wireRequest(async (method: string, params: unknown) => {
         if (method === "agents.list" && vanishPatchSent)
           return {
             defaultId: "agent-a",
@@ -669,7 +670,7 @@ describe("OpenClaw Agent avatars", () => {
           return vanishBase.request(method, params)
         }
         return vanishBase.request(method, params)
-      },
+      }),
     }
     const vanishWs = createOpenClawWorkspace({ client: vanishClient })
     const vanishRevision = (await vanishWs.listAgents()).agents[0]!.revision

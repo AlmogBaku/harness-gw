@@ -1,16 +1,16 @@
 /**
  * Hermes asks the user through server→client JSON-RPC requests: the backend
  * writes one `clarify` / `approval` frame and parks the agent until the
- * renderer answers that very frame (`tui_gateway/server_requests.py`). AOS is
+ * renderer answers that very frame (`tui_gateway/server_requests.py`). The gateway is
  * that renderer, so this module owns exactly one `subscribeRequests` handler and one
  * `request.cancel` subscription, projects a recognized request into the pending
  * request the browser already renders, and answers through the request handle
  * the vendored channel hands it.
  *
- * A request whose method AOS cannot render is claimed and never answered: the
+ * A request whose method the gateway cannot render is claimed and never answered: the
  * prompt belongs to whichever Hermes renderer raised it, and `-32601` would
  * cancel it — on every reconnect, because `open_requests` are re-delivered. Only
- * a request AOS can render but cannot use (no bound Session, an unusable
+ * a request the gateway can render but cannot use (no bound Session, an unusable
  * payload) is declined, which Hermes treats as "skipped" for a clarify and as
  * "unanswered" for a queue backed approval, so the agent proceeds instead of
  * waiting out its 300 s deadline. Native ids, commands, URLs and paths never
@@ -93,7 +93,7 @@ export type HermesInteractionAttachments = {
 // ---------------------------------------------------------------------------
 
 /*
- * The six shapes AOS answers, copied from `apps/shared/src/
+ * The six shapes the gateway answers, copied from `apps/shared/src/
  * gateway-contract.generated.ts` at pin
  * NousResearch/hermes-agent@47685348eaca9d673719003b9e03a71becfa6423. The
  * generated contract is 176 KB of unrelated methods and is deliberately not
@@ -155,7 +155,7 @@ const ANSWERED_METHODS = ["clarify", "approval"] as const
 type AnsweredMethod = (typeof ANSWERED_METHODS)[number]
 
 /**
- * The prompts Hermes' turn blocks on (`agent_callbacks.py` `_ask`) that AOS
+ * The prompts Hermes' turn blocks on (`agent_callbacks.py` `_ask`) that the gateway
  * holds unrendered: the turn waits on them all the same.
  */
 const HELD_METHODS = new Set([
@@ -183,20 +183,20 @@ const MAX_LOGGED_METHOD_CHARS = 64
 export class HermesInteractionPublicError extends Error {
   constructor(
     readonly code:
-      | "AOS_INVALID_INTERACTION"
-      | "AOS_INTERACTION_NOT_FOUND"
-      | "AOS_LIMIT_EXCEEDED"
-      | "AOS_PROVIDER_INVALID_RESPONSE"
-      | "AOS_PROVIDER_UNAVAILABLE"
+      | "HGW_INVALID_INTERACTION"
+      | "HGW_INTERACTION_NOT_FOUND"
+      | "HGW_LIMIT_EXCEEDED"
+      | "HGW_PROVIDER_INVALID_RESPONSE"
+      | "HGW_PROVIDER_UNAVAILABLE"
   ) {
     super(
-      code === "AOS_PROVIDER_INVALID_RESPONSE"
+      code === "HGW_PROVIDER_INVALID_RESPONSE"
         ? "Hermes returned invalid interaction data"
-        : code === "AOS_PROVIDER_UNAVAILABLE"
+        : code === "HGW_PROVIDER_UNAVAILABLE"
           ? "Hermes is temporarily unavailable"
-          : code === "AOS_INTERACTION_NOT_FOUND"
+          : code === "HGW_INTERACTION_NOT_FOUND"
             ? "Interaction not found"
-            : code === "AOS_LIMIT_EXCEEDED"
+            : code === "HGW_LIMIT_EXCEEDED"
               ? "Interaction limit exceeded"
               : "Invalid interaction response"
     )
@@ -248,7 +248,7 @@ export type HermesInteractionResult = {
   /**
    * `expired`: Hermes no longer holds this request open. It timed out, was
    * cancelled, answered elsewhere, or belongs to another process; Hermes does
-   * not say which, so neither does AOS.
+   * not say which, so neither does the gateway.
    */
   status: "resolved" | "expired" | "already-resolved" | "uncertain"
 }
@@ -358,7 +358,7 @@ function boundedJson(value: unknown) {
 
 /** A request field AOS cannot use: the caller declines the whole request. */
 function invalidNative(): never {
-  throw new HermesInteractionPublicError("AOS_PROVIDER_INVALID_RESPONSE")
+  throw new HermesInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
 }
 
 function parseChoices(value: unknown): string[] | null | undefined {
@@ -599,18 +599,18 @@ const REPLY_FIELDS = new Set(["requestId", "status", "payload"])
 
 function strictReply(value: unknown) {
   if (!isRecord(value))
-    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+    throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
   if (Object.keys(value).some((key) => !REPLY_FIELDS.has(key)))
-    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+    throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
   const requestId = validString(value.requestId, 256)
   if (
     !requestId ||
     (value.status !== ReplyStatus.Resolved &&
       value.status !== ReplyStatus.Cancelled)
   )
-    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+    throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
   if (!boundedJson(value))
-    throw new HermesInteractionPublicError("AOS_LIMIT_EXCEEDED")
+    throw new HermesInteractionPublicError("HGW_LIMIT_EXCEEDED")
   return {
     requestId,
     status: value.status as ReplyStatus,
@@ -623,12 +623,12 @@ type ValidReply = ReturnType<typeof strictReply>
 /** The native values one ordered public answer set stands for. */
 function answerSets(value: unknown, questions: Question[]) {
   if (!isRecord(value) || Object.keys(value).some((key) => key !== "answers"))
-    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+    throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
   if (
     !Array.isArray(value.answers) ||
     value.answers.length !== questions.length
   )
-    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+    throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
   return value.answers.map((candidate, index) => {
     const question = questions[index]!
     if (
@@ -639,7 +639,7 @@ function answerSets(value: unknown, questions: Question[]) {
             HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion)
           : 1)
     )
-      throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+      throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
     const answers = candidate.map((answer) =>
       nativeText(answer, HERMES_INTERACTION_LIMITS.maxStringBytes, true)
     )
@@ -647,7 +647,7 @@ function answerSets(value: unknown, questions: Question[]) {
       answers.some((answer) => answer === undefined) ||
       new Set(answers).size !== answers.length
     )
-      throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+      throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
     const publicAnswers = answers as string[]
     // An unchanged locked answer is answered with the value Hermes locked: its
     // public form may be a redaction of a credential or a path.
@@ -712,7 +712,7 @@ function approvalResult(
     typeof choice !== "string" ||
     !interaction.choices.includes(choice as ApprovalChoice)
   )
-    throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+    throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
   const selected = choice as ApprovalChoice
   return {
     choice: selected,
@@ -808,7 +808,7 @@ export class HermesInteractions {
 
   /**
    * Notify the turn observing this Session of every live request, and through
-   * `held` of each prompt it waits on that AOS holds unrendered.
+   * `held` of each prompt it waits on that the gateway holds unrendered.
    */
   subscribePendingRequests(
     scope: HermesInteractionScope,
@@ -839,12 +839,12 @@ export class HermesInteractions {
         completed.fingerprint !== undefined &&
         completed.fingerprint !== fingerprint
       )
-        throw new HermesInteractionPublicError("AOS_INVALID_INTERACTION")
+        throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
       return completed.result
     }
     const interaction = this.#pending.get(key)
     if (!interaction)
-      throw new HermesInteractionPublicError("AOS_INTERACTION_NOT_FOUND")
+      throw new HermesInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
     const result: ClarifyResult | ApprovalResult =
       interaction.kind === "approval"
         ? approvalResult(interaction, reply)
@@ -890,7 +890,7 @@ export class HermesInteractions {
           "hermes.interactions.answer_unsupported",
           "request.answer"
         )
-        throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
+        throw new HermesInteractionPublicError("HGW_PROVIDER_UNAVAILABLE")
       }
       return this.#unacknowledge(interaction)
     }
@@ -930,7 +930,7 @@ export class HermesInteractions {
       try {
         attachment = await this.attachments.ensure(scope, { refresh: true })
       } catch {
-        throw new HermesInteractionPublicError("AOS_PROVIDER_UNAVAILABLE")
+        throw new HermesInteractionPublicError("HGW_PROVIDER_UNAVAILABLE")
       }
       this.#settleDeferred()
       this.#expireUnconfirmed(scope, reconciliation)
@@ -991,9 +991,9 @@ export class HermesInteractions {
   /**
    * The one `subscribeRequests` handler. Returning `false` declines: the vendored
    * channel answers `-32601`, which Hermes reads as a skipped question rather
-   * than a client that will answer later. A method AOS cannot render is
+   * than a client that will answer later. A method the gateway cannot render is
    * therefore claimed instead: whichever renderer raised that prompt is still
-   * waiting on it, and AOS may not cancel it on that user's behalf.
+   * waiting on it, and the gateway may not cancel it on that user's behalf.
    */
   #deliver(request: ServerRequest): boolean {
     const method = ANSWERED_METHODS.find(
@@ -1036,7 +1036,7 @@ export class HermesInteractions {
       if (!request.replayed) return true
       this.#completed.delete(key)
     }
-    // AOS being full is AOS' own limit, never a reason to cancel a prompt a
+    // The gateway being full is its own limit, never a reason to cancel a prompt a
     // shared Session's other renderer may still answer; the next resume
     // re-delivers what is still open, so a claimed request can be presented
     // once this Session has room again.
@@ -1068,7 +1068,7 @@ export class HermesInteractions {
       confirmed: this.#reconciliation,
     })
     this.#retain(scope)
-    // A request written while the socket was down reaches AOS only as a
+    // A request written while the socket was down reaches the gateway only as a
     // re-delivery, so a first delivery raises the request however it arrived.
     // Only this Session's own `resume()` stays quiet: it hands the same
     // request straight back to its caller.
@@ -1227,7 +1227,7 @@ export class HermesInteractions {
   }
 
   /**
-   * Claim a request AOS cannot render and never answer it. The Session may be
+   * Claim a request the gateway cannot render and never answer it. The Session may be
    * shared with Hermes' own renderer, which is still waiting on that prompt.
    */
   #hold(method: string): true {

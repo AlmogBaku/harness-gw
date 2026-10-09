@@ -7,7 +7,7 @@ import {
   loadProxyConfig,
   PROXY_ENV_OVERRIDES,
   PROXY_ENV_PREFIX,
-  ProxyConfigurationError,
+  GatewayConfigurationError,
   resolveProxyConfigPath,
 } from "./config-file"
 
@@ -167,7 +167,7 @@ async function loadError(options: Parameters<typeof loadProxyConfig>[0]) {
 
 async function loadFailure(options: Parameters<typeof loadProxyConfig>[0]) {
   const error = await loadError(options)
-  expect(error).toBeInstanceOf(ProxyConfigurationError)
+  expect(error).toBeInstanceOf(GatewayConfigurationError)
   return error.message
 }
 
