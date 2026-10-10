@@ -101,6 +101,7 @@ describe("@harness-gw/sdk package", () => {
     ])
     expect(files.filter((path) => !path.startsWith("dist/"))).toEqual([
       "LICENSE",
+      "NOTICE",
       "README.md",
       "package.json",
     ])
