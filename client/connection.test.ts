@@ -203,6 +203,19 @@ function createGatewayAgent(
     .onNotification(methods.agent.session.cancel, ({ params }) => {
       record(methods.agent.session.cancel, params)
     })
+    .onRequest(HGW_METHODS.sessions.search, z.unknown(), ({ params }) => {
+      record(HGW_METHODS.sessions.search, params)
+      return {
+        sessions: [
+          {
+            sessionId: SESSION_ID,
+            cwd: FOLDER,
+            title: "Weekly report",
+            _meta: { [HGW_META_KEY]: sessionInfoMeta() },
+          },
+        ],
+      }
+    })
     .onRequest(HGW_METHODS.session.update, z.unknown(), ({ params }) => {
       record(HGW_METHODS.session.update, params)
       return {}
@@ -439,6 +452,14 @@ describe("ACP connection", () => {
     expect(proxy.paramsOf(methods.agent.session.list)).toMatchObject({
       cursor: "cursor-1",
       _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
+    })
+
+    const searched = await connection.searchSessions({ query: "weekly" })
+    expect(searched.sessions.map(({ title }) => title)).toEqual([
+      "Weekly report",
+    ])
+    expect(proxy.paramsOf(HGW_METHODS.sessions.search)).toEqual({
+      _meta: { [HGW_META_KEY]: { query: "weekly" } },
     })
 
     // `session/new` joined the Session, so opening it resumes nothing; the

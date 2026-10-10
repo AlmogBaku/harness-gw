@@ -50,6 +50,8 @@ import {
   HgwHistoryPageTagSchema,
   HgwInitializeMetaSchema,
   HgwSessionResumeResponseMetaSchema,
+  HgwSessionSearchMetaSchema,
+  HgwSessionSearchResponseSchema,
   HgwSteerResponseSchema,
   type HgwHistoryCursor,
   type HgwInitializeMeta,
@@ -1435,6 +1437,20 @@ export function createAcpConnection(
         sessions: response.sessions,
         ...(response.nextCursor ? { nextCursor: response.nextCursor } : {}),
       }
+    },
+
+    async searchSessions(meta) {
+      return HgwSessionSearchResponseSchema.parse(
+        await request("short", (agent, options) =>
+          agent.request(
+            HGW_METHODS.sessions.search,
+            {
+              _meta: { [HGW_META_KEY]: HgwSessionSearchMetaSchema.parse(meta) },
+            },
+            options
+          )
+        )
+      )
     },
 
     subscribe,

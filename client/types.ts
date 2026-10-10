@@ -19,6 +19,7 @@ import type {
   HgwPromptMetaSchema,
   HgwSessionListMetaSchema,
   HgwSessionNewMetaSchema,
+  HgwSessionSearchMeta,
   HgwSessionUpdateRequestSchema,
   HgwSteerRequestSchema,
   HgwSteerResponseSchema,
@@ -136,6 +137,13 @@ export interface AcpConnection {
     meta: z.infer<typeof HgwSessionListMetaSchema>,
     cursor?: string
   ): Promise<{ sessions: SessionInfo[]; nextCursor?: string }>
+  /**
+   * The Sessions matching a query, at most one window of them, newest first
+   * where the runtime orders them. Operators only.
+   */
+  searchSessions(
+    meta: HgwSessionSearchMeta
+  ): Promise<{ sessions: SessionInfo[] }>
   /**
    * Opens the Session while any listener subscribes. The connection joins it,
    * replaying it from the start the first time, rejoins it from its own
