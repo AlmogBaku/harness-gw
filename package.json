@@ -1,6 +1,6 @@
 {
   "name": "@harness-gw/sdk",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A gateway that puts Hermes, OpenClaw, and OpenCode behind one ACP WebSocket, and the browser client and protocol SDK for it.",
   "license": "Apache-2.0",
   "type": "module",

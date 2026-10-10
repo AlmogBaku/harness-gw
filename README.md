@@ -63,7 +63,7 @@ You need a running harness. Hermes is the primary one; see
    docker run --rm \
      -v "$PWD/config.yaml:/run/harness-gw/config.yaml:ro" \
      -v "$PWD/hermes-token:/run/secrets/hermes-token:ro" \
-     ghcr.io/almogbaku/harness-gw:0.1.2 \
+     ghcr.io/almogbaku/harness-gw:0.1.3 \
      config check --config /run/harness-gw/config.yaml
    ```
 
@@ -73,7 +73,7 @@ You need a running harness. Hermes is the primary one; see
    docker run --rm -p 127.0.0.1:4100:4100 \
      -v "$PWD/config.yaml:/run/harness-gw/config.yaml:ro" \
      -v "$PWD/hermes-token:/run/secrets/hermes-token:ro" \
-     ghcr.io/almogbaku/harness-gw:0.1.2 \
+     ghcr.io/almogbaku/harness-gw:0.1.3 \
      serve --config /run/harness-gw/config.yaml
    ```
 
