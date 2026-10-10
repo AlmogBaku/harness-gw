@@ -175,7 +175,3 @@ A `v*` tag matching `package.json`'s version runs `release.yml`. After the
 protected `release` environment is approved, it publishes `@harness-gw/sdk` to
 npm with provenance and pushes a multi-arch image to GHCR with a build
 attestation.
-
-harness-gw is licensed under [Apache-2.0](LICENSE). The Hermes adapter carries
-MIT-licensed code from [Hermes](https://github.com/NousResearch/hermes-agent),
-Copyright (c) 2025 Nous Research; [NOTICE](NOTICE) lists what it covers.

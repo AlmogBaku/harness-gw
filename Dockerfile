@@ -8,7 +8,6 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 COPY --chown=bun:bun src ./src
 COPY --chown=bun:bun protocol ./protocol
 COPY --chown=bun:bun lifecycle ./lifecycle
-COPY LICENSE NOTICE ./
 USER bun
 # The listeners' ports come from the configuration, named by
 # HARNESS_GW_CONFIG_FILE or found at $XDG_CONFIG_HOME/harness-gw/config.yaml.
