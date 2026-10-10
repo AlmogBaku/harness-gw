@@ -307,6 +307,10 @@ function createFakeConnection() {
       }
       return { sessions: [listed], nextCursor: "cursor-2" }
     },
+    async searchSessions(meta) {
+      record("searchSessions", meta)
+      return { sessions: [listEntry(true, "Research notes")] }
+    },
     // Older pages belong to the thread's runtime, never the workspace client.
     resumePage: () => Promise.reject(new Error("unused")),
     history: () => undefined,
@@ -524,6 +528,24 @@ describe("ACP workspace client", () => {
     expect(calls.filter((call) => call.method === "listSessions")).toEqual([
       { method: "listSessions", args: [{ agentId: AGENT_ID }, "cursor-2"] },
     ])
+  })
+
+  it("caches the Sessions a search matched, so their rows need no list read", async () => {
+    const { client, argsOf, calls } = createClient()
+
+    await expect(client.searchSessions("research", AGENT_ID)).resolves.toEqual([
+      {
+        sessionId: SESSION_ID,
+        agentId: AGENT_ID,
+        title: "Research notes",
+        updatedAt: UPDATED_AT,
+      },
+    ])
+    expect(argsOf("searchSessions")).toEqual([
+      { query: "research", agentId: AGENT_ID },
+    ])
+    await client.getSessionMetadata([SESSION_ID])
+    expect(calls.some((call) => call.method === "listSessions")).toBe(false)
   })
 
   it("looks for an unlisted Session on page one only", async () => {

@@ -1,3 +1,5 @@
+import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2"
+
 import {
   backoffDelay,
   defaultClock,
@@ -15,6 +17,7 @@ import type {
   AgentUpdate,
   SessionActionCapabilities,
   SessionCreationOptions,
+  SessionSearchResult,
 } from "./workspace"
 import type { HgwRemoteClient } from "./hgw-client"
 import { createAcpComposerStore } from "./acp-workspace-client-composer"
@@ -141,6 +144,15 @@ export function createAcpWorkspaceClient({
     return response
   }
 
+  /** Lands Session entries the gateway sent in the row cache. */
+  function rememberRows(sessions: readonly SessionInfo[]) {
+    for (const session of sessions) {
+      const row = rowOf(session)
+      remember(row.sessionId, row.info, row.updatedAt)
+      if (row.title) store.setTitle(row.sessionId, row.title)
+    }
+  }
+
   type SessionPage = Awaited<ReturnType<AcpConnection["listSessions"]>>
   const pageReads = new Map<string, Promise<SessionPage>>()
   let catalogScope: string | undefined
@@ -160,11 +172,7 @@ export function createAcpWorkspaceClient({
     const read = connection
       .listSessions(meta, cursor)
       .then((page) => {
-        for (const session of page.sessions) {
-          const row = rowOf(session)
-          remember(row.sessionId, row.info, row.updatedAt)
-          if (row.title) store.setTitle(row.sessionId, row.title)
-        }
+        rememberRows(page.sessions)
         return page
       })
       .finally(() => pageReads.delete(key))
@@ -387,6 +395,31 @@ export function createAcpWorkspaceClient({
     },
     /** The Agent the thread list pages History for, once one is selected. */
     sessionCatalogScope: () => catalogScope,
+    /**
+     * The Sessions the runtime matches to a query, across every Agent or the
+     * one named. Each lands in the row cache as a listed one does.
+     */
+    async searchSessions(
+      query: string,
+      agentId?: string
+    ): Promise<SessionSearchResult[]> {
+      const { sessions } = await connection.searchSessions({
+        query,
+        ...(agentId === undefined ? {} : { agentId }),
+      })
+      rememberRows(sessions)
+      const titles = new Map(
+        sessions.map(({ sessionId, title }) => [sessionId, title ?? ""])
+      )
+      return store
+        .rowsFor(sessions.map(({ sessionId }) => sessionId))
+        .map(({ sessionId, agentId, updatedAt }) => ({
+          sessionId,
+          agentId,
+          title: titles.get(sessionId) ?? "",
+          updatedAt,
+        }))
+    },
     subscribeSessionCatalog(listener: (sessionIds: readonly string[]) => void) {
       catalogListeners.add(listener)
       return () => catalogListeners.delete(listener)

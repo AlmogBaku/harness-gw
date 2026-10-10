@@ -66,6 +66,15 @@ export type SessionMetadata = {
   platform?: SessionPlatform
 }
 
+/** One Session a search matched, as its row cache now holds it. */
+export type SessionSearchResult = Pick<
+  SessionMetadata,
+  "sessionId" | "agentId" | "updatedAt"
+> & {
+  /** The provider's title, or empty when it reports none. */
+  title: string
+}
+
 /** Which Session actions the selected runtime declares it performs. */
 export type SessionActionCapabilities = {
   rename: boolean

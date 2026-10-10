@@ -60,6 +60,9 @@ export const HGW_METHODS = {
     focus: "_hgw/session/focus",
     part: "_hgw/session/part",
   },
+  sessions: {
+    search: "_hgw/sessions/search",
+  },
   agents: {
     list: "_hgw/agents/list",
     update: "_hgw/agents/update",
@@ -181,6 +184,29 @@ export const HgwSessionNewMetaSchema = z.strictObject({
 /** `ListSessionsRequest._meta.hgw` */
 export const HgwSessionListMetaSchema = z.strictObject({
   agentId: IdentifierSchema.optional(),
+})
+
+/** `_hgw/sessions/search` request `_meta.hgw`. */
+export const HgwSessionSearchMetaSchema = z.strictObject({
+  agentId: IdentifierSchema.optional(),
+  query: z.string().min(1).max(512),
+})
+export type HgwSessionSearchMeta = z.infer<typeof HgwSessionSearchMetaSchema>
+
+/**
+ * The `_hgw/sessions/search` response: matching Sessions as `session/list`
+ * entries, which ACP's own schema validates for `session/list` alone.
+ */
+export const HgwSessionSearchResponseSchema = readObject({
+  sessions: z.array(
+    readObject({
+      sessionId: IdentifierSchema,
+      cwd: z.string(),
+      title: z.string().nullish(),
+      updatedAt: z.string().nullish(),
+      _meta: z.record(z.string(), z.unknown()).nullish(),
+    })
+  ),
 })
 
 /**

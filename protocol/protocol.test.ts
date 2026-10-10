@@ -942,6 +942,7 @@ describe("AOS v1 normalized protocol", () => {
         focus: "_hgw/session/focus",
         part: "_hgw/session/part",
       },
+      sessions: { search: "_hgw/sessions/search" },
       agents: {
         list: "_hgw/agents/list",
         update: "_hgw/agents/update",
