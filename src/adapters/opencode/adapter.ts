@@ -308,6 +308,13 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     return this.#workspace.listSessions(agentId, limit, offset)
   }
 
+  searchSessions(
+    agentId: string | undefined,
+    query: string
+  ): Promise<SessionCatalogResponse> {
+    return this.#workspace.searchSessions(agentId, query)
+  }
+
   async history(
     agentId: string,
     sessionId: string,

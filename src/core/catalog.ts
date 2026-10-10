@@ -4,6 +4,7 @@ import {
   type AgentUpdatePatch,
   type AgentUpdateResponse,
   type RuntimeInfo,
+  type Session,
 } from "../../protocol"
 import { defaultClock, type Clock, type Logger } from "../../lifecycle"
 import { coreFailure } from "./failures"
@@ -20,6 +21,8 @@ import type { SessionRow, SessionRows } from "./session-rows"
 
 /** One Session list page; a cursor carries the next offset. */
 const SESSION_LIST_LIMIT = 50
+/** The most Sessions one catalog response holds, and so one search answers. */
+const SESSION_PAGE_MAX = 100
 
 /**
  * The workspace a runtime holds, as members reach it: one per process, which
@@ -57,6 +60,15 @@ export type Catalog = {
     offset: number,
     limit?: number
   ): Promise<CommandResults["list"]>
+  /**
+   * At most one page of the Sessions a query matches, across every Agent or
+   * the one named: the runtime's own search, or else a case-insensitive title
+   * match over the listed window.
+   */
+  search(
+    agentId: string | undefined,
+    query: string
+  ): Promise<CommandResults["search"]>
   /**
    * One Session's row as a replaying cell: the known row at once, then the
    * row the provider holds now, then each change. `failed` hears why that
@@ -121,6 +133,25 @@ export function createCatalog({
       : undefined
   }
 
+  /** One page of every Agent's Sessions, or of one Agent's. */
+  function listPage(
+    agentId: string | undefined,
+    limit: number,
+    offset: number
+  ) {
+    return agentId === undefined
+      ? runtime.listAllSessions(limit, offset)
+      : runtime.listSessions(agentId, limit, offset)
+  }
+
+  /** Sessions a read returned, remembered, as members are shown them. */
+  function remembered(sessions: readonly Session[]) {
+    rows.rememberList(sessions)
+    return sessions.map((read) =>
+      overlaid(rows.get(read.agentId, read.id) ?? read)
+    )
+  }
+
   /** A row as members are shown it: live execution outranks the row. */
   function overlaid(row: SessionRow): SessionRow {
     const target = scope(row.agentId, row.id)
@@ -176,20 +207,50 @@ export function createCatalog({
     scope,
 
     async list(agentId, offset, limit = SESSION_LIST_LIMIT) {
-      const page = await (agentId === undefined
-        ? runtime.listAllSessions(limit, offset)
-        : runtime.listSessions(agentId, limit, offset))
-      rows.rememberList(page.sessions)
+      const page = await listPage(agentId, limit, offset)
       const next = offset + page.sessions.length
       return {
-        rows: page.sessions.map((listed) =>
-          overlaid(rows.get(listed.agentId, listed.id) ?? listed)
-        ),
+        rows: remembered(page.sessions),
         // No cursor points past the catalog window, which no runtime serves.
         ...(next < Math.min(page.total, SESSION_CATALOG_MAX_WINDOW)
           ? { nextOffset: next }
           : {}),
       }
+    },
+
+    async search(agentId, query) {
+      if (runtime.searchSessions)
+        return {
+          rows: remembered(
+            // A search that reports no read state leaves the known one.
+            (await runtime.searchSessions(agentId, query)).sessions.map(
+              (found) => {
+                const unread = rows.get(found.agentId, found.id)?.unread
+                return found.unread !== undefined || unread === undefined
+                  ? found
+                  : { ...found, unread }
+              }
+            )
+          ),
+        }
+      const needle = query.toLocaleLowerCase()
+      const matches: Session[] = []
+      let offset = 0
+      while (
+        offset < SESSION_CATALOG_MAX_WINDOW &&
+        matches.length < SESSION_PAGE_MAX
+      ) {
+        const page = await listPage(agentId, SESSION_PAGE_MAX, offset)
+        matches.push(
+          ...page.sessions.filter(
+            ({ title }) => title?.toLocaleLowerCase().includes(needle) ?? false
+          )
+        )
+        offset += page.sessions.length
+        if (page.sessions.length < SESSION_PAGE_MAX || offset >= page.total)
+          break
+      }
+      return { rows: remembered(matches.slice(0, SESSION_PAGE_MAX)) }
     },
 
     subscribe(target, listener, failed) {

@@ -78,6 +78,9 @@ function revision(parts: readonly string[]) {
   return `oc-${(hash >>> 0).toString(36)}`
 }
 
+/** The most Sessions one search answers: one catalog page. */
+const SEARCH_LIMIT = 100
+
 function validPage(limit: number, offset: number) {
   return (
     Number.isSafeInteger(limit) &&
@@ -151,6 +154,14 @@ export function createOpenCodeWorkspaceOperations(input: {
     return (await allSessions())
       .filter((session) => session.agent === agentId)
       .map((session) => projectSession(session, agentId))
+      .sort(newestSessionFirst)
+  }
+
+  /** Every Session an Agent owns, of every Agent, newest first. */
+  async function everyOwned() {
+    return (await allSessions())
+      .filter((session) => !!session.agent)
+      .map((session) => projectSession(session, session.agent!))
       .sort(newestSessionFirst)
   }
 
@@ -316,15 +327,33 @@ export function createOpenCodeWorkspaceOperations(input: {
     ): Promise<SessionCatalogResponse> {
       if (!validPage(limit, offset))
         throw new OpenCodeWorkspaceUnavailableError()
-      const sessions = (await allSessions())
-        .filter((session) => !!session.agent)
-        .map((session) => projectSession(session, session.agent!))
-        .sort(newestSessionFirst)
+      const sessions = await everyOwned()
       return SessionCatalogResponseSchema.parse({
         sessions: sessions.slice(offset, offset + limit),
         total: sessions.length,
         limit,
         offset,
+      })
+    },
+
+    /** OpenCode has no content search; titles are what it can match. */
+    async searchSessions(
+      agentId: string | undefined,
+      query: string
+    ): Promise<SessionCatalogResponse> {
+      const needle = query.toLocaleLowerCase()
+      const sessions = (
+        agentId === undefined ? await everyOwned() : await owned(agentId)
+      )
+        .filter(
+          ({ title }) => title?.toLocaleLowerCase().includes(needle) ?? false
+        )
+        .slice(0, SEARCH_LIMIT)
+      return SessionCatalogResponseSchema.parse({
+        sessions,
+        total: sessions.length,
+        limit: SEARCH_LIMIT,
+        offset: 0,
       })
     },
 

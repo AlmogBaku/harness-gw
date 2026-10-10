@@ -412,6 +412,33 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("answers a search with the matching Sessions a client can resume, as list entries", async () => {
+    const test = await harness({
+      rows: [
+        sessionRow(),
+        sessionRow({ id: "session-2", title: "Release plan" }),
+        sessionRow({ id: "session-3", agentId: "reader", title: "Notes too" }),
+      ],
+      agentFolder: async (agentId) => (agentId === "reader" ? undefined : "/"),
+    })
+    const search = (query: string) =>
+      test.agent.request(HGW_METHODS.sessions.search, {
+        _meta: { [HGW_META_KEY]: { query } },
+      })
+
+    await expect(search("notes")).resolves.toEqual({
+      sessions: [
+        expect.objectContaining({
+          sessionId: SESSION,
+          cwd: "/",
+          title: "Notes",
+        }),
+      ],
+    })
+    await expect(search("")).rejects.toMatchObject(INVALID_PARAMS)
+    test.close()
+  })
+
   it("offers no cursor past the catalog window", async () => {
     const test = await harness({ rows: [sessionRow()], total: 5_000 })
 

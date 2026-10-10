@@ -1063,6 +1063,7 @@ describe("guest ACP listener", () => {
       ],
       [HGW_METHODS.session.update, { sessionId: 5 }],
       [HGW_METHODS.agents.update, { sessionId: 5 }],
+      [HGW_METHODS.sessions.search, { _meta: { hgw: { query: "notes" } } }],
     ] as const)
       expect(await socket.request(method, params), method).toMatchObject({
         error: { code: METHOD_NOT_FOUND },
