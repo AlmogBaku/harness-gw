@@ -1778,7 +1778,9 @@ export function runWireListenerContract(
               },
             })
           )
-          await until(clock, raw.next())
+          // Real crypto checks the token; stepping the fake clock meanwhile
+          // can pass the handshake deadline under load.
+          await raw.next()
 
           raw.send(
             JSON.stringify([
