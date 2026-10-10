@@ -628,6 +628,77 @@ describe("Hermes server adapter", () => {
     expect(second.total).toBe(120)
   })
 
+  describe("searching Sessions natively", () => {
+    const searching = (results: (profile: string) => unknown) => {
+      const request = vi.fn(async () => ({
+        profiles: ["alpha", "beta"].map((name) => ({
+          name,
+          ui_meta: {},
+          ui_meta_revisions: {},
+        })),
+      }))
+      const http = vi.fn(async (path: string) =>
+        results(
+          new URL(path, "http://native.test").searchParams.get("profile")!
+        )
+      )
+      return { adapter: new HermesServerAdapter({ request, http }), http }
+    }
+
+    it("asks one profile's search for the query and projects its rows without inventing read state", async () => {
+      const { adapter, http } = searching((profile) => ({
+        results: [
+          { id: "s-1", profile, title: "Quarterly plan", last_active: 5 },
+        ],
+      }))
+
+      const { sessions } = await adapter.searchSessions("alpha", "plan")
+
+      expect(http.mock.calls.map(([path]) => path)).toEqual([
+        "/api/sessions/search?q=plan&profile=alpha&limit=100&exclude_sources=cron%2Ctool%2Ckanban",
+      ])
+      expect(sessions).toHaveLength(1)
+      expect(sessions[0]).toMatchObject({
+        agentId: "alpha",
+        title: "Quarterly plan",
+      })
+      expect(sessions[0]).not.toHaveProperty("unread")
+      expect(sessions[0]).not.toHaveProperty("pinned")
+    })
+
+    it("merges every profile's matches newest first", async () => {
+      const { adapter } = searching((profile) => ({
+        results: (profile === "alpha" ? [30, 10] : [20]).map((last_active) => ({
+          id: `${profile}-${last_active}`,
+          profile,
+          last_active,
+        })),
+      }))
+
+      const { sessions } = await adapter.searchSessions(undefined, "notes")
+
+      expect(sessions.map(({ id }) => id)).toEqual([
+        "alpha-30",
+        "beta-20",
+        "alpha-10",
+      ])
+    })
+
+    it.each([
+      ["a payload without results", { sessions: [] }],
+      [
+        "a row of another profile",
+        { results: [{ id: "s-1", profile: "beta" }] },
+      ],
+    ])("refuses %s", async (_case, payload) => {
+      const { adapter } = searching(() => payload)
+
+      await expect(
+        adapter.searchSessions("alpha", "plan")
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+    })
+  })
+
   describe("with Hermes back-filling pinned Sessions onto every page", () => {
     // Hermes's dashboard list appends every pinned Session a page missed,
     // after the `limit` rows, on every page; `total` counts each Session once.

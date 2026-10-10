@@ -34,12 +34,14 @@ import {
   HgwSessionNewMetaSchema,
   HgwSessionPartRequestSchema,
   HgwSessionResumeMetaSchema,
+  HgwSessionSearchMetaSchema,
   HgwSessionUpdateRequestSchema,
   HgwSteerRequestSchema,
   type HgwExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import { unlessAborted } from "../core/channel"
+import type { SessionRow } from "../core/session-rows"
 import type { PresenceReport } from "../push/presence"
 import { GATEWAY_VERSION } from "../version"
 import {
@@ -323,6 +325,36 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       throw invalidParams(`cwd must be ${folder}`)
   }
 
+  /**
+   * The rows a client can resume, reading into `folders` each Agent's folder
+   * it lacks. A Session with no folder cannot be resumed, so it is not shown;
+   * one Agent's unreadable folder leaves every other Agent's rows.
+   */
+  async function resumable(
+    rows: readonly SessionRow[],
+    folders: Map<string, string | undefined>
+  ) {
+    const others = [...new Set(rows.map((row) => row.agentId))].filter(
+      (id) => !folders.has(id)
+    )
+    await Promise.all(
+      others.map(async (id) => {
+        const folder = await folderOf(id).catch((cause: unknown) => {
+          const { code } = errorNotificationOf(context.publicError, cause)
+          context.logger.warn(
+            { agentId: id, errorCode: code },
+            "session.list.folder_read_failed"
+          )
+          return null
+        })
+        if (folder === undefined)
+          context.logger.info({ agentId: id }, "session.list.no_folder")
+        folders.set(id, folder ?? undefined)
+      })
+    )
+    return rows.filter((row) => folders.get(row.agentId) !== undefined)
+  }
+
   /** Whether this client reads older pages itself (`initialize`). */
   let clientPagesHistory = false
   /** The elicitation modes this client declared it answers (`initialize`). */
@@ -544,32 +576,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           folders.set(agentId, folder)
         }
         const page = await catalog.list(agentId, offset)
-        const others = [...new Set(page.rows.map((row) => row.agentId))].filter(
-          (id) => !folders.has(id)
+        const rows = (await resumable(page.rows, folders)).filter(
+          (row) => filter === undefined || filter === folders.get(row.agentId)
         )
-        await Promise.all(
-          others.map(async (id) => {
-            // A Session with no folder cannot be resumed, so it is not listed;
-            // one Agent's unreadable folder leaves every other Agent's rows.
-            const folder = await folderOf(id).catch((cause: unknown) => {
-              const { code } = errorNotificationOf(context.publicError, cause)
-              context.logger.warn(
-                { agentId: id, errorCode: code },
-                "session.list.folder_read_failed"
-              )
-              return null
-            })
-            if (folder === undefined)
-              context.logger.info({ agentId: id }, "session.list.no_folder")
-            folders.set(id, folder ?? undefined)
-          })
-        )
-        const rows = page.rows.filter((row) => {
-          const folder = folders.get(row.agentId)
-          return (
-            folder !== undefined && (filter === undefined || filter === folder)
-          )
-        })
         sessions.remember(rows)
         return { ...page, rows }
       },
@@ -584,6 +593,42 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         : { nextCursor: encodeCursor(listed.nextOffset) }),
     }
   })
+
+  // The Sessions a query matches, as `session/list` entries.
+  app.onRequest(
+    HGW_METHODS.sessions.search,
+    undecoded,
+    async ({ params: raw, requestId }) => {
+      admit(HGW_METHODS.sessions.search, "search")
+      const meta = parseMeta(
+        HgwSessionSearchMetaSchema,
+        (raw as { _meta?: Record<string, unknown> } | null | undefined)?._meta
+      )
+      const agentId = agentOf(meta.agentId)
+      const folders = new Map<string, string | undefined>()
+      const found = await perform(
+        "search",
+        { ...(agentId === undefined ? {} : { agentId }), query: meta.query },
+        async ({ agentId, query }) => {
+          if (agentId !== undefined) {
+            const folder = await folderOf(agentId)
+            if (folder === undefined) throw unsupported("no working folder")
+            folders.set(agentId, folder)
+          }
+          const { rows } = await catalog.search(agentId, query)
+          const shown = await resumable(rows, folders)
+          sessions.remember(shown)
+          return { rows: shown }
+        },
+        requestId
+      )
+      return {
+        sessions: found.rows.map((row) =>
+          sessionInfoOf(row, folders.get(row.agentId)!)
+        ),
+      }
+    }
+  )
 
   app.onRequest(
     methods.agent.session.resume,

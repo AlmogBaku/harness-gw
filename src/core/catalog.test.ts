@@ -30,10 +30,13 @@ function row(overrides: Partial<Session> = {}): Session {
 function harness(
   options: {
     listed?: Session
+    /** Every listed Session, when a test needs more than one. */
+    window?: Session[]
     held?: Session
     state?: SessionExecutionState
     updateSession?: () => Promise<void>
     subscribeCatalogChanges?: ServerRuntime["subscribeCatalogChanges"]
+    searchSessions?: ServerRuntime["searchSessions"]
   } = {}
 ) {
   const updateSession = vi.fn(options.updateSession ?? (async () => undefined))
@@ -43,11 +46,12 @@ function harness(
     publicError: () => undefined,
     link: READY_LINK,
     subscribeCatalogChanges: options.subscribeCatalogChanges,
+    searchSessions: options.searchSessions,
     resolveProviderSessionId: (_agentId: string, publicId: string) =>
       `stored-${publicId}`,
     listAllSessions: async (limit: number, offset: number) => ({
-      sessions: [options.listed ?? row()],
-      total: 1,
+      sessions: options.window ?? [options.listed ?? row()],
+      total: options.window?.length ?? 1,
       limit,
       offset,
     }),
@@ -124,6 +128,36 @@ describe("createCatalog", () => {
       unread: false,
     })
     expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
+  })
+
+  it("matches titles of the listed window, ignoring case, when the runtime cannot search", async () => {
+    const { catalog } = harness({
+      window: [
+        row({ id: "session-1", title: "Weekly Digest" }),
+        row({ id: "session-2", title: "Release notes" }),
+        row({ id: "session-3", title: undefined }),
+      ],
+    })
+
+    const { rows } = await catalog.search(undefined, "digest")
+
+    expect(rows.map(({ id }) => id)).toEqual(["session-1"])
+  })
+
+  it("keeps a Session's known read state when the runtime's search omits it", async () => {
+    const { catalog, rows } = harness({
+      searchSessions: async () => ({
+        sessions: [row()],
+        total: 1,
+        limit: 1,
+        offset: 0,
+      }),
+    })
+    rows.rememberList([row({ unread: true })])
+
+    const found = await catalog.search(AGENT, "weekly")
+
+    expect(found.rows.map(({ unread }) => unread)).toEqual([true])
   })
 
   it("starts the runtime's change feed again when it fails to start", async () => {

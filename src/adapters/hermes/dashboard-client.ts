@@ -44,6 +44,20 @@ export class HermesDashboardClient {
     ) as Promise<HermesNativeSessionPage>
   }
 
+  /**
+   * Hermes' search of one profile: id matches first, then message content,
+   * one row per conversation. Answers `{ results }`, at most `limit` rows.
+   */
+  searchSessions(profile: string, query: string, limit: number) {
+    const params = new URLSearchParams({
+      q: query,
+      profile,
+      limit: String(limit),
+      exclude_sources: "cron,tool,kanban",
+    })
+    return this.http(`/api/sessions/search?${params}`)
+  }
+
   getSession(profile: string, storedId: string) {
     return this.http(
       `/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`

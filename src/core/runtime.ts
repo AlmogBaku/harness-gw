@@ -339,6 +339,15 @@ export interface ServerRuntime {
     offset: number
   ): Promise<SessionCatalogResponse>
   /**
+   * At most one page of the Sessions a query matches, across every Agent or
+   * the one named, newest first. Absent when the runtime has no search of its
+   * own; the catalog then matches titles over the listed window.
+   */
+  searchSessions?(
+    agentId: string | undefined,
+    query: string
+  ): Promise<SessionCatalogResponse>
+  /**
    * One chronological page of history, paged backwards: `offset` counts from
    * the newest message and `nextOffset` starts the next older page. A page
    * short of the start begins at its first user message, so no turn splits;

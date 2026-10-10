@@ -381,6 +381,48 @@ function titled(row: Record<string, unknown>) {
   return title === undefined ? {} : { title }
 }
 
+/** The most Sessions one native search reads of a profile, and answers. */
+const HERMES_SEARCH_LIMIT = 100
+/** How many profiles a read across every profile reads at once. */
+const PROFILE_FANOUT = 4
+
+/**
+ * Native Session rows of one profile, each validated: a list page's and a
+ * search's alike. Read state and the pin are copied only where the row
+ * carries them; an older Hermes, or a search, omits them, and absent must
+ * stay absent rather than collapse to "read" or "unpinned".
+ */
+function nativeSessions(profile: string, rows: unknown[]): Session[] {
+  const seen = new Set<string>()
+  return rows.map((row) => {
+    if (!isRecord(row)) throw new HermesUnavailableError()
+    const storedId = trimmedText(row.id)
+    if (
+      !storedId ||
+      trimmedText(row.profile) !== profile ||
+      seen.has(storedId) ||
+      (row.unread !== undefined && typeof row.unread !== "boolean") ||
+      (row.pinned !== undefined && typeof row.pinned !== "boolean")
+    )
+      throw new HermesUnavailableError()
+    seen.add(storedId)
+    const platform = sessionPlatform(row.source)
+    return {
+      id: sessionId(profile, storedId),
+      agentId: profile,
+      ...titled(row),
+      archived: row.archived === true,
+      ...createdAt(row.started_at),
+      ...updatedAt(row),
+      status: SETTLED,
+      ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
+      ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
+      // source carries the channel a Session came from; unknown/absent stays absent.
+      ...(platform !== undefined ? { platform } : {}),
+    }
+  })
+}
+
 function sessionId(_profile: string, storedId: string) {
   return storedId
 }
@@ -1430,37 +1472,7 @@ export class HermesServerAdapter implements ServerRuntime {
     }
     if (!isRecord(payload) || !Array.isArray(payload.sessions))
       throw new HermesUnavailableError()
-    const seen = new Set<string>()
-    const sessions = payload.sessions.map((row) => {
-      if (!isRecord(row)) throw new HermesUnavailableError()
-      const storedId = trimmedText(row.id)
-      if (
-        !storedId ||
-        trimmedText(row.profile) !== profile ||
-        seen.has(storedId) ||
-        (row.unread !== undefined && typeof row.unread !== "boolean") ||
-        (row.pinned !== undefined && typeof row.pinned !== "boolean")
-      )
-        throw new HermesUnavailableError()
-      seen.add(storedId)
-      const platform = sessionPlatform(row.source)
-      return {
-        id: sessionId(profile, storedId),
-        agentId: profile,
-        ...titled(row),
-        archived: row.archived === true,
-        ...createdAt(row.started_at),
-        ...updatedAt(row),
-        status: SETTLED,
-        // Read state is derived per catalog row; an older Hermes omits it, and
-        // absent must stay absent rather than collapse to "read".
-        ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
-        // The pin is stored, and absent stays absent for the same reason.
-        ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
-        // source carries the channel a Session came from; unknown/absent stays absent.
-        ...(platform !== undefined ? { platform } : {}),
-      }
-    })
+    const sessions = nativeSessions(profile, payload.sessions)
     // A malformed count stays an error even where a short page replaces it.
     if (
       payload.total !== undefined &&
@@ -1527,17 +1539,9 @@ export class HermesServerAdapter implements ServerRuntime {
     const profiles = (await this.listAgents()).agents.map(
       ({ summary }) => summary.id
     )
-    const profilePages: Array<{ sessions: Session[]; total: number }> = []
-    const fanout = 4
-    for (let start = 0; start < profiles.length; start += fanout) {
-      profilePages.push(
-        ...(await Promise.all(
-          profiles
-            .slice(start, start + fanout)
-            .map((profile) => this.#sessionPrefix(profile, prefixLength))
-        ))
-      )
-    }
+    const profilePages = await this.#eachProfile(profiles, (profile) =>
+      this.#sessionPrefix(profile, prefixLength)
+    )
     const merged = profilePages
       .flatMap(({ sessions }) => sessions)
       .sort(newestSessionFirst)
@@ -1549,6 +1553,61 @@ export class HermesServerAdapter implements ServerRuntime {
     })
     if (!result.success) throw new HermesUnavailableError()
     return result.data
+  }
+
+  /**
+   * Hermes' own search, by Session id and then by message content, of one
+   * profile or of every profile. Its rows carry no read state or pin.
+   */
+  async searchSessions(agentId: string | undefined, query: string) {
+    const dashboard = this.#dashboard
+    if (!dashboard) throw new HermesUnavailableError()
+    const profiles =
+      agentId === undefined
+        ? (await this.listAgents()).agents.map(({ summary }) => summary.id)
+        : [agentId]
+    const found = await this.#eachProfile(profiles, async (profile) => {
+      let payload: unknown
+      try {
+        payload = await dashboard.searchSessions(
+          profile,
+          query,
+          HERMES_SEARCH_LIMIT
+        )
+      } catch (error) {
+        throwUnavailable(error)
+      }
+      if (!isRecord(payload) || !Array.isArray(payload.results))
+        throw new HermesUnavailableError()
+      return nativeSessions(profile, payload.results)
+    })
+    const sessions = found
+      .flat()
+      .sort(newestSessionFirst)
+      .slice(0, HERMES_SEARCH_LIMIT)
+    const result = SessionCatalogResponseSchema.safeParse({
+      sessions,
+      total: sessions.length,
+      limit: HERMES_SEARCH_LIMIT,
+      offset: 0,
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
+  }
+
+  /** `read` of every profile, a few profiles at a time. */
+  async #eachProfile<T>(
+    profiles: readonly string[],
+    read: (profile: string) => Promise<T>
+  ) {
+    const results: T[] = []
+    for (let start = 0; start < profiles.length; start += PROFILE_FANOUT)
+      results.push(
+        ...(await Promise.all(
+          profiles.slice(start, start + PROFILE_FANOUT).map(read)
+        ))
+      )
+    return results
   }
 
   async history(

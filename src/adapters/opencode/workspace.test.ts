@@ -107,6 +107,48 @@ describe("OpenCode workspace operations", () => {
     })
   })
 
+  it.each([
+    ["one Agent's", "research", "research", ["s3", "s1"]],
+    ["every Agent's", undefined, "RESEARCH", ["s4", "s3", "s1"]],
+    ["no", "research", "budget", []],
+  ])(
+    "searches %s Session titles, ignoring case, newest first",
+    async (_case, agentId, query, matched) => {
+      const operations = createOpenCodeWorkspaceOperations({
+        client: stubClient({
+          list: async () => ({
+            data: [
+              session({ id: "s1", title: "Research notes" }),
+              session({ id: "s2", title: "Meeting minutes" }),
+              session({
+                id: "s3",
+                title: "research follow-up",
+                time: { created: 1, updated: 3_000 },
+              }),
+              session({
+                id: "s4",
+                agent: "other",
+                title: "Other research",
+                time: { created: 1, updated: 4_000 },
+              }),
+              session({
+                id: "s5",
+                agent: undefined,
+                title: "Unowned research",
+              }),
+            ],
+            cursor: {},
+          }),
+        }),
+      })
+
+      const page = await operations.searchSessions(agentId, query)
+
+      expect(page.sessions.map(({ id }) => id)).toEqual(matched)
+      expect(page.total).toBe(matched.length)
+    }
+  )
+
   it("fails closed when an invite title has multiple exact-Agent matches", async () => {
     const operations = createOpenCodeWorkspaceOperations({
       client: stubClient({
