@@ -56,8 +56,7 @@ defaulting to its `publicOrigin`; the two listeners may not share one. Before
 any socket or route is reached:
 
 - a WebSocket upgrade, or any request other than GET, HEAD and OPTIONS, needs
-  an `Origin` on that list when it carries one; a `null` or foreign one gets
-  403. A request with no `Origin` comes from no browser page, so it is
+  an `Origin` on that list when it carries one; a `null` or foreign one gets 403. A request with no `Origin` comes from no browser page, so it is
   admitted: a script or a non-browser ACP client needs no `Origin`.
 - a GET or HEAD is never checked, so a view in an opaque-origin frame can read
   the file its pass names.
@@ -159,15 +158,15 @@ permissions; events pass back through it in reverse). The guest addresses the
 invited conversation by its reference alone; any other Session id is
 `-32002`.
 
-| Method                                                                                                               | Guest behavior                                                                                                                               |
-| -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `session/resume`                                                                                                     | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
-| `session/prompt`                                                                                                     | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown. |
-| `_hgw/session/steer`                                                                                                 | Steers the invited conversation's active turn.                                                                                               |
-| `session/cancel`                                                                                                     | Stops a turn in the invited conversation only.                                                                                               |
-| `session/close`                                                                                                      | Stops the Session's active work for every member, then detaches.                                                                             |
-| `_hgw/session/focus`                                                                                                 | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
-| `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
+| Method                                                                                                                                       | Guest behavior                                                                                                                               |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `session/resume`                                                                                                                             | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
+| `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown. |
+| `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
+| `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
+| `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
+| `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
+| `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
 
 `session/prompt` and `_hgw/session/steer` refuse, with `-32602`, text that
 starts with `/` (after any leading whitespace or zero-width characters) and
@@ -388,14 +387,35 @@ as a `running` update followed by an `_hgw_error` idle update for the same
 
 ### Requests (client → server, expect a response)
 
-| Method                | Purpose                                                                                                                                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_hgw/session/update` | Set title, archived, or unread (exactly one intent per call; `protocol/acp.ts`)                                                                                                                      |
-| `_hgw/session/part`   | Detach this connection from the Session; the Session's work and all other members continue (`HgwSessionPartRequestSchema`, `protocol/acp.ts`)                                                        |
-| `_hgw/session/steer`  | Deliver a text correction to the active run                                                                                                                                                          |
-| `_hgw/session/focus`  | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — a client may send `{}` as its liveness probe. (`HgwFocusRequestSchema`, `protocol/acp.ts`) |
-| `_hgw/agents/list`    | Fetch the agent catalog                                                                                                                                                                              |
-| `_hgw/agents/update`  | Write visibility and/or avatar; compare-and-set on the observed revision (`HgwAgentUpdateRequestSchema`, `protocol/acp.ts`)                                                                          |
+| Method                 | Purpose                                                                                                                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_hgw/session/update`  | Set title, archived, or unread (exactly one intent per call; `protocol/acp.ts`)                                                                                                                      |
+| `_hgw/session/part`    | Detach this connection from the Session; the Session's work and all other members continue (`HgwSessionPartRequestSchema`, `protocol/acp.ts`)                                                        |
+| `_hgw/session/steer`   | Deliver a text correction to the active run                                                                                                                                                          |
+| `_hgw/session/focus`   | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — a client may send `{}` as its liveness probe. (`HgwFocusRequestSchema`, `protocol/acp.ts`) |
+| `_hgw/sessions/search` | Find Sessions matching a query; see [Session search](#session-search) (`HgwSessionSearchMetaSchema`, `protocol/acp.ts`)                                                                              |
+| `_hgw/agents/list`     | Fetch the agent catalog                                                                                                                                                                              |
+| `_hgw/agents/update`   | Write visibility and/or avatar; compare-and-set on the observed revision (`HgwAgentUpdateRequestSchema`, `protocol/acp.ts`)                                                                          |
+
+#### Session search
+
+`_hgw/sessions/search` is operator-only; the guest listener refuses it as
+method not found. The request carries `_meta.hgw` `{ agentId?, query }`
+(`HgwSessionSearchMetaSchema`): `query` is 1 to 512 characters, and an absent
+`agentId` searches every Agent. The response is `{ sessions }`
+(`HgwSessionSearchResponseSchema`): at most 100 `session/list` entries, newest
+first, each carrying its Agent's folder and the same `_meta.hgw` a list row
+carries, with no cursor. Like a list across Agents, it leaves out a Session
+whose Agent has no folder.
+
+```json
+{ "_meta": { "hgw": { "agentId": "researcher", "query": "release" } } }
+```
+
+Hermes answers from its own search, which matches Session ids and message
+content; its rows carry no read state, so a Session's known `unread` stands.
+Every other runtime matches titles, ignoring case: OpenCode over its own
+Sessions, and OpenClaw over the first 1000 Sessions the list serves.
 
 ### Notifications (no response expected)
 
