@@ -58,7 +58,7 @@
     "@opencode-ai/sdk": "1.18.29",
     "@types/bun": "^1.4.3",
     "@types/ms": "2.1.0",
-    "@types/node": "^20",
+    "@types/node": "^26",
     "commander": "15.0.0",
     "eslint": "^10",
     "globals": "^17.12.0",
