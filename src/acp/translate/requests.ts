@@ -18,7 +18,7 @@ import {
   type PendingRequest,
 } from "../../core/events"
 import { distinctChoices, maskRequestText } from "../../core/request-text"
-import type { MaskStrength } from "../../redaction"
+import { maskJson, type MaskStrength } from "../../redaction"
 import type {
   AcpOutbound,
   PendingRequestToOutbound,
@@ -301,11 +301,12 @@ export function answeredQuestionOutbound(
     sessionUpdate: "tool_call_update",
     toolCallId,
     status: "completed",
-    rawOutput: {
+    // The runtime got the answers as typed; every member reads them masked.
+    rawOutput: maskJson({
       status: responses.some(({ answers }) => answers.length)
         ? "answered"
         : "cancelled",
       responses,
-    },
+    }),
   })
 }

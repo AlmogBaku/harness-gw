@@ -19,6 +19,7 @@ import {
 } from "../../../protocol/acp"
 import type { AcpOutbound, Built, TranslateContext } from "../types"
 import { StopReason, type ToolDiff } from "../../core/events"
+import { containsCredential, maskCredentials, maskJson } from "../../redaction"
 
 /**
  * The `session/update` values the gateway emits, each carrying the `_meta.hgw`
@@ -117,6 +118,128 @@ export function artifactOutbound(
 
 type ToolMeta = Omit<ExtraMeta<typeof HgwToolCallMetaSchema>, "messageId">
 
+/**
+ * The most text one tool field carries, which is also the most a browser keeps
+ * of a terminal: a longer one is cut before it is masked, so one huge output
+ * costs the masker no more than this.
+ */
+const MAX_TOOL_TEXT = 262_144
+
+/** The first, or for a terminal the last, `MAX_TOOL_TEXT` units of `text`. */
+function bounded(text: string, keep: "head" | "tail") {
+  if (text.length <= MAX_TOOL_TEXT) return text
+  return keep === "head"
+    ? text.slice(0, MAX_TOOL_TEXT)
+    : text.slice(-MAX_TOOL_TEXT)
+}
+
+/** Text that reads as a JSON object, array, or string, parsed; anything else `undefined`. */
+function parsedJson(text: string): unknown {
+  if (!/^\s*[[{"]/u.test(text)) return undefined
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * A tool's text as it may leave the gateway, for every runtime alike. JSON is
+ * masked by key and value and sent as written when nothing in it was a
+ * credential; any other text is masked broadly. Either is then bounded.
+ */
+export function maskedToolText(text: string, keep: "head" | "tail" = "head") {
+  const json = parsedJson(text)
+  if (json === undefined) return maskCredentials(bounded(text, keep))
+  const masked = maskJson(json)
+  return bounded(masked === json ? text : JSON.stringify(masked), keep)
+}
+
+/** A path a tool names, or `undefined` when a credential sits in it: masked, it would name no file. */
+export function publicPath(path: string) {
+  return containsCredential(path) ? undefined : path
+}
+
+/**
+ * A call's content item as it may leave the gateway: text masked, a diff that
+ * names a path carrying a credential dropped whole, and a patch carrying one
+ * dropped from its diff, since masked it would no longer apply.
+ */
+function maskedContent(
+  content: Built<ToolCallContent>
+): Built<ToolCallContent>[] {
+  if (content.type === "content") return [maskedStreamed(content)]
+  if (content.type !== "diff") return [content]
+  const named = content.changes.flatMap((change) =>
+    Object.values(change).filter((value) => typeof value === "string")
+  )
+  if (named.some((path) => publicPath(path) === undefined)) return []
+  return content.patch && containsCredential(content.patch.text)
+    ? [{ ...content, patch: undefined }]
+    : [content]
+}
+
+/** A subagent's report with its prose masked and every path carrying a credential dropped. */
+function maskedSubagent(subagent: NonNullable<ToolMeta["subagent"]>) {
+  const { goal, summary, filesRead, filesWritten } = subagent
+  const paths = (files: readonly string[]) =>
+    files.filter((file) => publicPath(file) !== undefined)
+  return {
+    ...subagent,
+    ...(goal === undefined ? {} : { goal: maskCredentials(goal) }),
+    ...(summary === undefined ? {} : { summary: maskCredentials(summary) }),
+    ...(filesRead === undefined ? {} : { filesRead: paths(filesRead) }),
+    ...(filesWritten === undefined
+      ? {}
+      : { filesWritten: paths(filesWritten) }),
+  }
+}
+
+/** A tool call update's every field a reader sees, masked as tool data. */
+function maskedCall(call: Omit<Built<ToolCallUpdate>, "_meta">) {
+  const { title, rawInput, rawOutput, content, locations } = call
+  return {
+    ...call,
+    ...(typeof title === "string" ? { title: maskedToolText(title) } : {}),
+    ...(rawInput === undefined ? {} : { rawInput: maskJson(rawInput) }),
+    ...(rawOutput === undefined
+      ? {}
+      : {
+          rawOutput:
+            typeof rawOutput === "string"
+              ? maskedToolText(rawOutput)
+              : maskJson(rawOutput),
+        }),
+    ...(content ? { content: content.flatMap(maskedContent) } : {}),
+    ...(locations
+      ? {
+          locations: locations.filter(
+            (location) => publicPath(location.path) !== undefined
+          ),
+        }
+      : {}),
+  }
+}
+
+/** A tool call's meta with its arguments text and its subagent masked. */
+function maskedMeta(extra: ToolMeta | undefined) {
+  if (!extra) return {}
+  const { argsText, argsTextDelta, subagent } = extra
+  return {
+    ...extra,
+    ...(argsText === undefined ? {} : { argsText: maskedToolText(argsText) }),
+    ...(argsTextDelta === undefined
+      ? {}
+      : { argsTextDelta: maskedToolText(argsTextDelta) }),
+    ...(subagent === undefined ? {} : { subagent: maskedSubagent(subagent) }),
+  }
+}
+
+/**
+ * One tool call update, live or replayed, for any runtime: every field a reader
+ * sees is masked here, the one place each runtime's tool data passes on its
+ * way to a browser.
+ */
 export function toolOutbound(
   context: TranslateContext,
   messageId: string,
@@ -125,9 +248,31 @@ export function toolOutbound(
 ): AcpOutbound {
   return update({
     sessionUpdate: "tool_call_update",
-    ...call,
-    _meta: { [HGW_META_KEY]: { ...turnMeta(context), messageId, ...extra } },
+    ...maskedCall(call),
+    _meta: {
+      [HGW_META_KEY]: { ...turnMeta(context), messageId, ...maskedMeta(extra) },
+    },
   })
+}
+
+/** What a call streams into its content: text, or the terminal it runs. */
+type StreamedContent = Built<
+  Extract<ToolCallContent, { type: "content" } | { type: "terminal" }>
+>
+
+/** A streamed item with its text masked; a terminal carries none. */
+function maskedStreamed<Content extends StreamedContent>(
+  content: Content
+): Content {
+  return content.type === "content" && content.content.type === "text"
+    ? {
+        ...content,
+        content: {
+          ...content.content,
+          text: maskedToolText(content.content.text),
+        },
+      }
+    : content
 }
 
 /** Appends one item to a call's content; `tool_call_update` replaces it all. */
@@ -135,12 +280,12 @@ export function toolContentOutbound(
   context: TranslateContext,
   messageId: string,
   toolCallId: string,
-  content: Built<ToolCallContent>
+  content: StreamedContent
 ): AcpOutbound {
   return update({
     sessionUpdate: "tool_call_content_chunk",
     toolCallId,
-    content,
+    content: maskedStreamed(content),
     _meta: { [HGW_META_KEY]: { ...turnMeta(context), messageId } },
   })
 }
@@ -175,7 +320,7 @@ export const ACP_STOP_REASON = {
 } as const satisfies Record<StopReason, string>
 
 /** A call's text output as ACP tool content. */
-export function textContent(text: string): Built<ToolCallContent> {
+export function textContent(text: string): StreamedContent {
   return { type: "content", content: { type: "text", text } }
 }
 

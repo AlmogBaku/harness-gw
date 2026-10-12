@@ -570,6 +570,29 @@ describe("answeredQuestionOutbound", () => {
     })
   })
 
+  it("shows every member a credential the operator typed as an answer masked", () => {
+    const typed = ["deploy with token", "abcdefgh1234"].join("=")
+
+    expect(
+      answeredQuestionOutbound(
+        asking,
+        shownAnswers(asking, { action: "accept", content: { q0: typed } })
+      )
+    ).toMatchObject({
+      update: {
+        rawOutput: {
+          responses: [
+            {
+              question: "Which environment?",
+              answers: ["deploy with token=[credential redacted]"],
+            },
+            { question: "Anything else to watch?", answers: [] },
+          ],
+        },
+      },
+    })
+  })
+
   it("leaves no record when the request names no tool call", () => {
     expect(
       answeredQuestionOutbound(

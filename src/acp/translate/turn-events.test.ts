@@ -442,6 +442,212 @@ describe("translateTurnEvent tool calls", () => {
   )
 })
 
+describe("translateTurnEvent tool data masking", () => {
+  const M = "[credential redacted]"
+  /** A synthetic value, assigned in two parts so no scanner reads it as a leak. */
+  const SECRET = "abcdefgh1234"
+  const assigned = (name: string, value = SECRET) => [name, value].join("=")
+  const open: TurnEvent = {
+    kind: TurnEventKind.ToolCallStarted,
+    toolCallId: "c1",
+    title: "terminal",
+    parentMessageId: "m1",
+  }
+
+  // Every runtime's tool data reaches the browser through these builders, so
+  // each row is one field a reader sees, for Hermes, OpenClaw, and OpenCode.
+  it.each<[string, TurnEvent[], Record<string, unknown>[]]>([
+    [
+      "the title and a location naming a credential",
+      [
+        {
+          ...open,
+          title: `deploy --${assigned("token")}`,
+          locations: [
+            { path: "/srv/app" },
+            { path: `/srv/${assigned("token")}` },
+          ],
+        },
+      ],
+      [
+        {
+          title: `deploy --${assigned("token", M)}`,
+          locations: [{ path: "/srv/app" }],
+        },
+      ],
+    ],
+    [
+      "the arguments, which stay JSON",
+      [
+        open,
+        {
+          kind: TurnEventKind.ToolCallInputChunk,
+          toolCallId: "c1",
+          delta: JSON.stringify({
+            command: `export ${assigned("TOKEN")}`,
+            apiKey: SECRET,
+          }),
+        },
+        { kind: TurnEventKind.ToolCallInputEnded, toolCallId: "c1" },
+      ],
+      [{ rawInput: { command: `export ${assigned("TOKEN", M)}`, apiKey: M } }],
+    ],
+    [
+      "the result, its content, and a diff",
+      [
+        open,
+        {
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: "c1",
+          output: `password: ${SECRET}`,
+          failed: false,
+          diffs: [
+            {
+              changes: [
+                { operation: DiffOperation.Modify, path: "/srv/app/a.ts" },
+              ],
+              patch: `--- a/a.ts\n+${assigned("const token")}`,
+            },
+            {
+              changes: [
+                {
+                  operation: DiffOperation.Add,
+                  path: `/srv/${assigned("token")}`,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      [
+        {
+          rawOutput: `password: ${M}`,
+          content: [
+            {
+              type: "content",
+              content: { type: "text", text: `password: ${M}` },
+            },
+            {
+              type: "diff",
+              changes: [{ operation: "modify", path: "/srv/app/a.ts" }],
+            },
+          ],
+        },
+      ],
+    ],
+    [
+      "streamed output",
+      [
+        open,
+        {
+          kind: TurnEventKind.ToolCallOutputChunk,
+          toolCallId: "c1",
+          text: assigned("token"),
+        },
+      ],
+      [
+        {
+          content: {
+            type: "content",
+            content: { type: "text", text: assigned("token", M) },
+          },
+        },
+      ],
+    ],
+    [
+      "a terminal's command and output, and a working directory naming a credential",
+      [
+        open,
+        {
+          kind: TurnEventKind.TerminalOutput,
+          terminalId: "t1",
+          toolCallId: "c1",
+          command: `export ${assigned("TOKEN")}`,
+          cwd: `/srv/${assigned("token")}`,
+          data: `password: ${SECRET}`,
+        },
+      ],
+      [
+        {
+          sessionUpdate: "terminal_update",
+          command: `export ${assigned("TOKEN", M)}`,
+        },
+        {
+          sessionUpdate: "terminal_output_chunk",
+          data: Buffer.from(`password: ${M}`).toString("base64"),
+        },
+      ],
+    ],
+    [
+      "a subagent's goal and the files it read",
+      [
+        {
+          ...open,
+          subagent: {
+            id: "s1",
+            goal: `log in with ${assigned("password")}`,
+            filesRead: ["/srv/app/a.ts", `/srv/${assigned("token")}`],
+          },
+        },
+      ],
+      [
+        {
+          _meta: {
+            [HGW_META_KEY]: expect.objectContaining({
+              subagent: {
+                id: "s1",
+                goal: `log in with ${assigned("password", M)}`,
+                filesRead: ["/srv/app/a.ts"],
+              },
+            }),
+          },
+        },
+      ],
+    ],
+  ])("masks %s", (_field, events, expected) => {
+    const { outbound } = translate(events)
+
+    expect(JSON.stringify(outbound)).not.toContain(SECRET)
+    for (const update of expected)
+      expect(updatesOf(outbound)).toContainEqual(
+        expect.objectContaining(update)
+      )
+  })
+
+  it("sends JSON arguments with nothing to mask exactly as written", () => {
+    const delta = '{ "path" : "a.txt" }'
+    const [, update] = updatesOf(
+      translate([
+        open,
+        { kind: TurnEventKind.ToolCallInputChunk, toolCallId: "c1", delta },
+      ]).outbound
+    )
+
+    expect(HgwToolCallMetaSchema.parse(aosMeta(update!)).argsTextDelta).toBe(
+      delta
+    )
+  })
+
+  it("masks a JSON output's secret-named key before cutting it to the browser's bound", () => {
+    const output = JSON.stringify({ apiKey: SECRET, pad: "x".repeat(300_000) })
+    const [update] = updatesOf(
+      translate([
+        {
+          kind: TurnEventKind.ToolCallFinished,
+          toolCallId: "c1",
+          output,
+          failed: false,
+        },
+      ]).outbound
+    )
+    const [content] = (update as { content: { content: { text: string } }[] })
+      .content
+
+    expect(content!.content.text.startsWith(`{"apiKey":"${M}"`)).toBe(true)
+    expect(content!.content.text.length).toBe(262_144)
+  })
+})
+
 describe("translateTurnEvent plans", () => {
   it.each([
     ["pending", "pending"],

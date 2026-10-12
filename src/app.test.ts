@@ -677,6 +677,35 @@ describe("MCP App files", () => {
     ).toEqual({ status, ...REFUSAL })
   })
 
+  it("masks a view's input and result, and still serves the file its call names", async () => {
+    const secret = "abcdefgh1234"
+    const note = `use ${["token", secret].join("=")}`
+    const { proxy, open } = fileGateway({
+      call: { ...reportCall, input: { path: REPORT, note } },
+    })
+    open.mockResolvedValueOnce({
+      html: "<p>view</p>",
+      toolInput: { path: REPORT, note, apiKey: secret },
+      toolResult: { content: [{ type: "text", text: note }] },
+    })
+
+    const view = await openView(proxy)
+
+    expect(JSON.stringify(view)).not.toContain(secret)
+    expect(view).toMatchObject({
+      toolInput: {
+        note: "use token=[credential redacted]",
+        apiKey: "[credential redacted]",
+      },
+      toolResult: {
+        content: [{ type: "text", text: "use token=[credential redacted]" }],
+      },
+    })
+    expect(
+      (await proxy.request(`${origin}${view.files?.addresses.path}`)).status
+    ).toBe(200)
+  })
+
   it("passes on only the runtime headers a file needs, and lets only a view that sent a pass read the answer", async () => {
     const { proxy, read } = fileGateway({
       call: {

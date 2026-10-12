@@ -263,6 +263,45 @@ describe("translateHistory", () => {
     })
   })
 
+  it("replays a stored call's credentials masked, as the live call showed them", () => {
+    const secret = "abcdefgh1234"
+    const assigned = (name: string, value: string) => [name, value].join("=")
+    const command = `export ${assigned("TOKEN", secret)}`
+    const stored: SessionHistoryResponse = {
+      ...history,
+      messages: [
+        {
+          id: "a1",
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: "c1",
+              toolName: "terminal",
+              args: { command },
+              argsText: JSON.stringify({ command }),
+              result: { apiKey: secret },
+            },
+          ],
+          createdAt: "2026-09-19T09:00:01.000Z",
+        },
+      ],
+      total: 1,
+    }
+
+    const outbound = translateHistory(stored)
+
+    expect(JSON.stringify(outbound)).not.toContain(secret)
+    expect(updatesOf(outbound)).toContainEqual(
+      expect.objectContaining({
+        rawInput: {
+          command: `export ${assigned("TOKEN", "[credential redacted]")}`,
+        },
+        rawOutput: { apiKey: "[credential redacted]" },
+      })
+    )
+  })
+
   it("replays a failed tool call without an output", () => {
     const update = updatesOf(translateHistory(history))[6]
 
