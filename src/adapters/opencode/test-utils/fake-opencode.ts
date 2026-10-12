@@ -6,7 +6,7 @@
  * `fakeOpenCodeClient`, through its `fetcher`, so the client's own status
  * mapping and credential tracking are what the contracts prove.
  *
- * It copies OpenCode 1.18.29 (`@opencode-ai/sdk` 1.18.29), its v2 Session API
+ * It copies OpenCode 1.19.0 (`@opencode-ai/sdk` 1.19.0), its v2 Session API
  * behind basic auth, serving one project directory.
  *
  * Usage:
