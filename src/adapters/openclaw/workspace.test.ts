@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest"
 
 import type { AgentUpdatePatch } from "../../../protocol"
+import { captureLogs } from "../../../test/support/log-capture"
 import { ServerAgentUpdateUnsupportedError } from "../../core/runtime"
+import {
+  OpenClawClientConnectionError,
+  OpenClawClientRequestError,
+} from "./client"
+import { OpenClawNativePayloadError } from "./native-schemas"
 import {
   OPENCLAW_CREATOR_AGENT_ID,
   OpenClawWorkspaceOwnershipError,
@@ -96,7 +102,7 @@ describe("OpenClaw workspace reads", () => {
     })
   })
 
-  it("[CL1-WORKSPACE-002] rejects a Session row whose key and declared owner disagree", async () => {
+  it("[CL1-WORKSPACE-002] leaves a row whose declared owner disagrees out of a list, and refuses it on a lookup", async () => {
     const native = gateway({
       "agents.list": agentCatalog([
         { id: "analyst", name: "Analyst", kind: "agent" },
@@ -108,13 +114,143 @@ describe("OpenClaw workspace reads", () => {
             agentId: "other",
             label: "Foreign",
           },
+          { key: "agent:analyst:own", agentId: "analyst", label: "Own" },
         ],
       },
     })
     const workspace = createOpenClawWorkspace({ client: native })
 
-    await expect(workspace.listSessions("analyst", 50, 0)).rejects.toEqual(
-      new OpenClawWorkspaceOwnershipError()
+    const page = await workspace.listSessions("analyst", 50, 0)
+
+    expect(page.sessions.map(({ id }) => id)).toEqual(["agent:analyst:own"])
+    await expect(
+      workspace.getSession("analyst", "agent:analyst:main")
+    ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())
+  })
+
+  it("[CL1-WORKSPACE-022] lists an Agent's other Sessions past a malformed row, counting offsets in rows kept", async () => {
+    const row = (key: string) => ({ key, agentId: "analyst", label: key })
+    let rows: unknown[] = [
+      row("agent:analyst:0"),
+      { ...row("agent:analyst:bad"), pinned: "yes" },
+      row("agent:analyst:1"),
+      row("agent:analyst:2"),
+    ]
+    const native = gateway({})
+    native.request = wireRequest(async (method: string, params: unknown) => {
+      if (method === "agents.list")
+        return agentCatalog([{ id: "analyst", name: "Analyst", kind: "agent" }])
+      const { offset, limit } = params as { offset: number; limit: number }
+      return { sessions: rows.slice(offset, offset + limit) }
+    })
+    const logs = captureLogs()
+    const workspace = createOpenClawWorkspace({
+      client: native,
+      log: logs.logger,
+    })
+
+    const first = await workspace.listSessions("analyst", 2, 0)
+    const second = await workspace.listSessions("analyst", 2, 2)
+
+    expect([...first.sessions, ...second.sessions].map(({ id }) => id)).toEqual(
+      ["agent:analyst:0", "agent:analyst:1", "agent:analyst:2"]
+    )
+    expect(second.total).toBe(3)
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields.sessionId])
+    ).toContainEqual(["openclaw.session.skipped", "agent:analyst:bad"])
+
+    // A bad last row ends the list where the good rows do.
+    rows = [row("agent:analyst:0"), { key: "" }]
+    await expect(
+      workspace.listSessions("analyst", 5, 0)
+    ).resolves.toMatchObject({ total: 1 })
+
+    rows = [{ key: "" }]
+    await expect(
+      workspace.listSessions("analyst", 5, 0)
+    ).rejects.toBeInstanceOf(OpenClawWorkspaceUnavailableError)
+  })
+
+  it("[CL1-WORKSPACE-023] lists the other Agents' Sessions when one Agent's list fails, and fails when every one does or authentication fails", async () => {
+    const failures = new Map<string, Error>([
+      ["beta", new OpenClawClientRequestError("rejected")],
+    ])
+    const native = gateway({})
+    native.request = wireRequest(async (method: string, params: unknown) => {
+      if (method === "agents.list")
+        return agentCatalog([
+          { id: "alpha", name: "Alpha", kind: "agent" },
+          { id: "beta", name: "Beta", kind: "agent" },
+        ])
+      const { agentId } = params as { agentId: string }
+      const failure = failures.get(agentId)
+      if (failure) throw failure
+      return { sessions: [{ key: `agent:${agentId}:main`, agentId }] }
+    })
+    const logs = captureLogs()
+    const workspace = createOpenClawWorkspace({
+      client: native,
+      log: logs.logger,
+    })
+
+    const catalog = await workspace.listAllSessions(50, 0)
+
+    expect(catalog.sessions.map(({ id }) => id)).toEqual(["agent:alpha:main"])
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields.agentId])
+    ).toEqual([["openclaw.agent.unavailable", "beta"]])
+
+    failures.set("alpha", new OpenClawClientRequestError("timeout"))
+    await expect(workspace.listAllSessions(50, 0)).rejects.toBeInstanceOf(
+      OpenClawClientRequestError
+    )
+
+    const authentication = new OpenClawClientConnectionError("authentication")
+    failures.clear()
+    failures.set("alpha", authentication)
+    await expect(workspace.listAllSessions(50, 0)).rejects.toBe(authentication)
+  })
+
+  it("[CL1-WORKSPACE-024] keeps the other Agents when one Agent row is malformed, and fails when none can be read", async () => {
+    let agents: Array<Record<string, unknown>> = [
+      { id: "analyst", name: "Analyst", kind: "agent" },
+      { id: "broken", name: "Broken", kind: "robot" },
+      { id: "verbose", name: "n".repeat(257), kind: "agent" },
+      { id: "hidden", name: "Hidden", kind: "agent" },
+    ]
+    const native = gateway({})
+    native.request = wireRequest(async (method: string, params: unknown) => {
+      if (method === "agents.list") return agentCatalog(agents)
+      const { agentId } = params as { agentId: string }
+      return { sessions: [{ key: `agent:${agentId}:main`, agentId }] }
+    })
+    const workspace = createOpenClawWorkspace({
+      client: native,
+      hiddenAgentIds: ["hidden"],
+      log: captureLogs().logger,
+    })
+
+    const catalog = await workspace.listAgents()
+
+    expect(catalog.agents.map(({ summary }) => summary.id)).toEqual(["analyst"])
+    await expect(
+      workspace.getSession("analyst", "agent:analyst:main")
+    ).resolves.toMatchObject({ id: "agent:analyst:main" })
+    // The Agent's own bad row is unreadable, never gone.
+    await expect(
+      workspace.getSession("broken", "agent:broken:main")
+    ).rejects.toBeInstanceOf(OpenClawNativePayloadError)
+    await expect(
+      workspace.getSession("hidden", "agent:hidden:main")
+    ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())
+
+    agents = [
+      { id: "broken", name: "Broken", kind: "robot" },
+      { id: "verbose", name: "n".repeat(257), kind: "agent" },
+    ]
+    await expect(workspace.listAgents()).rejects.toBeInstanceOf(
+      OpenClawWorkspaceUnavailableError
     )
   })
 

@@ -229,6 +229,7 @@ export function composeOpenClawRuntime({
     new OpenClawServerAdapter({
       client,
       turns,
+      logger,
       gatewayOrigin: gatewayHttpOrigin(baseUrl),
       // Read for each file through `credentials`, which registers what it
       // reads with the log masker.
