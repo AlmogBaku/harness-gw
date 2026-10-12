@@ -7,7 +7,6 @@ import type {
   RequestPermissionResponse,
   SessionConfigOption,
   SessionUpdate,
-  UnknownVariant,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
@@ -17,7 +16,7 @@ import type {
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type { HgwExtensions } from "../../protocol/acp"
+import type { Built, HgwExtensions } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import type {
   ExecutionEvent,
@@ -177,19 +176,7 @@ export const initialTranslateState: TranslateState = {
   replayedCorrections: 0,
 }
 
-/**
- * An ACP value the gateway builds, as opposed to one it received. The SDK
- * brands the variants it does not know so only received values can carry them;
- * that brand also stops TypeScript from checking a built value whose tag is
- * computed (`stopReason: stopping ? "cancelled" : "end_turn"`) against the
- * known variants. Dropping the branded members at every depth restores that
- * check, and a `Built` value is still a plain `T`.
- */
-export type Built<T> = T extends UnknownVariant<unknown>
-  ? never
-  : T extends object
-    ? { [K in keyof T]: Built<T[K]> }
-    : T
+export type { Built }
 
 /**
  * One thing to send after translating a turn event. Session-scoped updates and

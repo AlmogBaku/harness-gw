@@ -1,3 +1,4 @@
+import type { UnknownVariant } from "@agentclientprotocol/sdk/experimental/v2"
 import { z } from "zod"
 
 import {
@@ -28,6 +29,25 @@ import {
  * browser validates every key it knows and drops the rest, so a gateway that
  * adds a key never costs the browser the whole payload. The gateway's builders
  * stay exact through the inferred types.
+ */
+
+/**
+ * An ACP value either end builds, as opposed to one it received. The SDK
+ * brands the variants it does not know so only received values can carry them;
+ * that brand also stops TypeScript from checking a built value whose tag is
+ * computed (`stopReason: stopping ? "cancelled" : "end_turn"`) against the
+ * known variants. Dropping the branded members at every depth restores that
+ * check, and a `Built` value is still a plain `T`. The gateway builds every
+ * update it sends this way; a browser test builds the updates it feeds in.
+ */
+export type Built<T> =
+  T extends UnknownVariant<unknown>
+    ? never
+    : T extends object
+      ? { [K in keyof T]: Built<T[K]> }
+      : T
+
+/**
  */
 
 export const ACP_PROTOCOL_VERSION = 2 as const
