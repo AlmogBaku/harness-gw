@@ -27,6 +27,10 @@ connection rather than guess: the SDK client fails `initialized` with an error
 naming both versions and closes without reconnecting, since a retry cannot
 change the gateway's version.
 
+The extension version covers the ACP wire only. A Web Push message carries
+its own `v` (see [Web Push payload](#web-push-payload)), because a service
+worker reads it long after any connection has closed.
+
 `initialize`'s `info` names the gateway: `{ "name": "harness-gw", "version":
 "<gateway release>" }`.
 
@@ -428,16 +432,27 @@ Sessions, and OpenClaw over the first 1000 Sessions the list serves.
 
 #### `_hgw/activity` union ()
 
-Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `type`:
+Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant
+`type`. An item the gateway re-sends on connect, from the Session list and the
+coordinator's snapshots, also carries `replayed: true` and the row's own time
+as `occurredAt`; a live item carries no `replayed`.
 
-| `type`                | Extra fields                            |
-| --------------------- | --------------------------------------- |
-| `turn-started`        | `turnId`                                |
-| `turn-finished`       | `turnId`                                |
-| `turn-failed`         | `turnId`                                |
-| `attention-requested` | `requestId`, `attentionKind: "question" | "permission"` |
-| `attention-resolved`  | `requestId`                             |
-| `unread-changed`      | `unread: boolean`                       |
+| `type`                | Extra fields                                                                                    |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| `turn-started`        | `turnId`                                                                                        |
+| `turn-finished`       | `turnId`                                                                                        |
+| `turn-failed`         | `turnId`                                                                                        |
+| `attention-requested` | `requestId`, `attentionKind: "question" \| "permission"`, optional `requestText`, `requestMore` |
+| `attention-resolved`  | `requestId`                                                                                     |
+| `unread-changed`      | `unread: boolean`                                                                               |
+
+`requestText` is one line of what the request asks: a permission's operation
+or message, or an elicitation's first question. It is masked of credentials
+and bidirectional controls, collapsed to single spaces, and cut to 200 UTF-16
+units ending in `…`. `requestMore` counts the questions after the first. Both
+are absent when there is nothing to show. The ask card itself, the
+`session/request_permission` or `session/elicitation` request, keeps the full
+text, line breaks included, with the same credential masking.
 
 ## Artifacts
 
@@ -584,6 +599,54 @@ tool call's view and `…/artifacts/:artifactId/app` for a published Artifact's:
 | `POST` | `/resources/read`         | Read one of the view server's `ui://` resources                  |
 | `POST` | `/files`                  | Renew the view's file addresses                                  |
 | `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds |
+
+### Web Push payload
+
+A configured deployment sends one Web Push message per Session when a
+notification window closes: input after 3 s, a failure after 5 s, a finished
+turn after 20 s. Nothing is sent while the operator is at the workspace, and a
+Session on screen, or read after its event, is left out. The decrypted payload
+is JSON matching `PushMessageSchema` (`protocol/push.ts`):
+
+| Field          | Type                                   | Presence                      |
+| -------------- | -------------------------------------- | ----------------------------- |
+| `v`            | `2`                                    | always                        |
+| `category`     | `"input" \| "failure" \| "completion"` | always                        |
+| `agentId`      | identifier                             | always                        |
+| `sessionId`    | identifier                             | always                        |
+| `occurredAt`   | ISO 8601, the Session's newest event   | always                        |
+| `locale`       | `"en" \| "he"`                         | always, the device's own      |
+| `agentName`    | string, 1–64 UTF-16 units              | fresh device, visible Agent   |
+| `sessionTitle` | string, 1–120 UTF-16 units             | fresh device, titled Session  |
+| `requestText`  | string, 1–200 UTF-16 units             | fresh device, input only      |
+| `requestMore`  | integer ≥ 1                            | with `requestText`, when more |
+
+`v` versions the payload on its own, apart from `HGW_EXTENSION_VERSION`.
+Version 2 replaced, without compatibility, version 1's one counted message per
+category, which named no Session when it counted several.
+
+- **Text.** Every text field is one line: control and bidirectional
+  characters removed, whitespace collapsed, credentials masked as
+  `[credential redacted]`, and cut at a code-point boundary ending in `…`. An
+  Agent's name travels only for a visible, selectable Agent that is not the
+  creator; the catalog lookup waits at most 1 s, and a slow or failed one
+  sends the message without it.
+- **Fresh devices.** Only a registration stored in the last 30 days receives
+  `agentName`, `sessionTitle`, `requestText` and `requestMore`; an older one
+  receives the ids alone until the browser registers it again with
+  `PUT /push/subscriptions`. A registration older than 90 days is removed,
+  on startup and before each delivery.
+- **Size.** Every message is padded to 4096 bytes. A payload past the
+  encryptor's 3993-byte plaintext limit drops `requestText` and
+  `requestMore`, then `sessionTitle`, then `agentName`; the ids always
+  travel.
+- **Topic.** The `Topic` header is per Session and keyed: the first 32
+  characters of base64url(HMAC-SHA256(key, UTF-8 of the JSON array
+  `[agentId, sessionId]`)), where the key is HKDF-SHA256 over the VAPID
+  private key with an empty salt and the info `harness-gw push topic v1`. A
+  push service can collapse a Session's undelivered messages into the newest
+  without learning which Session it is. A Session is not sent a message
+  whose newest event is no newer than one it was already sent.
 
 ## Client modules
 

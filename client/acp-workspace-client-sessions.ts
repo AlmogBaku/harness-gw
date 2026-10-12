@@ -55,11 +55,14 @@ function statusFromState(update: StateUpdate): SessionStatus {
     : "idle"
 }
 
-/** Content-free workspace events; read state travels as a row change instead. */
+/**
+ * Workspace events as the feed sent them, a request's preview and the replay
+ * mark included; read state travels as a row change instead.
+ */
 function activityEventOf(
   notification: HgwActivityNotification
 ): WorkspaceActivityEvent | undefined {
-  const { agentId, sessionId, occurredAt, type } = notification
+  const { agentId, sessionId, occurredAt, type, replayed } = notification
   if (type === "unread-changed") return undefined
   const key =
     "turnId" in notification
@@ -72,14 +75,19 @@ function activityEventOf(
     agentId,
     sessionId,
     occurredAt,
+    ...(replayed ? { replayed } : {}),
   }
-  if (type === "attention-requested")
+  if (type === "attention-requested") {
+    const { requestText, requestMore } = notification
     return {
       ...base,
       type,
       requestId: notification.requestId,
       attentionKind: notification.attentionKind,
+      ...(requestText === undefined ? {} : { requestText }),
+      ...(requestMore === undefined ? {} : { requestMore }),
     }
+  }
   if (type === "attention-resolved")
     return { ...base, type, requestId: notification.requestId }
   return { ...base, type, turnId: notification.turnId }

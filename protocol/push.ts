@@ -1,11 +1,15 @@
 import { z } from "zod"
 
-import { IdentifierSchema } from "./acp"
+import { HGW_REQUEST_TEXT_MAX, IdentifierSchema } from "./acp"
 
 /**
  * Web Push contract shared by the browser, the service worker, and the gateway.
- * Content-free by construction: a category, a count, opaque ids when exactly
- * one Session is meant, a timestamp, and the device locale.
+ * One message is about one Session. It always carries the category, the Agent
+ * and Session ids, when the Session's newest event happened, and the device
+ * locale. A device whose registration is under 30 days old may also get the
+ * Agent's name, the Session's title, and a preview of what is asked: each one
+ * line, cut to its `PUSH_TEXT_LIMITS` entry, with credentials masked. Every
+ * encrypted message is padded to one size.
  */
 
 export const PushCategorySchema = z.enum(["input", "failure", "completion"])
@@ -44,30 +48,42 @@ export const PRESENCE_GRACE_MS = 60_000
  * operator who really left is owed, inside a 3-second input window.
  */
 export const PRESENCE_CLOSED_GRACE_MS = 2_000
-/** Fixed window from the first event in which one push per category is sent. */
+/**
+ * Fixed window from a category's first event. When it closes, each Session
+ * that had an event inside it gets one push, about its newest one.
+ */
 export const COALESCE_WINDOW_MS: Readonly<Record<PushCategory, number>> = {
   input: 3_000,
   failure: 5_000,
   completion: 20_000,
 }
 
-/** The encrypted payload a device receives; ids are present iff count is 1. */
-export const PushMessageSchema = z
-  .strictObject({
-    v: z.literal(1),
-    category: PushCategorySchema,
-    count: z.number().int().min(1),
-    agentId: IdentifierSchema.optional(),
-    sessionId: IdentifierSchema.optional(),
-    occurredAt: z.string().datetime(),
-    locale: PushLocaleSchema,
-  })
-  .refine(
-    (message) =>
-      (message.count === 1) ===
-      (message.agentId !== undefined && message.sessionId !== undefined),
-    { message: "A single-Session push carries both ids; a count carries none" }
-  )
+/** The longest each text field may be, in UTF-16 units, as zod's `.max` counts. */
+export const PUSH_TEXT_LIMITS = {
+  agentName: 64,
+  sessionTitle: 120,
+  requestText: HGW_REQUEST_TEXT_MAX,
+} as const
+
+const pushText = (max: number) => z.string().min(1).max(max)
+
+/**
+ * The encrypted payload a device receives. `v` versions it on its own, apart
+ * from the ACP extension version; `requestMore` counts the questions asked
+ * after the one `requestText` previews.
+ */
+export const PushMessageSchema = z.strictObject({
+  v: z.literal(2),
+  category: PushCategorySchema,
+  agentId: IdentifierSchema,
+  sessionId: IdentifierSchema,
+  occurredAt: z.string().datetime(),
+  locale: PushLocaleSchema,
+  agentName: pushText(PUSH_TEXT_LIMITS.agentName).optional(),
+  sessionTitle: pushText(PUSH_TEXT_LIMITS.sessionTitle).optional(),
+  requestText: pushText(PUSH_TEXT_LIMITS.requestText).optional(),
+  requestMore: z.number().int().min(1).optional(),
+})
 export type PushMessage = z.infer<typeof PushMessageSchema>
 
 export const PushCategoriesSchema = z.strictObject({

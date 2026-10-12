@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest"
 
-import { categoryOf, PushMessageSchema, PushRegistrationSchema } from "./push"
+import {
+  categoryOf,
+  PUSH_TEXT_LIMITS,
+  PushMessageSchema,
+  PushRegistrationSchema,
+} from "./push"
 
 const base = {
-  v: 1,
+  v: 2,
+  category: "input",
+  agentId: "agent",
+  sessionId: "session",
   occurredAt: "2026-09-20T10:00:00.000Z",
   locale: "en",
 } as const
@@ -19,30 +27,36 @@ describe("push contract", () => {
     expect(categoryOf("attention-resolved")).toBeUndefined()
   })
 
-  it("ties the Session ids to a count of exactly one", () => {
-    const single = {
-      ...base,
-      category: "input",
-      count: 1,
-      agentId: "agent",
-      sessionId: "session",
+  it.each([
+    ["the ids alone", base, true],
+    [
+      "every text field at its limit",
+      {
+        ...base,
+        agentName: "a".repeat(PUSH_TEXT_LIMITS.agentName),
+        sessionTitle: "t".repeat(PUSH_TEXT_LIMITS.sessionTitle),
+        requestText: "q".repeat(PUSH_TEXT_LIMITS.requestText),
+        requestMore: 2,
+      },
+      true,
+    ],
+    ["a count", { ...base, count: 1 }, false],
+    ["the first version", { ...base, v: 1 }, false],
+    ["no Session id", { ...base, sessionId: undefined }, false],
+    [
+      "a title past its limit",
+      { ...base, sessionTitle: "t".repeat(PUSH_TEXT_LIMITS.sessionTitle + 1) },
+      false,
+    ],
+    ["an empty name", { ...base, agentName: "" }, false],
+    ["no further question", { ...base, requestMore: 0 }, false],
+    ["a field it does not define", { ...base, title: "leak" }, false],
+  ])(
+    "accepts only a v2 message about one Session: %s",
+    (_case, message, valid) => {
+      expect(PushMessageSchema.safeParse(message).success).toBe(valid)
     }
-    expect(PushMessageSchema.safeParse(single).success).toBe(true)
-    expect(
-      PushMessageSchema.safeParse({ ...base, category: "failure", count: 3 })
-        .success
-    ).toBe(true)
-    expect(
-      PushMessageSchema.safeParse({ ...base, category: "input", count: 1 })
-        .success
-    ).toBe(false)
-    expect(PushMessageSchema.safeParse({ ...single, count: 2 }).success).toBe(
-      false
-    )
-    expect(
-      PushMessageSchema.safeParse({ ...single, title: "leak" }).success
-    ).toBe(false)
-  })
+  )
 
   it("accepts a browser subscription with device preferences", () => {
     const registration = {

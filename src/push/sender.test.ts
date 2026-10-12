@@ -44,9 +44,8 @@ beforeAll(() => {
 })
 
 const MESSAGE: PushMessage = {
-  v: 1,
+  v: 2,
   category: "input",
-  count: 1,
   agentId: "researcher",
   sessionId: "session-1",
   occurredAt: "2026-09-20T10:00:00.000Z",

@@ -626,16 +626,26 @@ export const HgwErrorNotificationSchema = readObject({
   message: z.string().max(4096),
 })
 
+/**
+ * The longest a request preview may be, in UTF-16 units, as zod's `.max`
+ * counts; the push payload's `requestText` shares it.
+ */
+export const HGW_REQUEST_TEXT_MAX = 200
+
 const ActivityBase = {
   agentId: IdentifierSchema,
   sessionId: IdentifierSchema,
   occurredAt: z.string().datetime(),
+  /** Re-sent on connect from what the gateway already holds, not just happened. */
+  replayed: z.literal(true).optional(),
 }
 
 /**
- * `_hgw/activity`: content-free workspace events for every Session the
- * connection may observe. Hydrated on connect from coordinator snapshots and
- * the session list.
+ * `_hgw/activity`: workspace events for every Session the connection may
+ * observe, in ids, times, and kinds. An attention request also carries a
+ * one-line preview of what it asks, with credentials masked, and how many
+ * questions follow it. Hydrated on connect from coordinator snapshots and the
+ * session list, and those items are marked `replayed`.
  */
 export const HgwActivityNotificationSchema = z.discriminatedUnion("type", [
   readObject({
@@ -648,6 +658,8 @@ export const HgwActivityNotificationSchema = z.discriminatedUnion("type", [
     type: z.literal("attention-requested"),
     requestId: IdentifierSchema,
     attentionKind: z.enum(["question", "permission"]),
+    requestText: z.string().min(1).max(HGW_REQUEST_TEXT_MAX).optional(),
+    requestMore: z.number().int().min(1).optional(),
   }),
   readObject({
     ...ActivityBase,
