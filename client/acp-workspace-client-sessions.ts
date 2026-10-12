@@ -74,7 +74,8 @@ const FEED_STATUS: Readonly<
  * mark included; read state travels as a row change instead.
  */
 function activityEventOf(
-  notification: HgwActivityNotification
+  notification: HgwActivityNotification,
+  marksReplays: boolean
 ): WorkspaceActivityEvent | undefined {
   const { agentId, sessionId, occurredAt, type, replayed } = notification
   if (type === "unread-changed") return undefined
@@ -89,7 +90,7 @@ function activityEventOf(
     agentId,
     sessionId,
     occurredAt,
-    ...(replayed ? { replayed } : {}),
+    ...(replayed && marksReplays ? { replayed } : {}),
   }
   if (type === "attention-requested") {
     const { requestText, requestMore } = notification
@@ -136,6 +137,11 @@ export function createAcpSessionStore({
   const subscribed = new Map<string, number>()
   /** Every Session's open requests, as the feed reports them. */
   const openRequests = new Map<string, Set<string>>()
+  /**
+   * Only the first connection's catch-up is old news to this client: a later
+   * one may re-send what happened while the socket was down.
+   */
+  let marksReplays = true
   const todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   const activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
   const invalidationListeners = new Map<string, Set<() => void>>()
@@ -327,7 +333,7 @@ export function createAcpSessionStore({
       if (notification.type === "unread-changed")
         return patch(notification.sessionId, { unread: notification.unread })
       noteActivity(notification)
-      const event = activityEventOf(notification)
+      const event = activityEventOf(notification, marksReplays)
       if (event) emitActivity(event)
     }
   )
@@ -339,10 +345,14 @@ export function createAcpSessionStore({
     },
     /**
      * A connection that starts over re-sends every request still open as it
-     * hydrates, so one the old connection left open and the new one does not
-     * name has been settled while nobody was listening.
+     * catches up, so one the old connection left open and the new one does
+     * not name was settled while nobody was listening; and what it re-sends
+     * is no longer marked as already seen.
      */
-    forgetOpenRequests: () => openRequests.clear(),
+    startOver() {
+      openRequests.clear()
+      marksReplays = false
+    },
     put,
     rowsFor,
     /** The provider's title, as a list page or a subscribed Session reports it. */

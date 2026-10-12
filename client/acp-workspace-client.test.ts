@@ -921,8 +921,8 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("maps workspace activity, its preview and replay mark, and ignores read-state events", async () => {
-    const { client, emitNotification } = createClient()
+  it("maps workspace activity, its preview and the first connection's replay mark, and ignores read-state events", async () => {
+    const { client, emitNotification, emitStatus } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
 
@@ -979,6 +979,22 @@ describe("ACP workspace client", () => {
     // A live item carries no replay mark and no preview it was not sent.
     expect(events[0]).not.toHaveProperty("replayed")
     expect(events[0]).not.toHaveProperty("requestText")
+
+    // A later connection's catch-up may hold what happened while it was
+    // down, so what it re-sends arrives unmarked.
+    emitStatus("reconnecting")
+    emitStatus("ready")
+    emitNotification(HGW_METHODS.notify.activity, {
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      occurredAt: UPDATED_AT,
+      replayed: true,
+      type: "attention-requested",
+      requestId: "request-3",
+      attentionKind: "question",
+    })
+    expect(events[2]).toMatchObject({ requestId: "request-3" })
+    expect(events[2]).not.toHaveProperty("replayed")
   })
 
   it("reports an Agent the catalog gained once a creator run stops", async () => {

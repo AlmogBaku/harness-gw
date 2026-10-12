@@ -312,11 +312,12 @@ export function createAcpWorkspaceClient({
   let connectionCurrentlyReady = connectionEverReady
   const leaveStatus = connection.subscribeStatus((status) => {
     if (status === "ready") {
-      // Before the new connection's hydration names what is still open.
-      store.forgetOpenRequests()
-      // A reconnect: was ever ready and had an interruption.
-      if (connectionEverReady && !connectionCurrentlyReady)
+      // A reconnect: was ever ready and had an interruption. Its catch-up is
+      // yet to come.
+      if (connectionEverReady && !connectionCurrentlyReady) {
+        store.startOver()
         scheduleSessionRelist()
+      }
       connectionEverReady = true
       connectionCurrentlyReady = true
     } else {
