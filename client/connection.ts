@@ -69,7 +69,7 @@ import {
   STABLE_AFTER_MS,
   type RequestTier,
 } from "./limits"
-import { loggedId, loggedStream } from "./log"
+import { callEach, loggedId, loggedStream } from "./log"
 import type {
   AcpConnection,
   AcpConnectionOutage,
@@ -721,13 +721,13 @@ export function createAcpConnection(
   function setStatus(next: AcpConnectionStatus) {
     if (status === next) return
     status = next
-    for (const listener of statusListeners) listener(next)
+    callEach(statusListeners, logger, "acp.listener.failed", next)
   }
 
   function setOutage(next: AcpConnectionOutage | undefined) {
     if (outage === next) return
     outage = next
-    for (const listener of outageListeners) listener(next)
+    callEach(outageListeners, logger, "acp.listener.failed", next)
   }
 
   function emitPending(request: AcpPendingRequest) {
@@ -852,7 +852,13 @@ export function createAcpConnection(
         }
       if (open.replaying) open.replaying.delivered = true
       for (const { listener } of open.listeners)
-        listener.update?.(params.update, meta)
+        callEach(
+          listener.update ? [listener.update] : [],
+          logger,
+          "acp.listener.failed",
+          params.update,
+          meta
+        )
     })
     .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
       permissionRequest(params, signal)
@@ -863,8 +869,12 @@ export function createAcpConnection(
   for (const [method, parser] of Object.entries(NOTIFICATION_PARSERS))
     app.onNotification(method, parser, ({ params }) => {
       if (method === HGW_METHODS.notify.error) noticeGone(params)
-      for (const listener of notificationListeners.get(method) ?? [])
-        listener(params)
+      callEach(
+        notificationListeners.get(method) ?? [],
+        logger,
+        "acp.listener.failed",
+        params
+      )
     })
 
   /** An opened Session the proxy reports as not found is gone for good. */
@@ -1178,7 +1188,13 @@ export function createAcpConnection(
     if (next === "joined") open.waiters?.resolve()
     if (failure !== undefined) open.waiters?.reject(failure)
     if (next === "joined" || failure !== undefined) open.waiters = undefined
-    for (const { listener } of open.listeners) listener.state?.(next)
+    for (const { listener } of open.listeners)
+      callEach(
+        listener.state ? [listener.state] : [],
+        logger,
+        "acp.listener.failed",
+        next
+      )
   }
 
   function subscribe(sessionId: string, listener: AcpSessionListener) {

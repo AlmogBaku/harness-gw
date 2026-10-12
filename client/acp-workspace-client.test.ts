@@ -684,6 +684,26 @@ describe("ACP workspace client", () => {
     ).toEqual([[SESSION_ID, "waiting-for-input"]])
   })
 
+  it("keeps publishing to the other subscribers when one throws", async () => {
+    const { client, join, emitUpdate } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    client.subscribeSessionMetadata([SESSION_ID], () => {
+      throw new Error("listener failed")
+    })
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID], (rows) =>
+      published.push(rows)
+    )
+    await join()
+
+    emitUpdate(
+      { sessionUpdate: "session_info_update" },
+      { agentId: AGENT_ID, status: "waiting-for-input", archived: false }
+    )
+
+    expect(published.at(-1)?.[0]?.status).toBe("waiting-for-input")
+  })
+
   it("acks read state optimistically before the provider write", async () => {
     const { client, argsOf, emitNotification } = createClient()
     const published = await watchRows(client)

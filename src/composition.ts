@@ -292,7 +292,10 @@ export async function createConfiguredGateway(
    * One row cache per process: the catalog keeps it current and push delivery
    * reads the same rows to gate a notification on read state.
    */
-  const sessionRows = createSessionRows(clock)
+  const sessionRows = createSessionRows({
+    ...clock,
+    logger: dependencies.logger,
+  })
   /** One workspace catalog per process, which both listeners share. */
   const catalog = createCatalog({
     runtime: runtimeInstance.runtime,

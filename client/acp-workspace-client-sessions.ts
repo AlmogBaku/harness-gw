@@ -21,7 +21,10 @@ import type {
   TodoItem,
   WorkspaceActivityEvent,
 } from "./workspace"
+import type { Logger } from "../lifecycle"
+import { SILENT_LOGGER } from "./connection"
 import { subscribeHgwNotification } from "./hgw-notification"
+import { callEach } from "./log"
 import type { AcpConnection } from "./types"
 
 /**
@@ -41,6 +44,8 @@ export type AcpSessionStoreOptions = {
   now?: () => number
   /** A live turn of a subscribed Session just stopped, however it ended. */
   onTurnFinished?: (sessionId: string) => void
+  /** Where a listener that throws is told; the others still hear. */
+  logger?: Logger
 }
 
 /** The one place a `state_update` becomes a Session status. */
@@ -126,6 +131,7 @@ export function createAcpSessionStore({
   connection,
   now = Date.now,
   onTurnFinished,
+  logger = SILENT_LOGGER,
 }: AcpSessionStoreOptions) {
   const rows = new Map<string, SessionMetadata>()
   const titles = new Map<string, string>()
@@ -167,7 +173,12 @@ export function createAcpSessionStore({
   function notify(subscription: MetadataSubscription) {
     for (const sessionId of subscription.sessionIds)
       if (!rows.has(sessionId) && !answered.has(sessionId)) return
-    subscription.listener(rowsFor(subscription.sessionIds))
+    callEach(
+      [subscription.listener],
+      logger,
+      "sessions.listener.failed",
+      rowsFor(subscription.sessionIds)
+    )
   }
 
   function publish(sessionId: string) {
@@ -230,17 +241,25 @@ export function createAcpSessionStore({
   function setTodos(sessionId: string, next: TodoItem[]) {
     todos.set(sessionId, next)
     for (const listener of todoListeners.get(sessionId) ?? [])
-      listener(next.map((todo) => ({ ...todo })))
+      callEach(
+        [listener],
+        logger,
+        "sessions.listener.failed",
+        next.map((todo) => ({ ...todo }))
+      )
   }
 
   function emitActivity(event: WorkspaceActivityEvent) {
-    for (const listener of activityListeners) listener(event)
+    callEach(activityListeners, logger, "sessions.listener.failed", event)
   }
 
   /** Tells a Session's listeners to re-read what the provider now holds. */
   function invalidate(sessionId: string) {
-    for (const listener of invalidationListeners.get(sessionId) ?? [])
-      listener()
+    callEach(
+      invalidationListeners.get(sessionId) ?? [],
+      logger,
+      "sessions.listener.failed"
+    )
   }
 
   /** An update whose `_meta.hgw` does not parse carries nothing to publish. */

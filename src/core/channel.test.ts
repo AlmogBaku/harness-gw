@@ -795,6 +795,20 @@ function joined(
 const declining = (requestId: string, act: MemberAct) => act.decline(requestId)
 
 describe("a membership's declines", () => {
+  it("still asks the other requests when the member's stack throws on one", async () => {
+    const test = joined({
+      requests: [APPROVAL, QUESTION],
+      decline: (requestId) => {
+        if (requestId === APPROVAL.requestId) throw new Error("stack failed")
+      },
+    })
+
+    expect(() => test.membership.reissuePending()).not.toThrow()
+    await settle()
+
+    expect(test.log).toContain("asked:question-1")
+  })
+
   it("denies a permission its stack declines once the member was offered it", async () => {
     const test = joined({ decline: declining })
 

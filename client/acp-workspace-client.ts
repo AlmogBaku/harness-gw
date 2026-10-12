@@ -24,7 +24,7 @@ import { createAcpComposerStore } from "./acp-workspace-client-composer"
 import { createAcpSessionStore, rowOf } from "./acp-workspace-client-sessions"
 import type { AcpConnection } from "./types"
 import { SILENT_LOGGER } from "./connection"
-import { loggedId } from "./log"
+import { callEach, loggedId } from "./log"
 
 /**
  * The workspace surface over one ACP connection: Agent and Session ownership,
@@ -81,6 +81,7 @@ export function createAcpWorkspaceClient({
 }: AcpWorkspaceClientOptions) {
   const store = createAcpSessionStore({
     connection,
+    logger: clientLog,
     ...(now ? { now } : {}),
     onTurnFinished: (sessionId) => {
       reportCreatedAgents(sessionId).catch((err: unknown) =>
@@ -290,7 +291,12 @@ export function createAcpWorkspaceClient({
       }
       // A listener that throws has not failed the read, so it is not retried.
       const sessionIds = page.sessions.map(({ sessionId }) => sessionId)
-      for (const listener of catalogListeners) listener(sessionIds)
+      callEach(
+        catalogListeners,
+        clientLog,
+        "sessions.catalog_listener.failed",
+        sessionIds
+      )
       return
     }
   }
