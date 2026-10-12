@@ -183,7 +183,11 @@ What a guest is shown:
   connection has; the REST byte caps still apply.
 - Reasoning, tool input and output, terminals, compaction, the model, and
   subagent prose are dropped. A tool call that declares an MCP App reaches
-  the guest as its card alone.
+  the guest as its card; when its server is in `guest.appServers` (default
+  `aos-ui`), its result passes whole too, as the guest's own view route would
+  hand it. Arguments never pass, since they may name host paths.
+- A published Artifact the provider holds reaches the guest by its id alone,
+  live and in a replay alike; inline Artifact data never does.
 - Questions (`elicitation/create`) reach the guest unchanged, and the guest may
   answer them.
 - Permission requests are never shown to a guest. One raised in a turn the

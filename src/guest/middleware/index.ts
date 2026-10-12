@@ -25,6 +25,8 @@ export type GuestGrant = {
 export type GuestMiddlewareOptions = GuestScopeOptions & {
   /** How many turns every guest together may hold at once. */
   guestActiveExecutions: number
+  /** The MCP servers whose App calls reach this guest whole; none by default. */
+  appServers?: readonly string[]
 }
 
 /**
@@ -39,7 +41,7 @@ export function createGuestMiddleware(
     createCommandsMiddleware(),
     createScopeMiddleware(options),
     createHistoryMiddleware(options),
-    createTurnsMiddleware(),
+    createTurnsMiddleware(options),
     createPermissionsMiddleware({ principalId: options.grant.principalId }),
     createFeedsMiddleware(),
     createQuotaMiddleware({ limit: options.guestActiveExecutions }),

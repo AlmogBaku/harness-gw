@@ -16,6 +16,8 @@ import {
   type MemberEvent,
   type Middleware,
 } from "../../core/member"
+import { appCallPassesWhole } from "./app-servers"
+import { ARTIFACT_PART_NAME, guestArtifact } from "./artifacts"
 import type { GuestGrant } from "./index"
 
 /**
@@ -34,7 +36,8 @@ const ProjectedHistorySchema = SessionHistoryResponseSchema.extend({
 
 export function projectGuestHistory(
   history: SessionHistoryResponse,
-  publicSessionId = history.sessionId
+  publicSessionId = history.sessionId,
+  appServers: readonly string[] = []
 ) {
   const messages: unknown[] = []
   /**
@@ -53,8 +56,9 @@ export function projectGuestHistory(
     }
     const content = message.content.flatMap(
       (part): SessionMessage["content"] => {
-        // An MCP App reaches a guest as its card alone: its input and result
-        // travel only through the invitation's own view route.
+        // An MCP App reaches a guest as its card, with its result when its
+        // server is allowlisted; its input travels only through the
+        // invitation's own view route, which withholds the host paths it names.
         if (part.type === "tool-call")
           return part.app
             ? [
@@ -64,11 +68,22 @@ export function projectGuestHistory(
                   toolName: part.toolName,
                   args: {},
                   argsText: "",
+                  ...(part.result !== undefined &&
+                  appCallPassesWhole(part.toolName, appServers)
+                    ? { result: part.result }
+                    : {}),
                   ...(part.isError ? { isError: true } : {}),
                   app: true as const,
                 },
               ]
             : []
+        // A published Artifact replays as it streamed live.
+        if (part.type === "data" && part.name === ARTIFACT_PART_NAME) {
+          const artifact = guestArtifact(part.data)
+          return artifact
+            ? [{ type: "data", name: ARTIFACT_PART_NAME, data: artifact }]
+            : []
+        }
         return part.type === "text" ? [{ type: "text", text: part.text }] : []
       }
     )
@@ -131,10 +146,15 @@ export function projectGuestHistory(
   })
 }
 
-export type GuestHistoryOptions = { grant: GuestGrant }
+export type GuestHistoryOptions = {
+  grant: GuestGrant
+  /** The MCP servers whose App calls keep their result; none by default. */
+  appServers?: readonly string[]
+}
 
 export function createHistoryMiddleware({
   grant,
+  appServers = [],
 }: GuestHistoryOptions): Middleware {
   /**
    * Every user message this guest was shown, in history or as a prompt under
@@ -157,7 +177,8 @@ export function createHistoryMiddleware({
         case "history": {
           const page = projectGuestHistory(
             ProjectedHistorySchema.parse(event.page),
-            grant.ref
+            grant.ref,
+            appServers
           )
           for (const message of page.messages)
             if (message.role === "user") shown.add(message.id)

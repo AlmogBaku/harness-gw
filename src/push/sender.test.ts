@@ -4,8 +4,10 @@ import {
   createHash,
   generateKeyPairSync,
   randomBytes,
-  type JsonWebKey,
+  type webcrypto,
 } from "node:crypto"
+
+type JsonWebKey = webcrypto.JsonWebKey
 import { beforeAll, describe, expect, it, vi } from "vitest"
 
 import type { PushMessage } from "../../protocol/push"

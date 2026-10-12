@@ -356,6 +356,15 @@ export const GatewayConfigSchema = z
           keys: UniqueSecretKeysSchema,
           clockSkewSeconds: z.number().int().min(0).max(60).default(0),
         }),
+        /**
+         * MCP servers whose App calls reach guests whole: the call's result as
+         * the operator sees it, never its arguments. Any other App call reaches
+         * a guest as its card alone.
+         */
+        appServers: z
+          .array(z.string().min(1).max(256))
+          .max(64)
+          .default(["aos-ui"]),
       })
       .optional(),
     push: PushSchema.optional(),

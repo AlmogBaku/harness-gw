@@ -6,8 +6,8 @@
  * `OpenClawClient`, built by `fakeOpenClawClient`, so the client's own link,
  * deadlines and error mapping are what the contracts prove.
  *
- * It copies the OpenClaw v2026.9.4 Gateway protocol
- * (`@openclaw/gateway-protocol` 2026.9.4), for an operator device holding the
+ * It copies the OpenClaw v2026.10.2 Gateway protocol
+ * (`@openclaw/gateway-protocol` 2026.10.2), for an operator device holding the
  * admin scope.
  *
  * Usage:

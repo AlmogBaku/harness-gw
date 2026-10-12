@@ -582,6 +582,47 @@ describe("Hermes server adapter", () => {
     expect(request).not.toHaveBeenCalled()
   })
 
+  it("lists the other Agents' Sessions when one profile cannot be read, and fails only when none can", async () => {
+    const request = vi.fn(async () => ({
+      profiles: [
+        { name: "alpha", ui_meta: {}, ui_meta_revisions: {} },
+        { name: "beta", ui_meta: {}, ui_meta_revisions: {} },
+      ],
+    }))
+    const broken = new Set(["beta"])
+    const http = vi.fn(async (path: string) => {
+      const profileName = new URL(path, "http://native.test").searchParams.get(
+        "profile"
+      )!
+      // Hermes answers 500 for a profile whose session store does not exist yet.
+      if (broken.has(profileName)) throw new HermesHttpError(500)
+      return {
+        sessions: [
+          { id: `${profileName}-1`, profile: profileName, last_active: 1 },
+        ],
+        total: 1,
+      }
+    })
+    const logs = captureLogs()
+    const adapter = new HermesServerAdapter(
+      { request, http },
+      { log: logs.logger }
+    )
+
+    const catalog = await adapter.listAllSessions(50, 0)
+
+    expect(catalog.sessions.map(({ id }) => id)).toEqual(["alpha-1"])
+    expect(catalog.total).toBe(1)
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields.profile])
+    ).toEqual([["hermes.profile.unavailable", "beta"]])
+
+    broken.add("alpha")
+    await expect(adapter.listAllSessions(50, 0)).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
+  })
+
   it("merges multiple Agent catalogs into deterministic bounded global pages", async () => {
     const rows = (profileName: string, newest: number, count: number) =>
       Array.from({ length: count }, (_, index) => ({

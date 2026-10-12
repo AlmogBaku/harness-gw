@@ -4,7 +4,11 @@ import { join } from "node:path"
 import { parse } from "yaml"
 import { afterEach, describe, expect, it } from "vitest"
 
-import { isHttpsOrLoopback, listenerOrigins, parseGatewayConfig } from "./config"
+import {
+  isHttpsOrLoopback,
+  listenerOrigins,
+  parseGatewayConfig,
+} from "./config"
 import { readSecretFile, readSecretKeyFile } from "./secrets"
 import { appFileSettings } from "./routes/app-files"
 
@@ -190,6 +194,7 @@ describe("proxy configuration and secret boundary", () => {
         keys: [{ id: "guest", secretFile: "/run/secrets/guest-key" }],
         clockSkewSeconds: 0,
       },
+      appServers: ["aos-ui"],
     })
   })
 
@@ -573,8 +578,8 @@ describe("MCP Apps fallback credentials", () => {
       "http://127.0.0.1:4110/mcp",
     ])
       expect(
-        parseGatewayConfig(withServer({ url, headers: header })).mcpApps?.fallback
-          ?.servers["aos-ui"]
+        parseGatewayConfig(withServer({ url, headers: header })).mcpApps
+          ?.fallback?.servers["aos-ui"]
       ).toEqual({ url, headers: header })
   })
 
@@ -620,9 +625,9 @@ describe("the Artifact viewer", () => {
       resource: "ui://aos-ui/artifact",
     })
     const viewer = { server: "files", resource: "ui://files/viewer" }
-    expect(parseGatewayConfig(withViewer(viewer)).mcpApps?.files?.viewer).toEqual(
-      viewer
-    )
+    expect(
+      parseGatewayConfig(withViewer(viewer)).mcpApps?.files?.viewer
+    ).toEqual(viewer)
   })
 
   it.each([

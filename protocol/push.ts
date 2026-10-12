@@ -77,7 +77,7 @@ export const PushMessageSchema = z.strictObject({
   category: PushCategorySchema,
   agentId: IdentifierSchema,
   sessionId: IdentifierSchema,
-  occurredAt: z.string().datetime(),
+  occurredAt: z.iso.datetime(),
   locale: PushLocaleSchema,
   agentName: pushText(PUSH_TEXT_LIMITS.agentName).optional(),
   sessionTitle: pushText(PUSH_TEXT_LIMITS.sessionTitle).optional(),

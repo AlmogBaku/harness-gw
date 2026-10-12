@@ -196,9 +196,9 @@ export const SessionSchema = z.strictObject({
   title: z.string().min(1).max(4096).optional(),
   archived: z.boolean(),
   /** Absent when the provider does not report it. */
-  createdAt: z.string().datetime().optional(),
+  createdAt: z.iso.datetime().optional(),
   /** Absent while the provider has not stored the Session. */
-  updatedAt: z.string().datetime().optional(),
+  updatedAt: z.iso.datetime().optional(),
   status: SessionStatusSchema,
   /** Provider read state; absent when untracked or unknowable on this read. */
   unread: z.boolean().optional(),
@@ -324,8 +324,8 @@ const SessionMessagePartSchema = z.discriminatedUnion("type", [
     kind: z.enum(Object.values(ToolKind)).optional(),
     locations: z.array(ToolLocationSchema).max(256).optional(),
     diffs: z.array(ToolDiffSchema).max(64).optional(),
-    startedAt: z.string().datetime().optional(),
-    completedAt: z.string().datetime().optional(),
+    startedAt: z.iso.datetime().optional(),
+    completedAt: z.iso.datetime().optional(),
     durationMs: z.number().int().nonnegative().optional(),
     /** The tool declares an MCP App view; open it through the mcpApps API. */
     app: z.literal(true).optional(),
@@ -378,9 +378,9 @@ export const SessionMessageSchema = z.strictObject({
   role: z.enum(["user", "assistant", "system"]),
   content: z.array(SessionMessagePartSchema).max(2_000),
   attachments: z.array(SessionMessageAttachmentSchema).max(16).optional(),
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
   /** When the turn's newest stored part landed; absent when the provider keeps no per-row time. */
-  completedAt: z.string().datetime().optional(),
+  completedAt: z.iso.datetime().optional(),
   // The two states a durable message may carry besides a plain completion: a
   // turn still waiting on the user, and a turn the provider failed. Both shapes
   // are the ones the workspace already renders for a live turn.
@@ -824,7 +824,7 @@ export const SessionContextResponseSchema = z.strictObject({
   /** What the Session has cost so far, where the runtime reports it. */
   cost: z
     .strictObject({
-      amount: z.number().finite().min(0),
+      amount: z.number().min(0),
       currency: z.string().min(1),
     })
     .optional(),
@@ -849,7 +849,7 @@ export const ArtifactDescriptorSchema = z.strictObject({
       encoding: z.enum(["utf8", "base64"]),
       data: z.string(),
     }),
-    z.strictObject({ type: z.literal("url"), url: z.string().url() }),
+    z.strictObject({ type: z.literal("url"), url: z.url() }),
     z.strictObject({
       type: z.literal("provider"),
       reference: z.string().min(1),

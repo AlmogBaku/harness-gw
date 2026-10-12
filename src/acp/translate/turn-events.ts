@@ -24,6 +24,7 @@ import {
 import {
   initialTranslateState,
   type AcpOutbound,
+  type Built,
   type TranslateContext,
   type TranslateTurnEvent,
   type TranslateState,
@@ -92,7 +93,7 @@ function jsonOr(text: string, fallback: unknown): unknown {
 type Step = { state: TranslateState; outbound: AcpOutbound[] }
 
 /** An update whose ACP fields carry every fact but the turn it belongs to. */
-function turnUpdate(context: TranslateContext, value: SessionUpdate) {
+function turnUpdate(context: TranslateContext, value: Built<SessionUpdate>) {
   return update({ ...value, _meta: { [HGW_META_KEY]: turnMeta(context) } })
 }
 
@@ -381,7 +382,7 @@ function toolFinished(
   // The settled content replaces everything streamed into the call, so it
   // restates the terminals the call announced.
   const terminals = Object.entries(state.terminals).flatMap(
-    ([terminalId, toolCallId]): ToolCallContent[] =>
+    ([terminalId, toolCallId]): Built<ToolCallContent>[] =>
       toolCallId === event.toolCallId ? [{ type: "terminal", terminalId }] : []
   )
   const output = jsonOr(event.output, event.output)

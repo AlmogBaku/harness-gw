@@ -168,14 +168,14 @@ function executionUpdate({
     return { sessionUpdate: "state_update", state: "requires_action", ...meta }
   if (state === "running" || state === "stopping")
     return { sessionUpdate: "state_update", state: "running", ...meta }
-  return {
-    sessionUpdate: "state_update",
-    state: "idle",
-    ...(state === "uncertain"
-      ? { stopReason: HGW_STOP_REASONS.uncertain }
-      : {}),
-    ...meta,
-  }
+  if (state === "uncertain")
+    return {
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: HGW_STOP_REASONS.uncertain,
+      ...meta,
+    }
+  return { sessionUpdate: "state_update", state: "idle", ...meta }
 }
 
 function sessionInfoUpdate(row: SessionRow): SessionUpdate {
