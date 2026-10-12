@@ -15,7 +15,7 @@ const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/gu
  * C0, DEL, and C1 controls other than whitespace, which collapses instead,
  * and a surrogate with no partner: in a `u` pattern a pair is one code point.
  */
-// eslint-disable-next-line no-control-regex
+// oxlint-disable-next-line no-control-regex
 const UNPRINTABLE = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\uD800-\uDFFF]/gu
 
 /** Text as the ask card shows it: line breaks and length kept, nothing reordered. */

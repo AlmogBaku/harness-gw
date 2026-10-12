@@ -204,7 +204,7 @@ export function backgroundProcessId(result: unknown) {
 }
 
 // CSI and OSC sequences, which a terminal renders rather than prints.
-// eslint-disable-next-line no-control-regex
+// oxlint-disable-next-line no-control-regex
 const ANSI_SEQUENCES = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/gu
 
 /** A terminal chunk as the plain text it prints. */

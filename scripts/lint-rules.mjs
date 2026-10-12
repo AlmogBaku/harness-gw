@@ -1,3 +1,7 @@
+/**
+ * The repository's own lint rules, loaded by Oxlint as the `hgw` JS plugin
+ * (`.oxlintrc.json` scopes each rule to its files).
+ */
 import { readdirSync } from "node:fs"
 import { dirname, relative, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -18,7 +22,7 @@ function adapterOf(filename) {
 }
 
 /** One server adapter never reaches into another; what they share lives above them. */
-const rule = {
+const adapterBoundaries = {
   meta: {
     type: "problem",
     schema: [],
@@ -30,7 +34,9 @@ const rule = {
   create(context) {
     const owner = adapterOf(context.filename)
     if (!owner) return {}
-    function check(source, node) {
+    /** Reports `node` when its `source`, which every import form has, names another adapter. */
+    function check(node) {
+      const { source } = node
       const specifier =
         source?.type === "Literal"
           ? source.value
@@ -50,14 +56,42 @@ const rule = {
         })
     }
     return {
-      ImportDeclaration: (node) => check(node.source, node),
-      ExportNamedDeclaration: (node) => check(node.source, node),
-      ExportAllDeclaration: (node) => check(node.source, node),
-      ImportExpression: (node) => check(node.source, node),
-      TSImportType: (node) =>
-        check(node.source ?? node.argument?.literal ?? node.argument, node),
+      ImportDeclaration: check,
+      ExportNamedDeclaration: check,
+      ExportAllDeclaration: check,
+      ImportExpression: check,
+      TSImportType: check,
     }
   },
 }
 
-export default { rules: { "adapter-boundaries": rule } }
+const styleMatchers =
+  /^(?:toHaveClass|toHaveStyle|toHaveCSS|toHaveScreenshot)$/u
+
+/** Tests assert behavior: a call to a styling matcher is rejected. */
+const noStyleAssertions = {
+  meta: {
+    type: "problem",
+    schema: [],
+    messages: {
+      styleAssertion: "Tests never assert styling; assert behavior instead.",
+    },
+  },
+  create(context) {
+    return {
+      CallExpression(node) {
+        const name = node.callee.property?.name
+        if (typeof name === "string" && styleMatchers.test(name))
+          context.report({ node, messageId: "styleAssertion" })
+      },
+    }
+  },
+}
+
+export default {
+  meta: { name: "hgw" },
+  rules: {
+    "adapter-boundaries": adapterBoundaries,
+    "no-style-assertions": noStyleAssertions,
+  },
+}

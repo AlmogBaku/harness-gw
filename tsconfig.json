@@ -1,5 +1,5 @@
 {
-  // Editors and typescript-eslint type each file with the first config below
+  // Editors and type-aware lint rules type each file with the first config below
   // that holds it, so gateway code never meets DOM types nor client code Bun's.
   "files": [],
   "references": [
