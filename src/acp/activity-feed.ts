@@ -17,7 +17,7 @@ import type { ActivityFeed } from "./types"
 const HYDRATION_PAGE_SIZE = 100
 
 /** A time the wire accepts as `occurredAt`. */
-const OccurredAtSchema = z.string().datetime()
+const OccurredAtSchema = z.iso.datetime()
 
 export type ActivityFeedOptions = {
   catalog: Pick<Catalog, "list" | "rows" | "scope">

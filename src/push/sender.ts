@@ -36,7 +36,8 @@ const encoder = new TextEncoder()
 export async function deriveTopicKey(privateKey: Uint8Array) {
   const material = await crypto.subtle.importKey(
     "raw",
-    privateKey,
+    // WebCrypto takes a view over an ArrayBuffer, never a shared one.
+    new Uint8Array(privateKey),
     "HKDF",
     false,
     ["deriveKey"]
