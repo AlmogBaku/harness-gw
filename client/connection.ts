@@ -40,6 +40,7 @@ import {
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
+  HGW_REPLAY_POSITION,
   HgwActivityNotificationSchema,
   HgwAgentUpdateResponseSchema,
   HgwAgentsListResponseSchema,
@@ -247,6 +248,20 @@ export function acpSocketUrl(path: string, base: string) {
   const url = new URL(path, base)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   return url.toString()
+}
+
+/**
+ * The cursor a rejoin resumes from: the first event of the live turn the
+ * Session's listeners have not seen, as ACP's inclusive cursors name it, or
+ * none for a view that saw no turn event, which the gateway positions itself.
+ */
+function rejoinCursor(position: { turnId: string; after: number } | undefined) {
+  return {
+    type: HGW_REPLAY_POSITION,
+    ...(position === undefined
+      ? {}
+      : { turnId: position.turnId, from: position.after + 1 }),
+  }
 }
 
 function subscribeTo<Listener>(listeners: Set<Listener>, listener: Listener) {
@@ -1016,12 +1031,11 @@ export function createAcpConnection(
             {
               sessionId,
               cwd: AGENT_CWD,
-              ...(fromStart ? { replayFrom: { type: "start" } } : {}),
+              replayFrom: fromStart
+                ? { type: "start" }
+                : rejoinCursor(open.position),
               _meta: {
-                [HGW_META_KEY]: {
-                  ...(agentId === undefined ? {} : { agentId }),
-                  ...(fromStart ? {} : open.position),
-                },
+                [HGW_META_KEY]: agentId === undefined ? {} : { agentId },
               },
             },
             options

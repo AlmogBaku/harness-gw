@@ -19,6 +19,7 @@ import {
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
+  HGW_REPLAY_POSITION,
   HGW_STOP_REASONS,
   HgwHistoryCursorSchema,
   formatArtifactUri,
@@ -208,7 +209,7 @@ describe("AOS ACP agent", () => {
       authMethods: [],
       _meta: {
         hgw: {
-          version: 1,
+          version: 2,
           role: "operator",
           extensions: {
             steer: true,
@@ -2336,13 +2337,97 @@ describe("Session rooms", () => {
 
     const other = await test.connect("connection-2")
     await other.list()
-    await open(other, { _meta: { [HGW_META_KEY]: { turnId, after: 1 } } })
+    await open(other, {
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: 2 },
+    })
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     expect(prompts(other.recorder)).toEqual([])
     expect(flow(other.recorder)).toContain("chunk Done")
     test.close()
     other.close()
+  })
+
+  // ACP cursors are inclusive: `from` names the first event still needed.
+  it("replays a positioned resume from the event its cursor names", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await liveTurn(test, [test])
+    const live = sequencesOf(test.recorder).at(-1)!
+    const { turnId } = test.coordinator.snapshot(test.scope)
+
+    const named = await test.connect("connection-2")
+    await named.list()
+    await open(named, {
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: live },
+    })
+    const past = await test.connect("connection-3")
+    await past.list()
+    await open(past, {
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: live + 1 },
+    })
+
+    expect(flow(named.recorder).filter(isPromptOrChunk)).toEqual(["chunk Live"])
+    expect(flow(past.recorder).filter(isPromptOrChunk)).toEqual([])
+    test.close()
+    named.close()
+    past.close()
+  })
+
+  // ACP replays nothing to a resume that names no cursor.
+  it("follows a resume naming no cursor from the turn's next event", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: undefined })
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn, "the turn to end")
+
+    const seen = flow(other.recorder)
+    expect(seen.filter(isPromptOrChunk)).toEqual(["chunk More"])
+    expect(seen.at(-1)).toBe("state idle")
+    test.close()
+    other.close()
+  })
+
+  it("rebuilds nothing for a resume naming no cursor past its journal's start", async () => {
+    const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
+    await test.list()
+    await liveTurn(test, [test])
+    // A third event outgrows the journal, so the turn's start is gone.
+    chunk(test.sources[0], "Aside", "assistant-2")
+    await test.recorder.wait(said("Aside"), "an update carrying Aside")
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: undefined })
+    chunk(test.sources[0], "More", "assistant-2")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn, "the turn to end")
+
+    const seen = flow(other.recorder)
+    expect(seen.filter((item) => item.startsWith("history"))).toEqual([])
+    expect(seen.filter(isPromptOrChunk)).toEqual(["chunk More"])
+    test.close()
+    other.close()
+  })
+
+  it("refuses a resume that names its position in metadata", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        _meta: { [HGW_META_KEY]: { turnId: "run-1", after: 1 } },
+      })
+    ).rejects.toMatchObject(INVALID_PARAMS)
+    test.close()
   })
 
   it("gives a reconnect without a cursor the prompt once, then the stream", async () => {

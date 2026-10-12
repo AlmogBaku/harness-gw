@@ -7,6 +7,7 @@ import {
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
+  HGW_REPLAY_POSITION,
 } from "../../../protocol/acp"
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { assertLeakFree } from "../../../test/support/leak-oracle"
@@ -196,7 +197,10 @@ type Table = {
   settling: Promise<unknown>[]
 }
 
-/** Resumes `member`'s Session and lets its owed state go out. */
+/**
+ * Resumes `member`'s Session as the SDK does, at the position its view holds,
+ * and lets its owed state go out.
+ */
 async function join(
   t: Table,
   member: Member,
@@ -205,6 +209,7 @@ async function join(
   const answer = await member.agent.request(methods.agent.session.resume, {
     sessionId: member.sessionId,
     cwd: "/",
+    replayFrom: { type: HGW_REPLAY_POSITION },
     ...params,
   })
   await t.clock.advance(0)
@@ -215,7 +220,7 @@ const fromStart = { replayFrom: { type: "start" } }
 
 /** A resume at the cursor `member` holds of the live turn, as a rejoin sends. */
 const atCursor = (turnId: string | undefined, after: number) => ({
-  _meta: { [HGW_META_KEY]: { turnId, after } },
+  replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: after + 1 },
 })
 
 /** Sends one prompt under a client id, as the browser's composer does. */

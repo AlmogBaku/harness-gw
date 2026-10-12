@@ -11,10 +11,12 @@ import { z } from "zod"
 
 import {
   HGW_AUTH_METHOD_INVITE,
+  HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
+  HGW_REPLAY_POSITION,
   HGW_STOP_REASONS,
   HgwReplayBeforeSchema,
   type HgwHistoryCursor,
@@ -106,7 +108,7 @@ function createGatewayAgent(
         info: { name: "harness-gw", version: "9.9.9" },
         _meta: {
           [HGW_META_KEY]: {
-            version: options.version ?? 1,
+            version: options.version ?? HGW_EXTENSION_VERSION,
             role: "operator",
             extensions: {
               steer: true,
@@ -364,7 +366,7 @@ describe("ACP connection", () => {
     const connection = connectInProcess(proxy)
 
     await expect(connection.initialized).resolves.toEqual({
-      version: 1,
+      version: 2,
       role: "operator",
       extensions: expect.objectContaining({ readState: true, focus: true }),
     })
@@ -380,7 +382,8 @@ describe("ACP connection", () => {
   })
 
   it("ends without reconnecting when the gateway speaks another version", async () => {
-    const proxy = createGatewayAgent({ version: 2 })
+    // A gateway from before the release this client speaks.
+    const proxy = createGatewayAgent({ version: 1 })
     const statuses: string[] = []
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -967,11 +970,13 @@ describe("ACP connection", () => {
     await clock.advance(250)
 
     expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
-    expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
-      _meta: {
-        [HGW_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
-      },
+    // ACP cursors are inclusive, so the rejoin names the first event it lacks.
+    const rejoin = proxy.callsOf(methods.agent.session.resume)[1]
+    expect(rejoin).toMatchObject({
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId: "run-1", from: 5 },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
     })
+    expect(rejoin).not.toHaveProperty(["_meta", HGW_META_KEY, "after"])
     // The gateway forgot this connection's presence when the transport dropped, so
     // the report goes out again ahead of the rejoin it would otherwise
     // contradict. The wire order is the browser's to keep; the order the agent
@@ -989,6 +994,31 @@ describe("ACP connection", () => {
     )
     expect(connection.status).toBe("ready")
     expect(pipe.sockets).toHaveLength(2)
+    connection.close()
+  })
+
+  it("rejoins a Session it saw no turn of at the position it holds", async () => {
+    const clock = useFakeClock()
+    const proxy = createGatewayAgent()
+    const pipe = pipedSockets(() => proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/v1/acp",
+      socketConstructor: pipe.WebSocket,
+    })
+    connection.start()
+    await connection.initialized
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
+    await connection.joined(SESSION_ID)
+
+    pipe.sockets[0]?.drop()
+    await clock.advance(250)
+
+    // Not a resume without a cursor, which ACP answers with no replay at all.
+    expect(proxy.callsOf(methods.agent.session.resume)[1]).toHaveProperty(
+      "replayFrom",
+      { type: HGW_REPLAY_POSITION }
+    )
     connection.close()
   })
 

@@ -68,7 +68,7 @@ export function hgwAcpAgentPath(agentId: string) {
   return `${HGW_ACP_AGENTS_PATH}/${encodeURIComponent(agentId)}`
 }
 export const HGW_META_KEY = "hgw" as const
-export const HGW_EXTENSION_VERSION = 1 as const
+export const HGW_EXTENSION_VERSION = 2 as const
 export const HGW_AUTH_METHOD_INVITE = "hgw-invite" as const
 export const HGW_ATTACHMENT_URI_SCHEME = "hgw-attachment:" as const
 export const HGW_ARTIFACT_URI_SCHEME = "artifact:" as const
@@ -253,9 +253,21 @@ export type HgwSessionInfoMeta = z.infer<typeof HgwSessionInfoMetaSchema>
 export const HgwSessionResumeMetaSchema = z.strictObject({
   /** Owning Agent, when the client knows it before listing (deep links). */
   agentId: IdentifierSchema.optional(),
-  /** Last `_meta.hgw.sequence` the client saw for `turnId`. */
-  after: SequenceSchema.optional(),
+})
+
+/**
+ * The reserved `replayFrom` variant that resumes a view from where it already
+ * reaches in the live turn: `from` is the first `_meta.hgw.sequence` of
+ * `turnId` the client still needs, inclusive as every ACP cursor is. One that
+ * names neither replays the live turn from its first event, or rebuilds the
+ * view from history once the journal no longer holds that.
+ */
+export const HGW_REPLAY_POSITION = "_hgw/position" as const
+export const HgwReplayPositionSchema = z.strictObject({
+  type: z.literal(HGW_REPLAY_POSITION),
   turnId: IdentifierSchema.optional(),
+  from: z.number().int().min(1).optional(),
+  _meta: z.record(z.string(), z.unknown()).nullish(),
 })
 
 /**

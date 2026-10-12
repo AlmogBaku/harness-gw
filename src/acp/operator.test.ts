@@ -6,6 +6,7 @@ import { type SessionHistoryResponse } from "../../protocol"
 import {
   HGW_METHODS,
   HGW_META_KEY,
+  HGW_REPLAY_POSITION,
   HgwActivityNotificationSchema,
 } from "../../protocol/acp"
 import {
@@ -645,9 +646,8 @@ describe("operator ACP listener", () => {
     await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
-      _meta: {
-        [HGW_META_KEY]: { agentId: AGENT, turnId: "run-live", after: 0 },
-      },
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId: "run-live", from: 1 },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
     })
     await drainedReplay(test, source)
 

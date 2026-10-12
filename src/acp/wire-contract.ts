@@ -44,6 +44,7 @@ import {
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
   HGW_METHODS,
+  HGW_REPLAY_POSITION,
   HGW_STOP_REASONS,
   hgwAcpAgentPath,
 } from "../../protocol/acp"
@@ -1073,7 +1074,7 @@ export function runWireContract(
             stale.connection.agent.request(methods.agent.session.resume, {
               sessionId,
               cwd: stale.folder,
-              _meta: { [HGW_META_KEY]: { after: 1 } },
+              replayFrom: { type: HGW_REPLAY_POSITION, from: 2 },
             })
           )
           const reader = connectPlain()

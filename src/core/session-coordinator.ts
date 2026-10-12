@@ -1249,6 +1249,18 @@ export class SessionCoordinator {
   }
 
   /**
+   * The cursor a view that wants none of the live turn so far follows it from:
+   * past every event its journal holds, or from its live events when it keeps
+   * none. Absent when no turn streams on.
+   */
+  nextCursor(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment) return undefined
+    if (segment.journal) return segment.nextSequence
+    return segment.terminal ? undefined : 0
+  }
+
+  /**
    * Workspace-wide execution feed: one listener sees the lifecycle of every
    * Session this coordinator drives, independent of the per-segment turn
    * subscriptions and their replay.

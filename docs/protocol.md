@@ -20,7 +20,7 @@ Native runtimes keep their own transports behind the gateway (`src/adapters/`);
 
 `initialize` answers ACP's `protocolVersion: 2` and, in its top-level
 `_meta.hgw.version`, the version of this extension (`HGW_EXTENSION_VERSION`,
-now `1`). A breaking change to anything in this document raises it; an
+now `2`). A breaking change to anything in this document raises it; an
 addition (a new method, notification, field or extension flag a client may
 ignore) does not. A client that speaks another version must refuse the
 connection rather than guess: the SDK client fails `initialized` with an error
@@ -70,9 +70,9 @@ any socket or route is reached:
 
 The response carries an `Acp-Connection-Id` header. A client sends
 `initialize` and receives capabilities in `_meta.hgw`. On reconnect, send
-`initialize` again and then `session/resume` with `_meta.hgw.after` set to the
-last sequence cursor observed. When the cursor is beyond bounded replay, the
-same resume rebuilds the Session from history, as described under
+`initialize` again and then `session/resume` with the `_hgw/position` cursor
+naming the first sequence not yet observed. When the cursor is beyond bounded
+replay, the same resume rebuilds the Session from history, as described under
 [Response `_meta.hgw` shapes](#response-_metahgw-shapes).
 
 The SDK client reconnects with jittered backoff starting at 250 ms, capped at
@@ -99,7 +99,7 @@ The `initialize` response's `_meta.hgw` (`HgwInitializeMetaSchema`):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "role": "operator | guest",
   "extensions": {
     "steer": true,
@@ -247,20 +247,32 @@ Agent's address a Session that is already gone deletes successfully.
 **`session/resume`** request (`HgwSessionResumeMetaSchema`):
 
 ```json
-{ "agentId?": "…", "after?": 0, "turnId?": "…" }
+{ "agentId?": "…" }
 ```
 
 `agentId` is optional and used for deep links when the client knows the owning
-Agent before listing. `after` is the last `sequence` the client observed for
-`turnId`. An `after` beyond bounded replay, or a `turnId` that is no longer the
-live turn, rebuilds the Session from history in the same resume.
+Agent before listing. A position in `_meta.hgw` (version 1's `after` and
+`turnId`) answers `-32602` invalid params.
 
-`replayFrom` is absent (resume without replay), `{ type: "start" }`, or the
-`_hgw/before` older-page variant described under
-[Older history pages](#older-history-pages). As ACP asks of a receiver that
-does not understand a cursor, the gateway rejects every other `replayFrom` type,
-and an `_hgw/before` without a string `cursor`, with `-32602` invalid params
-rather than guessing where to replay from.
+`replayFrom` is one of:
+
+- absent: nothing is replayed, as ACP asks. The view follows the live turn from
+  its next event, and is never rebuilt from history.
+- `{ type: "start" }`: the whole Session is replayed.
+- `{ type: "_hgw/position", turnId?, from? }` (`HGW_REPLAY_POSITION`,
+  `HgwReplayPositionSchema`): the reconnect cursor. `from` is the first
+  `sequence` of `turnId` the client still needs, inclusive as every ACP cursor
+  is. A `from` beyond bounded replay, or a `turnId` that is no longer the live
+  turn, rebuilds the Session from history in the same resume. With neither
+  field, the live turn replays from its first event, or the Session is rebuilt
+  from history when the journal no longer holds that.
+- the `_hgw/before` older-page variant described under
+  [Older history pages](#older-history-pages).
+
+As ACP asks of a receiver that does not understand a cursor, the gateway
+rejects every other `replayFrom` type, and an `_hgw/before` without a string
+`cursor`, with `-32602` invalid params rather than guessing where to replay
+from.
 
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `clientId` becomes the
@@ -288,7 +300,7 @@ as events after the answer.
 the turn and sequence the joined Session stands at; a later resume continues
 from it. Session info (`session_info_update`), execution state (`state_update`),
 capabilities (`available_commands_update._meta.hgw.capabilities`), models, and
-usage arrive as events after the answer. When the journal cannot answer `after`
+usage arrive as events after the answer. When the journal cannot answer `from`
 (`ReplayCursorLostError`, `core/channel.ts`), the gateway rebuilds the Session
 from history as a `start` resume does: the retained messages arrive as standard
 `session/update`s before the answer, the live turn follows them, and the answer

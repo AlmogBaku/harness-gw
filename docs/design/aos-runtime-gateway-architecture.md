@@ -423,10 +423,11 @@ in the log); catch-up happens through a standard `session/resume` with
 
 **Client**: exponential backoff 250 ms → 5 000 ms
 (`client/connection.ts`). The client rejoins each
-resumed Session via `session/resume` with `_meta.hgw.after` (last sequence)
-and `turnId` (`protocol/acp.ts`); a cursor the gateway can no longer
-answer is rebuilt from history in that same resume. Guest re-logins before
-resuming.
+resumed Session via `session/resume` with the `_hgw/position` cursor: the
+`turnId` and the first sequence it still needs (`protocol/acp.ts`). A cursor
+the gateway can no longer answer is rebuilt from history in that same resume.
+A resume that names no cursor replays nothing, as ACP asks. Guest re-logins
+before resuming.
 
 **Gateway**: coordinator journal holds every event of a turn segment, bounded by
 the subscriber limits (`limits.subscriberEvents`/`limits.subscriberBytes`). Adjacent text

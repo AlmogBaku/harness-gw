@@ -165,10 +165,16 @@ function declineReply(request: PendingRequest): RequestReply {
 export type ResumePosition = { turnId?: string; after?: number }
 
 /**
- * How a resume builds its view: rebuilt from history `fromStart`, and from
- * the newest page alone for a member that `paged` older history itself.
+ * How a resume builds its view: rebuilt from history `fromStart`, followed
+ * from its position when `positioned` and from the live turn's next event
+ * otherwise, and rebuilt from the newest page alone for a member that `paged`
+ * older history itself.
  */
-export type ResumeView = { fromStart: boolean; paged: boolean }
+export type ResumeView = {
+  fromStart: boolean
+  positioned: boolean
+  paged: boolean
+}
 
 /**
  * How history is read: the bounded `pageSize` one from-start read or one
@@ -1068,7 +1074,11 @@ class Membership {
    */
   resume(
     position: ResumePosition,
-    view: ResumeView = { fromStart: false, paged: this.#paged }
+    view: ResumeView = {
+      fromStart: false,
+      positioned: true,
+      paged: this.#paged,
+    }
   ) {
     this.#releaseCells()
     // The resume answers before its join lands; a Session found gone between
@@ -1081,24 +1091,23 @@ class Membership {
       )
     this.#send({ type: "join" })
     this.#paged = view.paged
-    return unlessAborted(
-      this.#resume(position, view.fromStart),
-      this.#detaching
-    ).catch((cause: unknown) => {
-      // A join its deadline cut short; the membership's log names its Session.
-      if (cause instanceof MembershipDetachedError && !this.#parted)
-        this.#options.logger.warn(
-          { agentId: this.#addressed.agentId, waitingOn: this.#resuming },
-          "membership.join.expired"
-        )
-      this.endIfGone(cause)
-      throw cause
-    })
+    return unlessAborted(this.#resume(position, view), this.#detaching).catch(
+      (cause: unknown) => {
+        // A join its deadline cut short; the membership's log names its Session.
+        if (cause instanceof MembershipDetachedError && !this.#parted)
+          this.#options.logger.warn(
+            { agentId: this.#addressed.agentId, waitingOn: this.#resuming },
+            "membership.join.expired"
+          )
+        this.endIfGone(cause)
+        throw cause
+      }
+    )
   }
 
   async #resume(
     position: ResumePosition,
-    fromStart: boolean
+    { fromStart, positioned }: ResumeView
   ): Promise<{ history?: SessionHistoryResponse }> {
     // A fresh invitation has no history to replay and no turn to follow.
     if (this.pending) return {}
@@ -1106,10 +1115,11 @@ class Membership {
     this.#restating = true
     try {
       this.#resuming = "follow"
-      const history =
-        fromStart || !(await this.#followPositioned(position))
-          ? await this.#replay()
-          : undefined
+      let history: SessionHistoryResponse | undefined
+      if (fromStart) history = await this.#replay()
+      else if (!positioned) await this.#followNext()
+      else if (!(await this.#followPositioned(position)))
+        history = await this.#replay()
       this.#resuming = "report"
       await this.#reportView()
       return history === undefined ? {} : { history }
@@ -1168,7 +1178,14 @@ class Membership {
   async #rebuild() {
     if (this.detached || this.pending) return
     try {
-      await this.#resume({}, true)
+      await this.#resume(
+        {},
+        {
+          fromStart: true,
+          positioned: false,
+          paged: this.#paged,
+        }
+      )
     } catch (cause) {
       this.#send({ type: "fell-behind" })
       await this.report(cause)
@@ -1379,6 +1396,16 @@ class Membership {
         return false
       }
     )
+  }
+
+  /**
+   * Follows the live turn from the next event it streams, as a resume that
+   * names no cursor asks: the view is shown nothing that came before, not even
+   * the turn's prompt, and is never rebuilt from history.
+   */
+  async #followNext() {
+    this.joinChannel(true)
+    await this.#follow(true, "next")
   }
 
   /**
@@ -1793,7 +1820,7 @@ class Membership {
    */
   #follow(
     refollow: boolean,
-    after?: number,
+    after?: number | "next",
     replayedCorrections = 0,
     ended?: string
   ) {
@@ -1804,7 +1831,11 @@ class Membership {
         return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
       if (carried === turnId) return turnId
-      const cursor = after ?? this.#startCursor(refollow)
+      const cursor =
+        after === "next"
+          ? this.#coordinator.nextCursor(this.#scope)
+          : (after ?? this.#startCursor(refollow))
+      if (after === "next" && cursor === undefined) return undefined
       let subscription
       try {
         subscription = await this.#coordinator.recover(

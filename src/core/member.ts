@@ -218,7 +218,12 @@ export type MemberCommands = {
     scope?: MemberScope
     /** Replay the Session's history before following it. */
     fromStart: boolean
-    /** Where the member's view already reaches in the live turn. */
+    /**
+     * Follow the live turn from where the member's view already reaches,
+     * `turnId` and `after`; a resume that names no position replays nothing
+     * and follows only what the turn streams next.
+     */
+    positioned: boolean
     turnId?: string
     after?: number
   }

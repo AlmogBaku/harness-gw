@@ -27,6 +27,7 @@ import {
   ACP_PROTOCOL_VERSION,
   HGW_METHODS,
   HGW_META_KEY,
+  HGW_REPLAY_POSITION,
   HGW_STOP_REASONS,
 } from "../../protocol/acp"
 import {
@@ -1112,7 +1113,10 @@ export async function prompt(
   return accepted.messageId
 }
 
-/** Opens a Session and waits for the execution report its resume owes. */
+/**
+ * Opens a Session as the SDK does, at the position its view holds, and waits
+ * for the execution report its resume owes.
+ */
 export async function open(
   browser: Browser,
   params: Partial<ResumeSessionRequest> = {}
@@ -1121,6 +1125,7 @@ export async function open(
   await browser.agent.request(methods.agent.session.resume, {
     sessionId: SESSION,
     cwd: "/",
+    replayFrom: { type: HGW_REPLAY_POSITION },
     ...params,
   })
   await browser.recorder.wait(

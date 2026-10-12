@@ -30,6 +30,7 @@ import {
   HgwAgentUpdateRequestSchema,
   HgwClientCapabilitiesMetaSchema,
   HgwReplayBeforeSchema,
+  HgwReplayPositionSchema,
   HgwSessionListMetaSchema,
   HgwSessionNewMetaSchema,
   HgwSessionPartRequestSchema,
@@ -135,15 +136,30 @@ function operatorExtensions(catalog: Catalog): HgwExtensions {
 }
 
 /**
- * The `_hgw/before` cursor a resume names, or `undefined` for no replay or
- * `start`. ACP asks a receiver to refuse a cursor it does not understand
- * rather than guess where to replay from, so every other one is refused.
+ * Where a resume replays from: nothing when it names no cursor, the whole
+ * Session from `start`, the live turn from an `_hgw/position`, or one older
+ * page `_hgw/before`. ACP asks a receiver to refuse a cursor it does not
+ * understand rather than guess where to replay from, so every other one is
+ * refused.
  */
-function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
-  if (!replayFrom || replayFrom.type === "start") return undefined
-  const parsed = HgwReplayBeforeSchema.safeParse(replayFrom)
-  if (!parsed.success) throw invalidParams()
-  return parsed.data.cursor
+function replayCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
+  if (!replayFrom) return { from: "next" } as const
+  if (replayFrom.type === "start") return { from: "start" } as const
+  const position = HgwReplayPositionSchema.safeParse(replayFrom)
+  if (position.success) {
+    const { turnId, from } = position.data
+    return {
+      from: "position",
+      position: {
+        ...(turnId === undefined ? {} : { turnId }),
+        // The member holds the turn up to the event before the one it needs.
+        ...(from === undefined ? {} : { after: from - 1 }),
+      },
+    } as const
+  }
+  const before = HgwReplayBeforeSchema.safeParse(replayFrom)
+  if (!before.success) throw invalidParams()
+  return { from: "before", cursor: before.data.cursor } as const
 }
 
 /** True when a focus report repeats the exposure the connection last sent. */
@@ -412,6 +428,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const membership = sessions.join(client, scope)
     return context.channels.resume(membership, command, {
       fromStart: command.fromStart,
+      positioned: command.positioned,
       paged: clientPagesHistory,
     })
   }
@@ -654,8 +671,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params, client, requestId }) => {
       const method = methods.agent.session.resume
       stack()
-      const cursor = olderPageCursor(params.replayFrom)
-      if (cursor !== undefined) {
+      const replay = replayCursor(params.replayFrom)
+      if (replay.from === "before") {
+        const { cursor } = replay
         admit(method, "older-page")
         const { page } = await perform(
           "older-page",
@@ -681,9 +699,10 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         "resume",
         {
           sessionId: params.sessionId,
-          ...meta,
+          ...(replay.from === "position" ? replay.position : {}),
           ...(agentId === undefined ? {} : { agentId }),
-          fromStart: params.replayFrom?.type === "start",
+          fromStart: replay.from === "start",
+          positioned: replay.from === "position",
         },
         (command) => resume(command, client, params),
         requestId
