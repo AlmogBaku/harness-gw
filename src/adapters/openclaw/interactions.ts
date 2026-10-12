@@ -47,7 +47,11 @@ export type OpenClawInteractionTransport = Readonly<{
 }>
 export type OpenClawInteractionResult = Readonly<{
   status:
-    "resolved" | "expired" | "already-resolved" | "uncertain" | "in-progress"
+    | "resolved"
+    | "expired"
+    | "already-resolved"
+    | "uncertain"
+    | "in-progress"
 }>
 export class OpenClawInteractionPublicError extends Error {
   constructor(
@@ -588,13 +592,15 @@ export class OpenClawInteractions {
     }
     if (!value || typeof value !== "object") bad()
     const item = (value as Record<string, unknown>).approval as
-      Record<string, unknown> | undefined
+      | Record<string, unknown>
+      | undefined
     if (!item || item.id !== p.id) bad()
     const approval = item!
     if (!validateApprovalGetResult({ approval })) bad()
     const source = approval.source as Record<string, unknown> | undefined
     const presentation = approval.presentation as
-      Record<string, unknown> | undefined
+      | Record<string, unknown>
+      | undefined
     if (
       approval.sourceSessionKey !== p.scope.providerSessionId &&
       source?.sessionKey !== p.scope.providerSessionId

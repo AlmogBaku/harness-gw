@@ -114,7 +114,8 @@ export function fakeOpenCode() {
   let serverEvents = 0
   /** The question the running turn blocks on, and what settles its wait. */
   let asked:
-    { request: Record<string, unknown>; settle: () => void } | undefined
+    | { request: Record<string, unknown>; settle: () => void }
+    | undefined
   let nextQuestion = 1
   let interrupted: (() => void) | undefined
 

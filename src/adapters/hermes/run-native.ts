@@ -42,7 +42,11 @@ import { ServerTurnSteerUncertainError } from "../../core/runtime"
 
 /** Hermes' own five native turn states; `absent` means Hermes does not list it. */
 export type HermesNativeStatus =
-  "starting" | "working" | "waiting" | "idle" | "absent"
+  | "starting"
+  | "working"
+  | "waiting"
+  | "idle"
+  | "absent"
 
 export type HermesSubmitPrompt = {
   scope: HermesTurnScope
@@ -75,7 +79,10 @@ export type HermesSubmitCompletion = {
 
 /** Native admission status of an accepted prompt (`PromptSubmitStatus`). */
 export type HermesSubmitStatus =
-  "streaming" | "queued" | "steered" | "redirected"
+  | "streaming"
+  | "queued"
+  | "steered"
+  | "redirected"
 
 export type HermesSubmitRejection =
   | "command-with-attachments"

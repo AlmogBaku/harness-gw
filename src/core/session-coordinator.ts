@@ -66,7 +66,11 @@ import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
 export type SessionExecutionState =
-  "idle" | "running" | "stopping" | "waiting-for-input" | "uncertain"
+  | "idle"
+  | "running"
+  | "stopping"
+  | "waiting-for-input"
+  | "uncertain"
 
 /** The Session status each execution state overlays on the provider's row. */
 export const EXECUTION_STATUS: Record<

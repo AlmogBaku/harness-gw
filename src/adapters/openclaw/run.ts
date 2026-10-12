@@ -87,7 +87,11 @@ export interface OpenClawRunRequestClient {
 
 export type OpenClawBoundRepliesResult = Readonly<{
   status:
-    "resolved" | "expired" | "already-resolved" | "uncertain" | "in-progress"
+    | "resolved"
+    | "expired"
+    | "already-resolved"
+    | "uncertain"
+    | "in-progress"
 }>
 
 export type OpenClawBoundReplies = Readonly<{
@@ -116,7 +120,9 @@ export type OpenClawBoundReplies = Readonly<{
 export class OpenClawTurnPublicError extends Error {
   constructor(
     readonly code:
-      "HGW_PROVIDER_UNAVAILABLE" | "HGW_SEND_UNCERTAIN" | "HGW_STOP_UNCERTAIN",
+      | "HGW_PROVIDER_UNAVAILABLE"
+      | "HGW_SEND_UNCERTAIN"
+      | "HGW_STOP_UNCERTAIN",
     message: string,
     options?: ErrorOptions
   ) {

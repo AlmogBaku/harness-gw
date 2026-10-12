@@ -12,7 +12,12 @@
 import { SECRET_TERMS } from "../redaction"
 
 export type JsonValue =
-  null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue }
 
 const MAX_DEPTH = 8
 const MAX_ENTRIES = 100

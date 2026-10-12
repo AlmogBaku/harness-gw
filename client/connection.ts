@@ -299,14 +299,18 @@ type Transport = {
 }
 
 type ConnectionEvent =
-  { type: "closed"; code: number | undefined } | { type: "close" }
+  | { type: "closed"; code: number | undefined }
+  | { type: "close" }
 
 /**
  * What a Session owner hears: its connection's transport becoming usable or
  * lost, a from-start replay asked for, and the provider reporting it gone.
  */
 type SessionEvent =
-  { type: "ready" } | { type: "lost" } | { type: "replay" } | { type: "gone" }
+  | { type: "ready" }
+  | { type: "lost" }
+  | { type: "replay" }
+  | { type: "gone" }
 
 /** The updates of one older page, in arrival order. */
 type PageUpdates = AcpHistoryPage["updates"][number][]
@@ -646,7 +650,8 @@ export function createAcpConnection(
   let invitation: string | undefined
   // The last presence report, replayed whenever a new transport recovers.
   let lastFocus:
-    { sessionId: string | null; foreground: boolean; idle: boolean } | undefined
+    | { sessionId: string | null; foreground: boolean; idle: boolean }
+    | undefined
   /** The handle for the running inbound-silence timer; replaced on every inbound frame. */
   let silenceTimer: unknown = undefined
   let settleInitialized: ((meta: HgwInitializeMeta) => void) | undefined

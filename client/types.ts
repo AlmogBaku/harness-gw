@@ -33,7 +33,11 @@ import type {
 
 /** `capacity` is a reconnect the gateway asked to wait out, being full. */
 export type AcpConnectionStatus =
-  "connecting" | "ready" | "reconnecting" | "capacity" | "closed"
+  | "connecting"
+  | "ready"
+  | "reconnecting"
+  | "capacity"
+  | "closed"
 
 /** Why the connection is recovering, as `AcpConnectionStatus` names it. */
 export type AcpConnectionOutage = "reconnecting" | "capacity"
@@ -77,7 +81,8 @@ export type AcpHistoryPage = {
  * whether the replay completed.
  */
 export type AcpSessionReplayListener = () =>
-  ((replayed: boolean) => void) | void
+  | ((replayed: boolean) => void)
+  | void
 
 /**
  * Where one opened Session stands: `joining` until the gateway has joined it,

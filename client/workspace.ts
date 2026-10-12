@@ -28,7 +28,11 @@ export class AgentUpdateError extends Error {
 }
 
 export type SessionStatus =
-  "idle" | "running" | "waiting-for-input" | "failed" | "unknown"
+  | "idle"
+  | "running"
+  | "waiting-for-input"
+  | "failed"
+  | "unknown"
 
 export type ActivityBase = {
   id: string

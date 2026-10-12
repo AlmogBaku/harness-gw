@@ -33,7 +33,8 @@ export type OpenClawSessionLease = Readonly<{
   readonly key: string
   readonly approvalReplayKey: string | undefined
   approvalReplay():
-    Readonly<{ generation: number; replay: SessionApprovalReplay }> | undefined
+    | Readonly<{ generation: number; replay: SessionApprovalReplay }>
+    | undefined
   takeApprovalDirty(): boolean
   refreshApprovalReplay(): Promise<void>
   release(): Promise<void>

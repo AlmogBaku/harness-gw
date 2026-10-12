@@ -143,7 +143,9 @@ export type HermesActivity =
   | {
       status: "unavailable"
       reason:
-        "session-not-resumed" | "session-idle" | "session-state-unavailable"
+        | "session-not-resumed"
+        | "session-idle"
+        | "session-state-unavailable"
     }
   | {
       status: "available"

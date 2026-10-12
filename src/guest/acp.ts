@@ -113,7 +113,8 @@ function createGuestAuthentication(
     now,
   })
   let redeemed:
-    { grant: GuestGrant; member: Omit<Member, "connection"> } | undefined
+    | { grant: GuestGrant; member: Omit<Member, "connection"> }
+    | undefined
   let close: (() => void) | undefined
   let timer: unknown
 

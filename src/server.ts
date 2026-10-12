@@ -197,9 +197,9 @@ function mountState<Upgrade extends SocketUpgrade>(
   }
 }
 
-export function startGatewayServer<Upgrade extends SocketUpgrade = SocketUpgrade>(
-  options: StartGatewayServerOptions<Upgrade>
-) {
+export function startGatewayServer<
+  Upgrade extends SocketUpgrade = SocketUpgrade,
+>(options: StartGatewayServerOptions<Upgrade>) {
   const mounts = (options.sockets ?? []).map((mount) => mountState(mount))
   const { logger } = options
   const failPeer = (peer: SocketPeer<Upgrade>, cause?: unknown) => {

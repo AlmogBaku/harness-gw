@@ -200,13 +200,15 @@ function validBase64(encoded: string) {
   const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0
   for (let index = 0; index < encoded.length - padding; index += 1) {
     const code = encoded.charCodeAt(index)
-    if (!(
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f
-    ))
+    if (
+      !(
+        (code >= 0x41 && code <= 0x5a) ||
+        (code >= 0x61 && code <= 0x7a) ||
+        (code >= 0x30 && code <= 0x39) ||
+        code === 0x2b ||
+        code === 0x2f
+      )
+    )
       return false
   }
   return true

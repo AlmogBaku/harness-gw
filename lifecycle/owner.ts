@@ -17,7 +17,12 @@ import type { Clock } from "./clock"
 import type { LogFields, Logger } from "./logger"
 
 export type OwnerKind =
-  "connection" | "membership" | "turn" | "link" | "reading" | "session-owner"
+  | "connection"
+  | "membership"
+  | "turn"
+  | "link"
+  | "reading"
+  | "session-owner"
 
 /** `bumpGeneration` moves the generation that `stale` compares against. */
 export type OwnerContext = { generation: number }

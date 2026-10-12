@@ -205,7 +205,8 @@ export function createOpenCodeWorkspaceOperations(input: {
   }
 
   type InviteResolution =
-    { providerSessionId: ids.ProviderSessionId; created: false } | undefined
+    | { providerSessionId: ids.ProviderSessionId; created: false }
+    | undefined
   const invitedResolutions = new Map<string, Promise<InviteResolution>>()
 
   async function resolveInvite(

@@ -79,7 +79,9 @@ export function stateOutbound(
 export function chunkOutbound(
   context: TranslateContext,
   sessionUpdate:
-    "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk",
+    | "agent_message_chunk"
+    | "agent_thought_chunk"
+    | "user_message_chunk",
   messageId: string,
   content: string | Built<ContentBlock>,
   extra?: ExtraMeta<typeof HgwChunkMetaSchema>

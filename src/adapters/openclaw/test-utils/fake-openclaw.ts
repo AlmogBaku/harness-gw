@@ -156,7 +156,8 @@ export function fakeOpenClaw() {
   const transcript: Record<string, unknown>[] = []
   /** The approval the running turn blocks on, and what settles its wait. */
   let open:
-    { approval: Record<string, unknown>; settle: () => void } | undefined
+    | { approval: Record<string, unknown>; settle: () => void }
+    | undefined
   let nextApproval = 1
   let interrupted: (() => void) | undefined
 

@@ -24,7 +24,8 @@ export type TurnOperation = Operations<ServerTurnEngine, Promise<unknown>>
 
 /** Every operation that answers asynchronously, so a fault can hold or fail it. */
 export type FaultOperation =
-  Operations<ServerRuntime, Promise<unknown>> | TurnOperation
+  | Operations<ServerRuntime, Promise<unknown>>
+  | TurnOperation
 
 type SyncOperation = Exclude<
   Operations<ServerRuntime, unknown> | Operations<ServerTurnEngine, unknown>,

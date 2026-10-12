@@ -3,7 +3,10 @@ import type { GatewayLogLevel } from "../config"
 import type { GatewayConfigFileAccess } from "../config-file"
 import type { startGatewayServer } from "../server"
 
-export type GatewayCliDependencies = Omit<ConfiguredGatewayDependencies, "logger"> &
+export type GatewayCliDependencies = Omit<
+  ConfiguredGatewayDependencies,
+  "logger"
+> &
   Partial<GatewayConfigFileAccess> & {
     /** Builds the proxy log once the configuration has named its level. */
     createLogger: (

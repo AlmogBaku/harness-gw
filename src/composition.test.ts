@@ -217,12 +217,15 @@ describe("configured proxy composition", () => {
           credentials: options.credentials,
         }) as HermesRpcTransport & { credentials: typeof options.credentials }
     )
-    const configured = await createConfiguredGateway(await configuration(true), {
-      runtimeFactory: hermesRuntimeFactory(transportFactory),
-      logger: captureLogs().logger,
-      credentials: new CredentialValues(),
-      clock: () => 1_700_000_000_000,
-    })
+    const configured = await createConfiguredGateway(
+      await configuration(true),
+      {
+        runtimeFactory: hermesRuntimeFactory(transportFactory),
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
+        clock: () => 1_700_000_000_000,
+      }
+    )
 
     expect(transportFactory).toHaveBeenCalledOnce()
     expect(configured.guest?.runtimeInstance).toBe(configured.runtimeInstance)
@@ -244,12 +247,15 @@ describe("configured proxy composition", () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
-    const configured = await createConfiguredGateway(await configuration(true), {
-      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: captureLogs().logger,
-      credentials: new CredentialValues(),
-      clock: () => 1_700_000_000_000,
-    })
+    const configured = await createConfiguredGateway(
+      await configuration(true),
+      {
+        runtimeFactory: hermesRuntimeFactory(() => ({ request })),
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
+        clock: () => 1_700_000_000_000,
+      }
+    )
     const response = await configured.app.request(
       "https://aos.example.test/api/v1/guest-invitations",
       {
@@ -295,11 +301,14 @@ describe("configured proxy composition", () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
-    const configured = await createConfiguredGateway(await configuration(true), {
-      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: captureLogs().logger,
-      credentials: new CredentialValues(),
-    })
+    const configured = await createConfiguredGateway(
+      await configuration(true),
+      {
+        runtimeFactory: hermesRuntimeFactory(() => ({ request })),
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
+      }
+    )
 
     const invite = (origin?: string) =>
       new Request("https://aos.example.test/api/v1/guest-invitations", {
@@ -333,11 +342,14 @@ describe("configured proxy composition", () => {
   })
 
   it("names the rejected field when invitation input is invalid", async () => {
-    const configured = await createConfiguredGateway(await configuration(true), {
-      runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
-      logger: captureLogs().logger,
-      credentials: new CredentialValues(),
-    })
+    const configured = await createConfiguredGateway(
+      await configuration(true),
+      {
+        runtimeFactory: hermesRuntimeFactory(() => ({ request: vi.fn() })),
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
+      }
+    )
     const post = (body: Record<string, unknown>) =>
       configured.app.request(
         "https://aos.example.test/api/v1/guest-invitations",
@@ -377,11 +389,14 @@ describe("configured proxy composition", () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [profile()] } : undefined
     )
-    const configured = await createConfiguredGateway(await configuration(true), {
-      runtimeFactory: hermesRuntimeFactory(() => ({ request })),
-      logger: captureLogs().logger,
-      credentials: new CredentialValues(),
-    })
+    const configured = await createConfiguredGateway(
+      await configuration(true),
+      {
+        runtimeFactory: hermesRuntimeFactory(() => ({ request })),
+        logger: captureLogs().logger,
+        credentials: new CredentialValues(),
+      }
+    )
 
     const response = await configured.app.request(
       "https://aos.example.test/api/v1/guest-invitations",

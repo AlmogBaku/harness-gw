@@ -175,7 +175,8 @@ export type WorkspaceEvent =
  * workspace's.
  */
 export type MemberEvent =
-  ({ sessionId: string } & SessionEvent) | WorkspaceEvent
+  | ({ sessionId: string } & SessionEvent)
+  | WorkspaceEvent
 
 /** Where a member's events leave the Channel, implemented by the transport. */
 export type MemberConnection = {
