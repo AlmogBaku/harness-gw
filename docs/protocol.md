@@ -170,7 +170,8 @@ invited conversation by its reference alone; any other Session id is
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
 | `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
-| `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
+| `session/new`, `session/list` | `-31016` forbidden: the session capability promises both, so they exist, but not for a guest. |
+| `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
 
 `session/prompt` and `_hgw/session/steer` refuse, with `-32602`, text that
 starts with `/` (after any leading whitespace or zero-width characters) and
@@ -639,6 +640,7 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | `-31013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
 | `-31014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
 | `-31015` | `unsupported`            | Runtime cannot store a requested Agent field                |
+| `-31016` | `forbidden`              | The method exists, but not for this principal               |
 
 Codes `-32001` through `-32009` are no longer used.
 
@@ -659,6 +661,7 @@ The machine name an error travels as — the `message` of a public reply, and th
 | `-31013` | `temporarily_unavailable` |
 | `-31014` | `uncertain_mutation`      |
 | `-31015` | `unsupported`             |
+| `-31016` | `forbidden`               |
 | (other)  | `internal_error`          |
 
 ## HTTP API

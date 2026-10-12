@@ -95,6 +95,11 @@ function uncertainMutation() {
   )
 }
 
+/** A method that exists, refused to the principal that called it. */
+export function forbidden() {
+  return new RequestError(HGW_JSONRPC_ERRORS.forbidden, "forbidden")
+}
+
 /** `hint` says what the deployment lacks, for an operator client. */
 export function unsupported(hint?: string) {
   return new RequestError(
@@ -133,6 +138,7 @@ const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
       [temporarilyUnavailable(), "temporarily_unavailable"],
       [uncertainMutation(), "uncertain_mutation"],
       [unsupported(), "unsupported"],
+      [forbidden(), "forbidden"],
     ] as const
   ).map(([error, name]) => [error.code, name])
 )

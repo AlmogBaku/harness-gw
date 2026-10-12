@@ -76,6 +76,7 @@ import type { AcpConnectionContext, HgwAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
   errorNotificationOf,
+  forbidden,
   invalidParams,
   notFound,
   parseMeta,
@@ -91,6 +92,19 @@ import {
  * the member stack, and leaves what reaches a Session's members to its
  * channel.
  */
+
+/**
+ * The methods an empty session capability promises (ACP v2 `SessionCapabilities`):
+ * every connection that offers sessions has them.
+ */
+const SESSION_BASELINE: ReadonlySet<string> = new Set([
+  methods.agent.session.new,
+  methods.agent.session.list,
+  methods.agent.session.resume,
+  methods.agent.session.close,
+  methods.agent.session.prompt,
+  methods.agent.session.cancel,
+])
 
 /** Extension methods with no params still need a parser for the SDK. */
 const withoutParams = () => undefined
@@ -211,10 +225,15 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Refuses a method the stack does not admit, before its params are decoded,
-   * so a refused method is unavailable however its params are spelled.
+   * so a refused method is unavailable however its params are spelled. A
+   * method the session capability promises exists for every connection, so
+   * refusing it is `forbidden` rather than unknown.
    */
   function admit(method: string, kind: CommandKind) {
-    if (!admits(stack(), kind)) throw RequestError.methodNotFound(method)
+    if (admits(stack(), kind)) return
+    throw SESSION_BASELINE.has(method)
+      ? forbidden()
+      : RequestError.methodNotFound(method)
   }
 
   /**

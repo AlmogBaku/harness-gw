@@ -1052,7 +1052,10 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("refuses the methods an operator owns as unknown, however their params are spelled", async () => {
+  // The session capability a guest is offered promises session/new and
+  // session/list, so refusing them as unknown would contradict it: they exist,
+  // but not for a guest.
+  it("refuses the session methods its capability promises as forbidden", async () => {
     const test = harness({ existing: true })
     const socket = await loggedInWire(
       test.listener,
@@ -1062,6 +1065,23 @@ describe("guest ACP listener", () => {
     for (const [method, params] of [
       [methods.agent.session.new, { cwd: "/" }],
       [methods.agent.session.list, {}],
+      [methods.agent.session.list, { cwd: "/srv/agent" }],
+    ] as const)
+      expect(await socket.request(method, params), method).toMatchObject({
+        error: { code: -31016, message: "forbidden" },
+      })
+    expect(test.listAllSessions).not.toHaveBeenCalled()
+    socket.close()
+  })
+
+  it("refuses the methods an operator owns as unknown, however their params are spelled", async () => {
+    const test = harness({ existing: true })
+    const socket = await loggedInWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+
+    for (const [method, params] of [
       [HGW_METHODS.session.update, { sessionId: REF, title: "Renamed" }],
       [methods.agent.session.delete, { sessionId: REF }],
       [

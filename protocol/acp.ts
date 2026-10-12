@@ -119,6 +119,8 @@ export const HGW_JSONRPC_ERRORS = {
   temporarilyUnavailable: -31013,
   uncertainMutation: -31014,
   unsupported: -31015,
+  /** A method that exists, refused to this connection's principal. */
+  forbidden: -31016,
 } as const
 export type HgwJsonRpcErrorCode =
   (typeof HGW_JSONRPC_ERRORS)[keyof typeof HGW_JSONRPC_ERRORS]
