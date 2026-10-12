@@ -481,34 +481,45 @@ text, line breaks included.
 #### Credential masking
 
 The gateway masks a credential as `[credential redacted]` at one of two
-strengths. A term is any word of `SECRET_TERMS` (`src/redaction.ts`), in any
-case, with `-` or `_` allowed between its letters (`api_key`, `apiKey`,
-`password`, `token`, …). A name that ends in a term after a `-` or `_` is
-read as that term, the way a logged field name is (`DB_PASSWORD`,
-`AWS_SECRET_ACCESS_KEY`, `x-api-key`); a word that only ends in a term's
-letters, such as `bypass`, is not.
+strengths, and only its value: a name, the value's quotes, a `Basic` or
+`Bearer` word, a URL's scheme, user and host, and a value that only names a
+secret (one that starts with `$`, `<` or `{`, such as `$TOKEN`) stay.
+
+A name is secret when a run of up to three of its words spells a word of
+`SECRET_TERMS` (`src/redaction.ts`), or when its letters end in one. Its words
+split at a change of case and at any character that is not a letter or a
+digit, so `api_key`, `apiKey` and `API-KEY` read alike: `DB_PASSWORD`,
+`DB_PASSWORD_PROD`, `x-api-key`, `password_hash`, `token_type` and
+`PGPASSWORD` are secret. A safe name covers the terms inside it, so
+`token_count`, `input_token_count`, `token_limit`, `token_usage`,
+`auth_mode`, `authorization_mode`, `oauth`, `secretary`, `bypass` and
+`access_key_rotation` are not; `npm_config_userconfig` is, though no word of
+it is a term. A flag's leading `-` are not part of its name (`--token=`). One
+rule reads every name: a name text assigns, a JSON key, and a logged field.
 
 A bearer token is at least 8 characters of `[A-Za-z0-9._~+/-]`, the RFC 6750
 token characters, whose last character may also be `=` and is never `.`, so
 a sentence's closing period stays.
 
 - **Broad** masks:
-  - a term, `=` or `:` with any spacing, and its value up to the next
-    whitespace, `,` or `;`, quotes included; the whole match goes;
-  - `Basic` or `Bearer` and the bearer token after it, when the token mixes
-    at least two of upper case, lower case, digits and symbols, counted with
-    its first letter's case ignored; so `Basic authentication` and
-    `Enable Basic Authentication?` stay, and a whole JWT or `ya29.…` token
-    after `Bearer` goes;
+  - the value a secret name is given with `=` or `:` and any spacing: a quoted
+    value inside its quotes, any other up to whitespace, `,` or `;`, or up to
+    a closing quote before one; a `Basic` or `Bearer` word before the value
+    stays;
+  - after `Basic` or `Bearer`, a bearer token that mixes at least two of upper
+    case, lower case, digits and symbols, counted with its first letter's
+    case ignored; so `Basic authentication` and `Enable Basic
+    Authentication?` stay, and a whole JWT or `ya29.…` token after `Bearer`
+    goes;
   - a provider key by its prefix alone: `ghp_`, `gho_`, `ghs_`, `ghu_`,
     `ghr_`, `sk-`, `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-` or `xoxs-` and the word
     characters and `-` after it.
 - **Narrow** masks:
-  - a term written as one word, `term=VALUE` or `term:VALUE`, whose value
-    has no whitespace and none of ``$ ( ) | & ; < > ` ' " { } * ? [ ] \``,
+  - the value glued to a secret name, `name=VALUE` or `name:VALUE`, whose
+    value has no whitespace and none of ``$ ( ) | & ; < > ` ' " { } * ? [ ] \``,
     starts with none of `/`, `.` or `~`, may sit in single or double quotes,
     and ends where a shell word does: at whitespace, `;`, `&`, `|`, `(`, `)`,
-    `<`, `>`, a quote, a backtick, or the end of the text. The term, the
+    `<`, `>`, a quote, a backtick, or the end of the text. The name, the
     quotes and that boundary stay; only the value goes, so
     `export TOKEN=…; ./deploy.sh` keeps its `;`;
   - a bearer token after `Authorization:` and `Bearer` or `Basic`, in any
@@ -531,24 +542,46 @@ a sentence's closing period stays.
     and its generic ones gated by length and entropy (`Bearer` and 20 or more
     random characters, `sk-` and 40 or more). A match that is a URL or a
     URL's scheme stays, because the scanner's database rules take the whole
-    URL or only its scheme.
+    URL or only its scheme. A run of more than 2,048 characters without
+    whitespace reaches the scanner in 2,048-character pieces, so its work
+    stays in proportion to the text.
 - **Neither** masks a value that is already `[credential redacted]`, so
   masking text twice, at either strength, leaves one placeholder per
   credential.
 
-| Text                                                    | Strength |
-| ------------------------------------------------------- | -------- |
-| A permission's message and title on the ask card        | narrow   |
-| A question's prompt, header and choices on the ask card | broad    |
-| An elicitation's own message on the ask card            | broad    |
-| `requestText` in `_hgw/activity` and in Web Push        | broad    |
-| `sessionTitle` and `agentName` in Web Push              | broad    |
+| Text                                                                                                                                              | Strength |
+| ------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| A permission's message and title on the ask card                                                                                                  | narrow   |
+| A question's prompt, header and choices on the ask card                                                                                           | broad    |
+| An elicitation's own message on the ask card                                                                                                      | broad    |
+| `requestText` in `_hgw/activity` and in Web Push                                                                                                  | broad    |
+| `sessionTitle` and `agentName` in Web Push                                                                                                        | broad    |
+| A tool call's title, arguments, result and content, its streamed output, its terminal's command and output, and its subagent's goal and summary | broad    |
+| The answers an answered question records                                                                                                          | broad    |
+| An MCP App view's tool input and result                                                                                                           | broad    |
+
+Tool data is masked on its way to the browser, live and replayed, for every
+runtime and both listeners. A JSON value, and text that parses as one, is
+masked by key and by value: a secret-named key keeps its name and loses any
+value but a boolean or `null`, and JSON with nothing to mask is sent as
+written. A path that carries a credential is dropped rather than masked,
+since masked it would name no file: a location, a diff that names it, a
+subagent's file, a terminal's working directory. A patch that carries one is
+dropped from its diff. Each text is cut to 262,144 UTF-16 units, a
+terminal's output keeping its tail: plain text before it is masked, so a huge
+output costs no more to mask, and JSON after, so no secret-named key is cut
+out of reach. An MCP App view's files are served from the stored call, never
+from its masked input.
 
 A masked choice is shown with ` (option N)` after it when two choices read
 the same once masked, and an answer naming the shown choice reaches the
-runtime as the choice it wrote. On Hermes, the adapter masks its own
-questions, choices and answers broadly and its approvals narrowly before the
-gateway does.
+runtime as the choice it wrote; an answer is recorded masked, and reaches the
+runtime as typed. On Hermes, the adapter masks its own questions, choices and
+answers broadly and its approvals narrowly before the gateway does.
+
+Masking finds a credential by its name, header, URL position, or known shape.
+One with none of these is sent as written, and a credential split across two
+streamed pieces of output is masked piece by piece.
 
 ## Artifacts
 
