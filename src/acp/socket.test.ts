@@ -45,7 +45,14 @@ describe("ACP WebSocket shim", () => {
     expect(messages).toEqual(['{"jsonrpc":"2.0"}', '{"id":1}'])
   })
 
-  it("closes with 1008 when one inbound frame exceeds the frame cap", () => {
+  it("delivers a frame at the frame cap and closes with 1008 one byte past it", () => {
+    // One prompt as large as a frame may carry stays inside the default byte
+    // budget: closing here would end every Session on the tab's one socket.
+    const atCap = harness()
+    atCap.socket.receive("a".repeat(1_100_000))
+    expect(atCap.closed).toEqual([])
+    expect(atCap.messages).toHaveLength(1)
+
     const { socket, closed, messages, closes } = harness()
 
     socket.receive("a".repeat(1_100_001))

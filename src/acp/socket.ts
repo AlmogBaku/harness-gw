@@ -11,7 +11,12 @@ export type AcpWebSocket = Parameters<PreparedWebSocketUpgrade["accept"]>[0]
 const MAX_FRAME_BYTES = 1_100_000
 const DEFAULT_INPUT_WINDOW_MS = 1_000
 const DEFAULT_INPUT_FRAMES_PER_WINDOW = 64
-const DEFAULT_INPUT_BYTES_PER_WINDOW = 256 * 1_024
+/**
+ * Room for one frame at the cap and the same second's ordinary traffic. A
+ * budget below the cap closed the tab's one socket, and with it every
+ * Session, on a single large prompt.
+ */
+const DEFAULT_INPUT_BYTES_PER_WINDOW = 2 * MAX_FRAME_BYTES
 
 const decoder = new TextDecoder()
 
