@@ -318,7 +318,7 @@ describe("push dispatcher", () => {
         sessionId: "session-2",
         occurredAt: iso(START + 1_000),
         agentName: "Writer [credential redacted]",
-        sessionTitle: "Draft for [credential redacted]",
+        sessionTitle: "Draft for token: [credential redacted]",
         requestText: "Ship it?",
       },
     ])

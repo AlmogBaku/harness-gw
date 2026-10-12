@@ -220,7 +220,7 @@ describe("pendingRequestToOutbound questions", () => {
       ],
     })
     expect(meta.questions[1]?.prompt).toBe(
-      "Anything else? See https://docs.example.test/exports with [credential redacted]"
+      "Anything else? See https://docs.example.test/exports with token=[credential redacted]"
     )
   })
 
@@ -461,10 +461,10 @@ describe("a question with a credential in it", () => {
     const meta = HgwElicitationMetaSchema.parse(metaOf(elicitationOf(masked)))
 
     expect(meta.questions[0]).toMatchObject({
-      header: "[credential redacted]",
+      header: "token: [credential redacted]",
       options: [
-        { label: "use [credential redacted] (option 1)" },
-        { label: "use [credential redacted] (option 2)" },
+        { label: "use token: [credential redacted] (option 1)" },
+        { label: "use token: [credential redacted] (option 2)" },
       ],
     })
   })
@@ -473,7 +473,7 @@ describe("a question with a credential in it", () => {
     expect(
       replyFromElicitation(masked, {
         action: "accept",
-        content: { q0: "use [credential redacted] (option 2)" },
+        content: { q0: "use token: [credential redacted] (option 2)" },
       })
     ).toMatchObject({ payload: { answers: [["use token: ZZZZyyyy9999"]] } })
   })

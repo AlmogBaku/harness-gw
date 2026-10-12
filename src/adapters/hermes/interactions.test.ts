@@ -839,7 +839,7 @@ describe("HermesInteractions server requests", () => {
 
     const interrupt = interactions.pending(scope)[0]
     expect(interrupt?.message).toBe(
-      "Use https://hermes.internal with [credential redacted] or [credential redacted]"
+      "Use https://hermes.internal with token=[credential redacted] or passphrase=[credential redacted]"
     )
     const choices = interrupt?.questions?.[0]?.choices ?? []
     expect(choices).toEqual(["/home/operator/run.sh", "skip"])

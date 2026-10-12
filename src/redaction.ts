@@ -1,13 +1,13 @@
 import { redact } from "@sanity-labs/secret-scan"
 
-/** What every masked field, URL credential, and credential value becomes. */
+/** What every field, URL credential, and credential value a log masks becomes. */
 const REDACTED = "[REDACTED]"
 
 /**
  * Every word a native field or variable name uses for a credential, lowercase
- * with separators removed (`api_key` and `apiKey` are both `apikey`). The log
- * redactor masks a field whose name ends in one, and the adapters mask tool
- * data, question text, and history by the same list. `code` is deliberately
+ * with separators removed (`api_key` and `apiKey` are both `apikey`).
+ * `isSecretName` reads every name by this list: a logged field, a JSON key in
+ * browser-bound data, and a name text assigns a value to. `code` is deliberately
  * absent: it is the classification an operator diagnoses a failure by, and the
  * only credential spelled that way is an OAuth `?code=` query value, which
  * every logged URL loses.
@@ -41,24 +41,86 @@ export const SECRET_TERMS: readonly string[] = [
 /** What a masked credential reads as, wherever an operator or guest reads it. */
 const MASKED = "[credential redacted]"
 
-/** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
-const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
 /**
- * A name that ends in a `SECRET_TERMS` word after a separator, as the log
- * redactor reads a field name: `DB_PASSWORD`, `x-api-key`. A word that only
- * ends in the letters, such as `bypass`, is not one. The words before the term
- * are bounded in length and number, so a long run of separated words such as
- * `a-a-a-…` costs one pass, not one pass per word.
+ * Names that read like a credential but are not one, each as its words joined:
+ * a count, a limit, a mode, or a word that only contains a term's letters. A
+ * run of a name's words that spells one hides the terms inside it, so
+ * `input_token_count` is a count, not a token.
  */
-const secretName = String.raw`(?:[a-z0-9]{1,32}[-_]){0,6}(?:${secretTerm})`
-/** A JWT, whole: a credential wherever it stands. */
-const JWT = String.raw`\beyJ[\w-]+\.[\w-]+\.[\w-]+`
+const SAFE_NAMES = new Set([
+  "accesskeyrotation",
+  "authmode",
+  "authorizationmode",
+  "bypass",
+  "oauth",
+  "oauthmode",
+  "secretary",
+  "tokencount",
+  "tokenlimit",
+  "tokenusage",
+])
+/** Names that are credentials though no word of theirs is a term. */
+const SECRET_NAMES = new Set(["npmconfiguserconfig"])
+/** The longest run of words a `SECRET_TERMS` or `SAFE_NAMES` entry spans. */
+const MAX_RUN = 3
+
+/** A name's words, lowercase: `apiKey`, `API_KEY` and `api-key` are `api`, `key`. */
+function nameWords(name: string) {
+  return name
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/gu)
+    .filter(Boolean)
+}
+
+/** Each run of up to `MAX_RUN` adjacent words, joined, with the span it covers. */
+function wordRuns(words: readonly string[]) {
+  return words.flatMap((_, start) =>
+    Array.from(
+      { length: Math.min(MAX_RUN, words.length - start) },
+      (_, length) => ({
+        start,
+        end: start + length + 1,
+        joined: words.slice(start, start + length + 1).join(""),
+      })
+    )
+  )
+}
+
+/**
+ * Whether a field or variable name names a credential, in any case or
+ * separator style: one rule for logs, JSON keys, and the names text assigns.
+ * A run of up to three of its words that spells a `SECRET_TERMS` word counts
+ * (`DB_PASSWORD_PROD`, `x-api-key`, `password_hash`, `token_type`), and so do
+ * its letters ending in one (`PGPASSWORD`), unless a `SAFE_NAMES` run covers it.
+ */
+export function isSecretName(name: string) {
+  const letters = name.toLowerCase().replace(/[^a-z0-9]+/gu, "")
+  if (SECRET_NAMES.has(letters)) return true
+  if (!SECRET_TERMS.some((term) => letters.includes(term))) return false
+  const words = nameWords(name)
+  const joined = words.join("")
+  const runs = wordRuns(words)
+  const safe = runs.filter((run) => SAFE_NAMES.has(run.joined))
+  const covered = (start: number, end: number) =>
+    safe.some((run) => run.start <= start && end <= run.end)
+  return (
+    runs.some(
+      (run) => SECRET_TERMS.includes(run.joined) && !covered(run.start, run.end)
+    ) ||
+    (!covered(words.length - 1, words.length) &&
+      SECRET_TERMS.some((term) => joined.endsWith(term)))
+  )
+}
+
+/** A JWT, whole, starting where no word does: a credential wherever it stands. */
+const JWT = String.raw`(?<![\w-])eyJ[\w-]+\.[\w-]+\.[\w-]+`
 /** An RFC 6750 bearer token of at least 8 characters, ending in no dot. */
 const BEARER_TOKEN = String.raw`[A-Za-z0-9._~+/-]{7,}[A-Za-z0-9_~+/=-]`
 /** A value with no shell, glob or quote syntax, and not a path. */
 const PLAIN_VALUE = String.raw`[^\s$()|&;<>\x60'"{}*?\[\]\\/.~][^\s$()|&;<>\x60'"{}*?\[\]\\]*`
-/** Where a shell word ends. */
-const WORD_END = String.raw`(?=[\s;&|()<>"'\x60]|$)`
+/** The characters a shell word ends before. */
+const WORD_END = /[\s;&|()<>"'\x60]/u
 /**
  * A URL's password, after its `scheme://user:` and before its `@`, and not
  * shell syntax, so the URL still shows the host it reaches. A scheme is at
@@ -67,25 +129,44 @@ const WORD_END = String.raw`(?=[\s;&|()<>"'\x60]|$)`
 const URL_PASSWORD = String.raw`\b(?<userinfo>[a-z][\w+.-]{0,31}://[^\s:/@]*:)[^\s:/@$(){}\x60'"]+(?=@)`
 /** A value already masked, which neither strength masks again. */
 const ALREADY_MASKED = String.raw`(?!(?:(?:basic|bearer)\s+)?\[credential redacted\])`
+/** A name a value is assigned to, whole, after any flag dashes: never the tail of a longer one. */
+const NAME = String.raw`(?<![\w.-])-*(?<name>[A-Za-z_][\w.-]*)`
 
 /**
- * The two strengths a credential mask comes in. `broad` takes a term's value
- * up to the next break, however it is spaced or quoted, a Basic or Bearer
- * token, and any provider key prefix, for text that only describes: a
- * preview, a title, a question. `narrow` takes only a value that cannot be
- * shell syntax, a token an `Authorization` header names, and a key of a real
- * key's length, for text an operator approves: a permission must still show
- * what it would run. Both take a URL's password.
+ * The two strengths a credential mask comes in. Each has a pass for the
+ * credentials that announce themselves by shape, then a pass for the values a
+ * secret name is assigned. `broad` takes a name's value up to the next break,
+ * however it is spaced or quoted, a Basic or Bearer token, and any provider key
+ * prefix, for text that only describes: a preview, a title, a question, a tool's
+ * data. `narrow` takes only a value glued to its name that cannot be shell
+ * syntax, a token an `Authorization` header names, and a key of a real key's
+ * length, for text an operator approves: a permission must still show what it
+ * would run. Both take a URL's password. Every shape starts where a word does,
+ * so a run of one shape repeated costs one pass, not one per repeat.
  */
 const CREDENTIAL_MASKS = {
-  broad: new RegExp(
-    String.raw`\b${secretName}\s*[=:]\s*${ALREADY_MASKED}(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+(?<token>${BEARER_TOKEN})|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|${JWT}|${URL_PASSWORD}`,
-    "giu"
-  ),
-  narrow: new RegExp(
-    String.raw`\b(?<header>authorization\s*:\s*(?:bearer|basic)\s+)${BEARER_TOKEN}|\b(?<term>${secretName}[=:])(?:(?<quote>["'])${PLAIN_VALUE}\k<quote>|${PLAIN_VALUE})${WORD_END}|\bgh[opsur]_[A-Za-z0-9]{30,}|\bsk-(?=[\w-]*\d)[\w-]{20,}|\bxox[baprs]-[\w-]+|${JWT}|${URL_PASSWORD}`,
-    "giu"
-  ),
+  broad: {
+    shapes: new RegExp(
+      String.raw`\b(?<prefix>(?:basic|bearer)\s+)(?<token>${BEARER_TOKEN})|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|${JWT}|${URL_PASSWORD}`,
+      "giu"
+    ),
+    name: new RegExp(String.raw`${NAME}(?<separator>\s*[=:]\s*)`, "gu"),
+    value: new RegExp(
+      String.raw`${ALREADY_MASKED}(?<prefix>(?:(?:basic|bearer)\s+)?)(?:(?<quote>["'])(?<quoted>[^"'\r\n]*)\k<quote>|(?<plain>[^\s,;]+?)(?=["']?(?:[\s,;]|$)))`,
+      "iuy"
+    ),
+  },
+  narrow: {
+    shapes: new RegExp(
+      String.raw`\b(?<header>authorization\s*:\s*(?:bearer|basic)\s+)${BEARER_TOKEN}|\bgh[opsur]_[A-Za-z0-9]{30,}|(?<![\w-])sk-(?=[\w-]*\d)[\w-]{20,}|\bxox[baprs]-[\w-]+|${JWT}|${URL_PASSWORD}`,
+      "giu"
+    ),
+    name: new RegExp(String.raw`${NAME}(?<separator>[=:])`, "gu"),
+    value: new RegExp(
+      String.raw`(?:(?<quote>["'])(?<quoted>${PLAIN_VALUE})\k<quote>|(?<plain>${PLAIN_VALUE}))`,
+      "uy"
+    ),
+  },
 }
 export type MaskStrength = keyof typeof CREDENTIAL_MASKS
 
@@ -95,23 +176,62 @@ export type MaskStrength = keyof typeof CREDENTIAL_MASKS
  */
 const TOKEN_KINDS = [/[A-Z]/u, /[a-z]/u, /[0-9]/u, /[._~+/=-]/u]
 
-type MaskGroups = Partial<
-  Record<"token" | "header" | "term" | "quote" | "userinfo", string>
+type ShapeGroups = Partial<
+  Record<"prefix" | "token" | "header" | "userinfo", string>
 >
 
-function masked(match: string, ...args: unknown[]) {
-  const { token, header, term, quote, userinfo } = args.at(-1) as MaskGroups
+function maskedShape(match: string, ...args: unknown[]) {
+  const { prefix, token, header, userinfo } = args.at(-1) as ShapeGroups
   // "Basic Authentication" is prose; a token mixes kinds of character.
   if (token !== undefined) {
     const counted = token.charAt(0).toLowerCase() + token.slice(1)
     return TOKEN_KINDS.filter((kind) => kind.test(counted)).length >= 2
-      ? MASKED
+      ? `${prefix ?? ""}${MASKED}`
       : match
   }
   if (header !== undefined) return `${header}${MASKED}`
   if (userinfo !== undefined) return `${userinfo}${MASKED}`
-  if (term !== undefined) return `${term}${quote ?? ""}${MASKED}${quote ?? ""}`
   return MASKED
+}
+
+/** A value that only names a secret: `$TOKEN`, `${TOKEN}`, `<token>`, `{token}`. */
+const PLACEHOLDER = /^[$<{]/u
+
+/**
+ * `text` with the value of every secret name it assigns masked, the name, its
+ * separator, and the value's quotes kept. One scan: a name that is not secret
+ * resumes the scan right after its separator, so its value is still read for
+ * a name of its own (`user=a&token=b`), and a narrow value that does not end
+ * where a shell word does is skipped whole, since every name inside it would
+ * end at the same place.
+ */
+function maskNames(text: string, strength: MaskStrength) {
+  const { name, value } = CREDENTIAL_MASKS[strength]
+  let output = ""
+  let copied = 0
+  name.lastIndex = 0
+  for (let match = name.exec(text); match; match = name.exec(text)) {
+    if (!isSecretName(match.groups?.name ?? "")) continue
+    value.lastIndex = name.lastIndex
+    const found = value.exec(text)
+    if (!found) continue
+    const end = value.lastIndex
+    const { prefix = "", quote = "", quoted, plain } = found.groups ?? {}
+    const secret = quoted ?? plain ?? ""
+    if (
+      strength === "narrow" &&
+      end < text.length &&
+      !WORD_END.test(text[end]!)
+    ) {
+      name.lastIndex = end
+      continue
+    }
+    if (PLACEHOLDER.test(secret)) continue
+    output += `${text.slice(copied, name.lastIndex)}${prefix}${quote}${MASKED}${quote}`
+    copied = end
+    name.lastIndex = end
+  }
+  return output + text.slice(copied)
 }
 
 /**
@@ -119,7 +239,7 @@ function masked(match: string, ...args: unknown[]) {
  * Its database rules take a whole URL or only its scheme, so a URL is left to
  * the masks, which take just its password.
  */
-function maskKnownKeys(text: string) {
+function scanned(text: string) {
   return redact(text, (secret) =>
     secret.text.includes("://") || text.startsWith("://", secret.end)
       ? secret.text
@@ -128,34 +248,88 @@ function maskKnownKeys(text: string) {
 }
 
 /**
+ * The longest run without whitespace the secret scanner reads whole. Inside
+ * one such run its rules restart at every repeat, so 64 KiB of `eyJ-` took it
+ * seconds; text that breaks lines or words, a PEM block included, it reads in
+ * one pass.
+ */
+const SCAN_RUN = 2_048
+const LONG_RUN = new RegExp(String.raw`(?<!\S)\S{${SCAN_RUN + 1},}`, "gu")
+
+/**
+ * `text` with every provider key the scanner knows masked, each run of more
+ * than `SCAN_RUN` characters without whitespace read in `SCAN_RUN` pieces.
+ */
+function maskScanned(text: string) {
+  let output = ""
+  let copied = 0
+  for (const run of text.matchAll(LONG_RUN)) {
+    output += scanned(text.slice(copied, run.index))
+    for (let start = 0; start < run[0].length; start += SCAN_RUN)
+      output += scanned(run[0].slice(start, start + SCAN_RUN))
+    copied = run.index + run[0].length
+  }
+  return output + scanned(text.slice(copied))
+}
+
+/**
  * `text` with every credential it spells out as `[credential redacted]`, at
- * the given strength: every credential a name, a header, a key prefix, or a
- * URL announces, then every other provider key the secret scanner knows by
- * its shape. Paths and URLs stay, so text a runtime wrote for the operator
- * still reads as written.
+ * the given strength: every credential a header, a key prefix, or a URL
+ * announces, then every value a secret name is assigned, then every other
+ * provider key the secret scanner knows by its shape. Only the value goes:
+ * names, quotes, placeholders, paths, and hosts stay, so text a runtime wrote
+ * for the operator still reads as written.
  */
 export function maskCredentials(
   text: string,
   strength: MaskStrength = "broad"
 ) {
-  return maskKnownKeys(text.replace(CREDENTIAL_MASKS[strength], masked))
+  const shaped = text.replace(CREDENTIAL_MASKS[strength].shapes, maskedShape)
+  return maskScanned(maskNames(shaped, strength))
+}
+
+/** Whether `text` carries anything the broad mask would take. */
+export function containsCredential(text: string) {
+  return maskCredentials(text) !== text
+}
+
+/**
+ * A JSON value with every credential in it masked, and the value itself back
+ * when nothing was: a secret-named key keeps its name and loses its value,
+ * unless that value is a boolean or `null`, which only says whether one is
+ * set; every other string is masked as text.
+ */
+export function maskJson(value: unknown): unknown {
+  if (typeof value === "string") return maskCredentials(value)
+  if (value === null || typeof value !== "object") return value
+  if (Array.isArray(value)) {
+    const items = value.map(maskJson)
+    return items.every((item, index) => item === value[index]) ? value : items
+  }
+  let changed = false
+  const entries = Object.entries(value).map(([key, item]) => {
+    const next =
+      isSecretName(key) && typeof item !== "boolean" && item !== null
+        ? MASKED
+        : maskJson(item)
+    if (next !== item) changed = true
+    return [key, next]
+  })
+  return changed ? Object.fromEntries(entries) : value
 }
 
 /**
  * The names a push subscription and a VAPID pair carry, which a log masks by
  * exact name: a subscription endpoint is a bearer capability to wake one
- * device. They stay out of `SECRET_TERMS`, because matched as a suffix they
- * would drop ordinary provider fields such as `apiEndpoint` from
- * browser-bound data.
+ * device. They stay out of `SECRET_TERMS`, because as a name rule they would
+ * mask ordinary provider fields such as `apiEndpoint` in browser-bound data.
  */
 const PUSH_KEYS = new Set(["applicationserverkey", "endpoint", "p256dh"])
 
 /** Whether a logged field name spells a credential, in any case or separator style. */
 function isSecretKey(key: string) {
-  const normalized = key.toLowerCase().replace(/[-_ ]/gu, "")
   return (
-    PUSH_KEYS.has(normalized) ||
-    SECRET_TERMS.some((term) => normalized.endsWith(term))
+    PUSH_KEYS.has(key.toLowerCase().replace(/[-_ ]/gu, "")) || isSecretName(key)
   )
 }
 

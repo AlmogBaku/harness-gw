@@ -68,7 +68,7 @@ describe("requestPreview", () => {
       "a shell command with its credential masked",
       { requestId: "r", kind: "permission", message: curl },
       {
-        text: "curl -H '[credential redacted] https://api.example.test/repos",
+        text: "curl -H 'Authorization: Bearer [credential redacted]' https://api.example.test/repos",
       },
     ],
     [
@@ -119,7 +119,7 @@ describe("maskRequestText", () => {
     const text = `Run this:\n${curl}\n\n${"step ".repeat(100)}\u202Edone`
 
     expect(maskRequestText(text, "broad")).toBe(
-      `Run this:\ncurl -H '[credential redacted] https://api.example.test/repos\n\n${"step ".repeat(100)}done`
+      `Run this:\ncurl -H 'Authorization: Bearer [credential redacted]' https://api.example.test/repos\n\n${"step ".repeat(100)}done`
     )
   })
 })
