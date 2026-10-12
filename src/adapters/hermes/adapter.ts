@@ -1195,7 +1195,7 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async runtimeInfo(): Promise<RuntimeInfo> {
-    let visibilityAvailable = false
+    let visibilityAvailable: boolean
     try {
       const catalog = await this.listAgents()
       visibilityAvailable = catalog.agents.every(

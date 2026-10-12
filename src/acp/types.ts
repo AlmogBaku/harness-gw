@@ -7,6 +7,7 @@ import type {
   RequestPermissionResponse,
   SessionConfigOption,
   SessionUpdate,
+  UnknownVariant,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
@@ -177,11 +178,25 @@ export const initialTranslateState: TranslateState = {
 }
 
 /**
+ * An ACP value the gateway builds, as opposed to one it received. The SDK
+ * brands the variants it does not know so only received values can carry them;
+ * that brand also stops TypeScript from checking a built value whose tag is
+ * computed (`stopReason: stopping ? "cancelled" : "end_turn"`) against the
+ * known variants. Dropping the branded members at every depth restores that
+ * check, and a `Built` value is still a plain `T`.
+ */
+export type Built<T> = T extends UnknownVariant<unknown>
+  ? never
+  : T extends object
+    ? { [K in keyof T]: Built<T[K]> }
+    : T
+
+/**
  * One thing to send after translating a turn event. Session-scoped updates and
  * notifications omit `sessionId`; the attachment adds it when sending.
  */
 export type AcpOutbound =
-  | { kind: "update"; update: SessionUpdate }
+  | { kind: "update"; update: Built<SessionUpdate> }
   | {
       kind: "steer-accepted"
       turnId: string

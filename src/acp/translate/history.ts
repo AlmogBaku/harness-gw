@@ -8,7 +8,12 @@ import {
   HgwMessageMetaSchema,
   type HgwMessageMeta,
 } from "../../../protocol/acp"
-import type { AcpOutbound, TranslateContext, TranslateHistory } from "../types"
+import type {
+  AcpOutbound,
+  Built,
+  TranslateContext,
+  TranslateHistory,
+} from "../types"
 import {
   artifactOutbound,
   chunkOutbound,
@@ -45,7 +50,7 @@ const HISTORY_CONTEXT: TranslateContext = {
   stopping: false,
 }
 
-function imageBlock(image: string): ContentBlock | undefined {
+function imageBlock(image: string): Built<ContentBlock> | undefined {
   const match = DATA_URL.exec(image)
   return match
     ? { type: "image", data: match[2], mimeType: match[1] }
@@ -53,7 +58,7 @@ function imageBlock(image: string): ContentBlock | undefined {
 }
 
 /** Text and inline images only; every other part replays as its own outbound. */
-function contentBlocks(parts: readonly MessagePart[]): ContentBlock[] {
+function contentBlocks(parts: readonly MessagePart[]): Built<ContentBlock>[] {
   return parts.flatMap((part) => {
     if (part.type === "text") return [{ type: "text", text: part.text }]
     if (part.type !== "image") return []
@@ -189,7 +194,7 @@ function partsOutbound(
   const outbound: AcpOutbound[] = []
   const chunk = (
     sessionUpdate: "agent_message_chunk" | "agent_thought_chunk",
-    content: ContentBlock
+    content: Built<ContentBlock>
   ) => {
     outbound.push(chunkOutbound(context, sessionUpdate, message.id, content))
   }
@@ -235,7 +240,7 @@ function fromEmpty(outbound: readonly AcpOutbound[]): AcpOutbound[] {
       return [item]
     const sessionUpdate = MESSAGE_START[value.sessionUpdate]
     const key = `${sessionUpdate}\u0000${value.messageId}`
-    if (value.messageId == null || started.has(key)) return [item]
+    if (started.has(key)) return [item]
     started.add(key)
     return [
       update({
