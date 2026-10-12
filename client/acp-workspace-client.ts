@@ -283,13 +283,13 @@ export function createAcpWorkspaceClient({
       let page
       try {
         page = await listSessions()
-      } catch {
+      } catch (err) {
         if (stale(generation)) return
+        clientLog.warn({ err, attempt }, "sessions.relist_retry_failed")
         attempt += 1
         await backOff(backoffDelay(attempt, RELIST_BACKOFF))
         continue
       }
-      // A listener that throws has not failed the read, so it is not retried.
       const sessionIds = page.sessions.map(({ sessionId }) => sessionId)
       callEach(
         catalogListeners,
