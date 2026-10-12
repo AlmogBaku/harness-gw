@@ -37,6 +37,7 @@ import { createGuestInvitationService } from "../auth/guest-invitation"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import {
   PendingRequestKind,
+  RepliesTurnInputSchema,
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
@@ -495,9 +496,9 @@ describe("guest in a Session channel", () => {
     test.sources[0]?.finish()
 
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
-    const { replies } = test.start.mock.calls[1]?.[1] as {
-      replies: Array<{ requestId: string; status: string }>
-    }
+    const { replies } = RepliesTurnInputSchema.parse(
+      test.start.mock.calls[1]?.[1]
+    )
     expect(replies).toHaveLength(2)
     expect(replies).toEqual(
       expect.arrayContaining([

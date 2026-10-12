@@ -358,9 +358,11 @@ describe("AOS ACP agent", () => {
         { sessionId: "session-2" },
       ],
     })
-    expect(
-      (page.sessions[1]?._meta as Record<string, object>)[HGW_META_KEY]
-    ).not.toHaveProperty("createdAt")
+    expect(page.sessions[1]).not.toHaveProperty([
+      "_meta",
+      HGW_META_KEY,
+      "createdAt",
+    ])
     test.close()
   })
 
