@@ -22,7 +22,7 @@ import {
   mcpAppRoutes,
 } from "../../routes/mcp-apps"
 import { emptyError, invitationError, type GuestRoutes } from "../context"
-import { projectedArtifact } from "./content"
+import { invitedArtifact, projectedArtifact } from "./content"
 
 /**
  * The subject a guest path names. An Artifact reads as the guest content
@@ -40,7 +40,8 @@ function guestSubject(
   return {
     artifactId,
     read: async (scope) => {
-      const artifact = await runtime.artifact(
+      const artifact = await invitedArtifact(
+        runtime,
         agentId,
         scope.providerSessionId,
         artifactId

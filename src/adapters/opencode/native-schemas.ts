@@ -133,7 +133,7 @@ export const OpenCodeSessionCatalogSchema = z.object({
 })
 
 const NativePromptFileAttachmentSchema = z.object({
-  uri: z.string().min(1).max(25_000_000),
+  uri: z.string().min(1).max(35_000_000),
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(4_096).optional(),
   source: z.unknown().optional(),

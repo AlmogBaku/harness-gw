@@ -12,7 +12,7 @@ import {
 } from "../core/attachment-stages"
 import type { RuntimeInstance, ServerAttachmentStages } from "../core/runtime"
 import type { AppFileOptions } from "../routes/app-files"
-import { createGuestAudioBudget } from "./audio-budget"
+import { createGuestBudget } from "./budget"
 
 export const guestSecurityHeaders = {
   "cache-control": "no-store",
@@ -60,6 +60,14 @@ const AUDIO_WINDOW_MS = 600_000
 const AUDIO_MAX_IN_FLIGHT = 2
 const AUDIO_MAX_OPS_PER_WINDOW = 60
 
+/**
+ * The guest listener's artifact reads, each a provider read and a stored
+ * image's a whole history page: room for one turn's attachments at once.
+ */
+const ARTIFACT_WINDOW_MS = 600_000
+const ARTIFACT_MAX_IN_FLIGHT = 16
+const ARTIFACT_MAX_OPS_PER_WINDOW = 600
+
 export type GuestRoutes = ReturnType<typeof createGuestRoutes>
 
 export function emptyError(status: number) {
@@ -82,11 +90,17 @@ export function createGuestRoutes(options: GuestAppOptions) {
     attachmentStages: options.attachmentStages ?? createGuestAttachmentStages(),
     // One budget per guest app, so both audio directions spend the same
     // allowance for a conversation.
-    audioBudget: createGuestAudioBudget({
+    audioBudget: createGuestBudget({
       now,
       windowMs: AUDIO_WINDOW_MS,
       maxInFlight: AUDIO_MAX_IN_FLIGHT,
       maxOps: AUDIO_MAX_OPS_PER_WINDOW,
+    }),
+    artifactBudget: createGuestBudget({
+      now,
+      windowMs: ARTIFACT_WINDOW_MS,
+      maxInFlight: ARTIFACT_MAX_IN_FLIGHT,
+      maxOps: ARTIFACT_MAX_OPS_PER_WINDOW,
     }),
     authenticate: (request: Request) => authorizer.authenticate(request),
     authorize: (

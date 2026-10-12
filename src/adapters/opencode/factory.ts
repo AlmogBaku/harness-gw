@@ -3,6 +3,7 @@ import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance, ServerTurnEngine } from "../../core/runtime"
 import type { RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
+import { withHistoryImageArtifacts } from "../../core/history-image-artifacts"
 import { withMcpApps } from "../../mcp-apps/annotate"
 import { createMcpAppClient } from "../../mcp-apps/client"
 import { createOpenCodeClient, type OpenCodeClientOptions } from "./client"
@@ -72,17 +73,20 @@ export function composeOpenCodeRuntime({
       ...(mcp ? { mcpToolNames: mcp.names } : {}),
     })
   const engine = turns instanceof OpenCodeTurnEngine ? turns : undefined
-  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
+  // Wrapped before the coordinator, which runs turns through `runtime.turns`,
+  // and stored images innermost, so reading one back skips the view lookups.
   const runtime = withMcpApps(
-    new OpenCodeServerAdapter({
-      client,
-      turns,
-      interactions,
-      creatorAgentId,
-      logger,
-      ...(engine ? { link: engine.link } : {}),
-      ...(mcp ? { mcp } : {}),
-    })
+    withHistoryImageArtifacts(
+      new OpenCodeServerAdapter({
+        client,
+        turns,
+        interactions,
+        creatorAgentId,
+        logger,
+        ...(engine ? { link: engine.link } : {}),
+        ...(mcp ? { mcp } : {}),
+      })
+    )
   )
   return {
     runtime,

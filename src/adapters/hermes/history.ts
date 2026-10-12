@@ -437,22 +437,19 @@ export function projectHermesHistory(
         )
       )
         content.push({ type: "data", name: "hgw.artifact", data: descriptor })
-    const inlineImages =
-      role === "user" && Array.isArray(rawContent)
-        ? rawContent.flatMap((part) => {
-            const image =
-              isRecord(part) && part.type === "image_url"
-                ? imageSource(part.image_url)
-                : undefined
-            return image ? [{ type: "image" as const, image }] : []
-          })
-        : []
-    for (const image of inlineImages) content.push(image)
-    // A row that inlines its image already shows those bytes; the directive it
-    // also persisted would only repeat them.
-    if (inlineImages.length === 0)
-      for (const artifact of userContent?.artifacts ?? [])
-        content.push(artifact)
+    // A row that persisted its image's directive as well as its bytes shows the
+    // directive's Artifact, the one its live echo showed; the inline copy would
+    // only repeat it.
+    const artifacts = userContent?.artifacts ?? []
+    for (const artifact of artifacts) content.push(artifact)
+    if (role === "user" && artifacts.length === 0 && Array.isArray(rawContent))
+      for (const part of rawContent) {
+        const image =
+          isRecord(part) && part.type === "image_url"
+            ? imageSource(part.image_url)
+            : undefined
+        if (image) content.push({ type: "image", image })
+      }
     if (role === "assistant" && Array.isArray(value.tool_calls)) {
       for (const rawCall of value.tool_calls) {
         if (!isRecord(rawCall)) continue
