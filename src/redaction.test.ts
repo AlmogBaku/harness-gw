@@ -277,4 +277,21 @@ describe("maskCredentials", () => {
       )
     }
   )
+
+  // Unbounded, a name's words and a URL's scheme each cost a pass per word:
+  // 40 KB of separated words took seven seconds to mask.
+  it.each([
+    ["narrow", assigned("password", M)],
+    ["broad", M],
+  ] as const)(
+    "masks after a long run of separated words in one pass at %s strength",
+    (strength, masked) => {
+      const run = "a-".repeat(30_000)
+      const started = performance.now()
+      expect(
+        maskCredentials(`${run} ${assigned("password", SAMPLE)}`, strength)
+      ).toBe(`${run} ${masked}`)
+      expect(performance.now() - started).toBeLessThan(1_000)
+    }
+  )
 })
