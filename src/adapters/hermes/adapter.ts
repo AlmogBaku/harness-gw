@@ -263,7 +263,7 @@ function isUnpersistedDraft(
   )
 }
 
-/** The `ui_meta` namespaces AOS writes: visibility and the avatar. */
+/** The `ui_meta` namespaces AOS writes: visibility, and the avatar and mute. */
 const UI_META_KEYS = ["hermes-bots", "aos"] as const
 type UiMetaKey = (typeof UI_META_KEYS)[number]
 type UiMetaRevisions = Record<UiMetaKey, number>
@@ -330,11 +330,13 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
       visibility,
       ...(creator ? { role: "creator" as const } : {}),
       ...(avatar.success ? { avatar: avatar.data } : {}),
+      ...(aos.muted === true ? { muted: true as const } : {}),
     },
     visibility,
     selectable: visibility === "visible" && !creator,
     editable,
     avatarEditable: editable,
+    muteEditable: editable,
     revision: agentRevision(revisions),
   }
 }
@@ -1338,12 +1340,15 @@ export class HermesServerAdapter implements ServerRuntime {
         ...nativeNamespace(profile, "hermes-bots"),
         hidden: patch.visibility === "hidden",
       }
-    if (patch.avatar !== undefined) {
-      // Spread the stored keys so `role` survives; null drops the avatar.
+    if (patch.avatar !== undefined || patch.muted !== undefined) {
+      // One write from the stored keys, so `role` survives and an avatar and
+      // a mute in one patch both land; null drops the avatar, unmute the key.
       const aos = { ...nativeNamespace(profile, "aos") }
-      delete aos.avatar
-      writes.aos =
-        patch.avatar === null ? aos : { ...aos, avatar: patch.avatar }
+      if (patch.avatar === null) delete aos.avatar
+      else if (patch.avatar !== undefined) aos.avatar = patch.avatar
+      if (patch.muted === false) delete aos.muted
+      else if (patch.muted) aos.muted = true
+      writes.aos = aos
     }
     const touched = UI_META_KEYS.filter((key) => writes[key] !== undefined)
 
@@ -1377,7 +1382,9 @@ export class HermesServerAdapter implements ServerRuntime {
       (patch.visibility !== undefined &&
         agent.visibility !== patch.visibility) ||
       (patch.avatar !== undefined &&
-        (agent.summary.avatar ?? null) !== patch.avatar)
+        (agent.summary.avatar ?? null) !== patch.avatar) ||
+      (patch.muted !== undefined &&
+        (agent.summary.muted ?? false) !== patch.muted)
     )
       throw new HermesUnavailableError()
     return AgentUpdateResponseSchema.parse({

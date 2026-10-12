@@ -312,9 +312,12 @@ export function createAcpWorkspaceClient({
   let connectionCurrentlyReady = connectionEverReady
   const leaveStatus = connection.subscribeStatus((status) => {
     if (status === "ready") {
-      // A reconnect: was ever ready and had an interruption.
-      if (connectionEverReady && !connectionCurrentlyReady)
+      // A reconnect: was ever ready and had an interruption. Its catch-up is
+      // yet to come.
+      if (connectionEverReady && !connectionCurrentlyReady) {
+        store.startOver()
         scheduleSessionRelist()
+      }
       connectionEverReady = true
       connectionCurrentlyReady = true
     } else {
@@ -371,12 +374,20 @@ export function createAcpWorkspaceClient({
     },
     async listAgentCatalog() {
       return (await catalog()).agents.map(
-        ({ summary, visibility, selectable, editable, avatarEditable }) => ({
+        ({
           summary,
           visibility,
           selectable,
           editable,
           avatarEditable,
+          muteEditable,
+        }) => ({
+          summary,
+          visibility,
+          selectable,
+          editable,
+          avatarEditable,
+          muteEditable,
         })
       )
     },

@@ -435,8 +435,10 @@ Rules for every adapter:
   icon, not as a bad row.
 - **Throw `ServerAgentUpdateUnsupportedError`** for any field the runtime cannot
   store. Reject the whole patch; nothing is half-applied.
-- **Enforce `avatarEditable` in the adapter.** The browser flag is informational
-  only; the adapter must refuse a write for any Agent that is not writable.
+- **Enforce `avatarEditable` and `muteEditable` in the adapter.** The browser
+  flags are informational only; the adapter must refuse a write for any Agent
+  that is not writable, and refuse a `muted` field outright where the runtime
+  has no native store for it, rather than dropping it beside an avatar write.
 - **Take expected revisions from a fresh read.** Read the Agent's current state
   at the start of `updateAgent`; do not cache revision values from `listAgents`.
 - **Report `createdAt`** in `AosSessionInfoMeta` where the native Session has a

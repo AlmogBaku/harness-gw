@@ -138,14 +138,17 @@ export type SessionEvent =
   | { kind: "error"; cause: unknown }
 
 /**
- * One content-free workspace event about a Session the member may observe:
- * a turn's start and end, a request for attention and its resolution, and a
- * change of read state.
+ * One workspace event about a Session the member may observe: a turn's start
+ * and end, a request for attention and its resolution, and a change of read
+ * state. It carries ids, times, and kinds; a request for attention also
+ * carries one masked line of what it asks.
  */
 export type Activity = {
   agentId: string
   sessionId: string
   occurredAt: string
+  /** Re-sent on connect from what the gateway already holds. */
+  replayed?: true
 } & (
   | {
       type: "turn-started" | "turn-finished" | "turn-failed"
@@ -155,6 +158,8 @@ export type Activity = {
       type: "attention-requested"
       requestId: string
       attentionKind: "question" | "permission"
+      requestText?: string
+      requestMore?: number
     }
   | { type: "attention-resolved"; requestId: string }
   | { type: "unread-changed"; unread: boolean }

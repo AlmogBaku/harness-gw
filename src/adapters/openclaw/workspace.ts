@@ -112,6 +112,8 @@ function projectAgent(agent: OpenClawAgent, configured: ReadonlySet<string>) {
     // Only an Agent with its own authored entry can take a merge-by-id patch;
     // the implicit default Agent has none.
     avatarEditable: !creator && configured.has(agent.id),
+    // OpenClaw has no native place to keep a mute.
+    muteEditable: false,
     revision: revision(agent),
   }
 }
@@ -320,10 +322,15 @@ export function createOpenClawWorkspace(input: {
       return workspace?.startsWith("/") ? workspace : undefined
     },
     async updateAgent(agentId, patch, observedRevision) {
-      // A patch that touches visibility is unsupported as a whole, and the
-      // avatar is re-checked so no caller reaches the native write unchecked.
+      // A patch that touches visibility or the mute is unsupported as a
+      // whole, never half-written beside its avatar, and the avatar is
+      // re-checked so no caller reaches the native write unchecked.
       const avatar = AgentAvatarSchema.nullable().safeParse(patch.avatar)
-      if (patch.visibility !== undefined || !avatar.success)
+      if (
+        patch.visibility !== undefined ||
+        patch.muted !== undefined ||
+        !avatar.success
+      )
         throw new ServerAgentUpdateUnsupportedError()
       const agent = await requireVisibleAgent(agentId)
       if (agent.id === OPENCLAW_CREATOR_AGENT_ID)

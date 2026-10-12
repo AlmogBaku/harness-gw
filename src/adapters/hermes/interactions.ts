@@ -23,7 +23,8 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
-import { SECRET_TERMS } from "../../redaction"
+import { distinctChoices } from "../../core/request-text"
+import { maskCredentials } from "../../redaction"
 
 import {
   HermesRpcRejectedError,
@@ -297,29 +298,17 @@ function nativeText(
     : undefined
 }
 
-/** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
-const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
-const credentialText = new RegExp(
-  String.raw`(?:\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)`,
-  "giu"
-)
 /**
  * A credential is nobody's to read, so it goes before the text leaves the
  * adapter. Paths and URLs stay: a question reaches every member of the
- * conversation, a guest included, in the words the agent wrote.
+ * conversation, a guest included, in the words the agent wrote. A question
+ * is masked broadly; a permission narrowly, so what it runs stays readable.
  */
-function publicText(value: string) {
-  return value.replace(credentialText, "[credential redacted]")
-}
+const publicText = (value: string) => maskCredentials(value)
+const publicPermission = (value: string) => maskCredentials(value, "narrow")
 
 function publicChoices(nativeChoices: string[] | null) {
-  if (!nativeChoices) return null
-  const projected = nativeChoices.map(publicText)
-  return projected.map((choice, index) => {
-    return projected.filter((candidate) => candidate === choice).length > 1
-      ? `${choice} (option ${index + 1})`
-      : choice
-  })
+  return nativeChoices && distinctChoices(nativeChoices.map(publicText))
 }
 
 function boundedJson(value: unknown) {
@@ -558,11 +547,11 @@ function approvalInteraction(
     pendingRequest: {
       requestId: id,
       kind: PendingRequestKind.Permission,
-      message: publicText(message),
+      message: publicPermission(message),
       responseSchema: {
         type: "string",
         enum: choices,
-        ...(command && description ? { title: publicText(command) } : {}),
+        ...(command && description ? { title: publicPermission(command) } : {}),
       },
     },
   }

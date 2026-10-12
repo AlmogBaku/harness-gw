@@ -53,7 +53,7 @@ function researcherScope(id: string): SessionScope {
 function profile(
   hidden = false,
   revision: number | null = 7,
-  aos: { avatar?: unknown; revision?: number } = {}
+  aos: { avatar?: unknown; muted?: unknown; revision?: number } = {}
 ) {
   return {
     name: "researcher",
@@ -64,6 +64,7 @@ function profile(
         role: "agent",
         privatePath: "/srv/hermes/researcher",
         ...(aos.avatar === undefined ? {} : { avatar: aos.avatar }),
+        ...(aos.muted === undefined ? {} : { muted: aos.muted }),
       },
       "hermes-bots": { hidden, nativeOnly: "keep-server-side" },
     },
@@ -2240,6 +2241,7 @@ describe("Hermes server adapter", () => {
           selectable: true,
           editable: true,
           avatarEditable: true,
+          muteEditable: true,
           revision: "hermes-bots:7,aos:0",
         },
       ],
@@ -2531,22 +2533,84 @@ describe("Hermes server adapter", () => {
     expect(updated.agent.summary).toMatchObject({ avatar: "dome/sage" })
   })
 
-  it("rejects a write the confirming reread does not show", async () => {
+  it.each<[string, { avatar?: string; muted?: boolean }, AgentUpdatePatch]>([
+    [
+      "mutes, keeping the role and avatar",
+      { avatar: "ring/blue" },
+      { muted: true },
+    ],
+    [
+      "writes an avatar and a mute in one patch",
+      {},
+      { avatar: "dome/sage", muted: true },
+    ],
+    [
+      "unmutes by deleting the key",
+      { avatar: "ring/blue", muted: true },
+      { muted: false },
+    ],
+  ])("%s", async (_case, stored, patch) => {
+    const written = {
+      avatar: patch.avatar ?? stored.avatar,
+      ...(patch.muted ? { muted: true } : {}),
+    }
     const request = vi
       .fn()
-      .mockResolvedValueOnce({ profiles: [profile(false, 7, { revision: 3 })] })
+      .mockResolvedValueOnce({
+        profiles: [profile(false, 7, { ...stored, revision: 3 })],
+      })
       .mockResolvedValueOnce({ applied: { ui_meta: true } })
-      .mockResolvedValueOnce({ profiles: [profile(false, 7, { revision: 4 })] })
+      .mockResolvedValueOnce({
+        profiles: [profile(false, 7, { ...written, revision: 4 })],
+      })
     const adapter = new HermesServerAdapter({ request })
 
-    await expect(
-      adapter.updateAgent(
-        "researcher",
-        { avatar: "dome/sage" },
-        "hermes-bots:7,aos:3"
-      )
-    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    const updated = await adapter.updateAgent(
+      "researcher",
+      patch,
+      "hermes-bots:7,aos:3"
+    )
+
+    expect(
+      request.mock.calls.filter(([method]) => method === "profiles.configure")
+    ).toEqual([
+      [
+        "profiles.configure",
+        {
+          name: "researcher",
+          ui_meta: {
+            aos: {
+              role: "agent",
+              privatePath: "/srv/hermes/researcher",
+              ...written,
+            },
+          },
+          ui_meta_expected_revisions: { aos: 3 },
+        },
+      ],
+    ])
+    expect(updated.agent.summary.muted).toBe(written.muted)
   })
+
+  it.each<AgentUpdatePatch>([{ avatar: "dome/sage" }, { muted: true }])(
+    "rejects a write the confirming reread does not show: %o",
+    async (patch) => {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({
+          profiles: [profile(false, 7, { revision: 3 })],
+        })
+        .mockResolvedValueOnce({ applied: { ui_meta: true } })
+        .mockResolvedValueOnce({
+          profiles: [profile(false, 7, { revision: 4 })],
+        })
+      const adapter = new HermesServerAdapter({ request })
+
+      await expect(
+        adapter.updateAgent("researcher", patch, "hermes-bots:7,aos:3")
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+    }
+  )
 
   it("sends no native request for a malformed avatar reaching the adapter directly", async () => {
     const request = vi.fn(async () => ({ profiles: [profile(false, 7)] }))

@@ -56,11 +56,24 @@ function harness(
 
 const session = (
   sessionId: string,
-  occurredAtMs = START
+  occurredAtMs = START,
+  question?: string
 ): CoalescedSession => ({
   agentId: "researcher",
   sessionId,
   occurredAtMs,
+  newestAtMs: occurredAtMs,
+  ...(question === undefined
+    ? {}
+    : {
+        request: {
+          requestId: question,
+          kind: "elicitation",
+          questions: [
+            { text: question, choices: [], multiple: false, custom: true },
+          ],
+        },
+      }),
 })
 
 describe("push coalescer", () => {
@@ -88,15 +101,20 @@ describe("push coalescer", () => {
     ])
   })
 
-  it("answers for the earliest event it collapsed for each Session", () => {
+  it("answers for the earliest event and reports the newest request of each Session", () => {
     const { clock, coalescer, emitted } = harness()
 
-    coalescer.add(OPERATOR, "input", session("session-1", START + 500))
-    coalescer.add(OPERATOR, "input", session("session-1", START + 100))
-    coalescer.add(OPERATOR, "input", session("session-1", START + 900))
+    coalescer.add(OPERATOR, "input", session("session-1", START + 500, "Q2"))
+    coalescer.add(OPERATOR, "input", session("session-1", START + 900, "Q3"))
+    coalescer.add(OPERATOR, "input", session("session-1", START + 100, "Q1"))
     clock.advance(COALESCE_WINDOW_MS.input)
 
-    expect(emitted[0]!.sessions).toEqual([session("session-1", START + 100)])
+    expect(emitted[0]!.sessions).toEqual([
+      {
+        ...session("session-1", START + 900, "Q3"),
+        occurredAtMs: START + 100,
+      },
+    ])
   })
 
   it("never extends an open window, however late the last event is", () => {

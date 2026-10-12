@@ -12,6 +12,8 @@ export type AgentVisibility = "visible" | "hidden"
 export type AgentUpdate = {
   visibility?: AgentVisibility
   avatar?: string | null
+  /** Mutes the Agent's notifications, or with `false` unmutes them. */
+  muted?: boolean
 }
 
 /** Actionable Agent update refusals; all other failures remain ordinary Errors. */
@@ -33,6 +35,8 @@ export type ActivityBase = {
   agentId: string
   sessionId: string
   occurredAt: string
+  /** Re-sent on connect from what the gateway already held. */
+  replayed?: true
 }
 
 export type WorkspaceActivityEvent =
@@ -45,6 +49,10 @@ export type WorkspaceActivityEvent =
       type: "attention-requested"
       attentionKind: "question" | "permission"
       requestId: string
+      /** One masked line of what is asked; absent when nothing can be shown. */
+      requestText?: string
+      /** How many further questions the request asks. */
+      requestMore?: number
     })
   | (ActivityBase & { type: "attention-resolved"; requestId: string })
   | (ActivityBase & { type: "agent-ready" | "agent-activation-failed" })

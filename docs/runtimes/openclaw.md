@@ -151,8 +151,10 @@ before that reduction; the device's `operator.admin` scope can read it anyway.
 OpenClaw merges the patch into `agents.list` by id, refuses one that would drop
 an entry, and applies an `agents` change without restarting the Gateway.
 
-Visibility changes are unsupported for OpenClaw; a patch that includes
-`visibility` is rejected as a whole.
+Visibility changes and mutes are unsupported for OpenClaw: a patch that
+includes `visibility` or `muted` is rejected as a whole, so no mute is
+dropped beside an avatar that is written, and `muteEditable` is `false` for
+every Agent.
 
 OpenClaw's own Control UI reads `identity.avatar` as a file path, so after AOS
 writes a token such as `ring/blue` that field may show as a broken or default

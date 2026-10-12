@@ -17,6 +17,8 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
+import { distinctChoices, maskRequestText } from "../../core/request-text"
+import type { MaskStrength } from "../../redaction"
 import type {
   AcpOutbound,
   PendingRequestToOutbound,
@@ -74,14 +76,25 @@ function permissionOptions(request: PendingRequest): PermissionOption[] {
   })
 }
 
+/** A request's own message as the card shows it: whole, masked, in order. */
+function shownMessage(request: PendingRequest, strength: MaskStrength) {
+  return request.message === undefined
+    ? undefined
+    : maskRequestText(request.message, strength)
+}
+
+/**
+ * A permission is masked narrowly: the operator approves what it would run,
+ * so its shell syntax stays readable.
+ */
 function permissionOutbound(request: PendingRequest): RequestOutbound {
   // The schema's `title` names the operation and the message explains it; a
   // request with only one of the two titles itself with it.
   const label = record(request.responseSchema)?.title
-  const words = request.message
+  const words = shownMessage(request, "narrow")
   const title =
     typeof label === "string" && label
-      ? label
+      ? maskRequestText(label, "narrow")
       : (words ?? "Permission required")
   return {
     kind: "request-permission",
@@ -106,9 +119,7 @@ function permissionOutbound(request: PendingRequest): RequestOutbound {
         [HGW_META_KEY]: {
           requestId: request.requestId,
           ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
-          ...(request.message
-            ? { message: request.message.slice(0, 4_096) }
-            : {}),
+          ...(words ? { message: words.slice(0, 4_096) } : {}),
         },
       },
     },
@@ -120,16 +131,29 @@ function pendingQuestionsOf(request: PendingRequest): PendingQuestion[] {
   return request.questions ?? [{ choices: [], multiple: false, custom: true }]
 }
 
+/** A question's choices as the card shows them, in the runtime's order. */
+function shownChoices(question: PendingQuestion) {
+  return distinctChoices(
+    question.choices.map((choice) => maskRequestText(choice, "broad"))
+  )
+}
+
 /**
- * A header is the provider's short label and only that: a provider without one
+ * A question is masked broadly, its header, prompt, and choices alike. A
+ * header is the provider's short label and only that: a provider without one
  * leaves it unset rather than have the gateway invent English copy the browser
  * would show a Hebrew reader, and the browser labels that question by its place.
  */
 function questionsOf(request: PendingRequest): HgwQuestion[] {
   return pendingQuestionsOf(request).map((question) => ({
-    ...(question.label ? { header: question.label.slice(0, 256) } : {}),
-    prompt: question.text ?? question.label ?? request.message ?? "Question",
-    options: question.choices.map((label) => ({ label })),
+    ...(question.label
+      ? { header: maskRequestText(question.label, "broad").slice(0, 256) }
+      : {}),
+    prompt: maskRequestText(
+      question.text ?? question.label ?? request.message ?? "Question",
+      "broad"
+    ),
+    options: shownChoices(question).map((label) => ({ label })),
     multiple: question.multiple,
     custom: question.custom,
   }))
@@ -167,7 +191,7 @@ function elicitationOutbound(request: PendingRequest): RequestOutbound {
   const questions = questionsOf(request)
   const form: ElicitationForm = {
     mode: "form",
-    message: request.message ?? "Input required",
+    message: shownMessage(request, "broad") ?? "Input required",
     requestedSchema: {
       type: "object",
       properties: Object.fromEntries(
@@ -218,14 +242,20 @@ export const replyFromPermission = ((request, response) => {
       }
 }) satisfies ReplyFromPermission
 
-/** Every member answers the choices as the runtime wrote them. */
+/**
+ * Every member answers a choice as it was shown, and the runtime is answered
+ * with that choice as it wrote it; free text goes as typed.
+ */
 export const replyFromElicitation = ((request, response) => {
   if (response.action !== "accept")
     return { requestId: request.requestId, status: ReplyStatus.Cancelled }
   const content = record(response.content)
-  const answers = pendingQuestionsOf(request).map((_, index) =>
-    answerValues(content?.[`q${index}`])
-  )
+  const answers = pendingQuestionsOf(request).map((question, index) => {
+    const shown = shownChoices(question)
+    return answerValues(content?.[`q${index}`]).map(
+      (value) => question.choices[shown.indexOf(value)] ?? value
+    )
+  })
   return {
     requestId: request.requestId,
     status: ReplyStatus.Resolved,

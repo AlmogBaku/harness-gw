@@ -141,6 +141,38 @@ describe("pendingRequestToOutbound approvals", () => {
     })
   })
 
+  it("shows a long multi-line message whole, with its credential masked", () => {
+    const steps = Array.from({ length: 40 }, (_, index) => `step ${index + 1}`)
+    const outbound = permissionOf({
+      ...approval,
+      message: [...steps, "export token=ghp_leaked"].join("\n"),
+      responseSchema: { ...approval.responseSchema, title: "run deploy.sh" },
+    })
+
+    const shown = [...steps, "export token=[credential redacted]"].join("\n")
+    expect(outbound.request.description).toBe(shown)
+    expect(HgwPermissionMetaSchema.parse(metaOf(outbound)).message).toBe(shown)
+  })
+
+  it.each([
+    ["rm -rf token: ../../..", "rm -rf token: ../../.."],
+    ["curl -d token=aaaabbbb1111 x", "curl -d token=[credential redacted] x"],
+  ])(
+    "masks a permission narrowly, in its title and its message: %s",
+    (text, shown) => {
+      const outbound = permissionOf({
+        ...approval,
+        message: text,
+        responseSchema: { ...approval.responseSchema, title: text },
+      })
+
+      expect(outbound.request.title).toBe(shown)
+      expect(HgwPermissionMetaSchema.parse(metaOf(outbound)).message).toBe(
+        shown
+      )
+    }
+  )
+
   it("titles an approval that carries no message", () => {
     const outbound = permissionOf({
       requestId: "approval-2",
@@ -169,7 +201,7 @@ const located: PendingRequest = {
       custom: true,
     },
     {
-      text: "Anything else? See https://docs.example.test/exports",
+      text: "Anything else? See https://docs.example.test/exports with token=ghp_leaked",
       choices: [],
       multiple: false,
       custom: true,
@@ -178,7 +210,7 @@ const located: PendingRequest = {
 }
 
 describe("pendingRequestToOutbound questions", () => {
-  it("shows every member the paths and URLs the agent wrote", () => {
+  it("shows every member the paths and URLs the agent wrote, and no credential", () => {
     const meta = HgwElicitationMetaSchema.parse(metaOf(elicitationOf(located)))
     expect(meta.questions[0]).toMatchObject({
       prompt: "Where should exports live? Not under /srv/aos/repo.",
@@ -188,7 +220,7 @@ describe("pendingRequestToOutbound questions", () => {
       ],
     })
     expect(meta.questions[1]?.prompt).toBe(
-      "Anything else? See https://docs.example.test/exports"
+      "Anything else? See https://docs.example.test/exports with [credential redacted]"
     )
   })
 
@@ -406,6 +438,44 @@ describe("replyFromPermission", () => {
       requestId: "approval-1",
       status: "cancelled",
     })
+  })
+})
+
+describe("a question with a credential in it", () => {
+  /** Two choices that read the same once masked. */
+  const masked: PendingRequest = {
+    requestId: "clarify-9",
+    kind: "elicitation",
+    questions: [
+      {
+        label: "token: AAAAbbbb1111",
+        text: "Which key?",
+        choices: ["use token: AAAAbbbb1111", "use token: ZZZZyyyy9999"],
+        multiple: false,
+        custom: false,
+      },
+    ],
+  }
+
+  it("is masked broadly, its header and its choices told apart by place", () => {
+    const meta = HgwElicitationMetaSchema.parse(metaOf(elicitationOf(masked)))
+
+    expect(meta.questions[0]).toMatchObject({
+      header: "[credential redacted]",
+      options: [
+        { label: "use [credential redacted] (option 1)" },
+        { label: "use [credential redacted] (option 2)" },
+      ],
+    })
+  })
+
+  it("answers the runtime with the choice as it wrote it", () => {
+    expect(
+      replyFromElicitation(masked, {
+        action: "accept",
+        content: { q0: "use [credential redacted] (option 2)" },
+      })
+    ).toMatchObject({ payload: { answers: [["use token: ZZZZyyyy9999"]] } })
   })
 })
 

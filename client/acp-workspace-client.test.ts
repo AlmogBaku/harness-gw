@@ -183,6 +183,7 @@ function catalogEntry() {
     selectable: true,
     editable: true,
     avatarEditable: true,
+    muteEditable: true,
     revision: "revision-1",
   }
 }
@@ -406,6 +407,39 @@ function createFakeConnection() {
       }
     },
   }
+}
+
+/** A list entry that reports the Session in `status`. */
+function listedWith(status: SessionMetadata["status"]): SessionInfo {
+  const entry = listEntry()
+  return {
+    ...entry,
+    _meta: { [HGW_META_KEY]: { ...sessionInfoMeta(true), status } },
+  }
+}
+
+type ActivityType =
+  | "turn-started"
+  | "turn-finished"
+  | "turn-failed"
+  | "attention-requested"
+  | "attention-resolved"
+
+/** What the feed tells the client, or the connection starting over. */
+type FeedStep = ReturnType<typeof activity> | "reconnect"
+
+/** One `_hgw/activity` item about the listed Session. */
+function activity(type: ActivityType, requestId = "request-1") {
+  const base = {
+    agentId: AGENT_ID,
+    sessionId: SESSION_ID,
+    occurredAt: UPDATED_AT,
+    type,
+  }
+  if (type === "attention-requested")
+    return { ...base, requestId, attentionKind: "question" }
+  if (type === "attention-resolved") return { ...base, requestId }
+  return { ...base, turnId: "run-1" }
 }
 
 function createFakeRest() {
@@ -769,6 +803,100 @@ describe("ACP workspace client", () => {
     expect(statuses).toEqual(["idle", "running"])
   })
 
+  it.each<
+    [string, SessionMetadata["status"], FeedStep[], SessionMetadata["status"]]
+  >([
+    ["turn-started", "idle", [activity("turn-started")], "running"],
+    [
+      "attention-requested",
+      "running",
+      [activity("attention-requested")],
+      "waiting-for-input",
+    ],
+    [
+      "attention-resolved",
+      "waiting-for-input",
+      [activity("attention-resolved")],
+      "running",
+    ],
+    ["turn-finished", "running", [activity("turn-finished")], "idle"],
+    ["turn-failed", "running", [activity("turn-failed")], "failed"],
+    // The new connection's hydration re-sends no request that was open on
+    // the old one, so that request no longer holds the Session waiting.
+    [
+      "attention-resolved after a reconnect",
+      "running",
+      [
+        activity("attention-requested", "request-1"),
+        "reconnect",
+        activity("attention-requested", "request-2"),
+        activity("attention-resolved", "request-2"),
+      ],
+      "running",
+    ],
+  ])(
+    "moves a held Session nobody subscribes to on the feed's %s, from %s",
+    async (_case, from, steps, to) => {
+      const { client, setListed, emitNotification, emitStatus } = createClient()
+      setListed(listedWith(from))
+      await client.getSessionMetadata([SESSION_ID])
+
+      for (const step of steps)
+        if (step === "reconnect") {
+          emitStatus("reconnecting")
+          emitStatus("ready")
+        } else emitNotification(HGW_METHODS.notify.activity, step)
+
+      expect(client.sessionStatus(SESSION_ID)).toBe(to)
+    }
+  )
+
+  it("keeps a Session waiting while another of its requests is open, counting them while it is subscribed", async () => {
+    const { client, emitNotification, emitUpdate } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const release = client.subscribeSession(SESSION_ID)
+    emitUpdate({ sessionUpdate: "state_update", state: "requires_action" })
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-requested", "request-1")
+    )
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-requested", "request-2")
+    )
+    release()
+
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-resolved", "request-1")
+    )
+    expect(client.sessionStatus(SESSION_ID)).toBe("waiting-for-input")
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-resolved", "request-2")
+    )
+    expect(client.sessionStatus(SESSION_ID)).toBe("running")
+  })
+
+  it("leaves a subscribed Session's status to its own stream, and holds no row the feed names", async () => {
+    const { client, join, emitNotification, emitUpdate } = createClient()
+    await join()
+    emitNotification(HGW_METHODS.notify.activity, activity("turn-finished"))
+    expect(client.sessionStatus(SESSION_ID)).toBe("running")
+    emitUpdate({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
+    })
+    expect(client.sessionStatus(SESSION_ID)).toBe("idle")
+
+    emitNotification(HGW_METHODS.notify.activity, {
+      ...activity("turn-started"),
+      sessionId: UNLISTED_SESSION_ID,
+    })
+    expect(client.sessionStatus(UNLISTED_SESSION_ID)).toBe("unknown")
+  })
+
   it("publishes Session Todos from the plan update", async () => {
     const { client, join, emitUpdate } = createClient()
     await join()
@@ -794,8 +922,8 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("maps workspace activity and ignores read-state events", async () => {
-    const { client, emitNotification } = createClient()
+  it("maps workspace activity, its preview and the first connection's replay mark, and ignores read-state events", async () => {
+    const { client, emitNotification, emitStatus } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
 
@@ -806,6 +934,17 @@ describe("ACP workspace client", () => {
       type: "attention-requested",
       requestId: "request-1",
       attentionKind: "permission",
+    })
+    emitNotification(HGW_METHODS.notify.activity, {
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      occurredAt: UPDATED_AT,
+      replayed: true,
+      type: "attention-requested",
+      requestId: "request-2",
+      attentionKind: "question",
+      requestText: "Which region?",
+      requestMore: 2,
     })
     emitNotification(HGW_METHODS.notify.activity, {
       agentId: AGENT_ID,
@@ -825,12 +964,44 @@ describe("ACP workspace client", () => {
         requestId: "request-1",
         attentionKind: "permission",
       },
+      {
+        id: `${SESSION_ID}:request-2:attention-requested`,
+        agentId: AGENT_ID,
+        sessionId: SESSION_ID,
+        occurredAt: UPDATED_AT,
+        replayed: true,
+        type: "attention-requested",
+        requestId: "request-2",
+        attentionKind: "question",
+        requestText: "Which region?",
+        requestMore: 2,
+      },
     ])
+    // A live item carries no replay mark and no preview it was not sent.
+    expect(events[0]).not.toHaveProperty("replayed")
+    expect(events[0]).not.toHaveProperty("requestText")
+
+    // A later connection's catch-up may hold what happened while it was
+    // down, so what it re-sends arrives unmarked.
+    emitStatus("reconnecting")
+    emitStatus("ready")
+    emitNotification(HGW_METHODS.notify.activity, {
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      occurredAt: UPDATED_AT,
+      replayed: true,
+      type: "attention-requested",
+      requestId: "request-3",
+      attentionKind: "question",
+    })
+    expect(events[2]).toMatchObject({ requestId: "request-3" })
+    expect(events[2]).not.toHaveProperty("replayed")
   })
 
   it("reports an Agent the catalog gained once a creator run stops", async () => {
     const clock = useFakeClock()
-    const { client, join, emitUpdate, setAgents } = createClient()
+    const { client, join, emitUpdate, emitNotification, setAgents } =
+      createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
     setAgents([creatorEntry()])
@@ -841,6 +1012,12 @@ describe("ACP workspace client", () => {
 
     emitUpdate({ sessionUpdate: "state_update", state: "running" })
     setAgents([creatorEntry(), catalogEntry()])
+    // The feed can tell of the turn's end before the Session's own stream does.
+    emitNotification(HGW_METHODS.notify.activity, {
+      ...activity("turn-finished"),
+      agentId: CREATOR_ID,
+      sessionId,
+    })
     emitUpdate({
       sessionUpdate: "state_update",
       state: "idle",
@@ -849,6 +1026,7 @@ describe("ACP workspace client", () => {
     await clock.advance(0)
 
     expect(events).toEqual([
+      expect.objectContaining({ type: "turn-finished", sessionId }),
       {
         id: `${sessionId}:${AGENT_ID}`,
         type: "agent-ready",
@@ -1056,7 +1234,9 @@ describe("ACP workspace client", () => {
   })
 
   it("creates Sessions, reports focus, steers, and tracks catalog revisions", async () => {
-    const { client, argsOf, calls } = createClient()
+    const { client, argsOf, calls, setAgents } = createClient()
+    const muted = catalogEntry()
+    setAgents([{ ...muted, summary: { ...muted.summary, muted: true } }])
 
     await expect(
       client.createSession(AGENT_ID, { title: "Weekly report" })
@@ -1083,15 +1263,19 @@ describe("ACP workspace client", () => {
     ).rejects.toThrow(/revision/)
     await expect(client.listAgentCatalog()).resolves.toEqual([
       {
-        summary: expect.objectContaining({ avatar: "ring/blue" }) as unknown,
+        summary: expect.objectContaining({
+          avatar: "ring/blue",
+          muted: true,
+        }) as unknown,
         visibility: "visible",
         selectable: true,
         editable: true,
         avatarEditable: true,
+        muteEditable: true,
       },
     ])
     await client.updateAgent(AGENT_ID, { visibility: "hidden", avatar: null })
-    await client.updateAgent(AGENT_ID, { visibility: "visible" })
+    await client.updateAgent(AGENT_ID, { muted: false })
     expect(
       calls
         .filter((call) => call.method === "updateAgent")
@@ -1103,7 +1287,7 @@ describe("ACP workspace client", () => {
         avatar: null,
         revision: "revision-1",
       },
-      { agentId: AGENT_ID, visibility: "visible", revision: "revision-3" },
+      { agentId: AGENT_ID, muted: false, revision: "revision-3" },
     ])
   })
 

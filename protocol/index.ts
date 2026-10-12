@@ -111,6 +111,8 @@ const AgentSummarySchema = z.strictObject({
   visibility: z.enum(["visible", "hidden"]).optional(),
   role: z.literal("creator").optional(),
   avatar: AgentAvatarSchema.optional(),
+  /** The operator muted the Agent's notifications; absent when not. */
+  muted: z.literal(true).optional(),
 })
 
 export const AgentCatalogEntrySchema = z.strictObject({
@@ -121,6 +123,8 @@ export const AgentCatalogEntrySchema = z.strictObject({
   editable: z.boolean(),
   /** The runtime can store this Agent's avatar. */
   avatarEditable: z.boolean(),
+  /** The runtime can store whether this Agent is muted. */
+  muteEditable: z.boolean(),
   revision: IdentifierSchema,
 })
 export type AgentCatalogEntry = z.infer<typeof AgentCatalogEntrySchema>
@@ -135,6 +139,8 @@ export type AgentCatalogResponse = z.infer<typeof AgentCatalogResponseSchema>
 export const AgentUpdateFields = {
   visibility: z.enum(["visible", "hidden"]).optional(),
   avatar: AgentAvatarSchema.nullable().optional(),
+  /** Mutes the Agent's notifications, or with `false` unmutes them. */
+  muted: z.boolean().optional(),
   revision: IdentifierSchema,
 }
 
@@ -142,13 +148,18 @@ export const AgentUpdateFields = {
 export function writesAgentField(value: {
   visibility?: unknown
   avatar?: unknown
+  muted?: unknown
 }) {
-  return value.visibility !== undefined || value.avatar !== undefined
+  return (
+    value.visibility !== undefined ||
+    value.avatar !== undefined ||
+    value.muted !== undefined
+  )
 }
 
 export const AgentUpdateRequestSchema = z
   .strictObject(AgentUpdateFields)
-  .refine(writesAgentField, "At least one of visibility, avatar")
+  .refine(writesAgentField, "At least one of visibility, avatar, muted")
 export type AgentUpdateRequest = z.infer<typeof AgentUpdateRequestSchema>
 /** The fields an Agent update writes, without its observed revision. */
 export type AgentUpdatePatch = Omit<AgentUpdateRequest, "revision">

@@ -27,6 +27,10 @@ connection rather than guess: the SDK client fails `initialized` with an error
 naming both versions and closes without reconnecting, since a retry cannot
 change the gateway's version.
 
+The extension version covers the ACP wire only. A Web Push message carries
+its own `v` (see [Web Push payload](#web-push-payload)), because a service
+worker reads it long after any connection has closed.
+
 `initialize`'s `info` names the gateway: `{ "name": "harness-gw", "version":
 "<gateway release>" }`.
 
@@ -399,7 +403,7 @@ as a `running` update followed by an `_hgw_error` idle update for the same
 | `_hgw/session/focus`   | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — a client may send `{}` as its liveness probe. (`HgwFocusRequestSchema`, `protocol/acp.ts`) |
 | `_hgw/sessions/search` | Find Sessions matching a query; see [Session search](#session-search) (`HgwSessionSearchMetaSchema`, `protocol/acp.ts`)                                                                              |
 | `_hgw/agents/list`     | Fetch the agent catalog                                                                                                                                                                              |
-| `_hgw/agents/update`   | Write visibility and/or avatar; compare-and-set on the observed revision (`HgwAgentUpdateRequestSchema`, `protocol/acp.ts`)                                                                          |
+| `_hgw/agents/update`   | Write visibility, avatar and/or `muted`; compare-and-set on the observed revision (`HgwAgentUpdateRequestSchema`, `protocol/acp.ts`)                                                                 |
 
 #### Session search
 
@@ -421,6 +425,25 @@ content; its rows carry no read state, so a Session's known `unread` stands.
 Every other runtime matches titles, ignoring case: OpenCode over its own
 Sessions, and OpenClaw over the first 1000 Sessions the list serves.
 
+#### Agent updates and mute
+
+`_hgw/agents/update` takes `{ agentId, revision }` and at least one of
+`visibility`, `avatar` (`null` clears it) and `muted` (`AgentUpdateFields`,
+`protocol/index.ts`); any field alone is a valid update. `muted: true` mutes
+the Agent's Web Push notifications and `muted: false` unmutes them. A runtime
+that cannot store a field it is sent refuses the whole update as
+`unsupported` rather than writing the rest.
+
+Every `_hgw/agents/list` entry carries `muteEditable`, whether the runtime can
+store a mute for that Agent, beside `editable` and `avatarEditable`. Its
+`summary` carries `muted: true` while the Agent is muted, and no `muted` key
+when it is not. Only Hermes stores a mute; see
+[the runtime notes](runtimes/hermes.md#agent-icons-and-mute).
+
+A successful update tells every operator connection
+`_hgw/catalog_invalidated`, and push delivery applies it from the next
+notification (see [Web Push payload](#web-push-payload)).
+
 ### Notifications (no response expected)
 
 | Method                     | Direction     | Purpose                                                           |
@@ -432,16 +455,100 @@ Sessions, and OpenClaw over the first 1000 Sessions the list serves.
 
 #### `_hgw/activity` union ()
 
-Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant `type`:
+Every item carries `{ agentId, sessionId, occurredAt }` plus a discriminant
+`type`. An item the gateway re-sends on connect, from the Session list and the
+coordinator's snapshots, also carries `replayed: true` and the row's own time
+as `occurredAt`; a live item carries no `replayed`.
 
-| `type`                | Extra fields                            |
-| --------------------- | --------------------------------------- |
-| `turn-started`        | `turnId`                                |
-| `turn-finished`       | `turnId`                                |
-| `turn-failed`         | `turnId`                                |
-| `attention-requested` | `requestId`, `attentionKind: "question" | "permission"` |
-| `attention-resolved`  | `requestId`                             |
-| `unread-changed`      | `unread: boolean`                       |
+| `type`                | Extra fields                                                                                    |
+| --------------------- | ----------------------------------------------------------------------------------------------- |
+| `turn-started`        | `turnId`                                                                                        |
+| `turn-finished`       | `turnId`                                                                                        |
+| `turn-failed`         | `turnId`                                                                                        |
+| `attention-requested` | `requestId`, `attentionKind: "question" \| "permission"`, optional `requestText`, `requestMore` |
+| `attention-resolved`  | `requestId`                                                                                     |
+| `unread-changed`      | `unread: boolean`                                                                               |
+
+`requestText` is one line of what the request asks: a permission's operation
+or message, or an elicitation's first question. It is stripped of
+bidirectional controls, collapsed to single spaces, masked broadly (see
+[Credential masking](#credential-masking)), and cut to 200 UTF-16 units
+ending in `…`. `requestMore` counts the questions after the first. Both are
+absent when there is nothing to show. The ask card itself, the
+`session/request_permission` or `session/elicitation` request, keeps the full
+text, line breaks included.
+
+#### Credential masking
+
+The gateway masks a credential as `[credential redacted]` at one of two
+strengths. A term is any word of `SECRET_TERMS` (`src/redaction.ts`), in any
+case, with `-` or `_` allowed between its letters (`api_key`, `apiKey`,
+`password`, `token`, …). A name that ends in a term after a `-` or `_` is
+read as that term, the way a logged field name is (`DB_PASSWORD`,
+`AWS_SECRET_ACCESS_KEY`, `x-api-key`); a word that only ends in a term's
+letters, such as `bypass`, is not.
+
+A bearer token is at least 8 characters of `[A-Za-z0-9._~+/-]`, the RFC 6750
+token characters, whose last character may also be `=` and is never `.`, so
+a sentence's closing period stays.
+
+- **Broad** masks:
+  - a term, `=` or `:` with any spacing, and its value up to the next
+    whitespace, `,` or `;`, quotes included; the whole match goes;
+  - `Basic` or `Bearer` and the bearer token after it, when the token mixes
+    at least two of upper case, lower case, digits and symbols, counted with
+    its first letter's case ignored; so `Basic authentication` and
+    `Enable Basic Authentication?` stay, and a whole JWT or `ya29.…` token
+    after `Bearer` goes;
+  - a provider key by its prefix alone: `ghp_`, `gho_`, `ghs_`, `ghu_`,
+    `ghr_`, `sk-`, `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-` or `xoxs-` and the word
+    characters and `-` after it.
+- **Narrow** masks:
+  - a term written as one word, `term=VALUE` or `term:VALUE`, whose value
+    has no whitespace and none of ``$ ( ) | & ; < > ` ' " { } * ? [ ] \``,
+    starts with none of `/`, `.` or `~`, may sit in single or double quotes,
+    and ends where a shell word does: at whitespace, `;`, `&`, `|`, `(`, `)`,
+    `<`, `>`, a quote, a backtick, or the end of the text. The term, the
+    quotes and that boundary stay; only the value goes, so
+    `export TOKEN=…; ./deploy.sh` keeps its `;`;
+  - a bearer token after `Authorization:` and `Bearer` or `Basic`, in any
+    case and spacing; the header stays and only the token goes. A bare
+    `bearer` or `basic` word, as in `rm -rf bearer archive`, stays;
+  - a provider key of a real key's length: `ghp_`, `gho_`, `ghs_`, `ghu_` or
+    `ghr_` and 30 or more letters and digits, `sk-` and 20 or more word
+    characters or `-` including a digit, or `xoxb-`, `xoxa-`, `xoxp-`,
+    `xoxr-` or `xoxs-` and the word characters and `-` after it; so
+    `rm -rf sk-backups` stays.
+- **Both** mask:
+  - a JWT (`eyJ…` in three dot-separated parts);
+  - a URL's password: in `scheme://user:password@host`, a password with no
+    whitespace and none of ``: / @ $ ( ) { } ` ' "`` goes, and the scheme,
+    user and host stay;
+  - then, every provider key
+    [`@sanity-labs/secret-scan`](https://github.com/sanity-labs/secret-scan)
+    knows by its shape, whole: its rules come from TruffleHog's detectors
+    (Stripe, Tailscale, AWS and others), most anchored on a provider prefix,
+    and its generic ones gated by length and entropy (`Bearer` and 20 or more
+    random characters, `sk-` and 40 or more). A match that is a URL or a
+    URL's scheme stays, because the scanner's database rules take the whole
+    URL or only its scheme.
+- **Neither** masks a value that is already `[credential redacted]`, so
+  masking text twice, at either strength, leaves one placeholder per
+  credential.
+
+| Text                                                    | Strength |
+| ------------------------------------------------------- | -------- |
+| A permission's message and title on the ask card        | narrow   |
+| A question's prompt, header and choices on the ask card | broad    |
+| An elicitation's own message on the ask card            | broad    |
+| `requestText` in `_hgw/activity` and in Web Push        | broad    |
+| `sessionTitle` and `agentName` in Web Push              | broad    |
+
+A masked choice is shown with ` (option N)` after it when two choices read
+the same once masked, and an answer naming the shown choice reaches the
+runtime as the choice it wrote. On Hermes, the adapter masks its own
+questions, choices and answers broadly and its approvals narrowly before the
+gateway does.
 
 ## Artifacts
 
@@ -588,6 +695,62 @@ tool call's view and `…/artifacts/:artifactId/app` for a published Artifact's:
 | `POST` | `/resources/read`         | Read one of the view server's `ui://` resources                  |
 | `POST` | `/files`                  | Renew the view's file addresses                                  |
 | `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds |
+
+### Web Push payload
+
+A configured deployment sends one Web Push message per Session when a
+notification window closes: input after 3 s, a failure after 5 s, a finished
+turn after 20 s. Nothing is sent while the operator is at the workspace, and a
+Session on screen, or read after its event, is left out. The decrypted payload
+is JSON matching `PushMessageSchema` (`protocol/push.ts`):
+
+| Field          | Type                                   | Presence                      |
+| -------------- | -------------------------------------- | ----------------------------- |
+| `v`            | `2`                                    | always                        |
+| `category`     | `"input" \| "failure" \| "completion"` | always                        |
+| `agentId`      | identifier                             | always                        |
+| `sessionId`    | identifier                             | always                        |
+| `occurredAt`   | ISO 8601, the Session's newest event   | always                        |
+| `locale`       | `"en" \| "he"`                         | always, the device's own      |
+| `agentName`    | string, 1–64 UTF-16 units              | fresh device, visible Agent   |
+| `sessionTitle` | string, 1–120 UTF-16 units             | fresh device, titled Session  |
+| `requestText`  | string, 1–200 UTF-16 units             | fresh device, input only      |
+| `requestMore`  | integer ≥ 1                            | with `requestText`, when more |
+
+`v` versions the payload on its own, apart from `HGW_EXTENSION_VERSION`.
+Version 2 replaced, without compatibility, version 1's one counted message per
+category, which named no Session when it counted several.
+
+- **Text.** Every text field is one line: control and bidirectional
+  characters removed, whitespace collapsed, credentials masked broadly (see
+  [Credential masking](#credential-masking)), and cut at a code-point
+  boundary ending in `…`. An Agent's name travels only for a visible,
+  selectable Agent that is not the creator.
+- **Quiet Agents.** No message is sent for an Agent that is muted, or hidden
+  and not the creator. A creator's Session, and an Agent the catalog does not
+  hold, still send, unnamed. The gateway learns this from the Agent catalog on
+  every delivery: one read answers for 60 s, a delivery waits at most 1 s for
+  a new one, and a slow or failed read leaves the last read that succeeded to
+  answer, however old. With no read ever succeeded, the message goes without
+  a name. An Agent update made through the gateway applies from the next
+  delivery, even while reads fail. A skipped Session is logged with its count
+  only, never its Agent.
+- **Fresh devices.** Only a registration stored in the last 30 days receives
+  `agentName`, `sessionTitle`, `requestText` and `requestMore`; an older one
+  receives the ids alone until the browser registers it again with
+  `PUT /push/subscriptions`. A registration older than 90 days is removed,
+  on startup and before each delivery.
+- **Size.** Every message is padded to 4096 bytes. A payload past the
+  encryptor's 3993-byte plaintext limit drops `requestText` and
+  `requestMore`, then `sessionTitle`, then `agentName`; the ids always
+  travel.
+- **Topic.** The `Topic` header is per Session and keyed: the first 32
+  characters of base64url(HMAC-SHA256(key, UTF-8 of the JSON array
+  `[agentId, sessionId]`)), where the key is HKDF-SHA256 over the VAPID
+  private key with an empty salt and the info `harness-gw push topic v1`. A
+  push service can collapse a Session's undelivered messages into the newest
+  without learning which Session it is. A Session is not sent a message
+  whose newest event is no newer than one it was already sent.
 
 ## Client modules
 

@@ -4,13 +4,19 @@ import {
   COALESCE_WINDOW_MS,
   PRESENCE_CLOSED_GRACE_MS,
   PRESENCE_GRACE_MS,
+  PUSH_TEXT_LIMITS,
   PushMessageSchema,
   type PushCategory,
+  type PushMessage,
 } from "../../protocol/push"
+import { previewText, requestPreview } from "../core/request-text"
+import type { AgentFacts } from "./agent-facts"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import {
   createPushCoalescer,
+  defaultSchedule,
+  sessionKey,
   type CoalescedSession,
   type PresenceVerdict,
   type SuppressionReason,
@@ -26,6 +32,22 @@ const URGENCY: Readonly<Record<PushCategory, PushUrgency>> = {
   completion: "normal",
 }
 
+/** A device registered this recently is told what a Session is about. */
+const CONTENT_FRESH_MS = 30 * 86_400_000
+
+/**
+ * How long a Session's last push guards it against an older one: no window
+ * stays open longer than the longest window and one grace.
+ */
+const LAST_SENT_TTL_MS =
+  Math.max(...Object.values(COALESCE_WINDOW_MS)) + PRESENCE_GRACE_MS
+
+/** What a fresh device is told beyond the ids, each field only when known. */
+type PushContent = Pick<
+  PushMessage,
+  "agentName" | "sessionTitle" | "requestText" | "requestMore"
+>
+
 export type PushDispatcherOptions = {
   runtimeInstance: RuntimeInstance
   /** The same rows the ACP listener maintains, so read state gates delivery. */
@@ -35,6 +57,8 @@ export type PushDispatcherOptions = {
   sender: PushSender
   /** Which principal one Agent's events notify. */
   principalOf(agentId: string): string
+  /** What a push needs to know of its Agent; never rejects. */
+  agentFacts?: (agentId: string) => Promise<AgentFacts>
   logger?: Logger
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => () => void
@@ -44,16 +68,14 @@ export interface PushDispatcher {
   close(): void
 }
 
-const defaultSchedule = (callback: () => void, delayMs: number) => {
-  const handle = setTimeout(callback, delayMs)
-  return () => clearTimeout(handle)
-}
-
 /**
  * Turns the coordinator's execution events into device pushes: one window per
- * principal and category, gated by what the workspace already shows, and sent
- * to every device that asked for that category. The message stays content-free,
- * and so does the line this writes about it.
+ * principal and category, gated by what the workspace already shows, then one
+ * push per Session to every device that asked for that category. A quiet
+ * Agent, muted or hidden and not the creator, sends none. A device registered
+ * in the last 30 days is also told the Agent's name, the Session's title, and
+ * what is asked; the lines this writes name none of them, and no Agent,
+ * device, or Session either.
  */
 export function createPushDispatcher({
   runtimeInstance,
@@ -62,19 +84,24 @@ export function createPushDispatcher({
   presence,
   sender,
   principalOf,
+  agentFacts = async () => ({ quiet: false }),
   logger,
   now = Date.now,
   schedule = defaultSchedule,
 }: PushDispatcherOptions): PushDispatcher {
+  /** The newest event each Session was last pushed about. */
+  const lastSent = new Map<string, number>()
+
   /**
-   * One line for a window that had candidates and sent nothing: a count, the
-   * reason, and for a read decision the two moments it turned on. Timestamps
-   * identify nothing, and they are the only way to tell a read that really came
-   * after the event from a stamp that merely looks newer than one.
+   * One line for Sessions a window held back: a count, the reason, and for a
+   * read decision the two moments it turned on. The gate reports a window it
+   * emptied; delivery reports every Session it skips. Timestamps identify
+   * nothing, and they are the only way to tell a read that really came after
+   * the event from a stamp that merely looks newer than one.
    */
   const suppressed = (
     category: PushCategory,
-    reason: SuppressionReason,
+    reason: SuppressionReason | "quiet" | "stale",
     sessions: number,
     decision?: { readAtMs: number; occurredAtMs: number }
   ) => {
@@ -137,38 +164,100 @@ export function createPushDispatcher({
     return untilMs > now() ? { state: "grace", untilMs } : { state: "absent" }
   }
 
+  /**
+   * The Sessions with news newer than their last push, each recorded as sent:
+   * a later-closing window of another category must not tell a device about
+   * an event older than one it was already told about.
+   */
+  const unsent = (sessions: CoalescedSession[]) => {
+    for (const [key, newestAtMs] of lastSent)
+      if (newestAtMs < now() - LAST_SENT_TTL_MS) lastSent.delete(key)
+    return sessions.filter((session) => {
+      const sentAtMs = lastSent.get(sessionKey(session))
+      if (sentAtMs !== undefined && session.newestAtMs <= sentAtMs) return false
+      lastSent.set(sessionKey(session), session.newestAtMs)
+      return true
+    })
+  }
+
+  const contentOf = (
+    { agentId, sessionId, request }: CoalescedSession,
+    name: string | undefined
+  ): PushContent => {
+    const title = previewText(
+      sessionRows.get(agentId, sessionId)?.title ?? "",
+      PUSH_TEXT_LIMITS.sessionTitle
+    )
+    const preview = request && requestPreview(request)
+    return {
+      ...(name ? { agentName: name } : {}),
+      ...(title ? { sessionTitle: title } : {}),
+      ...(preview ? { requestText: preview.text } : {}),
+      ...(preview?.more ? { requestMore: preview.more } : {}),
+    }
+  }
+
+  const fresh = (device: StoredRegistration) =>
+    now() - Date.parse(device.createdAt) <= CONTENT_FRESH_MS
+
   const deliver = async (
     principalId: string,
     category: PushCategory,
-    sessions: CoalescedSession[],
-    closedAt: number
+    candidates: CoalescedSession[]
   ) => {
+    await registrations
+      .prune()
+      .catch((err: unknown) =>
+        logger?.warn({ err }, "push.device.prune_failed")
+      )
     const devices = registrations
       .list(principalId)
       .filter((device) => device.categories[category])
     if (devices.length === 0) return
-    // Ids travel only when exactly one Session is meant; a count carries none.
-    const only = sessions.length === 1 ? sessions[0] : undefined
-    const message = {
-      v: 1 as const,
-      category,
-      count: sessions.length,
-      occurredAt: new Date(closedAt).toISOString(),
-      ...(only ? { agentId: only.agentId, sessionId: only.sessionId } : {}),
-    }
+    const facts = new Map(
+      await Promise.all(
+        [...new Set(candidates.map(({ agentId }) => agentId))].map(
+          async (agentId) => [agentId, await agentFacts(agentId)] as const
+        )
+      )
+    )
+    const heard = candidates.filter(({ agentId }) => !facts.get(agentId)?.quiet)
+    if (heard.length < candidates.length)
+      suppressed(category, "quiet", candidates.length - heard.length)
+    const sessions = unsent(heard)
+    if (sessions.length < heard.length)
+      suppressed(category, "stale", heard.length - sessions.length)
+    if (sessions.length === 0) return
+    const told = devices.some(fresh)
+    const messages = sessions.map((session) => ({
+      ids: {
+        v: 2 as const,
+        category,
+        agentId: session.agentId,
+        sessionId: session.sessionId,
+        occurredAt: new Date(session.newestAtMs).toISOString(),
+      },
+      content: told ? contentOf(session, facts.get(session.agentId)?.name) : {},
+    }))
     const settled = await Promise.allSettled(
-      devices.map(async (device) => ({
-        device,
-        outcome: await sender.send(
+      messages.flatMap(({ ids, content }) =>
+        devices.map(async (device) => ({
           device,
-          PushMessageSchema.parse({ ...message, locale: device.locale }),
-          URGENCY[category]
-        ),
-      }))
+          outcome: await sender.send(
+            device,
+            PushMessageSchema.parse({
+              ...ids,
+              ...(fresh(device) ? content : {}),
+              locale: device.locale,
+            }),
+            URGENCY[category]
+          ),
+        }))
+      )
     )
 
     const statuses: Record<string, number> = {}
-    const departed: StoredRegistration[] = []
+    const departed = new Set<string>()
     let sent = 0
     let gone = 0
     let failed = 0
@@ -185,13 +274,13 @@ export function createPushDispatcher({
       if (outcome.result === "sent") sent += 1
       else if (outcome.result === "gone") {
         gone += 1
-        departed.push(device)
+        departed.add(device.subscription.endpoint)
       } else failed += 1
     }
     // A push service that reports a device gone has unsubscribed it for good.
-    for (const device of departed)
+    for (const endpoint of departed)
       await registrations
-        .remove(principalId, device.subscription.endpoint)
+        .remove(principalId, endpoint)
         .catch((err: unknown) =>
           logger?.warn({ err }, "push.device.remove_failed")
         )
@@ -217,8 +306,8 @@ export function createPushDispatcher({
     graceMs: PRESENCE_GRACE_MS,
     filter,
     presence: verdict,
-    emit: (principalId, category, sessions, closedAt) => {
-      deliver(principalId, category, sessions, closedAt).catch((err: unknown) =>
+    emit: (principalId, category, sessions) => {
+      deliver(principalId, category, sessions).catch((err: unknown) =>
         logger?.warn({ err }, "push.deliver.failed")
       )
     },
@@ -231,11 +320,16 @@ export function createPushDispatcher({
     const category = categoryOf(event.kind)
     if (!category) return
     // A timestamp the provider left unreadable must not silence a notification.
-    const occurredAtMs = Date.parse(event.occurredAt)
+    const parsedMs = Date.parse(event.occurredAt)
+    const occurredAtMs = Number.isNaN(parsedMs) ? now() : parsedMs
     coalescer.add(principalOf(event.agentId), category, {
       agentId: event.agentId,
       sessionId: event.sessionId,
-      occurredAtMs: Number.isNaN(occurredAtMs) ? now() : occurredAtMs,
+      occurredAtMs,
+      newestAtMs: occurredAtMs,
+      ...(event.kind === "attention-requested"
+        ? { request: event.request }
+        : {}),
     })
   })
 

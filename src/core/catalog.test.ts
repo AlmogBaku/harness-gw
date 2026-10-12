@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest"
 
-import type { Session } from "../../protocol"
+import type { AgentCatalogEntry, Session } from "../../protocol"
 import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import { createCatalog } from "./catalog"
@@ -37,6 +37,7 @@ function harness(
     updateSession?: () => Promise<void>
     subscribeCatalogChanges?: ServerRuntime["subscribeCatalogChanges"]
     searchSessions?: ServerRuntime["searchSessions"]
+    updateAgent?: ServerRuntime["updateAgent"]
   } = {}
 ) {
   const updateSession = vi.fn(options.updateSession ?? (async () => undefined))
@@ -57,6 +58,7 @@ function harness(
     }),
     getSession: async () => options.held ?? options.listed ?? row(),
     updateSession,
+    updateAgent: options.updateAgent,
   } as unknown as ServerRuntime
   const rows = createSessionRows()
   const catalog = createCatalog({
@@ -158,6 +160,39 @@ describe("createCatalog", () => {
     const found = await catalog.search(AGENT, "weekly")
 
     expect(found.rows.map(({ unread }) => unread)).toEqual([true])
+  })
+
+  it("tells the catalog and the Agent's listeners of a write, with the entry the runtime stored, and of no failed one", async () => {
+    const agent: AgentCatalogEntry = {
+      summary: { kind: "ready", id: AGENT, name: "Researcher", muted: true },
+      visibility: "visible",
+      selectable: true,
+      editable: true,
+      avatarEditable: true,
+      muteEditable: true,
+      revision: "revision-2",
+    }
+    const updateAgent = vi
+      .fn<ServerRuntime["updateAgent"]>()
+      .mockResolvedValueOnce({ revision: "catalog-2", agent })
+      .mockRejectedValueOnce(new Error("revision conflict"))
+    const { catalog } = harness({ updateAgent })
+    const invalidated = vi.fn()
+    const updated = vi.fn()
+    catalog.invalidation.subscribe(invalidated)
+    catalog.agentUpdates.subscribe(updated)
+
+    await expect(
+      catalog.updateAgent(AGENT, { muted: true }, "revision-1")
+    ).resolves.toEqual({ revision: "catalog-2", agent })
+    expect(invalidated).toHaveBeenCalledOnce()
+    expect(updated.mock.calls).toEqual([[agent]])
+
+    await expect(
+      catalog.updateAgent(AGENT, { muted: false }, "revision-2")
+    ).rejects.toThrow("revision conflict")
+    expect(invalidated).toHaveBeenCalledOnce()
+    expect(updated).toHaveBeenCalledOnce()
   })
 
   it("starts the runtime's change feed again when it fails to start", async () => {

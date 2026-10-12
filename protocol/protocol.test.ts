@@ -450,16 +450,29 @@ describe("AOS v1 normalized protocol", () => {
             activity: "idle",
             visibility: "visible",
             avatar: "ring/blue",
+            muted: true,
           },
           visibility: "visible",
           selectable: true,
           editable: true,
           avatarEditable: true,
+          muteEditable: true,
           revision: "hermes-bots:7,aos:2",
         },
       ],
     }
     expect(AgentCatalogResponseSchema.parse(payload)).toEqual(payload)
+    const [entry] = payload.agents
+    const withoutMuteEditable: Partial<typeof entry> = { ...entry }
+    delete withoutMuteEditable.muteEditable
+    for (const agent of [
+      withoutMuteEditable,
+      { ...entry, summary: { ...entry!.summary, muted: false } },
+    ])
+      expect(
+        AgentCatalogResponseSchema.safeParse({ ...payload, agents: [agent] })
+          .success
+      ).toBe(false)
     expect(() =>
       AgentCatalogResponseSchema.parse({
         ...payload,
@@ -496,6 +509,7 @@ describe("AOS v1 normalized protocol", () => {
       selectable: true,
       editable: true,
       avatarEditable: false,
+      muteEditable: false,
       revision: "rev-1",
     }
     expect(
@@ -521,6 +535,9 @@ describe("AOS v1 normalized protocol", () => {
     expect(
       AgentUpdateRequestSchema.parse({ avatar: "ring/blue", revision: "rev-1" })
     ).toEqual({ avatar: "ring/blue", revision: "rev-1" })
+    expect(
+      AgentUpdateRequestSchema.parse({ muted: false, revision: "rev-1" })
+    ).toEqual({ muted: false, revision: "rev-1" })
     expect(() =>
       AgentUpdateRequestSchema.parse({ visibility: "hidden" })
     ).toThrow()
@@ -547,6 +564,13 @@ describe("AOS v1 normalized protocol", () => {
       visibility: "visible",
       avatar: "ring/blue",
     })
+    expect(
+      HgwAgentUpdateRequestSchema.parse({
+        agentId: "agent-a",
+        revision: "rev-1",
+        muted: true,
+      })
+    ).toEqual({ agentId: "agent-a", revision: "rev-1", muted: true })
     expect(() =>
       HgwAgentUpdateRequestSchema.parse({ revision: "r", avatar: null })
     ).toThrow()

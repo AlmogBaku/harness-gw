@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 import type { Logger } from "../../lifecycle"
 import type { Catalog } from "../core/catalog"
 import {
@@ -6,12 +8,16 @@ import {
   type PendingRequest,
 } from "../core/events"
 import type { Activity } from "../core/member"
+import { requestPreview } from "../core/request-text"
 import type { SessionCoordinator } from "../core/session-coordinator"
 import type { SessionRow } from "../core/session-rows"
 import type { ActivityFeed } from "./types"
 
 /** One catalog page is the provider maximum and all a badge needs. */
 const HYDRATION_PAGE_SIZE = 100
+
+/** A time the wire accepts as `occurredAt`. */
+const OccurredAtSchema = z.iso.datetime()
 
 export type ActivityFeedOptions = {
   catalog: Pick<Catalog, "list" | "rows" | "scope">
@@ -29,6 +35,18 @@ export function attentionKindOf(
     : "question"
 }
 
+/** A request for attention: its id, its kind, and one masked line of it. */
+function attentionOf(request: PendingRequest) {
+  const preview = requestPreview(request)
+  return {
+    type: "attention-requested" as const,
+    requestId: request.requestId,
+    attentionKind: attentionKindOf(request),
+    ...(preview ? { requestText: preview.text } : {}),
+    ...(preview?.more ? { requestMore: preview.more } : {}),
+  }
+}
+
 function activityOf(event: ExecutionEvent): Activity {
   const base = {
     agentId: event.agentId,
@@ -41,12 +59,7 @@ function activityOf(event: ExecutionEvent): Activity {
     case "turn-failed":
       return { ...base, type: event.kind, turnId: event.turnId }
     case "attention-requested":
-      return {
-        ...base,
-        type: "attention-requested",
-        requestId: event.request.requestId,
-        attentionKind: attentionKindOf(event.request),
-      }
+      return { ...base, ...attentionOf(event.request) }
     case "attention-resolved":
       return { ...base, type: "attention-resolved", requestId: event.requestId }
   }
@@ -72,29 +85,43 @@ export function createActivityFeed({
       if (!closed) listener(activity)
     }
 
-    const noteUnread = (row: SessionRow) => {
+    /** A row change the feed sees as it happens. */
+    const liveBase = (row: SessionRow) => ({
+      agentId: row.agentId,
+      sessionId: row.id,
+      occurredAt: stamp(),
+    })
+
+    /** What hydration re-sends about a row: dated by the row itself. */
+    const replayedBase = (row: SessionRow) => {
+      const { updatedAt } = row
+      return {
+        agentId: row.agentId,
+        sessionId: row.id,
+        occurredAt:
+          updatedAt !== undefined &&
+          OccurredAtSchema.safeParse(updatedAt).success
+            ? updatedAt
+            : stamp(),
+        replayed: true as const,
+      }
+    }
+
+    const noteUnread = (row: SessionRow, base = liveBase(row)) => {
       const unread = row.unread === true
       if (lastUnread.get(rowKey(row)) === unread) return
       lastUnread.set(rowKey(row), unread)
-      push({
-        agentId: row.agentId,
-        sessionId: row.id,
-        occurredAt: stamp(),
-        type: "unread-changed",
-        unread,
-      })
+      push({ ...base, type: "unread-changed", unread })
     }
 
     /** Republishes what the provider already reports about a Session. */
-    const noteExecution = (row: SessionRow) => {
+    const noteExecution = (
+      row: SessionRow,
+      base: ReturnType<typeof replayedBase>
+    ) => {
       if (row.status !== "waiting-for-input" && row.status !== "failed") return
       const scope = catalog.scope(row.agentId, row.id)
       const execution = scope ? coordinator.snapshot(scope) : undefined
-      const base = {
-        agentId: row.agentId,
-        sessionId: row.id,
-        occurredAt: stamp(),
-      }
       if (row.status === "failed") {
         const turnId =
           execution && "turnId" in execution ? execution.turnId : undefined
@@ -102,12 +129,7 @@ export function createActivityFeed({
         return
       }
       for (const request of execution?.requests ?? [])
-        push({
-          ...base,
-          type: "attention-requested",
-          requestId: request.requestId,
-          attentionKind: attentionKindOf(request),
-        })
+        push({ ...base, ...attentionOf(request) })
     }
 
     const hydrate = async () => {
@@ -117,13 +139,15 @@ export function createActivityFeed({
         for (const row of rows) {
           // Seeding read first keeps hydration to the Sessions that need a badge.
           lastUnread.set(rowKey(row), false)
-          noteUnread(row)
-          noteExecution(row)
+          const base = replayedBase(row)
+          noteUnread(row, base)
+          noteExecution(row, base)
         }
       } catch {
         // A catalog the provider cannot serve leaves the feed to live events.
       } finally {
-        if (!closed) unsubscribeRows = catalog.rows.subscribe(noteUnread)
+        if (!closed)
+          unsubscribeRows = catalog.rows.subscribe((row) => noteUnread(row))
       }
     }
 
