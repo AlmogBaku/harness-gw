@@ -41,44 +41,56 @@ const MASKED = "[credential redacted]"
 
 /** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
 const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
-/** A provider key by its prefix, or a JWT: a credential wherever it stands. */
-const KEY_SHAPES = String.raw`\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+`
-/** A value with no shell or glob syntax, and not a path. */
+/** A JWT, whole: a credential wherever it stands. */
+const JWT = String.raw`\beyJ[\w-]+\.[\w-]+\.[\w-]+`
+/** An RFC 6750 bearer token of at least 8 characters, ending in no dot. */
+const BEARER_TOKEN = String.raw`[A-Za-z0-9._~+/-]{7,}[A-Za-z0-9_~+/=-]`
+/** A value with no shell, glob or quote syntax, and not a path. */
 const PLAIN_VALUE = String.raw`[^\s$()|&;<>\x60'"{}*?\[\]\\/.~][^\s$()|&;<>\x60'"{}*?\[\]\\]*`
+/** Where a shell word ends. */
+const WORD_END = String.raw`(?=[\s;&|()<>"'\x60]|$)`
+/** A value already masked, which neither strength masks again. */
+const ALREADY_MASKED = String.raw`(?!(?:(?:basic|bearer)\s+)?\[credential redacted\])`
 
 /**
  * The two strengths a credential mask comes in. `broad` takes a term's value
- * up to the next break, however it is spaced or quoted, and a Basic or Bearer
- * token, for text that only describes: a preview, a title, a question.
- * `narrow` takes only a value that cannot be shell syntax, for text an
- * operator approves: a permission must still show what it would run.
+ * up to the next break, however it is spaced or quoted, a Basic or Bearer
+ * token, and any provider key prefix, for text that only describes: a
+ * preview, a title, a question. `narrow` takes only a value that cannot be
+ * shell syntax, a token an `Authorization` header names, and a key of a real
+ * key's length, for text an operator approves: a permission must still show
+ * what it would run.
  */
 const CREDENTIAL_MASKS = {
   broad: new RegExp(
-    String.raw`\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+(?<token>[A-Za-z0-9+/=_-]{8,})|${KEY_SHAPES}`,
+    String.raw`\b(?:${secretTerm})\s*[=:]\s*${ALREADY_MASKED}(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+(?<token>${BEARER_TOKEN})|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|${JWT}`,
     "giu"
   ),
   narrow: new RegExp(
-    String.raw`\b(?<term>(?:${secretTerm})[=:])(?:(?<quote>["'])(?<quoted>${PLAIN_VALUE})\k<quote>|(?<plain>${PLAIN_VALUE}))(?=\s|$)|${KEY_SHAPES}`,
+    String.raw`\b(?<header>authorization\s*:\s*(?:bearer|basic)\s+)${BEARER_TOKEN}|\b(?<term>(?:${secretTerm})[=:])(?:(?<quote>["'])${PLAIN_VALUE}\k<quote>|${PLAIN_VALUE})${WORD_END}|\bgh[opsur]_[A-Za-z0-9]{30,}|\bsk-(?=[\w-]*\d)[\w-]{20,}|\bxox[baprs]-[\w-]+|${JWT}`,
     "giu"
   ),
 }
 export type MaskStrength = keyof typeof CREDENTIAL_MASKS
 
-/** Upper case, lower case, digits, and symbols: a token mixes at least two. */
-const TOKEN_KINDS = [/[A-Z]/u, /[a-z]/u, /[0-9]/u, /[+/=_-]/u]
+/**
+ * Upper case, lower case, digits, and symbols: a token mixes at least two,
+ * counted with its first letter's case ignored, so a capitalised word is prose.
+ */
+const TOKEN_KINDS = [/[A-Z]/u, /[a-z]/u, /[0-9]/u, /[._~+/=-]/u]
 
-type MaskGroups = Partial<
-  Record<"token" | "term" | "quote" | "quoted" | "plain", string>
->
+type MaskGroups = Partial<Record<"token" | "header" | "term" | "quote", string>>
 
 function masked(match: string, ...args: unknown[]) {
-  const { token, term, quote } = args.at(-1) as MaskGroups
-  // "Basic authentication" is prose; a token mixes kinds of character.
-  if (token !== undefined)
-    return TOKEN_KINDS.filter((kind) => kind.test(token)).length >= 2
+  const { token, header, term, quote } = args.at(-1) as MaskGroups
+  // "Basic Authentication" is prose; a token mixes kinds of character.
+  if (token !== undefined) {
+    const counted = token.charAt(0).toLowerCase() + token.slice(1)
+    return TOKEN_KINDS.filter((kind) => kind.test(counted)).length >= 2
       ? MASKED
       : match
+  }
+  if (header !== undefined) return `${header}${MASKED}`
   if (term !== undefined) return `${term}${quote ?? ""}${MASKED}${quote ?? ""}`
   return MASKED
 }

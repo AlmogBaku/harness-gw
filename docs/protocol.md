@@ -481,20 +481,40 @@ strengths. A term is any word of `SECRET_TERMS` (`src/redaction.ts`), in any
 case, with `-` or `_` allowed between its letters (`api_key`, `apiKey`,
 `password`, `token`, …).
 
-- **Broad** masks a term, `=` or `:` with any spacing, and its value up to the
-  next whitespace, `,` or `;`, quotes included, and the whole match goes. It
-  also masks `Basic` or `Bearer` followed by a token of at least 8 characters
-  of `[A-Za-z0-9+/=_-]` mixing at least two of upper case, lower case, digits
-  and symbols, so `Basic authentication` stays.
-- **Narrow** masks only a term written as one word, `term=VALUE` or
-  `term:VALUE`, whose value has no whitespace and none of
-  ``$ ( ) | & ; < > ` ' " { } * ? [ ] \``, may sit in single or double
-  quotes, and starts with none of `/`, `.` or `~`. The term and the quotes
-  stay; only the value goes. It has no Basic or Bearer form, so shell syntax
-  in a command stays readable.
-- **Both** mask a provider key by its prefix (`ghp_`, `gho_`, `ghs_`, `ghu_`,
-  `ghr_`, `sk-`, `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-`, `xoxs-`) and a JWT
-  (`eyJ…` in three dot-separated parts).
+A bearer token is at least 8 characters of `[A-Za-z0-9._~+/-]`, the RFC 6750
+token characters, whose last character may also be `=` and is never `.`, so
+a sentence's closing period stays.
+
+- **Broad** masks:
+  - a term, `=` or `:` with any spacing, and its value up to the next
+    whitespace, `,` or `;`, quotes included; the whole match goes;
+  - `Basic` or `Bearer` and the bearer token after it, when the token mixes
+    at least two of upper case, lower case, digits and symbols, counted with
+    its first letter's case ignored; so `Basic authentication` and
+    `Enable Basic Authentication?` stay, and a whole JWT or `ya29.…` token
+    after `Bearer` goes;
+  - a provider key by its prefix alone: `ghp_`, `gho_`, `ghs_`, `ghu_`,
+    `ghr_`, `sk-`, `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-` or `xoxs-` and the word
+    characters and `-` after it.
+- **Narrow** masks:
+  - a term written as one word, `term=VALUE` or `term:VALUE`, whose value
+    has no whitespace and none of ``$ ( ) | & ; < > ` ' " { } * ? [ ] \``,
+    starts with none of `/`, `.` or `~`, may sit in single or double quotes,
+    and ends where a shell word does: at whitespace, `;`, `&`, `|`, `(`, `)`,
+    `<`, `>`, a quote, a backtick, or the end of the text. The term, the
+    quotes and that boundary stay; only the value goes, so
+    `export TOKEN=…; ./deploy.sh` keeps its `;`;
+  - a bearer token after `Authorization:` and `Bearer` or `Basic`, in any
+    case and spacing; the header stays and only the token goes. A bare
+    `bearer` or `basic` word, as in `rm -rf bearer archive`, stays;
+  - a provider key of a real key's length: `ghp_`, `gho_`, `ghs_`, `ghu_` or
+    `ghr_` and 30 or more letters and digits, `sk-` and 20 or more word
+    characters or `-` including a digit, or `xoxb-`, `xoxa-`, `xoxp-`,
+    `xoxr-` or `xoxs-` and the word characters and `-` after it; so
+    `rm -rf sk-backups` stays.
+- **Both** mask a JWT (`eyJ…` in three dot-separated parts), and neither
+  masks a value that is already `[credential redacted]`, so masking text
+  twice, at either strength, leaves one placeholder per credential.
 
 | Text                                                    | Strength |
 | ------------------------------------------------------- | -------- |

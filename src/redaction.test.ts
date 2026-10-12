@@ -147,6 +147,13 @@ describe("log redaction", () => {
 const M = "[credential redacted]"
 /** The review's sample value, kept apart from any term a scanner keys on. */
 const SAMPLE = "abcdefgh1234"
+/** Opaque tokens and keys at real lengths, built so no scanner reads a leak. */
+const OPAQUE = "AbCdEfGh123456_x"
+const GITHUB_KEY = `ghp_${"a1".repeat(18)}`
+const OPENAI_KEY = `sk-${"ab12".repeat(6)}`
+const JWT = ["eyJhbGciOiJIUzI1NiJ9", "eyJzdWIiOiIxIn0", "abc123sig"].join(".")
+const AUTHORIZATION = (scheme: string, value: string) =>
+  ["Authorization", `${scheme} ${value}`].join(": ")
 /** A `term=value` assignment built in two parts, so no scanner reads it as a leak. */
 const assigned = (term: string, value: string) => [term, value].join("=")
 
@@ -185,7 +192,30 @@ describe("maskCredentials", () => {
       assigned("password", "'hunter2hunter2'"),
       assigned("password", `'${M}'`),
     ],
-    ["narrow", "push ghp_leaked0000 now", `push ${M} now`],
+    // A value ends where a shell word does, and the boundary stays.
+    [
+      "narrow",
+      `export ${assigned("TOKEN", SAMPLE)}; ./deploy.sh`,
+      `export ${assigned("TOKEN", M)}; ./deploy.sh`,
+    ],
+    [
+      "narrow",
+      `curl -d "${assigned("token", SAMPLE)}" x`,
+      `curl -d "${assigned("token", M)}" x`,
+    ],
+    ["narrow", `${assigned("token", SAMPLE)}&&`, `${assigned("token", M)}&&`],
+    ["narrow", `(${assigned("token", SAMPLE)})`, `(${assigned("token", M)})`],
+    // A bearer token only where a header names it.
+    [
+      "narrow",
+      `curl -H "${AUTHORIZATION("Bearer", OPAQUE)}"`,
+      `curl -H "${AUTHORIZATION("Bearer", M)}"`,
+    ],
+    // A key prefix counts only with a real key's length behind it.
+    ["narrow", "rm -rf sk-backups", "rm -rf sk-backups"],
+    ["narrow", "push ghp_leaked0000 now", "push ghp_leaked0000 now"],
+    ["narrow", `push ${GITHUB_KEY} now`, `push ${M} now`],
+    ["narrow", `use ${OPENAI_KEY} now`, `use ${M} now`],
     // A preview or a question masks anything credential-shaped.
     ["broad", assigned("token", "AbCdEfGh_IjKlMnOp"), M],
     ["broad", assigned("password", "P@ssw0rd!2024"), M],
@@ -196,7 +226,24 @@ describe("maskCredentials", () => {
     ["broad", "Authorization: Basic dXNlcjpwYXNz", M],
     ["broad", "send Bearer AbCdEfGhIjKlMnOpQrSt", `send ${M}`],
     ["broad", "send Basic dXNlcjpwYXNz.", `send ${M}.`],
+    ["broad", `send Bearer ${JWT}`, `send ${M}`],
+    ["broad", `Bearer ${["ya29", "a0AfH6SMBxyz"].join(".")}`, M],
+    // Capitalised prose is not a token.
+    ["broad", "Enable Basic Authentication?", "Enable Basic Authentication?"],
+    ["broad", "a Bearer Instrument", "a Bearer Instrument"],
   ] as const)("masks %s: %s", (strength, text, expected) => {
     expect(maskCredentials(text, strength)).toBe(expected)
   })
+
+  it.each([
+    [assigned("token", SAMPLE), assigned("token", M)],
+    [AUTHORIZATION("Bearer", OPAQUE), AUTHORIZATION("Bearer", M)],
+  ])(
+    "masks %s once when a broad mask follows a narrow one",
+    (text, expected) => {
+      expect(maskCredentials(maskCredentials(text, "narrow"), "broad")).toBe(
+        expected
+      )
+    }
+  )
 })
