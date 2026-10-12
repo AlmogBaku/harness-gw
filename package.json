@@ -29,6 +29,7 @@
     "serve": "bun run src/cli.ts serve",
     "lint": "oxlint",
     "format": "oxfmt \"**/*.ts\"",
+    "format:check": "oxfmt --check \"**/*.ts\"",
     "typecheck": "tsc -p tsconfig.gateway.json && tsc -p tsconfig.gateway-tests.json && tsc -p tsconfig.lifecycle.json && tsc -p tsconfig.client.json && tsc -p tsconfig.client-tests.json",
     "test": "vitest run --project !gate",
     "test:gate": "vitest run --project gate",
