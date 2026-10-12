@@ -444,6 +444,7 @@ const RESTORE_SNAPSHOT_FRESH_MS = 3_000
 export class HermesServerAdapter implements ServerRuntime {
   /** The gateway's socket; a transport that owns none is taken as up. */
   readonly link: ServerLink
+  readonly #log: Logger | undefined
   readonly #dashboard?: HermesDashboardClient
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
@@ -504,6 +505,7 @@ export class HermesServerAdapter implements ServerRuntime {
     } = {}
   ) {
     this.#media = options.media ?? {}
+    this.#log = options.log
     this.link = transport.link ?? READY_LINK
     this.#retry = options.retry ?? DEFAULT_RETRY_SCHEDULE
     this.#rawHistoryPage = options.rawHistoryPage ?? RAW_HISTORY_PAGE
@@ -1595,18 +1597,38 @@ export class HermesServerAdapter implements ServerRuntime {
     return result.data
   }
 
-  /** `read` of every profile, a few profiles at a time. */
+  /**
+   * `read` of every profile, a few profiles at a time. One profile Hermes
+   * cannot read, such as a new profile whose session store does not exist
+   * yet, costs the reader that profile's rows alone and leaves a warning;
+   * only Hermes failing every profile is an outage, and an authentication
+   * failure is never a profile's.
+   */
   async #eachProfile<T>(
     profiles: readonly string[],
     read: (profile: string) => Promise<T>
   ) {
     const results: T[] = []
-    for (let start = 0; start < profiles.length; start += PROFILE_FANOUT)
-      results.push(
-        ...(await Promise.all(
-          profiles.slice(start, start + PROFILE_FANOUT).map(read)
-        ))
-      )
+    let unavailable: unknown
+    for (let start = 0; start < profiles.length; start += PROFILE_FANOUT) {
+      const batch = profiles.slice(start, start + PROFILE_FANOUT)
+      const settled = await Promise.allSettled(batch.map(read))
+      settled.forEach((outcome, index) => {
+        if (outcome.status === "fulfilled") {
+          results.push(outcome.value)
+          return
+        }
+        if (!(outcome.reason instanceof HermesUnavailableError))
+          throw outcome.reason
+        unavailable = outcome.reason
+        this.#log?.warn(
+          { err: outcome.reason, profile: batch[index] },
+          "hermes.profile.unavailable"
+        )
+      })
+    }
+    if (profiles.length > 0 && results.length === 0)
+      throw new HermesUnavailableError({ cause: unavailable })
     return results
   }
 
