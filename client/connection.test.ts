@@ -17,7 +17,6 @@ import {
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
   HGW_REPLAY_POSITION,
-  HGW_STOP_REASONS,
   HgwReplayBeforeSchema,
   type HgwHistoryCursor,
 } from "../protocol/acp"
@@ -641,7 +640,7 @@ describe("ACP connection", () => {
       {
         sessionUpdate: "state_update",
         state: "idle",
-        stopReason: HGW_STOP_REASONS.error,
+        stopReason: "error",
       },
       { sequence: 7, turnId: "run-1", code: "HGW_SEND_FAILED" }
     )

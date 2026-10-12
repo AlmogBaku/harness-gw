@@ -7,7 +7,7 @@ travels in the gateway's own extension namespace, `hgw`:
 
 - methods and notifications named `_hgw/*`;
 - `_meta.hgw` on requests, responses and notifications;
-- the stop reasons `_hgw_error` and `_hgw_uncertain`;
+- the `replayFrom` cursors `_hgw/position` and `_hgw/before`;
 - the auth method `hgw-invite`;
 - the attachment URI scheme `hgw-attachment:`.
 
@@ -401,14 +401,26 @@ Every event emitted from a turn carries a base of
 | `plan_update`                         | `sequence`, `turnId?`, `todos` ()                                 |
 | `usage_update`                        | `source`, `estimated?`, `breakdown?` (); no sequence/turnId       |
 
-Stop reasons `_hgw_error` and `_hgw_uncertain` appear in
-`state_update { state: "idle" }` (`HGW_STOP_REASONS`). A
-`state_update { state: "running" }` carrying `code` and `message` reports a
-final failure on a run that stays active until it is stopped: a client shows
-the failure and keeps Stop available, and the run's own idle update ends it.
-A prompt the gateway accepted whose turn then fails to start reaches its sender
-as a `running` update followed by an `_hgw_error` idle update for the same
-`turnId`, carrying only a public `code`, never an `_hgw/error` notification.
+A failed turn ends with ACP's `state_update { state: "idle", stopReason:
+"error" }`. Its `error` is the public error: `-32603` and, as its `message`,
+the failure's machine code (`internal_error` for a stored failure that kept
+none). The provider's own words travel only as `_meta.hgw.message`, beside the
+same `code`.
+
+A turn the gateway can no longer observe, after a lost connection or an
+uncertain send, Stop or answer, reports ACP's `state_update { state: "unknown"
+}` with its `code`. It is not an outcome: a recover that confirms the turn
+streams it on, and a turn none confirms by the uncertainty deadline ends with
+`error` and the code `HGW_OUTCOME_UNKNOWN`. A prompt sent meanwhile answers
+`-31010` turn in progress.
+
+A `state_update { state: "requires_action" }` carrying `code` and `message`
+reports a final failure on a run that stays active until it is stopped: a
+client shows the failure and keeps Stop available, and the run's own idle
+update ends it. A prompt the gateway accepted whose turn then fails to start
+reaches its sender as a `running` update followed by an `error` idle update for
+the same `turnId`, carrying only a public `code`, never an `_hgw/error`
+notification.
 
 ## Extension methods (`_hgw/*`)
 

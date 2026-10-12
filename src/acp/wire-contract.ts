@@ -45,7 +45,6 @@ import {
   HGW_META_KEY,
   HGW_METHODS,
   HGW_REPLAY_POSITION,
-  HGW_STOP_REASONS,
   hgwAcpAgentPath,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
@@ -1090,9 +1089,7 @@ export function runWireContract(
           expect(userSide(stale.updates)).toEqual(userSide(reader.updates))
           for (const client of [plain, stale]) {
             expect(states(client.updates).at(-1)).toMatch(/^idle/u)
-            expect(states(client.updates).join()).not.toContain(
-              HGW_STOP_REASONS.uncertain
-            )
+            expect(states(client.updates)).not.toContain("unknown")
             expect(rebuildNotices(client)).toEqual([])
           }
         },

@@ -3,7 +3,6 @@ import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 import type { SessionMessage } from "../../../protocol"
 import {
   HGW_META_KEY,
-  HGW_STOP_REASONS,
   HgwArtifactDescriptorSchema,
   HgwMessageMetaSchema,
   type HgwMessageMeta,
@@ -21,6 +20,7 @@ import {
   outputContent,
   planUpdate,
   stateOutbound,
+  turnError,
   toolOutbound,
   update,
 } from "./updates"
@@ -171,7 +171,8 @@ function failureOutbound(
   return [
     stateOutbound(
       context,
-      { state: "idle", stopReason: HGW_STOP_REASONS.error },
+      // A stored failure keeps no machine code, only the provider's words.
+      { state: "idle", stopReason: "error", error: turnError(undefined) },
       {
         at: message.completedAt ?? message.createdAt,
         message: message.status.error,

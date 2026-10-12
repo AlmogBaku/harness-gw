@@ -427,6 +427,24 @@ export function isUncertainFailure(event: TurnEvent): boolean {
   )
 }
 
+/** How an uncertain turn ends once no recover confirmed it by its deadline. */
+export const OUTCOME_UNKNOWN_CODE = "HGW_OUTCOME_UNKNOWN" as const
+
+/**
+ * An uncertain failure the turn may outlive: nothing observes it until a
+ * recover confirms it or its deadline ends it. The deadline's own failure is
+ * that end, not one more doubt.
+ */
+export function isUnobservedFailure(event: TurnEvent): boolean {
+  return (
+    isUncertainFailure(event) &&
+    !(
+      event.kind === TurnEventKind.TurnFailed &&
+      event.code === OUTCOME_UNKNOWN_CODE
+    )
+  )
+}
+
 /**
  * The codes an adapter publishes when it stopped consuming a turn that may
  * still be alive in the provider. The turn is not over, so its journal outlives

@@ -28,11 +28,11 @@ import {
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_POSITION,
-  HGW_STOP_REASONS,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
   TurnEventKind,
+  isUnobservedFailure,
   type PendingRequest,
   type TurnEvent,
 } from "../core/events"
@@ -56,6 +56,7 @@ import { createSessionRows } from "../core/session-rows"
 import { createHgwAcpAgent } from "./agent"
 import { createChannels, type HistoryReach } from "../core/channel"
 import { withFaults, type Faults } from "./test-faults"
+import { turnError } from "./translate/updates"
 import type {
   AcpConnectionContext,
   AcpOutbound,
@@ -329,10 +330,17 @@ export const translators: Translators = {
             kind: "update",
             update: {
               sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: HGW_STOP_REASONS.uncertain,
-              // As the real translator does, the failure itself travels with
-              // the state it settled, which is what the member logs.
+              // As the real translator does: a turn nothing observes is
+              // unknown, and any other failure ends it.
+              ...(isUnobservedFailure(event)
+                ? { state: "unknown" as const }
+                : {
+                    state: "idle" as const,
+                    stopReason: "error" as const,
+                    error: turnError(event.code),
+                  }),
+              // The failure itself travels with the state it settled, which is
+              // what the member logs.
               _meta: {
                 [HGW_META_KEY]: {
                   ...meta._meta[HGW_META_KEY],

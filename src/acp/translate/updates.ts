@@ -1,9 +1,10 @@
-import type {
-  ContentBlock,
-  SessionUpdate,
-  ToolCallContent,
-  ToolCallUpdate,
-  Usage,
+import {
+  RequestError,
+  type ContentBlock,
+  type SessionUpdate,
+  type ToolCallContent,
+  type ToolCallUpdate,
+  type Usage,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
@@ -51,8 +52,20 @@ type ExtraMeta<Schema extends z.ZodObject> = Omit<
   "sequence" | "turnId"
 >
 
-/** A stop reason ACP names, or a `_`-prefixed one the gateway owns. */
-type IdleStopReason = (typeof ACP_STOP_REASON)[StopReason] | `_${string}`
+/** A stop reason ACP names for a turn that did not fail. */
+type IdleStopReason = (typeof ACP_STOP_REASON)[StopReason]
+
+/**
+ * The public error an `error` stop reason carries: the failure's machine code,
+ * as `_hgw/error` reports one, and never the provider's own words, which only
+ * `_meta.hgw` carries.
+ */
+export function turnError(code: string | undefined) {
+  return {
+    code: RequestError.internalError().code,
+    message: code ?? "internal_error",
+  }
+}
 
 /**
  * `at` says when the state took effect: a live run reads the clock, and a replay
@@ -64,7 +77,13 @@ export function stateOutbound(
   state:
     | { state: "running" }
     | { state: "requires_action" }
-    | { state: "idle"; stopReason: IdleStopReason; usage?: Usage },
+    | { state: "unknown" }
+    | { state: "idle"; stopReason: IdleStopReason; usage?: Usage }
+    | {
+        state: "idle"
+        stopReason: "error"
+        error: ReturnType<typeof turnError>
+      },
   extra?: ExtraMeta<typeof HgwStateMetaSchema>
 ): AcpOutbound {
   const at = extra?.at ?? new Date(context.now?.() ?? Date.now()).toISOString()

@@ -7,13 +7,12 @@ import type {
 import {
   HGW_META_KEY,
   HgwArtifactDescriptorSchema,
-  HGW_STOP_REASONS,
   HgwSubagentSchema,
 } from "../../../protocol/acp"
 import {
   CompactionStatus,
   isAwaitingStopFailure,
-  isUncertainFailure,
+  isUnobservedFailure,
   sumTokenCounts,
   TurnEventKind,
   type Subagent,
@@ -36,6 +35,7 @@ import {
   planUpdate,
   turnMeta,
   stateOutbound,
+  turnError,
   TodosSchema,
   toolContentOutbound,
   ACP_STOP_REASON,
@@ -271,15 +271,16 @@ function failedOutbound(
     stateOutbound(
       context,
       // A turn held on a question no client here can answer waits all the
-      // same: only Stop ends it.
+      // same: only Stop ends it. One nothing observes may run on.
       isAwaitingStopFailure(event)
         ? { state: "requires_action" }
-        : {
-            state: "idle",
-            stopReason: isUncertainFailure(event)
-              ? HGW_STOP_REASONS.uncertain
-              : HGW_STOP_REASONS.error,
-          },
+        : isUnobservedFailure(event)
+          ? { state: "unknown" }
+          : {
+              state: "idle",
+              stopReason: "error",
+              error: turnError(event.code),
+            },
       failure
     ),
   ]

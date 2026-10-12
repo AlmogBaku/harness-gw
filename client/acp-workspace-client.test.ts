@@ -15,7 +15,6 @@ import {
   HGW_METHODS,
   HGW_META_KEY,
   HGW_PLAN_ID,
-  HGW_STOP_REASONS,
   type HgwAvailableCommandsMetaSchema,
 } from "../protocol/acp"
 
@@ -759,10 +758,15 @@ describe("ACP workspace client", () => {
     emitUpdate({ sessionUpdate: "state_update", state: "requires_action" })
     expect(client.sessionStatus(SESSION_ID)).toBe("waiting-for-input")
 
+    // A turn nothing observes reads as failed, as it did before ACP named it.
+    emitUpdate({ sessionUpdate: "state_update", state: "unknown" })
+    expect(client.sessionStatus(SESSION_ID)).toBe("failed")
+
     emitUpdate({
       sessionUpdate: "state_update",
       state: "idle",
-      stopReason: HGW_STOP_REASONS.uncertain,
+      stopReason: "error",
+      error: { code: -32603, message: "HGW_OUTCOME_UNKNOWN" },
     })
     expect(client.sessionStatus(SESSION_ID)).toBe("failed")
 

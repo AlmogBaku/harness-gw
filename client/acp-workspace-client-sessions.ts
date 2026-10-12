@@ -7,7 +7,6 @@ import {
 import {
   HGW_META_KEY,
   HGW_METHODS,
-  HGW_STOP_REASONS,
   HgwActivityNotificationSchema,
   HgwPlanMetaSchema,
   HgwSessionInfoMetaSchema,
@@ -47,12 +46,10 @@ export type AcpSessionStoreOptions = {
 function statusFromState(update: StateUpdate): SessionStatus {
   if (StateUpdate.isRunning(update)) return "running"
   if (StateUpdate.isRequiresAction(update)) return "waiting-for-input"
+  // A turn nothing observes may have failed, and offers no Stop.
+  if (StateUpdate.isUnknown(update)) return "failed"
   if (!StateUpdate.isIdle(update)) return "unknown"
-  const stopReason = update.stopReason
-  return stopReason === HGW_STOP_REASONS.error ||
-    stopReason === HGW_STOP_REASONS.uncertain
-    ? "failed"
-    : "idle"
+  return update.stopReason === "error" ? "failed" : "idle"
 }
 
 /**

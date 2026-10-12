@@ -16,6 +16,7 @@ import {
   TurnEventKind,
   isAwaitingStopFailure,
   isRedialableFailure,
+  OUTCOME_UNKNOWN_CODE,
   pendingRequestsOf,
   type ExecutionEvent,
   type PendingRequest,
@@ -934,7 +935,7 @@ function settledNow(settled: Promise<void>) {
 /** How an uncertain turn ends once no recover confirmed it by its deadline. */
 const OUTCOME_UNKNOWN = {
   kind: TurnEventKind.TurnFailed,
-  code: "HGW_OUTCOME_UNKNOWN",
+  code: OUTCOME_UNKNOWN_CODE,
 } as const
 
 export class SessionCoordinator {

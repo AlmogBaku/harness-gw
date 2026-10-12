@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest"
 import type { SessionHistoryResponse } from "../../../protocol"
 import {
   HGW_META_KEY,
-  HGW_STOP_REASONS,
   HgwPlanMetaSchema,
   HgwStateMetaSchema,
   HgwToolCallMetaSchema,
@@ -371,12 +370,13 @@ describe("translateHistory", () => {
     )
 
     // A failed turn replays the way a live run reports failure: the turn's
-    // idle state update carries the vendor stop reason and the stored error.
+    // idle state update carries the error stop reason and the stored error.
     const idle = updates.at(-1)
     expect(idle).toMatchObject({
       sessionUpdate: "state_update",
       state: "idle",
-      stopReason: HGW_STOP_REASONS.error,
+      stopReason: "error",
+      error: { code: -32603, message: "internal_error" },
     })
     expect(
       HgwStateMetaSchema.parse(

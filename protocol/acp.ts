@@ -95,12 +95,6 @@ export const HGW_METHODS = {
   },
 } as const
 
-/** Vendor stop reasons used on `state_update { state: "idle" }`. */
-export const HGW_STOP_REASONS = {
-  error: "_hgw_error",
-  uncertain: "_hgw_uncertain",
-} as const
-
 /** Vendor permission option kind for Hermes' "allow for this session" scope. */
 export const HGW_PERMISSION_KIND_SESSION = "_allow_session" as const
 
@@ -502,9 +496,9 @@ export const HgwStateMetaSchema = readObject({
   /** Stop was acknowledged but the provider has not settled yet. */
   execution: z.literal("stopping").optional(),
   /**
-   * Present with the `_hgw_error` and `_hgw_uncertain` stop reasons, and on a
-   * `running` update when the turn reports a final failure but stays active
-   * until it is stopped.
+   * Present with the `error` stop reason and the `unknown` state, and on a
+   * `requires_action` update when the turn reports a final failure but stays
+   * active until it is stopped.
    */
   code: z.string().min(1).max(128).optional(),
   message: z.string().max(4096).optional(),

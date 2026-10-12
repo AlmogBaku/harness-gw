@@ -544,10 +544,12 @@ ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
 (method not found), `-32602` (invalid request), `-32800` (request cancelled);
 HGW block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
 revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
-`-31015` unsupported. Codes `-32001` through `-32009` are no longer used.
+`-31015` unsupported, `-31016` forbidden. Codes `-32001` through `-32009` are
+no longer used.
 
-**Vendor stop reasons** on `state_update { state: "idle" }`: `_hgw_error`,
-`_hgw_uncertain` (`protocol/acp.ts`).
+**Stop reasons and states** are ACP's own: a failed turn ends `idle` with the
+`error` stop reason, and a turn the gateway cannot observe reports the
+`unknown` state until a recover confirms it or its deadline ends it.
 
 All errors pass through `redactForLog`. Native bodies, credentials, paths, and
 stack traces never cross either listener.

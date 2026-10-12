@@ -9,7 +9,6 @@ import {
   HGW_AUTH_METHOD_INVITE,
   HGW_METHODS,
   HGW_REPLAY_BEFORE,
-  HGW_STOP_REASONS,
   HgwActivityNotificationSchema,
 } from "../../protocol/acp"
 
@@ -38,7 +37,6 @@ describe("docs/protocol.md", () => {
     HGW_REPLAY_BEFORE,
     ...ACTIVITY_TYPES,
     HGW_AUTH_METHOD_INVITE,
-    ...leaves(HGW_STOP_REASONS),
     HGW_ATTACHMENT_URI_SCHEME,
   ])("names %s", async (name) => {
     expect(await readFile(SPEC, "utf8")).toContain(`\`${name}\``)

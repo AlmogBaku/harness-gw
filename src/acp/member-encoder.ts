@@ -12,7 +12,6 @@ import type { SessionContextResponse } from "../../protocol"
 import {
   HGW_METHODS,
   HGW_META_KEY,
-  HGW_STOP_REASONS,
   HgwStateMetaSchema,
   type HgwActivityNotification,
   type HgwNoticeMeta,
@@ -61,33 +60,37 @@ function hasMode(request: Elicitation): request is ModedElicitation {
   return typeof request.mode === "string"
 }
 
-/** The vendor stop reasons that mean the turn failed rather than finished. */
-const HGW_STOP_CODES: ReadonlySet<string> = new Set(
-  Object.values(HGW_STOP_REASONS)
-)
-
 /** How much of a provider sentence one log line carries. */
 const MAX_LOGGED_FAILURE_CHARS = 200
 
 /**
- * The failure an idle `state_update` reports, when it reports one. Every other
- * update — including every streamed chunk — falls out on the first check. A
- * stop reason names the class of failure and nothing else, so the machine code
- * and the provider's sentence travel with it: they are what an operator
- * diagnoses one turn by. `errorCode` is the name `acp.error` already logs the
- * same classification under.
+ * The failure a `state_update` reports, when it reports one: the `error` stop
+ * reason, or the `unknown` state of a turn nothing observes. Every other
+ * update — including every streamed chunk — falls out on the first check. The
+ * state names the class of failure and nothing else, so the machine code and
+ * the provider's sentence travel with it: they are what an operator diagnoses
+ * one turn by. `errorCode` is the name `acp.error` already logs the same
+ * classification under.
  */
 function turnFailureOf(update: SessionUpdate) {
-  if (!SessionUpdate.isStateUpdate(update) || !StateUpdate.isIdle(update))
-    return undefined
-  const stopReason = update.stopReason
-  if (typeof stopReason !== "string" || !HGW_STOP_CODES.has(stopReason))
-    return undefined
-  const meta = HgwStateMetaSchema.safeParse(update._meta?.[HGW_META_KEY])
-  if (!meta.success) return { stopReason }
+  if (!SessionUpdate.isStateUpdate(update)) return undefined
+  if (StateUpdate.isUnknown(update))
+    return failureDetail({ state: "unknown" }, update._meta)
+  if (StateUpdate.isIdle(update) && update.stopReason === "error")
+    return failureDetail({ stopReason: "error" }, update._meta)
+  return undefined
+}
+
+/** A failure's class, with what its `_meta.hgw` says of it. */
+function failureDetail<Outcome extends object>(
+  outcome: Outcome,
+  extension: Record<string, unknown> | null | undefined
+) {
+  const meta = HgwStateMetaSchema.safeParse(extension?.[HGW_META_KEY])
+  if (!meta.success) return outcome
   const { turnId, code, message } = meta.data
   return {
-    stopReason,
+    ...outcome,
     turnId,
     ...(code === undefined ? {} : { errorCode: code }),
     ...(message === undefined
@@ -168,13 +171,10 @@ function executionUpdate({
     return { sessionUpdate: "state_update", state: "requires_action", ...meta }
   if (state === "running" || state === "stopping")
     return { sessionUpdate: "state_update", state: "running", ...meta }
+  // Nothing observes an uncertain turn until a recover confirms it or its
+  // deadline ends it.
   if (state === "uncertain")
-    return {
-      sessionUpdate: "state_update",
-      state: "idle",
-      stopReason: HGW_STOP_REASONS.uncertain,
-      ...meta,
-    }
+    return { sessionUpdate: "state_update", state: "unknown", ...meta }
   return { sessionUpdate: "state_update", state: "idle", ...meta }
 }
 
