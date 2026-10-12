@@ -576,6 +576,54 @@ export function sessionMachine(
     })
 }
 
+/** The most of an id read off a rejected entry that a warning carries. */
+const LOGGED_ID_LENGTH = 256
+
+/**
+ * The entries of a list answer, each read on its own: one this client cannot
+ * read is left out, and `skipped` hears it. Entries none of which can be read
+ * reject as a whole, since that is a gateway this client does not understand
+ * rather than one bad entry.
+ */
+function readEach<T>(
+  entries: readonly unknown[],
+  schema: z.ZodType<T>,
+  skipped: (entry: unknown) => void
+): T[] {
+  const kept: T[] = []
+  let unreadable: unknown
+  for (const entry of entries) {
+    const read = schema.safeParse(entry)
+    if (read.success) kept.push(read.data)
+    else {
+      unreadable = read.error
+      skipped(entry)
+    }
+  }
+  if (entries.length > 0 && kept.length === 0) throw unreadable
+  return kept
+}
+
+/** The id at `path` in an entry not yet read, bounded for a warning. */
+function loggedId(entry: unknown, ...path: string[]) {
+  let value = entry
+  for (const key of path)
+    value =
+      typeof value === "object" && value !== null
+        ? (value as Record<string, unknown>)[key]
+        : undefined
+  return typeof value === "string"
+    ? value.slice(0, LOGGED_ID_LENGTH)
+    : undefined
+}
+
+const AgentsListEntriesSchema = HgwAgentsListResponseSchema.extend({
+  agents: z.array(z.unknown()).max(1_000),
+})
+const SessionSearchEntriesSchema = HgwSessionSearchResponseSchema.extend({
+  sessions: z.array(z.unknown()),
+})
+
 export function createAcpConnection(
   options: AcpConnectionOptions
 ): AcpConnection {
@@ -1049,12 +1097,25 @@ export function createAcpConnection(
     }
   }
 
+  /** The Agent catalog, an entry at a time: one bad entry costs that Agent. */
   async function listAgents() {
-    return HgwAgentsListResponseSchema.parse(
+    const response = AgentsListEntriesSchema.parse(
       await request("short", (agent, options) =>
         agent.request(HGW_METHODS.agents.list, undefined, options)
       )
     )
+    return {
+      ...response,
+      agents: readEach(
+        response.agents,
+        HgwAgentsListResponseSchema.shape.agents.element,
+        (entry) =>
+          logger.warn(
+            { id: loggedId(entry, "summary", "id") },
+            "agents.entry_skipped"
+          )
+      ),
+    }
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */
@@ -1444,8 +1505,9 @@ export function createAcpConnection(
       }
     },
 
+    /** Search results, one at a time: one bad result costs that result. */
     async searchSessions(meta) {
-      return HgwSessionSearchResponseSchema.parse(
+      const response = SessionSearchEntriesSchema.parse(
         await request("short", (agent, options) =>
           agent.request(
             HGW_METHODS.sessions.search,
@@ -1456,6 +1518,18 @@ export function createAcpConnection(
           )
         )
       )
+      return {
+        ...response,
+        sessions: readEach(
+          response.sessions,
+          HgwSessionSearchResponseSchema.shape.sessions.element,
+          (entry) =>
+            logger.warn(
+              { id: loggedId(entry, "sessionId") },
+              "sessions.result_skipped"
+            )
+        ),
+      }
     },
 
     subscribe,

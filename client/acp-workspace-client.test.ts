@@ -552,6 +552,36 @@ describe("ACP workspace client", () => {
     expect(connection.listSessions).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps a page's readable rows past one it cannot read, and rejects a page none of whose rows can be read", async () => {
+    const { client, connection } = createClient()
+    const unreadable = {
+      ...listEntry(),
+      sessionId: UNLISTED_SESSION_ID,
+      _meta: {
+        [HGW_META_KEY]: { ...sessionInfoMeta(), status: "pondering" },
+      },
+    }
+    connection.listSessions = vi.fn(async () => ({
+      sessions: [listEntry(), unreadable],
+    }))
+
+    const page = await client.readSessionPage({})
+
+    expect(page.sessions.map(({ sessionId }) => sessionId)).toEqual([
+      SESSION_ID,
+    ])
+    expect(
+      (await client.getSessionMetadata([SESSION_ID])).map(
+        ({ sessionId }) => sessionId
+      )
+    ).toEqual([SESSION_ID])
+
+    connection.listSessions = vi.fn(async () => ({ sessions: [unreadable] }))
+    await expect(
+      client.readSessionPage({ agentId: AGENT_ID })
+    ).rejects.toThrow()
+  })
+
   it("answers for Sessions of a page the thread list read without reading it again", async () => {
     const { client, calls } = createClient()
 

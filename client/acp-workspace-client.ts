@@ -70,6 +70,9 @@ export type AcpWorkspaceClientOptions = {
   logger?: Logger
 }
 
+/** The most of an id read off a rejected entry that a warning carries. */
+const LOGGED_ID_LENGTH = 256
+
 export function createAcpWorkspaceClient({
   connection,
   rest,
@@ -144,13 +147,33 @@ export function createAcpWorkspaceClient({
     return response
   }
 
-  /** Lands Session entries the gateway sent in the row cache. */
+  /**
+   * Lands Session entries the gateway sent in the row cache, one at a time,
+   * and answers the ones it kept. An entry whose metadata this client cannot
+   * read is left out with a warning; entries none of which can be read reject
+   * as a whole, since that is a gateway this client does not understand.
+   */
   function rememberRows(sessions: readonly SessionInfo[]) {
+    const kept: SessionInfo[] = []
+    let unreadable: unknown
     for (const session of sessions) {
-      const row = rowOf(session)
+      let row
+      try {
+        row = rowOf(session)
+      } catch (error) {
+        unreadable = error
+        clientLog.warn(
+          { id: session.sessionId.slice(0, LOGGED_ID_LENGTH) },
+          "sessions.row_skipped"
+        )
+        continue
+      }
       remember(row.sessionId, row.info, row.updatedAt)
       if (row.title) store.setTitle(row.sessionId, row.title)
+      kept.push(session)
     }
+    if (sessions.length > 0 && kept.length === 0) throw unreadable
+    return kept
   }
 
   type SessionPage = Awaited<ReturnType<AcpConnection["listSessions"]>>
@@ -171,10 +194,7 @@ export function createAcpWorkspaceClient({
     if (inFlight) return inFlight
     const read = connection
       .listSessions(meta, cursor)
-      .then((page) => {
-        rememberRows(page.sessions)
-        return page
-      })
+      .then((page) => ({ ...page, sessions: rememberRows(page.sessions) }))
       .finally(() => pageReads.delete(key))
     pageReads.set(key, read)
     return read
@@ -418,12 +438,12 @@ export function createAcpWorkspaceClient({
         query,
         ...(agentId === undefined ? {} : { agentId }),
       })
-      rememberRows(sessions)
+      const kept = rememberRows(sessions)
       const titles = new Map(
-        sessions.map(({ sessionId, title }) => [sessionId, title ?? ""])
+        kept.map(({ sessionId, title }) => [sessionId, title ?? ""])
       )
       return store
-        .rowsFor(sessions.map(({ sessionId }) => sessionId))
+        .rowsFor(kept.map(({ sessionId }) => sessionId))
         .map(({ sessionId, agentId, updatedAt }) => ({
           sessionId,
           agentId,

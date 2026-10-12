@@ -90,6 +90,10 @@ function createGatewayAgent(
     refuseAgentUpdate?: number
     /** The hgw extension version `initialize` announces. */
     version?: number
+    /** The entries `_hgw/agents/list` answers with. */
+    agents?: readonly unknown[]
+    /** The results `_hgw/sessions/search` answers with. */
+    searchResults?: readonly unknown[]
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -207,7 +211,7 @@ function createGatewayAgent(
     .onRequest(HGW_METHODS.sessions.search, z.unknown(), ({ params }) => {
       record(HGW_METHODS.sessions.search, params)
       return {
-        sessions: [
+        sessions: options.searchResults ?? [
           {
             sessionId: SESSION_ID,
             cwd: FOLDER,
@@ -230,7 +234,10 @@ function createGatewayAgent(
       z.unknown().optional(),
       ({ params }) => {
         record(HGW_METHODS.agents.list, params)
-        return { revision: "revision-1", agents: [catalogEntry()] }
+        return {
+          revision: "revision-1",
+          agents: options.agents ?? [catalogEntry()],
+        }
       }
     )
     .onRequest(HGW_METHODS.agents.update, z.unknown(), ({ params }) => {
@@ -398,6 +405,56 @@ describe("ACP connection", () => {
     expect(statuses).not.toContain("ready")
     expect(statuses).not.toContain("reconnecting")
     expect(proxy.callsOf("initialize")).toHaveLength(1)
+  })
+
+  it("keeps the readable Agent entries and search results, and rejects when none can be read", async () => {
+    const result = (sessionId: string) => ({
+      sessionId,
+      cwd: FOLDER,
+      title: sessionId,
+      _meta: { [HGW_META_KEY]: sessionInfoMeta() },
+    })
+    const logs = captureLogs()
+    const connect = (options: Parameters<typeof createGatewayAgent>[0]) => {
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        connectAgent: createGatewayAgent(options).app,
+        logger: logs.logger,
+      })
+      connection.start()
+      return connection
+    }
+    const verbose = { kind: "ready", id: "verbose", name: "n".repeat(257) }
+    const partial = connect({
+      agents: [catalogEntry(), { ...catalogEntry(), summary: verbose }],
+      searchResults: [result("weekly"), { sessionId: "broken" }],
+    })
+
+    const catalog = await partial.listAgents()
+    const searched = await partial.searchSessions({ query: "w" })
+
+    expect(catalog.agents.map(({ summary }) => summary.id)).toEqual([AGENT_ID])
+    expect(searched.sessions.map(({ sessionId }) => sessionId)).toEqual([
+      "weekly",
+    ])
+    expect(
+      logs
+        .records()
+        .filter(({ message }) => message.endsWith("_skipped"))
+        .map(({ message, fields }) => [message, fields.id])
+    ).toEqual([
+      ["agents.entry_skipped", "verbose"],
+      ["sessions.result_skipped", "broken"],
+    ])
+
+    const unreadable = connect({
+      agents: [{ ...catalogEntry(), summary: verbose }],
+      searchResults: [{ sessionId: "broken" }],
+    })
+    await expect(unreadable.listAgents()).rejects.toThrow()
+    await expect(unreadable.searchSessions({ query: "w" })).rejects.toThrow()
+    partial.close()
+    unreadable.close()
   })
 
   it("redeems an invitation with the AOS login metadata, never logging it", async () => {
