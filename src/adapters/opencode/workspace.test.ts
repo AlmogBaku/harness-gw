@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { createOpenCodeWorkspaceOperations } from "./workspace"
+import { captureLogs } from "../../../test/support/log-capture"
+import {
+  createOpenCodeWorkspaceOperations,
+  OpenCodeWorkspaceUnavailableError,
+} from "./workspace"
 
 const session = (overrides: Record<string, unknown> = {}) => ({
   id: "session-1",
@@ -148,6 +152,82 @@ describe("OpenCode workspace operations", () => {
       expect(page.total).toBe(matched.length)
     }
   )
+
+  it("lists the other Sessions past a malformed row across cursor pages, and fails only when none can be read", async () => {
+    const at = (id: string, updated: number) =>
+      session({ id, time: { created: 1, updated } })
+    let pages: Record<string, unknown> = {
+      first: {
+        data: [at("one", 30), session({ id: "untitled", title: "" })],
+        cursor: { next: "second" },
+      },
+      second: { data: [at("two", 20), at("one", 99)], cursor: {} },
+    }
+    const logs = captureLogs()
+    const operations = createOpenCodeWorkspaceOperations({
+      client: stubClient({
+        list: async ({ cursor } = {}) => pages[cursor ?? "first"],
+      }),
+      log: logs.logger,
+    })
+
+    const page = await operations.listSessions("research", 50, 0)
+
+    expect(page.sessions.map(({ id }) => id)).toEqual(["one", "two"])
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields.sessionId])
+    ).toEqual([
+      ["opencode.session.skipped", "untitled"],
+      ["opencode.session.skipped", "one"],
+    ])
+    // An invite read that skipped a row cannot tell its Session is not there.
+    await expect(
+      operations.resolveInvitedSession("research", "guest")
+    ).rejects.toBeInstanceOf(OpenCodeWorkspaceUnavailableError)
+
+    pages = { first: { data: [session({ title: "" })], cursor: {} } }
+    await expect(
+      operations.listSessions("research", 50, 0)
+    ).rejects.toBeInstanceOf(OpenCodeWorkspaceUnavailableError)
+  })
+
+  it("lists the other Agents when one Agent row is malformed, and fails only when none can be read", async () => {
+    const agent = (overrides: Record<string, unknown>) => ({
+      id: "research",
+      mode: "primary",
+      hidden: false,
+      permissions: [],
+      request: {},
+      ...overrides,
+    })
+    let agents: unknown[] = [
+      agent({}),
+      agent({ id: "broken", mode: "sometimes" }),
+      agent({ id: "verbose", description: "d".repeat(4_097) }),
+    ]
+    const logs = captureLogs()
+    const operations = createOpenCodeWorkspaceOperations({
+      client: stubClient({}, async () => ({ data: agents })),
+      log: logs.logger,
+    })
+
+    const catalog = await operations.listAgents()
+
+    expect(catalog.agents.map(({ summary }) => summary.id)).toEqual([
+      "research",
+    ])
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields.agentId])
+    ).toEqual([
+      ["opencode.agent.skipped", "broken"],
+      ["opencode.agent.skipped", "verbose"],
+    ])
+
+    agents = [agent({ id: "broken", mode: "sometimes" })]
+    await expect(operations.listAgents()).rejects.toBeInstanceOf(
+      OpenCodeWorkspaceUnavailableError
+    )
+  })
 
   it("fails closed when an invite title has multiple exact-Agent matches", async () => {
     const operations = createOpenCodeWorkspaceOperations({

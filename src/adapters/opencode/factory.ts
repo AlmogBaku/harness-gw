@@ -79,6 +79,7 @@ export function composeOpenCodeRuntime({
       turns,
       interactions,
       creatorAgentId,
+      logger,
       ...(engine ? { link: engine.link } : {}),
       ...(mcp ? { mcp } : {}),
     })

@@ -1,9 +1,12 @@
+import type { Logger } from "../../../lifecycle"
 import {
+  AgentCatalogEntrySchema,
   AgentCatalogResponseSchema,
   newestSessionFirst,
   SessionCatalogResponseSchema,
   SessionCreateResponseSchema,
   SessionSchema,
+  type AgentCatalogEntry,
   type AgentCatalogResponse,
   type Session,
   type SessionCatalogResponse,
@@ -13,9 +16,11 @@ import { inviteSessionKey } from "../../core/invite-key"
 import type { SessionPatch } from "../../core/runtime"
 import {
   openCodeAgentAvatar,
+  parseOpenCodeAgent,
   parseOpenCodeAgentCatalog,
   parseOpenCodeSession,
   parseOpenCodeSessionCatalog,
+  type OpenCodeAgent,
 } from "./native-schemas"
 
 const MAX_PAGE_SIZE = 100
@@ -80,6 +85,46 @@ function revision(parts: readonly string[]) {
 
 /** The most Sessions one search answers: one catalog page. */
 const SEARCH_LIMIT = 100
+/** The most of an id read off a rejected row that a warning carries. */
+const LOGGED_ID_LENGTH = 256
+
+/** The id a rejected row names, bounded for a warning; never its content. */
+function loggedId(row: unknown) {
+  const id =
+    typeof row === "object" && row !== null
+      ? (row as Record<string, unknown>).id
+      : undefined
+  return typeof id === "string" ? id.slice(0, LOGGED_ID_LENGTH) : undefined
+}
+
+/** One native Agent as its catalog entry. */
+function catalogEntry(agent: OpenCodeAgent) {
+  const avatar = openCodeAgentAvatar(agent.request)
+  const visibility = agent.hidden ? ("hidden" as const) : ("visible" as const)
+  return {
+    summary: {
+      kind: "ready" as const,
+      id: agent.id,
+      name: agent.id,
+      ...(agent.description ? { description: agent.description } : {}),
+      ...(avatar ? { avatar } : {}),
+      status: "unknown" as const,
+      activity: "unknown" as const,
+      visibility,
+    },
+    visibility,
+    selectable: !agent.hidden,
+    editable: false,
+    avatarEditable: false,
+    muteEditable: false,
+    revision: revision([
+      agent.id,
+      agent.description ?? "",
+      String(agent.hidden),
+      avatar ?? "",
+    ]),
+  }
+}
 
 function validPage(limit: number, offset: number) {
   return (
@@ -114,15 +159,35 @@ function projectSession(
   return parsed.data
 }
 
+/** A listed native row as its owner's Session, or `undefined` when it is not one. */
+function listedSession(
+  value: NonNullable<ReturnType<typeof parseOpenCodeSession>["data"]>
+) {
+  try {
+    return projectSession(value, value.agent!)
+  } catch {
+    return undefined
+  }
+}
+
 export function createOpenCodeWorkspaceOperations(input: {
   client: OpenCodeWorkspaceClient
   creatorAgentId?: string
+  /** Where a row left out of a list is told, by its id alone. */
+  log?: Logger
 }) {
+  /**
+   * Every Session an Agent owns, of every Agent, newest first, one native row
+   * at a time. A row that is not one, or repeats one's id, is left out with a
+   * warning and counted in `skipped`; only rows none of which can be read are
+   * an outage. A Session no Agent owns is no one's, not a bad row.
+   */
   async function allSessions() {
-    const sessions: NonNullable<
-      ReturnType<typeof parseOpenCodeSessionCatalog>["data"]
-    >["data"] = []
+    const sessions: Session[] = []
     const seenCursors = new Set<string>()
+    const seenIds = new Set<string>()
+    let rows = 0
+    let skipped = 0
     let cursor: string | undefined
     do {
       const parsed = parseOpenCodeSessionCatalog(
@@ -132,37 +197,43 @@ export function createOpenCodeWorkspaceOperations(input: {
         })
       )
       if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
-      sessions.push(...parsed.data.data)
+      for (const row of parsed.data.data) {
+        const native = parseOpenCodeSession(row)
+        if (native.success && native.data.agent === undefined) continue
+        const session = native.success ? listedSession(native.data) : undefined
+        if (!session || seenIds.has(session.id)) {
+          skipped += 1
+          input.log?.warn(
+            { sessionId: loggedId(row) },
+            "opencode.session.skipped"
+          )
+          continue
+        }
+        seenIds.add(session.id)
+        sessions.push(session)
+      }
+      rows += parsed.data.data.length
       cursor = parsed.data.cursor.next
       if (cursor && seenCursors.has(cursor))
         throw new OpenCodeWorkspaceUnavailableError()
       if (cursor) seenCursors.add(cursor)
-      if (sessions.length > MAX_CATALOG_WINDOW)
+      if (rows > MAX_CATALOG_WINDOW)
         throw new OpenCodeWorkspaceUnavailableError()
     } while (cursor)
-    const seenIds = new Set<string>()
-    if (
-      sessions.some(
-        (session) => seenIds.has(session.id) || !seenIds.add(session.id)
-      )
-    )
+    if (skipped > 0 && sessions.length === 0)
       throw new OpenCodeWorkspaceUnavailableError()
-    return sessions
+    return { sessions: sessions.sort(newestSessionFirst), skipped }
   }
 
   async function owned(agentId: string) {
-    return (await allSessions())
-      .filter((session) => session.agent === agentId)
-      .map((session) => projectSession(session, agentId))
-      .sort(newestSessionFirst)
+    return (await allSessions()).sessions.filter(
+      (session) => session.agentId === agentId
+    )
   }
 
   /** Every Session an Agent owns, of every Agent, newest first. */
   async function everyOwned() {
-    return (await allSessions())
-      .filter((session) => !!session.agent)
-      .map((session) => projectSession(session, session.agent!))
-      .sort(newestSessionFirst)
+    return (await allSessions()).sessions
   }
 
   /** One authoritative read that both projects and proves exact ownership. */
@@ -217,8 +288,11 @@ export function createOpenCodeWorkspaceOperations(input: {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$/u.test(ref))
       throw new OpenCodeWorkspaceUnavailableError()
     const title = inviteSessionKey(ref)
-    const matches = (await owned(agentId)).filter(
-      (session) => session.title === title
+    const { sessions, skipped } = await allSessions()
+    // A skipped row may be the invited Session: none found is then unknown.
+    if (skipped > 0) throw new OpenCodeWorkspaceUnavailableError()
+    const matches = sessions.filter(
+      (session) => session.agentId === agentId && session.title === title
     )
     if (matches.length > 1) throw new OpenCodeWorkspaceUnavailableError()
     if (matches.length === 1)
@@ -268,39 +342,27 @@ export function createOpenCodeWorkspaceOperations(input: {
         await input.client.catalog.agents()
       )
       if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
-      const agents = parsed.data.data
-        .filter((agent) => agent.id !== input.creatorAgentId)
-        .sort((left, right) => left.id.localeCompare(right.id))
-        .map((agent) => {
-          const avatar = openCodeAgentAvatar(agent.request)
-          return {
-            summary: {
-              kind: "ready" as const,
-              id: agent.id,
-              name: agent.id,
-              ...(agent.description ? { description: agent.description } : {}),
-              ...(avatar ? { avatar } : {}),
-              status: "unknown" as const,
-              activity: "unknown" as const,
-              visibility: agent.hidden
-                ? ("hidden" as const)
-                : ("visible" as const),
-            },
-            visibility: agent.hidden
-              ? ("hidden" as const)
-              : ("visible" as const),
-            selectable: !agent.hidden,
-            editable: false,
-            avatarEditable: false,
-            muteEditable: false,
-            revision: revision([
-              agent.id,
-              agent.description ?? "",
-              String(agent.hidden),
-              avatar ?? "",
-            ]),
-          }
-        })
+      // One row at a time: a malformed Agent costs that Agent alone.
+      const agents: AgentCatalogEntry[] = []
+      let skipped = 0
+      for (const row of parsed.data.data) {
+        const native = parseOpenCodeAgent(row)
+        if (native.success && native.data.id === input.creatorAgentId) continue
+        const entry = native.success
+          ? AgentCatalogEntrySchema.safeParse(catalogEntry(native.data))
+          : undefined
+        if (!entry?.success) {
+          skipped += 1
+          input.log?.warn({ agentId: loggedId(row) }, "opencode.agent.skipped")
+          continue
+        }
+        agents.push(entry.data)
+      }
+      if (skipped > 0 && agents.length === 0)
+        throw new OpenCodeWorkspaceUnavailableError()
+      agents.sort((left, right) =>
+        left.summary.id.localeCompare(right.summary.id)
+      )
       return AgentCatalogResponseSchema.parse({
         revision: revision(agents.map((agent) => agent.revision)),
         agents,
