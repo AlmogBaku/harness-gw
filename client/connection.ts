@@ -730,13 +730,6 @@ export function createAcpConnection(
     for (const listener of outageListeners) listener(next)
   }
 
-  /** Ends the outage once the transport is ready and no Session is joining. */
-  function settleOutage() {
-    if (status !== "ready") return
-    for (const open of sessions.values()) if (open.state === "joining") return
-    setOutage(undefined)
-  }
-
   function emitPending(request: AcpPendingRequest) {
     for (const listener of pendingListeners)
       try {
@@ -1178,7 +1171,6 @@ export function createAcpConnection(
     if (failure !== undefined) open.waiters?.reject(failure)
     if (next === "joined" || failure !== undefined) open.waiters = undefined
     for (const { listener } of open.listeners) listener.state?.(next)
-    settleOutage()
   }
 
   function subscribe(sessionId: string, listener: AcpSessionListener) {
@@ -1250,7 +1242,6 @@ export function createAcpConnection(
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
-    settleOutage()
     if (open.state === "gone") return
     request("short", (agent, options) =>
       agent.request(HGW_METHODS.session.part, { sessionId }, options)
@@ -1309,6 +1300,9 @@ export function createAcpConnection(
       sendLivenessProbeAsync()
     }
     joinable = true
+    // The connection is back. Each Session's rejoin is its own state, so one
+    // slow resume holds up no other Session's view of the connection.
+    setOutage(undefined)
     const opened = [...sessions.keys()]
     for (const open of sessions.values())
       open.owner?.actor.send({ type: "ready" })
@@ -1369,7 +1363,6 @@ export function createAcpConnection(
     closeTransport: () => live?.connection.close(),
     markReady() {
       setStatus("ready")
-      settleOutage()
     },
     lose(next) {
       recovering = true

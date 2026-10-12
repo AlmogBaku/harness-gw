@@ -1077,7 +1077,7 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("reports the outage from a drop until the resumed Session has rejoined", async () => {
+  it("reports the outage from a drop until the transport is ready, leaving a rejoin to its Session", async () => {
     const clock = useFakeClock()
     const proxy = createGatewayAgent({ slowResume: true })
     const pipe = pipedSockets(() => proxy.app)
@@ -1097,13 +1097,14 @@ describe("ACP connection", () => {
     await clock.advance(0)
     expect(connection.outage).toBe("reconnecting")
     while (connection.status !== "ready") await clock.advance(1)
-    // The transport is back, but the Session is still rejoining.
+    await clock.advance(0)
+    // The transport is back: the outage is over, and the Session still
+    // rejoining says so in its own state, holding up no other Session.
     expect(connection.sessionState(SESSION_ID)).toBe("joining")
-    expect(connection.outage).toBe("reconnecting")
+    expect(connection.outage).toBeUndefined()
 
     await clock.advance(20)
     expect(connection.sessionState(SESSION_ID)).toBe("joined")
-    expect(connection.outage).toBeUndefined()
     connection.close()
   })
 
