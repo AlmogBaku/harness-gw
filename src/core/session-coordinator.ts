@@ -1413,7 +1413,7 @@ export class SessionCoordinator {
     input: SendInput,
     access: CoordinatorAccess,
     options: StartOptions = {}
-  ): Promise<CoordinatedTurnSubscription> {
+  ): Promise<CoordinatedTurnSubscription & { messageId: string }> {
     const admitted = await this.#command(scope, async () => {
       if (this.#closed) throw new Error("Session coordinator is closed")
       if (!("clientId" in input))
@@ -1452,17 +1452,30 @@ export class SessionCoordinator {
       // the repeat's reader follows the Session from its history.
       return { turnId: ids.turnId, events: ENDED, close: () => undefined }
     })
-    return "segment" in admitted
-      ? this.#atStorage(admitted, access, options.signal)
-      : admitted
+    const subscription: CoordinatedTurnSubscription =
+      "segment" in admitted
+        ? await this.#atStorage(admitted, access, options.signal)
+        : admitted
+    // An answer always names its prompt: as its provider stored it, or as the
+    // gateway minted it where nothing proves how.
+    return {
+      ...subscription,
+      messageId:
+        subscription.messageId ??
+        ("clientId" in input
+          ? clientTurnIds(access.principalId, scope.sessionId, input.clientId)
+              .messageId
+          : input.messageId),
+    }
   }
 
   /**
    * Subscribes to an admitted turn once its provider stored the prompt, under
    * the id it stored it as. Waited for outside the Session's commands, so a
-   * Stop or a steer meanwhile is not held. A receipt still missing at the
-   * admission deadline leaves the turn running and its start uncertain; a turn
-   * that ended first is answered by how it ended.
+   * Stop or a steer meanwhile is not held. ACP reads a refusal as a prompt
+   * never inserted, so a turn that ended first is refused only when its
+   * adapter knows the provider stored nothing; that one, and one whose receipt
+   * the admission deadline outran, may stand, and name no stored id.
    */
   async #atStorage(
     execution: Execution,
@@ -1476,17 +1489,18 @@ export class SessionCoordinator {
     try {
       messageId = await deadline.run(() => stored)
     } catch (error) {
-      // A turn over before any receipt is answered as it ended, at once: a
-      // stop or a failure is the answer, and any other end names no stored id.
-      if (error instanceof ServerTurnEndedError && error.ending === "ended")
+      // A turn over before any receipt is answered at once.
+      if (error instanceof ServerTurnEndedError) {
+        if (error.unstored) throw error
         return this.#repeat(execution, access)
+      }
       if (!deadline.signal.aborted) throw error
       const { agentId, sessionId } = execution.scope
       this.#logger.warn(
         { agentId, sessionId, turnId: execution.segment.turnId },
         "turn.receipt.deadline_passed"
       )
-      throw new ServerTurnUncertainError()
+      return this.#repeat(execution, access)
     }
     return { ...this.#repeat(execution, access), messageId }
   }

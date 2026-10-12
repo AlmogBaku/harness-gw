@@ -278,8 +278,13 @@ from.
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `clientId` becomes the
 turn's `turnId`; a retry with the same `clientId` returns the first answer
 unchanged. The response carries the minted user-message id as the top-level
-`messageId` field (SDK 1.5.0 `PromptResponse`); the answer is sent only after
-the runtime confirms it stored the prompt. Attachment content referenced by
+`messageId` field (SDK 1.5.0 `PromptResponse`). As ACP reads an error answer
+as a prompt never inserted, the answer waits for the runtime's storage receipt
+and names the id it stored the prompt under. A prompt the runtime may have
+stored without proving it, because its receipt outlasted the admission
+deadline or its turn ended first, is answered under the id the gateway minted.
+Only a turn its adapter knows stored nothing is answered with an error.
+Attachment content referenced by
 `resource_link` blocks uses the `hgw-attachment:` URI scheme
 (`HGW_ATTACHMENT_URI_SCHEME`, `protocol/acp.ts`).
 

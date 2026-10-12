@@ -52,7 +52,6 @@ import {
   type SessionScope,
 } from "./runtime"
 import {
-  clientTurnIds,
   ReplayCursorLostError,
   type CoordinatedTurnSubscription,
   type CoordinatorAccess,
@@ -1439,11 +1438,6 @@ class Membership {
   ): Promise<CommandResults["send"]> {
     // Joined before admission, so a turn that wins the race still reaches it.
     this.joinChannel()
-    const ids = clientTurnIds(
-      this.#member.principal.id,
-      this.#scope.sessionId,
-      input.clientId
-    )
     // Entered from the admission to the showing, so no follow subscribes this
     // member to the turn first. A first admission enters once its prompt is
     // prepared, so a slow one keeps no other turn from reaching this member.
@@ -1491,8 +1485,8 @@ class Membership {
       throw cause
     }
     const release = await enter()
-    // The prompt goes by the id its provider stored it under.
-    const messageId = subscription.messageId ?? ids.messageId
+    // The prompt goes by the id its provider stored it under, where it did.
+    const { messageId } = subscription
     let turn: ChannelTurn
     try {
       if (subscription.turnId === this.#followedTurn) {

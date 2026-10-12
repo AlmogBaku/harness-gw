@@ -4,7 +4,6 @@ import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import {
   PendingRequestKind,
-  StopReason,
   TurnEventKind,
   type ExecutionEvent,
   type TurnEvent,
@@ -2388,7 +2387,7 @@ describe("SessionCoordinator", () => {
     ).resolves.toMatchObject({ turnId: "run-2" })
   })
 
-  it("answers a start at its prompt's storage receipt, or leaves it uncertain at the deadline", async () => {
+  it("answers a start at its prompt's storage receipt, or under the gateway's id at the deadline", async () => {
     const { advance } = useFakeClock()
     let store!: (messageId: string) => void
     const receipted = Object.assign(new EventSource(), {
@@ -2417,52 +2416,79 @@ describe("SessionCoordinator", () => {
     receipted.finish()
     await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
 
-    const second = expect(
-      sessions.start(scope, input("run-2"), access("one"))
-    ).rejects.toBeInstanceOf(ServerTurnUncertainError)
+    const second = sessions.start(scope, input("run-2"), access("one"))
     await advance(ADMISSION_DEADLINE_MS)
-    await second
-    // The provider took the prompt, so its turn runs on and is not withdrawn.
+    // The provider took the turn and may have stored its prompt, which ACP
+    // owes an id: the one the gateway minted. The turn runs on.
+    await expect(second).resolves.toMatchObject({
+      turnId: "run-2",
+      messageId: "message-run-2",
+    })
     expect(sessions.state(scope)).toBe("running")
     expect(unreceipted.stop).not.toHaveBeenCalled()
   })
 
-  it("answers a start at once when its turn ends before its prompt's storage receipt", async () => {
-    useFakeClock()
-    const ending = (error: ServerTurnEndedError) => {
+  // ACP reads an error answer as a prompt never inserted, so only a turn its
+  // adapter knows stored nothing is refused; any other is answered under the
+  // id the gateway minted, and its stream tells how it ended.
+  it.each([
+    [
+      "a stop",
+      new ServerTurnEndedError("stopped", undefined, { unstored: true }),
+    ],
+    [
+      "a failure",
+      new ServerTurnEndedError("failed", "HGW_PROVIDER_RUN_FAILED", {
+        unstored: true,
+      }),
+    ],
+    [
+      "an end",
+      new ServerTurnEndedError("ended", undefined, { unstored: true }),
+    ],
+  ])(
+    "refuses a start at once when %s before its receipt stored nothing",
+    async (_ending, error) => {
+      useFakeClock()
       const stored = Promise.reject(error)
       stored.catch(() => undefined)
-      return Object.assign(new EventSource(), { stored })
-    }
-    const stop = new ServerTurnEndedError("stopped")
-    const stopped = ending(stop)
-    const ended = ending(new ServerTurnEndedError("ended"))
-    const engine: ServerTurnEngine = {
-      start: vi
-        .fn<ServerTurnEngine["start"]>()
-        .mockResolvedValueOnce(stopped)
-        .mockResolvedValueOnce(ended),
-      recover: vi.fn(async () => new EventSource()),
-    }
-    const sessions = coordinator(engine)
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async () => Object.assign(new EventSource(), { stored })),
+        recover: vi.fn(async () => new EventSource()),
+      }
+      const sessions = coordinator(engine)
 
-    // No clock advances: the answer never waits out the admission deadline.
-    await expect(
-      sessions.start(scope, input("run-1"), access("one"))
-    ).rejects.toBe(stop)
-    stopped.emit({
-      kind: TurnEventKind.TurnEnded,
-      stopReason: StopReason.Cancelled,
-    })
-    stopped.finish()
-    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
-    // A turn that ended otherwise is answered with no stored id to name.
-    const answer = await sessions.start(scope, input("run-2"), access("one"))
-    expect(answer).toMatchObject({ turnId: "run-2" })
-    expect(answer).not.toHaveProperty("messageId")
-    ended.emit(turnEnded)
-    ended.finish()
-  })
+      // No clock advances: the answer never waits out the admission deadline.
+      await expect(
+        sessions.start(scope, input("run-1"), access("one"))
+      ).rejects.toBe(error)
+    }
+  )
+
+  it.each([
+    ["a stop", new ServerTurnEndedError("stopped")],
+    [
+      "a failure",
+      new ServerTurnEndedError("failed", "HGW_PROVIDER_RUN_FAILED"),
+    ],
+    ["an end", new ServerTurnEndedError("ended")],
+  ])(
+    "answers a start at once under the gateway's id when %s before its receipt may have stored it",
+    async (_ending, error) => {
+      useFakeClock()
+      const stored = Promise.reject(error)
+      stored.catch(() => undefined)
+      const engine: ServerTurnEngine = {
+        start: vi.fn(async () => Object.assign(new EventSource(), { stored })),
+        recover: vi.fn(async () => new EventSource()),
+      }
+      const sessions = coordinator(engine)
+
+      await expect(
+        sessions.start(scope, input("run-1"), access("one"))
+      ).resolves.toMatchObject({ turnId: "run-1", messageId: "message-run-1" })
+    }
+  )
 
   it("keeps the journal of a turn whose Stop could not be confirmed", async () => {
     const { advance } = useFakeClock()
