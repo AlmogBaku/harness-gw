@@ -1,11 +1,12 @@
 import { PUSH_TEXT_LIMITS } from "../../protocol/push"
-import { maskCredentials } from "../redaction"
+import { maskCredentials, type MaskStrength } from "../redaction"
 import { PendingRequestKind, type PendingRequest } from "./events"
 
 /**
- * The words of a pending request as they leave the gateway. The ask card
- * shows them whole and masked; a notification or an activity item shows one
- * masked line of them, cut to fit.
+ * The words of a pending request, and the names around it, as they leave the
+ * gateway. The ask card shows them whole and masked, a permission at the
+ * narrow strength; a notification or an activity item shows one line of them,
+ * masked at the broad strength and cut to fit.
  */
 
 /** Embeddings, overrides, and isolates, which reorder the text around them. */
@@ -18,8 +19,20 @@ const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/gu
 const UNPRINTABLE = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\uD800-\uDFFF]/gu
 
 /** Text as the ask card shows it: line breaks and length kept, nothing reordered. */
-export function maskRequestText(text: string) {
-  return maskCredentials(text.replace(BIDI_CONTROLS, ""))
+export function maskRequestText(text: string, strength: MaskStrength) {
+  return maskCredentials(text.replace(BIDI_CONTROLS, ""), strength)
+}
+
+/**
+ * Choices as shown, each still telling which it is: two that read the same,
+ * once masked, are told apart by their place, so an answer names one choice.
+ */
+export function distinctChoices(choices: readonly string[]) {
+  return choices.map((choice, index) =>
+    choices.indexOf(choice) === choices.lastIndexOf(choice)
+      ? choice
+      : `${choice} (option ${index + 1})`
+  )
 }
 
 /** One printable line: no controls, no reordering, single spaces. */
@@ -41,16 +54,19 @@ function cut(line: string, max: number) {
   return `${kept.trimEnd()}…`
 }
 
-/** `value` as one line of at most `max` UTF-16 units; empty is `undefined`. */
+/**
+ * `value` as one masked line of at most `max` UTF-16 units; empty is
+ * `undefined`. The line is masked after it is flattened, so no control or
+ * reordering character can split a credential past the mask.
+ */
 export function previewText(value: string, max: number) {
-  return cut(oneLine(value), max)
+  return cut(maskCredentials(oneLine(value)), max)
 }
 
 /**
  * One masked line of what `request` asks: a permission's operation, else its
  * message; an elicitation's first question, else its message. `more` counts
- * the questions after the first. The line is masked after it is flattened, so
- * no control or reordering character can split a credential past the mask.
+ * the questions after the first.
  */
 export function requestPreview(
   request: PendingRequest
@@ -66,7 +82,7 @@ export function requestPreview(
   const text =
     source === undefined
       ? undefined
-      : cut(maskCredentials(oneLine(source)), PUSH_TEXT_LIMITS.requestText)
+      : previewText(source, PUSH_TEXT_LIMITS.requestText)
   if (text === undefined) return undefined
   return questions.length > 1 ? { text, more: questions.length - 1 } : { text }
 }

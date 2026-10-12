@@ -118,7 +118,7 @@ describe("maskRequestText", () => {
   it("keeps every line and the full length, masking only the credential and reordering", () => {
     const text = `Run this:\n${curl}\n\n${"step ".repeat(100)}\u202Edone`
 
-    expect(maskRequestText(text)).toBe(
+    expect(maskRequestText(text, "broad")).toBe(
       `Run this:\ncurl -H '[credential redacted] https://api.example.test/repos\n\n${"step ".repeat(100)}done`
     )
   })

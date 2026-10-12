@@ -36,21 +36,63 @@ export const SECRET_TERMS: readonly string[] = [
   "token",
 ]
 
+/** What a masked credential reads as, wherever an operator or guest reads it. */
+const MASKED = "[credential redacted]"
+
 /** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
 const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
-const credentialText = new RegExp(
-  String.raw`(?:\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)`,
-  "giu"
-)
+/** A provider key by its prefix, or a JWT: a credential wherever it stands. */
+const KEY_SHAPES = String.raw`\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+`
+/** A value with no shell or glob syntax, and not a path. */
+const PLAIN_VALUE = String.raw`[^\s$()|&;<>\x60'"{}*?\[\]\\/.~][^\s$()|&;<>\x60'"{}*?\[\]\\]*`
 
 /**
- * `text` with every credential it spells out as `[credential redacted]`: a
- * `token=…` assignment, a Basic or Bearer value, a known provider key prefix,
- * or a JWT. Paths and URLs stay, so text a runtime wrote for the operator
- * still reads as written.
+ * The two strengths a credential mask comes in. `broad` takes a term's value
+ * up to the next break, however it is spaced or quoted, and a Basic or Bearer
+ * token, for text that only describes: a preview, a title, a question.
+ * `narrow` takes only a value that cannot be shell syntax, for text an
+ * operator approves: a permission must still show what it would run.
  */
-export function maskCredentials(text: string) {
-  return text.replace(credentialText, "[credential redacted]")
+const CREDENTIAL_MASKS = {
+  broad: new RegExp(
+    String.raw`\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+(?<token>[A-Za-z0-9+/=_-]{8,})|${KEY_SHAPES}`,
+    "giu"
+  ),
+  narrow: new RegExp(
+    String.raw`\b(?<term>(?:${secretTerm})[=:])(?:(?<quote>["'])(?<quoted>${PLAIN_VALUE})\k<quote>|(?<plain>${PLAIN_VALUE}))(?=\s|$)|${KEY_SHAPES}`,
+    "giu"
+  ),
+}
+export type MaskStrength = keyof typeof CREDENTIAL_MASKS
+
+/** Upper case, lower case, digits, and symbols: a token mixes at least two. */
+const TOKEN_KINDS = [/[A-Z]/u, /[a-z]/u, /[0-9]/u, /[+/=_-]/u]
+
+type MaskGroups = Partial<
+  Record<"token" | "term" | "quote" | "quoted" | "plain", string>
+>
+
+function masked(match: string, ...args: unknown[]) {
+  const { token, term, quote } = args.at(-1) as MaskGroups
+  // "Basic authentication" is prose; a token mixes kinds of character.
+  if (token !== undefined)
+    return TOKEN_KINDS.filter((kind) => kind.test(token)).length >= 2
+      ? MASKED
+      : match
+  if (term !== undefined) return `${term}${quote ?? ""}${MASKED}${quote ?? ""}`
+  return MASKED
+}
+
+/**
+ * `text` with every credential it spells out as `[credential redacted]`, at
+ * the given strength. Paths and URLs stay, so text a runtime wrote for the
+ * operator still reads as written.
+ */
+export function maskCredentials(
+  text: string,
+  strength: MaskStrength = "broad"
+) {
+  return text.replace(CREDENTIAL_MASKS[strength], masked)
 }
 
 /**

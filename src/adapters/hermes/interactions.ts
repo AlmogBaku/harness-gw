@@ -23,6 +23,7 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
+import { distinctChoices } from "../../core/request-text"
 import { maskCredentials } from "../../redaction"
 
 import {
@@ -300,18 +301,14 @@ function nativeText(
 /**
  * A credential is nobody's to read, so it goes before the text leaves the
  * adapter. Paths and URLs stay: a question reaches every member of the
- * conversation, a guest included, in the words the agent wrote.
+ * conversation, a guest included, in the words the agent wrote. A question
+ * is masked broadly; a permission narrowly, so what it runs stays readable.
  */
-const publicText = maskCredentials
+const publicText = (value: string) => maskCredentials(value)
+const publicPermission = (value: string) => maskCredentials(value, "narrow")
 
 function publicChoices(nativeChoices: string[] | null) {
-  if (!nativeChoices) return null
-  const projected = nativeChoices.map(publicText)
-  return projected.map((choice, index) => {
-    return projected.filter((candidate) => candidate === choice).length > 1
-      ? `${choice} (option ${index + 1})`
-      : choice
-  })
+  return nativeChoices && distinctChoices(nativeChoices.map(publicText))
 }
 
 function boundedJson(value: unknown) {
@@ -550,11 +547,11 @@ function approvalInteraction(
     pendingRequest: {
       requestId: id,
       kind: PendingRequestKind.Permission,
-      message: publicText(message),
+      message: publicPermission(message),
       responseSchema: {
         type: "string",
         enum: choices,
-        ...(command && description ? { title: publicText(command) } : {}),
+        ...(command && description ? { title: publicPermission(command) } : {}),
       },
     },
   }

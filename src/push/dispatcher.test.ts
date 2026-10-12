@@ -257,9 +257,17 @@ describe("push dispatcher", () => {
     const test = harness({
       rows: [
         row({ title: "Quarterly\nnotes" }),
-        row({ id: "session-2", agentId: "writer", title: "Draft" }),
+        // A lock screen shows the title and the name, so both are masked.
+        row({
+          id: "session-2",
+          agentId: "writer",
+          title: "Draft for token: AAAAbbbb1111",
+        }),
       ],
-      catalog: catalogOf(entry(AGENT, "Researcher"), entry("writer", "Writer")),
+      catalog: catalogOf(
+        entry(AGENT, "Researcher"),
+        entry("writer", "Writer sk-leaked0000")
+      ),
     })
 
     test.publish(asked(["Which region?", "Why?"]))
@@ -291,8 +299,8 @@ describe("push dispatcher", () => {
         agentId: "writer",
         sessionId: "session-2",
         occurredAt: iso(START + 1_000),
-        agentName: "Writer",
-        sessionTitle: "Draft",
+        agentName: "Writer [credential redacted]",
+        sessionTitle: "Draft for [credential redacted]",
         requestText: "Ship it?",
       },
     ])

@@ -447,12 +447,49 @@ as `occurredAt`; a live item carries no `replayed`.
 | `unread-changed`      | `unread: boolean`                                                                               |
 
 `requestText` is one line of what the request asks: a permission's operation
-or message, or an elicitation's first question. It is masked of credentials
-and bidirectional controls, collapsed to single spaces, and cut to 200 UTF-16
-units ending in `…`. `requestMore` counts the questions after the first. Both
-are absent when there is nothing to show. The ask card itself, the
+or message, or an elicitation's first question. It is stripped of
+bidirectional controls, collapsed to single spaces, masked broadly (see
+[Credential masking](#credential-masking)), and cut to 200 UTF-16 units
+ending in `…`. `requestMore` counts the questions after the first. Both are
+absent when there is nothing to show. The ask card itself, the
 `session/request_permission` or `session/elicitation` request, keeps the full
-text, line breaks included, with the same credential masking.
+text, line breaks included.
+
+#### Credential masking
+
+The gateway masks a credential as `[credential redacted]` at one of two
+strengths. A term is any word of `SECRET_TERMS` (`src/redaction.ts`), in any
+case, with `-` or `_` allowed between its letters (`api_key`, `apiKey`,
+`password`, `token`, …).
+
+- **Broad** masks a term, `=` or `:` with any spacing, and its value up to the
+  next whitespace, `,` or `;`, quotes included, and the whole match goes. It
+  also masks `Basic` or `Bearer` followed by a token of at least 8 characters
+  of `[A-Za-z0-9+/=_-]` mixing at least two of upper case, lower case, digits
+  and symbols, so `Basic authentication` stays.
+- **Narrow** masks only a term written as one word, `term=VALUE` or
+  `term:VALUE`, whose value has no whitespace and none of
+  ``$ ( ) | & ; < > ` ' " { } * ? [ ] \``, may sit in single or double
+  quotes, and starts with none of `/`, `.` or `~`. The term and the quotes
+  stay; only the value goes. It has no Basic or Bearer form, so shell syntax
+  in a command stays readable.
+- **Both** mask a provider key by its prefix (`ghp_`, `gho_`, `ghs_`, `ghu_`,
+  `ghr_`, `sk-`, `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-`, `xoxs-`) and a JWT
+  (`eyJ…` in three dot-separated parts).
+
+| Text                                                    | Strength |
+| ------------------------------------------------------- | -------- |
+| A permission's message and title on the ask card        | narrow   |
+| A question's prompt, header and choices on the ask card | broad    |
+| An elicitation's own message on the ask card            | broad    |
+| `requestText` in `_hgw/activity` and in Web Push        | broad    |
+| `sessionTitle` and `agentName` in Web Push              | broad    |
+
+A masked choice is shown with ` (option N)` after it when two choices read
+the same once masked, and an answer naming the shown choice reaches the
+runtime as the choice it wrote. On Hermes, the adapter masks its own
+questions, choices and answers broadly and its approvals narrowly before the
+gateway does.
 
 ## Artifacts
 
@@ -626,8 +663,9 @@ Version 2 replaced, without compatibility, version 1's one counted message per
 category, which named no Session when it counted several.
 
 - **Text.** Every text field is one line: control and bidirectional
-  characters removed, whitespace collapsed, credentials masked as
-  `[credential redacted]`, and cut at a code-point boundary ending in `…`. An
+  characters removed, whitespace collapsed, credentials masked broadly (see
+  [Credential masking](#credential-masking)), and cut at a code-point
+  boundary ending in `…`. An
   Agent's name travels only for a visible, selectable Agent that is not the
   creator; the catalog lookup waits at most 1 s, and a slow or failed one
   sends the message without it.
