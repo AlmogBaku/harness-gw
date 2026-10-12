@@ -3,7 +3,13 @@
   "compilerOptions": {
     "types": ["bun", "node"]
   },
-  "include": ["protocol/**/*.ts", "src/**/*.ts", "test/**/*.ts"],
+  "include": [
+    "protocol/**/*.ts",
+    "src/**/*.ts",
+    "test/**/*.ts",
+    "lifecycle/**/*.test.ts",
+    "vitest.config.ts"
+  ],
   // The package test imports the browser client, so the client's tests
   // config checks it.
   "exclude": ["test/architecture/package-contents.test.ts"]

@@ -1,9 +1,12 @@
 {
-  "extends": "./tsconfig.base.json",
-  "compilerOptions": {
-    "lib": ["DOM", "ES2024", "ESNext.Disposable"],
-    "types": ["bun", "node"]
-  },
-  "include": ["**/*.ts", "**/*.mjs"],
-  "exclude": ["node_modules", "dist"]
+  // Editors and typescript-eslint type each file with the first config below
+  // that holds it, so gateway code never meets DOM types nor client code Bun's.
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.lifecycle.json" },
+    { "path": "./tsconfig.client.json" },
+    { "path": "./tsconfig.gateway.json" },
+    { "path": "./tsconfig.gateway-tests.json" },
+    { "path": "./tsconfig.client-tests.json" }
+  ]
 }

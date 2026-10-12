@@ -156,6 +156,9 @@ export default defineConfig([
         projectService: {
           // The virtual path the boundary test lints, which exists on no disk.
           allowDefaultProject: ["src/adapters/hermes/example.ts"],
+          // The root config only references the others, so the gateway's
+          // own options type that virtual file.
+          defaultProject: "tsconfig.gateway.json",
         },
       },
     },
