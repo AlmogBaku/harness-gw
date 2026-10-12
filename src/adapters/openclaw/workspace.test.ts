@@ -133,13 +133,17 @@ describe("OpenClaw workspace reads", () => {
     let rows: unknown[] = [
       row("agent:analyst:0"),
       { ...row("agent:analyst:bad"), pinned: "yes" },
+      { key: "" },
+      { ...row("agent:analyst:foreign"), agentId: "other" },
       row("agent:analyst:1"),
       row("agent:analyst:2"),
     ]
+    let pageReads = 0
     const native = gateway({})
     native.request = wireRequest(async (method: string, params: unknown) => {
       if (method === "agents.list")
         return agentCatalog([{ id: "analyst", name: "Analyst", kind: "agent" }])
+      pageReads += 1
       const { offset, limit } = params as { offset: number; limit: number }
       return { sessions: rows.slice(offset, offset + limit) }
     })
@@ -150,6 +154,8 @@ describe("OpenClaw workspace reads", () => {
     })
 
     const first = await workspace.listSessions("analyst", 2, 0)
+    // A run of bad rows costs a page, never a call per row.
+    expect(pageReads).toBe(3)
     const second = await workspace.listSessions("analyst", 2, 2)
 
     expect([...first.sessions, ...second.sessions].map(({ id }) => id)).toEqual(
@@ -244,6 +250,10 @@ describe("OpenClaw workspace reads", () => {
     await expect(
       workspace.getSession("hidden", "agent:hidden:main")
     ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())
+    // An Agent the roster leaves out adds no Sessions to the all-Agents list.
+    expect(
+      (await workspace.listAllSessions(50, 0)).sessions.map(({ id }) => id)
+    ).toEqual(["agent:analyst:main"])
 
     agents = [
       { id: "broken", name: "Broken", kind: "robot" },

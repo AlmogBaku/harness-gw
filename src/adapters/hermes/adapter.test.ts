@@ -646,9 +646,7 @@ describe("Hermes server adapter", () => {
 
     const catalog = await adapter.listAgents()
 
-    expect(catalog.agents.map(({ summary }) => summary.name)).toEqual([
-      "alpha",
-    ])
+    expect(catalog.agents.map(({ summary }) => summary.name)).toEqual(["alpha"])
     expect(
       logs.records().map(({ message, fields }) => [message, fields.profile])
     ).toEqual([
@@ -1501,13 +1499,19 @@ describe("Hermes server adapter", () => {
       good("two"),
       { ...good("bad-flag"), unread: 1 },
       { ...good("bad-title"), title: "t".repeat(4_097) },
+      // Past what a date can hold: projecting it throws.
+      { ...good("bad-time"), last_active: 1e16 },
+      { ...good("bad-owner"), profile: "someone-else" },
       good("three"),
     ]
     const http = vi.fn(async (path: string) => {
       const query = new URL(path, "http://native.test").searchParams
       const offset = Number(query.get("offset"))
       const limit = Number(query.get("limit"))
-      return { sessions: rows.slice(offset, offset + limit), total: rows.length }
+      return {
+        sessions: rows.slice(offset, offset + limit),
+        total: rows.length,
+      }
     })
     const logs = captureLogs()
     const adapter = new HermesServerAdapter(
@@ -1515,16 +1519,19 @@ describe("Hermes server adapter", () => {
       { log: logs.logger }
     )
 
-    // The second bad row is a refill page of its own: only the whole read
-    // keeping nothing is a failure.
+    // The second page is all bad rows: only the whole read keeping nothing is
+    // a failure, and a run of bad rows costs a page, never a call per row.
     const page = await adapter.listSessions("researcher", 3, 0)
 
     expect(page.sessions.map(({ id }) => id)).toEqual(["one", "two", "three"])
+    expect(http).toHaveBeenCalledTimes(3)
     expect(
       logs.records().map(({ message, fields }) => [message, fields.sessionId])
     ).toEqual([
       ["hermes.session.skipped", "bad-flag"],
       ["hermes.session.skipped", "bad-title"],
+      ["hermes.session.skipped", "bad-time"],
+      ["hermes.session.skipped", "bad-owner"],
     ])
 
     rows = [{ ...good("bad-pin"), pinned: 1 }]

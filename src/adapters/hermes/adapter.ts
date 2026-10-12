@@ -447,20 +447,25 @@ function nativeSession(profile: string, row: unknown): Session | undefined {
   )
     return undefined
   const platform = sessionPlatform(row.source)
-  const session = SessionSchema.safeParse({
-    id: sessionId(profile, storedId),
-    agentId: profile,
-    ...titled(row),
-    archived: row.archived === true,
-    ...createdAt(row.started_at),
-    ...updatedAt(row),
-    status: SETTLED,
-    ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
-    ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
-    // source carries the channel a Session came from; unknown/absent stays absent.
-    ...(platform !== undefined ? { platform } : {}),
-  })
-  return session.success ? session.data : undefined
+  try {
+    const session = SessionSchema.safeParse({
+      id: sessionId(profile, storedId),
+      agentId: profile,
+      ...titled(row),
+      archived: row.archived === true,
+      ...createdAt(row.started_at),
+      ...updatedAt(row),
+      status: SETTLED,
+      ...(typeof row.unread === "boolean" ? { unread: row.unread } : {}),
+      ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
+      // source carries the channel a Session came from; unknown/absent stays absent.
+      ...(platform !== undefined ? { platform } : {}),
+    })
+    return session.success ? session.data : undefined
+  } catch {
+    // A stored time past what a date can hold throws while projecting.
+    return undefined
+  }
 }
 
 function sessionId(_profile: string, storedId: string) {
@@ -1569,7 +1574,9 @@ export class HermesServerAdapter implements ServerRuntime {
    *
    * A row that cannot be read costs that row alone, and the next page refills
    * the gap. Only the whole read keeping nothing of the rows Hermes sent is an
-   * unreadable list: a refill page can hold as few rows as were skipped.
+   * unreadable list: a refill page can hold nothing but skipped rows. Pages
+   * keep one size, so a run of skipped rows costs a page rather than a call
+   * per row, and no row past the catalog window is read, since none is shown.
    */
   async #sessionPrefix(
     profile: string,
@@ -1583,8 +1590,12 @@ export class HermesServerAdapter implements ServerRuntime {
     let total = 0
     let read = 0
     let exhausted = false
+    const limit = Math.min(100, length)
     while (sessions.length < length) {
-      const limit = Math.min(100, length - sessions.length)
+      if (offset >= SESSION_CATALOG_MAX_WINDOW) {
+        exhausted = true
+        break
+      }
       const page = await this.#nativeSessionPage(profile, limit, offset)
       total = page.total
       read += Math.min(limit, page.rows)
@@ -1601,9 +1612,10 @@ export class HermesServerAdapter implements ServerRuntime {
       if (offset >= total) break
     }
     if (read > 0 && sessions.length === 0) throw new HermesUnavailableError()
-    return exhausted
-      ? { sessions, total: sessions.length }
-      : { sessions: sessions.slice(0, length), total }
+    return {
+      sessions: sessions.slice(0, length),
+      total: exhausted ? sessions.length : total,
+    }
   }
 
   async listSessions(profile: string, limit: number, offset: number) {

@@ -370,15 +370,21 @@ export function createOpenClawWorkspace(input: {
    * so that offsets count the rows kept, as the gateway's cursor does. A row
    * that is not one of the Agent's Sessions costs that row alone; the read
    * goes on by OpenClaw's own row count, and only the whole read keeping
-   * nothing of the rows OpenClaw sent is unreadable.
+   * nothing of the rows OpenClaw sent is unreadable. Pages keep one size, so
+   * a run of skipped rows costs a page rather than a call per row, and no row
+   * past the catalog window is read, since none is shown.
    */
   const fetchPrefix = async (agentId: string, prefix: number) => {
     const sessions: Session[] = []
+    const pageLimit = Math.min(MAX_SESSION_PAGE, prefix)
     let pageOffset = 0
     let read = 0
     let hasMore = false
     while (sessions.length < prefix) {
-      const pageLimit = Math.min(MAX_SESSION_PAGE, prefix - sessions.length)
+      if (pageOffset >= SESSION_CATALOG_MAX_WINDOW) {
+        hasMore = false
+        break
+      }
       const rows = openClawSessionRows(
         await input.client.request(
           "sessions.list",
@@ -397,7 +403,10 @@ export function createOpenClawWorkspace(input: {
     }
     if (read > 0 && sessions.length === 0)
       throw new OpenClawWorkspaceUnavailableError()
-    return { sessions, hasMore }
+    return {
+      sessions: sessions.slice(0, prefix),
+      hasMore: hasMore || sessions.length > prefix,
+    }
   }
   const requirePage = (limit: number, offset: number) => {
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SESSION_PAGE)

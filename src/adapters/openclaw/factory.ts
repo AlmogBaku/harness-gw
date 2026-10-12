@@ -266,8 +266,7 @@ export async function createOpenClawRuntime(
   limits: RuntimeLimits,
   dependencies: OpenClawRuntimeFactoryDependencies
 ): Promise<RuntimeInstance> {
-  const credentials = () =>
-    readOpenClawCredentials(config, dependencies.credentials)
+  const credentials = () => readOpenClawCredentials(config, dependencies.credentials)
   // Read once here so a bad identity fails startup; every dial reads again.
   await credentials()
   const { logger } = dependencies
