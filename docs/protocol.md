@@ -399,7 +399,7 @@ as a `running` update followed by an `_hgw_error` idle update for the same
 | `_hgw/session/focus`   | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — a client may send `{}` as its liveness probe. (`HgwFocusRequestSchema`, `protocol/acp.ts`) |
 | `_hgw/sessions/search` | Find Sessions matching a query; see [Session search](#session-search) (`HgwSessionSearchMetaSchema`, `protocol/acp.ts`)                                                                              |
 | `_hgw/agents/list`     | Fetch the agent catalog                                                                                                                                                                              |
-| `_hgw/agents/update`   | Write visibility and/or avatar; compare-and-set on the observed revision (`HgwAgentUpdateRequestSchema`, `protocol/acp.ts`)                                                                          |
+| `_hgw/agents/update`   | Write visibility, avatar and/or `muted`; compare-and-set on the observed revision (`HgwAgentUpdateRequestSchema`, `protocol/acp.ts`)                                                                 |
 
 #### Session search
 
@@ -420,6 +420,25 @@ Hermes answers from its own search, which matches Session ids and message
 content; its rows carry no read state, so a Session's known `unread` stands.
 Every other runtime matches titles, ignoring case: OpenCode over its own
 Sessions, and OpenClaw over the first 1000 Sessions the list serves.
+
+#### Agent updates and mute
+
+`_hgw/agents/update` takes `{ agentId, revision }` and at least one of
+`visibility`, `avatar` (`null` clears it) and `muted` (`AgentUpdateFields`,
+`protocol/index.ts`); any field alone is a valid update. `muted: true` mutes
+the Agent's Web Push notifications and `muted: false` unmutes them. A runtime
+that cannot store a field it is sent refuses the whole update as
+`unsupported` rather than writing the rest.
+
+Every `_hgw/agents/list` entry carries `muteEditable`, whether the runtime can
+store a mute for that Agent, beside `editable` and `avatarEditable`. Its
+`summary` carries `muted: true` while the Agent is muted, and no `muted` key
+when it is not. Only Hermes stores a mute; see
+[the runtime notes](runtimes/hermes.md#agent-icons-and-mute).
+
+A successful update tells every operator connection
+`_hgw/catalog_invalidated`, and push delivery applies it from the next
+notification (see [Web Push payload](#web-push-payload)).
 
 ### Notifications (no response expected)
 
@@ -665,10 +684,17 @@ category, which named no Session when it counted several.
 - **Text.** Every text field is one line: control and bidirectional
   characters removed, whitespace collapsed, credentials masked broadly (see
   [Credential masking](#credential-masking)), and cut at a code-point
-  boundary ending in `…`. An
-  Agent's name travels only for a visible, selectable Agent that is not the
-  creator; the catalog lookup waits at most 1 s, and a slow or failed one
-  sends the message without it.
+  boundary ending in `…`. An Agent's name travels only for a visible,
+  selectable Agent that is not the creator.
+- **Quiet Agents.** No message is sent for an Agent that is muted, or hidden
+  and not the creator. A creator's Session, and an Agent the catalog does not
+  hold, still send, unnamed. The gateway learns this from the Agent catalog on
+  every delivery: one read answers for 60 s, a delivery waits at most 1 s for
+  a new one, and a slow or failed read leaves the last read that succeeded to
+  answer, however old. With no read ever succeeded, the message goes without
+  a name. An Agent update made through the gateway applies from the next
+  delivery, even while reads fail. A skipped Session is logged with its count
+  only, never its Agent.
 - **Fresh devices.** Only a registration stored in the last 30 days receives
   `agentName`, `sessionTitle`, `requestText` and `requestMore`; an older one
   receives the ids alone until the browser registers it again with

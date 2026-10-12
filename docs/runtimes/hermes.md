@@ -257,24 +257,28 @@ credentials for its model: Hermes copies a new profile's model block but not
 its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
 another profile's tokens into it.
 
-## Agent icons
+## Agent icons and mute
 
 Each Agent's icon is an opaque `silhouette/tone` token stored in
 `ui_meta.aos.avatar` of the profile. A stored value that does not match
-`/^[a-z0-9-]{1,32}\/[a-z0-9-]{1,32}$/` reads as no icon.
+`/^[a-z0-9-]{1,32}\/[a-z0-9-]{1,32}$/` reads as no icon. A muted Agent has
+`ui_meta.aos.muted: true`, which the catalog reports as `summary.muted: true`;
+any other value reads as not muted.
 
 The Agent revision used for the compare-and-set is composite:
 `hermes-bots:N,aos:M`, where `N` and `M` are the per-namespace CAS counters
 that `profiles.list` returns in `ui_meta_revisions`.
 
-`_hgw/agents/update` writes the avatar (and optionally visibility) with one
+`_hgw/agents/update` writes the avatar, the mute, and visibility with one
 `profiles.configure` call. That call sends only the `ui_meta` namespaces the
-patch touches, each paired with its current `ui_meta_expected_revisions` entry,
-so unrelated `aos` keys such as `role` survive intact. Passing `null` for the
-avatar removes the key.
+patch touches, each paired with its current `ui_meta_expected_revisions` entry.
+The `aos` namespace is written whole from the stored keys, so `role` survives
+and a patch carrying both an avatar and a mute writes both. Passing `null` for
+the avatar removes that key, and `muted: false` removes `muted`. The update
+re-lists the profiles and fails unless they show every field it wrote.
 
-`avatarEditable` equals `editable` for every profile. The creator profile is
-never writable.
+`avatarEditable` and `muteEditable` equal `editable` for every profile. The
+creator profile is never writable.
 
 Session `createdAt` comes from the Session row's `started_at` (epoch seconds).
 
@@ -285,7 +289,7 @@ visibility uses.
 
 ## Operational behavior
 
-- Native profiles form the AOS Agent catalog and can expose Agent updates (visibility and avatar).
+- Native profiles form the AOS Agent catalog and can expose Agent updates (visibility, avatar, and mute).
 - Native CLI or cron Sessions may appear in AOS even when the client did not create them.
 - Activity is workspace-wide: the feed covers every Session the connection may observe.
 - ACP v2 starts or resumes a run and carries its server-to-client event stream.
