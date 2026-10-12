@@ -121,6 +121,7 @@ function entry(
     selectable: true,
     editable: true,
     avatarEditable: false,
+    muteEditable: false,
     revision: "revision-1",
     ...overrides,
   }

@@ -2199,6 +2199,7 @@ describe("Hermes server adapter", () => {
           selectable: true,
           editable: true,
           avatarEditable: true,
+          muteEditable: true,
           revision: "hermes-bots:7,aos:0",
         },
       ],

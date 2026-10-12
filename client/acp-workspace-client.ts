@@ -374,12 +374,20 @@ export function createAcpWorkspaceClient({
     },
     async listAgentCatalog() {
       return (await catalog()).agents.map(
-        ({ summary, visibility, selectable, editable, avatarEditable }) => ({
+        ({
           summary,
           visibility,
           selectable,
           editable,
           avatarEditable,
+          muteEditable,
+        }) => ({
+          summary,
+          visibility,
+          selectable,
+          editable,
+          avatarEditable,
+          muteEditable,
         })
       )
     },

@@ -263,7 +263,7 @@ function isUnpersistedDraft(
   )
 }
 
-/** The `ui_meta` namespaces AOS writes: visibility and the avatar. */
+/** The `ui_meta` namespaces AOS writes: visibility, and the avatar and mute. */
 const UI_META_KEYS = ["hermes-bots", "aos"] as const
 type UiMetaKey = (typeof UI_META_KEYS)[number]
 type UiMetaRevisions = Record<UiMetaKey, number>
@@ -330,11 +330,13 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
       visibility,
       ...(creator ? { role: "creator" as const } : {}),
       ...(avatar.success ? { avatar: avatar.data } : {}),
+      ...(aos.muted === true ? { muted: true as const } : {}),
     },
     visibility,
     selectable: visibility === "visible" && !creator,
     editable,
     avatarEditable: editable,
+    muteEditable: editable,
     revision: agentRevision(revisions),
   }
 }

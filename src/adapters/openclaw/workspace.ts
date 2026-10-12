@@ -112,6 +112,8 @@ function projectAgent(agent: OpenClawAgent, configured: ReadonlySet<string>) {
     // Only an Agent with its own authored entry can take a merge-by-id patch;
     // the implicit default Agent has none.
     avatarEditable: !creator && configured.has(agent.id),
+    // OpenClaw has no native place to keep a mute.
+    muteEditable: false,
     revision: revision(agent),
   }
 }

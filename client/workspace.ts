@@ -12,6 +12,8 @@ export type AgentVisibility = "visible" | "hidden"
 export type AgentUpdate = {
   visibility?: AgentVisibility
   avatar?: string | null
+  /** Mutes the Agent's notifications, or with `false` unmutes them. */
+  muted?: boolean
 }
 
 /** Actionable Agent update refusals; all other failures remain ordinary Errors. */

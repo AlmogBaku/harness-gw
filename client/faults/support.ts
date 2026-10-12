@@ -35,6 +35,7 @@ export function connectBrowser<T extends Harness>(test: T) {
         selectable: true,
         editable: false,
         avatarEditable: false,
+        muteEditable: false,
         revision: "rev-1",
       },
     ],

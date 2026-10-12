@@ -1535,6 +1535,7 @@ describe("Agent updates", () => {
     selectable: false,
     editable: true,
     avatarEditable: true,
+    muteEditable: true,
     revision: "rev-2",
   }
 

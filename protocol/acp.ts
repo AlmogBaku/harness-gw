@@ -355,10 +355,10 @@ export const HgwFocusRequestSchema = z.strictObject({
 // ---------------------------------------------------------------------------
 
 export const HgwAgentsListResponseSchema = AgentCatalogResponseSchema
-/** `_hgw/agents/update` params: at least one of visibility and avatar. */
+/** `_hgw/agents/update` params: at least one of visibility, avatar, and muted. */
 export const HgwAgentUpdateRequestSchema = z
   .strictObject({ agentId: IdentifierSchema, ...AgentUpdateFields })
-  .refine(writesAgentField, "At least one of visibility, avatar")
+  .refine(writesAgentField, "At least one of visibility, avatar, muted")
 export type HgwAgentUpdateRequest = z.infer<typeof HgwAgentUpdateRequestSchema>
 export const HgwAgentUpdateResponseSchema = AgentUpdateResponseSchema
 

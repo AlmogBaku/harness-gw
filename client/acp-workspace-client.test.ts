@@ -183,6 +183,7 @@ function catalogEntry() {
     selectable: true,
     editable: true,
     avatarEditable: true,
+    muteEditable: true,
     revision: "revision-1",
   }
 }
@@ -1233,7 +1234,9 @@ describe("ACP workspace client", () => {
   })
 
   it("creates Sessions, reports focus, steers, and tracks catalog revisions", async () => {
-    const { client, argsOf, calls } = createClient()
+    const { client, argsOf, calls, setAgents } = createClient()
+    const muted = catalogEntry()
+    setAgents([{ ...muted, summary: { ...muted.summary, muted: true } }])
 
     await expect(
       client.createSession(AGENT_ID, { title: "Weekly report" })
@@ -1260,15 +1263,19 @@ describe("ACP workspace client", () => {
     ).rejects.toThrow(/revision/)
     await expect(client.listAgentCatalog()).resolves.toEqual([
       {
-        summary: expect.objectContaining({ avatar: "ring/blue" }) as unknown,
+        summary: expect.objectContaining({
+          avatar: "ring/blue",
+          muted: true,
+        }) as unknown,
         visibility: "visible",
         selectable: true,
         editable: true,
         avatarEditable: true,
+        muteEditable: true,
       },
     ])
     await client.updateAgent(AGENT_ID, { visibility: "hidden", avatar: null })
-    await client.updateAgent(AGENT_ID, { visibility: "visible" })
+    await client.updateAgent(AGENT_ID, { muted: false })
     expect(
       calls
         .filter((call) => call.method === "updateAgent")
@@ -1280,7 +1287,7 @@ describe("ACP workspace client", () => {
         avatar: null,
         revision: "revision-1",
       },
-      { agentId: AGENT_ID, visibility: "visible", revision: "revision-3" },
+      { agentId: AGENT_ID, muted: false, revision: "revision-3" },
     ])
   })
 
