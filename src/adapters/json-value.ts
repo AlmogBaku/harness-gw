@@ -4,12 +4,11 @@
  * A native payload is provider data a browser reads, so its copy is bounded
  * before it leaves the adapter: nesting past `MAX_DEPTH` is dropped, each
  * array and object keeps its first `MAX_ENTRIES` entries, a string longer than
- * `MAX_STRING_LENGTH` is dropped, a key naming a credential or provider-private
- * data is dropped with its value, and a copy that still serializes past
- * `MAX_JSON_BYTES` of UTF-8 is no copy at all.
+ * `MAX_STRING_LENGTH` is dropped, a key naming provider-private data is dropped
+ * with its value, and a copy that still serializes past `MAX_JSON_BYTES` of
+ * UTF-8 is no copy at all. Credentials are the translate step's to mask, for
+ * every runtime alike.
  */
-
-import { SECRET_TERMS } from "../redaction"
 
 export type JsonValue =
   | null
@@ -23,7 +22,7 @@ const MAX_DEPTH = 8
 const MAX_ENTRIES = 100
 const MAX_STRING_LENGTH = 4_000
 const MAX_JSON_BYTES = 262_144
-const PRIVATE_TERMS = [...SECRET_TERMS, "metadata", "path", "url"]
+const PRIVATE_TERMS = ["metadata", "path", "url"]
 
 /** Whether a key, lowercased with `-`, `_`, and spaces removed, ends in a private term. */
 function isPrivateKey(key: string) {

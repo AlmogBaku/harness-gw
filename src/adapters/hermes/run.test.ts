@@ -1723,46 +1723,26 @@ describe("HermesRunEngine", () => {
     })
   })
 
-  it("projects bounded inspectable tool data while redacting credentials, credential environment assignments, and provider metadata without hiding safe lookalike keys", async () => {
-    const credentials = [
-      "OPENAI_API_KEY=ordinary-value",
-      "SERVICE_API_KEY=ordinary-value",
-      "AWS_ACCESS_KEY_ID=ordinary-value",
-      "CLIENT_SECRET_KEY=ordinary-value",
-      "SESSION_TOKEN=ordinary-value",
-      "NPM_CONFIG_USERCONFIG=ordinary-value",
-      "NPM_CONFIG__AUTH=ordinary-value",
-      "MYSQL_PWD=ordinary-value",
-      "PASSWORD_HASH=ordinary-value",
-      "SSH_PRIVATE_KEY_B64=ordinary-value",
-    ]
-    const safe =
-      "type x:string; variant A:control; ratio x:y; C:drive-relative; TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
+  // The translate step masks credentials for every runtime; the adapter only
+  // keeps what an operator reads and drops what a provider keeps to itself.
+  it("projects inspectable tool data with its paths and URLs, dropping provider metadata", async () => {
     const events = await streamedTurn((t) => [
       t.messageStart("message-42"),
       t.frame("tool.complete", {
         tool_id: "call-7",
         name: "search",
         args: {
-          query: "OPENAI_API_KEY=sk-query-secret",
           pattern:
             "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
           path: "/srv/private/workspace",
-          apiToken: "secret-token",
           native_metadata: { live_session_id: "live-secret" },
         },
         result: {
           status: "ok",
           sourceUrl: "https://provider.invalid/private",
           filesystem_path: "/srv/private/result.txt",
-          access_token: "bearer-secret",
-          summary:
-            "TOKEN=summary-secret; see:https://provider.invalid,(/srv/private/result.txt),./relative,~/home,C:\\private\\x,\\\\host\\share",
         },
       }),
-      ...[...credentials, safe].map((query, index) =>
-        t.toolStart(`env-call-${index}`, "search", { query })
-      ),
       t.frame("message.complete", {}),
     ])
 
@@ -1770,11 +1750,9 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.ToolCallInputChunk,
       toolCallId: "call-7",
       delta: JSON.stringify({
-        query: "OPENAI_API_KEY=[REDACTED]",
         pattern:
           "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
         path: "/srv/private/workspace",
-        apiToken: "[REDACTED]",
       }),
     })
     expect(events).toContainEqual({
@@ -1784,34 +1762,10 @@ describe("HermesRunEngine", () => {
         status: "ok",
         sourceUrl: "https://provider.invalid/private",
         filesystem_path: "/srv/private/result.txt",
-        access_token: "[REDACTED]",
-        summary:
-          "TOKEN=[REDACTED] see:https://provider.invalid,(/srv/private/result.txt),./relative,~/home,C:\\private\\x,\\\\host\\share",
       }),
       failed: false,
     })
     expect(JSON.stringify(events)).not.toContain("live-secret")
-    expect(JSON.stringify(events)).not.toContain("bearer-secret")
-    expect(JSON.stringify(events)).not.toContain("sk-query-secret")
-    expect(JSON.stringify(events)).not.toContain("summary-secret")
-    expect(JSON.stringify(events)).toContain("[REDACTED]")
-    const environmentDeltas = ofKind(events, TurnEventKind.ToolCallInputChunk)
-      .filter((event) =>
-        String((event as { toolCallId: string }).toolCallId).startsWith(
-          "env-call-"
-        )
-      )
-      .map((event) => (event as { delta: string }).delta)
-    expect(environmentDeltas).toEqual([
-      ...credentials.map((credential) =>
-        JSON.stringify({
-          query: credential.replace("ordinary-value", "[REDACTED]"),
-        })
-      ),
-      JSON.stringify({ query: safe }),
-    ])
-    for (const credential of credentials)
-      expect(JSON.stringify(events)).not.toContain(credential)
   })
 
   it("bounds multibyte and deeply nested tool output", async () => {
@@ -5442,7 +5396,6 @@ describe("Hermes native provider facts", () => {
         changes: [{ operation: "modify", path: "/workspace/.env" }],
       },
     ])
-    expect(JSON.stringify(events)).not.toContain("leaked")
   })
 
   it("streams a background process as the terminal of its call", async () => {

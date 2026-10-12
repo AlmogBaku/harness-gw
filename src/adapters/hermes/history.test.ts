@@ -823,7 +823,9 @@ describe("server-side Hermes history projection", () => {
     }
   )
 
-  it("preserves inspectable tool data while redacting credentials and provider metadata", () => {
+  // Credentials are masked in translate, for every runtime; this adapter drops
+  // only what the provider keeps to itself.
+  it("preserves inspectable tool data while dropping provider metadata", () => {
     const messages = projectHermesHistory([
       {
         id: "assistant-1",
@@ -842,12 +844,10 @@ describe("server-side Hermes history projection", () => {
                   provider_url: "http://127.0.0.1:9000/native",
                   details: {
                     language: "en",
-                    authorization: "Bearer nested-private-token",
                     stored_session_id: "stored-session-secret",
                   },
                 },
                 session_id: "live-session-secret",
-                credentials: { token: "secret-token" },
               }),
             },
           },
@@ -878,7 +878,6 @@ describe("server-side Hermes history projection", () => {
               metadata: { authorization: "Bearer private-token" },
             },
           ],
-          credential: "private-password",
         }),
       },
       {
@@ -888,7 +887,7 @@ describe("server-side Hermes history projection", () => {
         content: JSON.stringify({
           answer: "native payload",
           path: "/srv/private/output",
-          nested: { sessionId: "live-session-secret", token: "secret-token" },
+          nested: { sessionId: "live-session-secret" },
         }),
       },
     ])
@@ -905,12 +904,8 @@ describe("server-side Hermes history projection", () => {
             path: "/srv/hermes/private",
             privatePath: "workspace-relative/private.txt",
             provider_url: "http://127.0.0.1:9000/native",
-            details: {
-              language: "en",
-              authorization: "[REDACTED]",
-            },
+            details: { language: "en" },
           },
-          credentials: "[REDACTED]",
         },
         result: {
           ok: true,
@@ -921,7 +916,6 @@ describe("server-side Hermes history projection", () => {
               provider_url: "http://hermes.internal/result/1",
             },
           ],
-          credential: "[REDACTED]",
         },
       },
       {
@@ -935,7 +929,7 @@ describe("server-side Hermes history projection", () => {
         result: {
           answer: "native payload",
           path: "/srv/private/output",
-          nested: { token: "[REDACTED]" },
+          nested: {},
         },
       },
     ])
@@ -944,12 +938,10 @@ describe("server-side Hermes history projection", () => {
       "live-session-secret",
       "private-token",
       "stored-session-secret",
-      "private-password",
       "native_position",
       "metadata",
     ])
       expect(serialized).not.toContain(leak)
-    expect(serialized).toContain("[REDACTED]")
   })
 
   it.each([

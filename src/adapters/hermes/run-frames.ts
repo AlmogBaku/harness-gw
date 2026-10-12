@@ -20,7 +20,8 @@ import {
   utf8BytesWithin,
 } from "./native"
 import { parseJsonOrValue } from "../todos"
-import { publicPath, stringContainsCredential } from "./tool-data"
+import { containsCredential } from "../../redaction"
+import { publicPath } from "./tool-data"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
 const MAX_PREACTIVE_EVENTS = 4_096
@@ -231,7 +232,7 @@ function count(value: unknown) {
 
 function publicProse(value: unknown) {
   const text = boundedText(value)
-  return text && !stringContainsCredential(text) ? text : undefined
+  return text && !containsCredential(text) ? text : undefined
 }
 
 function publicPaths(value: unknown) {

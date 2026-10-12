@@ -4,7 +4,7 @@
  * must provide a local wrapper rather than changing these shared shapes.
  */
 
-import { containsCredential } from "../../credentials"
+import { containsCredential } from "../../redaction"
 
 // ---------------------------------------------------------------------------
 // Type guards
@@ -64,20 +64,15 @@ export function trimmedText(value: unknown) {
 const PRIVATE_LOCATION_VALUE =
   /(?:^|[\s("'=])(?:\/(?:etc|home|root|srv|tmp|var)\/|[A-Za-z]:\\|file:\/\/|https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|[^/\s]*(?:hermes|internal|\.local))(?:[/:]|$))/iu
 
-/** True when a native string carries a credential-shaped secret. */
-export function containsCredentialValue(value: string) {
-  return containsCredential(value)
-}
-
 /**
  * True when a native string looks like a credential or a private filesystem or
  * internal-network location. It guards what the guest listener may receive from
  * the adapter: published artifact identities. Operator-only data (tool calls,
- * diffs, locations, failure details) is held to `containsCredentialValue`
+ * diffs, locations, failure details) is held to `containsCredential`
  * alone, because the guest projection never forwards it.
  */
 export function containsPrivateValue(value: string) {
-  return containsCredentialValue(value) || PRIVATE_LOCATION_VALUE.test(value)
+  return containsCredential(value) || PRIVATE_LOCATION_VALUE.test(value)
 }
 
 // ---------------------------------------------------------------------------

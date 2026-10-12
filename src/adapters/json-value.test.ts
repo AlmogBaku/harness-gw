@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { publicJsonValue } from "./json-value"
 
 describe("publicJsonValue", () => {
-  it("bounds a native value's depth, entries, and private keys", () => {
+  it("bounds a native value's depth, entries, and provider-private keys", () => {
     let deep: unknown = "leaf"
     for (let level = 0; level < 10; level += 1) deep = { next: deep }
     let kept: unknown = publicJsonValue(deep)
@@ -20,10 +20,8 @@ describe("publicJsonValue", () => {
     expect(
       publicJsonValue({
         label: "kept",
-        apiToken: "synthetic-token",
-        api_key: "synthetic-key",
-        clientSecret: "synthetic-secret",
         filePath: "/synthetic/path",
+        sourceUrl: "https://synthetic.invalid",
         providerMetadata: {},
       })
     ).toEqual({ label: "kept" })

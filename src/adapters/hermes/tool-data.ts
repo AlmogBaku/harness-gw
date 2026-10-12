@@ -17,11 +17,10 @@ import {
   type ToolDiff,
   type ToolLocation,
 } from "../../core/events"
-import { SECRET_TERMS } from "../../redaction"
+import { containsCredential } from "../../redaction"
 
 import {
   boundedGraphBytes,
-  containsCredentialValue,
   isRecord,
   parseJson,
   trimmedText,
@@ -29,11 +28,6 @@ import {
   utf8BytesWithin,
 } from "./native"
 import { parseJsonOrValue } from "../todos"
-import {
-  isCredentialPlaceholder,
-  REDACTED,
-  redactCredentials,
-} from "../../credentials"
 import {
   projectHermesMediaArtifacts,
   type HermesMediaOptions,
@@ -88,16 +82,15 @@ const FILE_TOOLS = new Set(["read_file", "write_file", "patch"])
 
 /**
  * An absolute path that may leave the adapter: any one carrying no credential,
- * and none a projection already masked, since that no longer names the file.
- * Tool data reaches only the operator listener, which sees the Agent's real
- * paths; the guest projection drops tool calls before a path could reach it.
+ * since masked it would no longer name the file. Tool data reaches only the
+ * operator listener, which sees the Agent's real paths; the guest projection
+ * drops tool calls before a path could reach it.
  */
 export function publicPath(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value.startsWith("/") &&
-    !value.includes(REDACTED) &&
-    !containsCredentialValue(value)
+    !containsCredential(value)
   )
 }
 
@@ -161,7 +154,7 @@ function gitPatch(diff: unknown) {
   return typeof diff === "string" &&
     diff.startsWith("--- a/") &&
     !/^# /mu.test(diff) &&
-    !stringContainsCredential(diff)
+    !containsCredential(diff)
     ? diff
     : undefined
 }
@@ -183,32 +176,6 @@ const MAX_KEY_LENGTH = 128
 const MAX_STRING_LENGTH = 4_000
 const MAX_TOTAL_STRING_LENGTH = 8_000
 
-const SAFE_CREDENTIAL_LIKE_KEYS = new Set([
-  "accesskeyrotation",
-  "authmode",
-  "authorizationmode",
-  "oauth",
-  "oauthmode",
-  "secretary",
-  "tokencount",
-  "tokenlimit",
-  "tokenusage",
-])
-const CREDENTIAL_WRAPPERS = new Set([
-  "b64",
-  "base64",
-  "ciphertext",
-  "digest",
-  "encoded",
-  "encrypted",
-  "file",
-  "hash",
-  "hashed",
-  "path",
-  "salt",
-  "sha256",
-  "value",
-])
 type ProjectionState = {
   entries: number
   stringLength: number
@@ -217,32 +184,6 @@ type ProjectionState = {
 
 function normalizedKey(key: string) {
   return key.replace(/[^a-z0-9]/giu, "").toLowerCase()
-}
-
-function credentialToolKey(key: string) {
-  const words = key
-    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/gu)
-    .filter(Boolean)
-  const normalized = words.join("")
-  if (SAFE_CREDENTIAL_LIKE_KEYS.has(normalized)) return false
-  while (words.length > 1 && CREDENTIAL_WRAPPERS.has(words.at(-1) ?? ""))
-    words.pop()
-  const core = words.join("")
-  const prefix = words.slice(0, 2).join("")
-  const suffix = words.slice(-2).join("")
-  return (
-    core === "npmconfiguserconfig" ||
-    SECRET_TERMS.some(
-      (term) =>
-        core === term ||
-        core.endsWith(term) ||
-        words[0] === term ||
-        prefix === term ||
-        suffix === term
-    )
-  )
 }
 
 function providerPrivateKey(key: string) {
@@ -256,35 +197,13 @@ function providerPrivateKey(key: string) {
   )
 }
 
-const ASSIGNMENT =
-  /(^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*["'`]?)([^\s"'`]+)/gu
-
-/**
- * Native text as a tool projection shows it: each credential-shaped value, and
- * each value assigned to a credential-named variable, masked in place. A value
- * that only names a secret (`$TOKEN`) stays readable.
- */
-export function redactedText(value: string) {
-  return redactCredentials(value).replace(
-    ASSIGNMENT,
-    (match, lead: string, key: string, operator: string, secret: string) =>
-      credentialToolKey(key) && !isCredentialPlaceholder(secret)
-        ? `${lead}${key}${operator}${REDACTED}`
-        : match
-  )
-}
-
-export function stringContainsCredential(value: string) {
-  return redactedText(value) !== value
-}
-
 function projectString(value: string, state: ProjectionState) {
   const available = Math.max(
     0,
     Math.min(MAX_STRING_LENGTH, MAX_TOTAL_STRING_LENGTH - state.stringLength)
   )
   if (available === 0) return TRUNCATED
-  const projected = truncateString(redactedText(value), available)
+  const projected = truncateString(value, available)
   state.stringLength += projected.length
   return projected
 }
@@ -342,10 +261,6 @@ function projectValue(
     }
     if (key.length > MAX_KEY_LENGTH || providerPrivateKey(key)) continue
     state.entries += 1
-    if (credentialToolKey(key)) {
-      result[key] = REDACTED
-      continue
-    }
     let item: unknown
     try {
       item = Reflect.get(value, key)
@@ -393,8 +308,9 @@ function project(value: unknown) {
 
 /**
  * Projects operator-visible tool arguments without carrying provider session
- * metadata or credentials into the browser. Guest projections discard tool
- * calls before reaching this boundary.
+ * metadata into the browser; the gateway's translate step masks credentials
+ * for every runtime. Guest projections discard tool calls before reaching this
+ * boundary.
  */
 function projectHermesToolArgs(value: unknown): HermesPublicJsonRecord {
   const projected = project(value)
@@ -596,7 +512,7 @@ function publicAnswer(value: unknown) {
   return typeof value === "string" &&
     value.length > 0 &&
     value.length <= MAX_PUBLIC_ANSWER_LENGTH &&
-    !stringContainsCredential(value)
+    !containsCredential(value)
     ? value
     : undefined
 }

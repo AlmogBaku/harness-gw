@@ -10,7 +10,8 @@
  */
 import type { TURN_FAILURES as SHARED_TURN_FAILURES } from "../../core/failures"
 import { redactForLog } from "../../redaction"
-import { containsCredentialValue, trimmedText } from "./native"
+import { containsCredential } from "../../redaction"
+import { trimmedText } from "./native"
 import { stableNativeId } from "./run-frames"
 
 const MAX_LOGGED_NATIVE_CHARS = 200
@@ -186,7 +187,7 @@ export function publicDetail(value: unknown) {
   const native = trimmedText(value)
   if (native === undefined) return undefined
   const detail = native.slice(0, MAX_PUBLIC_DETAIL_CHARS).trim()
-  return containsCredentialValue(detail) ? undefined : detail
+  return containsCredential(detail) ? undefined : detail
 }
 
 /**
