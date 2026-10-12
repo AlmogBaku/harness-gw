@@ -271,6 +271,11 @@ the runtime confirms it stored the prompt. Attachment content referenced by
 `resource_link` blocks uses the `hgw-attachment:` URI scheme
 (`HGW_ATTACHMENT_URI_SCHEME`, `protocol/acp.ts`).
 
+A prompt carries `text` and `resource_link` blocks. The gateway advertises no
+prompt capability, so an `image`, `audio` or `resource` block answers `-32602`
+invalid params. A block of a type ACP has not defined, an `_`-prefixed extension
+or a later variant, is skipped and the rest of the prompt is sent.
+
 ### Response `_meta.hgw` shapes
 
 **`session/new`** response: `{ sessionId }` as a top-level result field, with no

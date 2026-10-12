@@ -55,7 +55,7 @@ import {
 } from "./agent-sessions"
 import {
   echoedParts,
-  isPromptBlock,
+  isUnadvertisedBlock,
   promptParts,
   promptText,
 } from "./prompt-content"
@@ -706,7 +706,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params, client, signal, requestId }) => {
       admit(methods.agent.session.prompt, "send")
       const meta = parseMeta(HgwPromptMetaSchema, params._meta)
-      if (!params.prompt.every(isPromptBlock)) throw invalidParams()
+      if (params.prompt.some(isUnadvertisedBlock)) throw invalidParams()
       const text = promptText(params.prompt)
       // A turn of attachments alone carries no text: its stage supplies the turn,
       // or, for a rewind, the turn it replaces.

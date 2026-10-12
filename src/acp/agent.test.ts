@@ -1,4 +1,5 @@
 import {
+  type ContentBlock,
   methods,
   RequestError,
   type RequestPermissionResponse,
@@ -2504,6 +2505,46 @@ describe("Session rooms", () => {
     await test.list()
 
     await expect(prompt(test, [])).rejects.toMatchObject(INVALID_PARAMS)
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  // ACP reserves `_` types for extensions and the rest for later variants, so
+  // a prompt carrying one is the prompt it was without it.
+  it("sends a prompt without the items ACP has not defined", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+
+    await prompt(test, [
+      { type: "text", text: "Summarize" },
+      { type: "_vendor_note", note: "from the vendor's client" },
+      // On the wire a later variant is plain JSON; only the SDK's parser
+      // brands it as one.
+      { type: "future_block", text: "a later ACP variant" } as ContentBlock,
+    ])
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    expect(test.start.mock.calls[0]?.[1]).toMatchObject({ prompt: "Summarize" })
+    test.close()
+  })
+
+  // Each needs a prompt capability the gateway never advertises.
+  it("refuses an inline image, audio clip or embedded file", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const text = { type: "text" as const, text: "Summarize" }
+
+    for (const block of [
+      { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" },
+      { type: "audio" as const, data: "YXVkaW8=", mimeType: "audio/wav" },
+      {
+        type: "resource" as const,
+        resource: { uri: "file:///notes.txt", text: "notes" },
+      },
+    ])
+      await expect(prompt(test, [text, block])).rejects.toMatchObject(
+        INVALID_PARAMS
+      )
     expect(test.start).not.toHaveBeenCalled()
     test.close()
   })
