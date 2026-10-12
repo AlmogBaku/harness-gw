@@ -594,6 +594,30 @@ on its own listener, a guest with its invitation token as a Bearer
 `Authorization` header. The gateway resolves the id only against that Session's
 own provider history.
 
+### Stored user images
+
+A user image the provider stored inline in its transcript replays as an
+Artifact `resource_link` on its `user_message_chunk`, never as an ACP `image`
+block, so no image's bytes travel on the shared socket
+(`src/core/history-image-artifacts.ts`). The images are a Hermes `image_url`
+part or an OpenCode prompt file, stored as a `data:` URL.
+
+- **Id:** `hgw-image-` and 32 hex characters of a SHA-256 over the provider
+  Session id, the data URL, and the part's place in its message.
+- **Name and type:** `name` is the part's own filename or `image.<ext>`.
+  `mimeType` appears only for PNG, JPEG, GIF, WebP, and BMP.
+- **Reading:** a client reads the bytes from the same Artifact route. The
+  gateway re-reads the history page that showed the image, or the newest four
+  pages when it has not placed the id. It answers 404 `not_found` for an image
+  none of them holds.
+- **Hermes:** a row that also carries the image's `@image:` directive replays
+  that directive's Artifact instead.
+- **Size:** a stored history image may be up to 35,000,000 characters as a
+  data URL, the same cap as a staged attachment.
+
+On the guest listener, Artifact reads share a per-invitation budget of 16 in
+flight and 600 per 10 minutes. Past it, the route answers 503 `rate_limited`.
+
 ## Interactions: permission and elicitation
 
 ACP delivers pending interactions as `session/request_permission` or
