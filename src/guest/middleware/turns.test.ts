@@ -12,8 +12,9 @@ import {
 import { runEvents, type MemberEvent } from "../../core/member"
 import { createTurnProjector, createTurnsMiddleware } from "./turns"
 
-/** One guest member's projector. */
-const projectorOf = () => createTurnProjector()
+/** One guest member's projector, passing App output from `appServers`. */
+const projectorOf = (appServers?: readonly string[]) =>
+  createTurnProjector(new Set(), appServers)
 
 /** One turn event, validated the way the projector validates it. */
 const project = (event: TurnEvent) =>
@@ -160,6 +161,49 @@ describe("guest turn projection", () => {
         failed: false,
       })
     ).toBeUndefined()
+  })
+
+  it("passes an App call's output whole from an allowlisted server, and none from any other", () => {
+    const projector = projectorOf(["aos-ui"])
+    const projectOne = (event: TurnEvent) =>
+      projector(TurnEventSchema.parse(event))
+    const started = (toolCallId: string, name: string) =>
+      projectOne({
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId,
+        title: name,
+        name,
+        app: true,
+      })
+    const chunk = (toolCallId: string) =>
+      projectOne({
+        kind: TurnEventKind.ToolCallOutputChunk,
+        toolCallId,
+        text: "partial",
+      })
+    const finished = (toolCallId: string) =>
+      projectOne({
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId,
+        output: '{"structuredContent":{"value":{"filename":"report.pdf"}}}',
+        failed: false,
+        app: true,
+      })
+
+    started("file-1", "present_artifact")
+    started("board-1", "mcp__excalidraw__create_view")
+    expect(chunk("file-1")).toEqual({
+      kind: TurnEventKind.ToolCallOutputChunk,
+      toolCallId: "file-1",
+      text: "partial",
+    })
+    expect(chunk("board-1")).toBeUndefined()
+    expect(finished("file-1")).toMatchObject({
+      output: '{"structuredContent":{"value":{"filename":"report.pdf"}}}',
+    })
+    expect(finished("board-1")).toMatchObject({ output: "" })
+    // Once finished, a call's output is whole; a late chunk is noise.
+    expect(chunk("file-1")).toBeUndefined()
   })
 
   it("passes a steer's acknowledgement and drops a kind it does not know", () => {

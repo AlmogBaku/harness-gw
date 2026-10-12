@@ -359,6 +359,86 @@ describe("guest history projection", () => {
       [{ type: "text", text }],
     ])
   })
+
+  it("keeps an App call's result from an allowlisted server, and never any call's arguments", () => {
+    const call = (toolCallId: string, toolName: string) => ({
+      type: "tool-call" as const,
+      toolCallId,
+      toolName,
+      args: { path: "/private/report.pdf" },
+      argsText: '{"path":"/private/report.pdf"}',
+      result: { structuredContent: { value: { filename: "report.pdf" } } },
+      app: true as const,
+    })
+    const history = page([])
+    history.messages = [
+      {
+        id: "reply",
+        role: "assistant",
+        content: [
+          call("file-1", "present_artifact"),
+          call("board-1", "mcp__excalidraw__create_view"),
+        ],
+        createdAt: "2026-09-15T00:00:00.000Z",
+      },
+    ]
+
+    const [reply] = projectGuestHistory(history, "ref", ["aos-ui"]).messages
+    expect(reply?.content).toEqual([
+      {
+        type: "tool-call",
+        toolCallId: "file-1",
+        toolName: "present_artifact",
+        args: {},
+        argsText: "",
+        result: { structuredContent: { value: { filename: "report.pdf" } } },
+        app: true,
+      },
+      {
+        type: "tool-call",
+        toolCallId: "board-1",
+        toolName: "mcp__excalidraw__create_view",
+        args: {},
+        argsText: "",
+        app: true,
+      },
+    ])
+    expect(JSON.stringify(reply)).not.toContain("/private")
+  })
+
+  it("replays a provider-held Artifact as it streamed live, and never inline data", () => {
+    const held = {
+      id: "art-1",
+      filename: "episode-memo.md",
+      mimeType: "text/markdown",
+      source: { type: "provider" as const, reference: "art-1" },
+    }
+    const history = page([])
+    history.messages = [
+      {
+        id: "reply",
+        role: "assistant",
+        content: [
+          { type: "data", name: "hgw.artifact", data: held },
+          {
+            type: "data",
+            name: "hgw.artifact",
+            data: {
+              id: "inline-1",
+              filename: "secret.txt",
+              source: { type: "inline", encoding: "utf8", data: "private" },
+            },
+          },
+        ],
+        createdAt: "2026-09-15T00:00:00.000Z",
+      },
+    ]
+
+    const [reply] = projectGuestHistory(history, "ref").messages
+    expect(reply?.content).toEqual([
+      { type: "data", name: "hgw.artifact", data: held },
+    ])
+  })
 })
 
 const SETUP = JSON.stringify({

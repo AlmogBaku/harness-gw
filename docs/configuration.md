@@ -125,6 +125,7 @@ a different origin and address from the operator listener.
 | `allowedOrigins`               | URL[]                 | Exact browser origins the guest listener accepts. Defaults to `[guest.publicOrigin]`. Must not overlap with the operator listener's origins.                                                                                   |
 | `invitations.keys`             | key[]                 | 1–3 HS256 signing keys. Each entry: `{ id, secretFile }`. `id` is 1–32 alphanumeric/hyphen/underscore characters. `secretFile` is an absolute path. Keys are tried newest-first; keep at most one retired key during rotation. |
 | `invitations.clockSkewSeconds` | integer               | Accepted clock skew when validating invitation tokens. 0–60, default `0`.                                                                                                                                                      |
+| `appServers`                   | string[]              | MCP servers whose App calls reach guests whole: the call's result as the operator sees it, never its arguments. Any other App call reaches a guest as its card alone. Max 64, default `["aos-ui"]`.                            |
 
 ### Push
 

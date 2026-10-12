@@ -976,15 +976,19 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("links a streamed artifact by its id alone", async () => {
+  it("links a replayed and a streamed artifact alike, by its id alone", async () => {
     const test = harness({ existing: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
     await test.resume(REF, true)
     await test.prompt("Show the notes")
+    const linking = (entry: { params?: unknown }) =>
+      JSON.stringify(entry.params).includes("resource_link")
     await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("resource_link"),
-      "an update carrying resource_link"
+      (entry) =>
+        linking(entry) &&
+        test.recorder.entries.filter(linking).indexOf(entry) === 1,
+      "the live update carrying resource_link after the replayed one"
     )
 
     const links = updates(test.recorder).flatMap(({ update }) =>
@@ -994,9 +998,12 @@ describe("guest ACP listener", () => {
         ? [update.content]
         : []
     )
-    // The guest history projection keeps text alone, so only the live
-    // publication links, and it names neither a route nor the stored Session.
-    expect(links.map((link) => link.uri)).toEqual(["artifact://art-1"])
+    // History replays the stored publication as the live turn streams its
+    // own, and neither names a route nor the stored Session.
+    expect(links.map((link) => link.uri)).toEqual([
+      "artifact://art-1",
+      "artifact://art-1",
+    ])
     expect(JSON.stringify(links)).not.toContain(STORED)
     test.close()
   })

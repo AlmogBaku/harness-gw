@@ -15,6 +15,8 @@ import {
   type MemberEvent,
   type Middleware,
 } from "../../core/member"
+import { appCallPassesWhole } from "./app-servers"
+import { guestArtifact } from "./artifacts"
 
 /**
  * What a guest is shown of a live turn: the conversation's own text whole,
@@ -26,30 +28,21 @@ import {
 function projectArtifact(
   candidate: TurnEventOf<typeof TurnEventKind.ArtifactPublished>
 ): TurnEventOf<typeof TurnEventKind.ArtifactPublished> | undefined {
-  const { id, filename, mimeType, sizeBytes, source } = candidate.artifact
-  if (
-    !validIdentifier(id) ||
-    source.type !== "provider" ||
-    source.reference !== id
-  )
-    return undefined
-  return {
-    kind: TurnEventKind.ArtifactPublished,
-    artifact: {
-      id,
-      filename,
-      ...(mimeType === undefined ? {} : { mimeType }),
-      ...(sizeBytes === undefined ? {} : { sizeBytes }),
-      source: { type: "provider", reference: id },
-    },
-  }
+  const artifact = guestArtifact(candidate.artifact)
+  return artifact && { kind: TurnEventKind.ArtifactPublished, artifact }
 }
 
 /**
  * One turn stream's projector. `shown` collects the calls whose card a guest
- * was shown, across every stream of the member.
+ * was shown, across every stream of the member; an App call from one of
+ * `appServers` also passes its output, as the guest's view route hands it.
  */
-export function createTurnProjector(shown: Set<string> = new Set()) {
+export function createTurnProjector(
+  shown: Set<string> = new Set(),
+  appServers: readonly string[] = []
+) {
+  /** The shown calls whose output passes, until each finishes. */
+  const whole = new Set<string>()
   /**
    * The name of every call whose start was hidden, until it finishes or its
    * turn ends. The conversation runs one turn at a time, and a failure it
@@ -103,8 +96,8 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
         }
       }
       // Only an MCP App's card, from its start to its settling: its name, no
-      // arguments, no output, and no other tool call. The App's input and
-      // result reach the guest through its view.
+      // arguments, and no other tool call. Its output passes when its server
+      // is allowlisted; its input reaches the guest through its view alone.
       case TurnEventKind.ToolCallStarted: {
         if (candidate.subagentId !== undefined) return undefined
         const name = candidate.name ?? candidate.title
@@ -113,6 +106,8 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
           return undefined
         }
         shown.add(candidate.toolCallId)
+        if (appCallPassesWhole(name, appServers))
+          whole.add(candidate.toolCallId)
         return {
           kind: TurnEventKind.ToolCallStarted,
           toolCallId: candidate.toolCallId,
@@ -129,15 +124,20 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
         const opens = candidate.app && name !== undefined
         if (opens) shown.add(candidate.toolCallId)
         else if (!shown.has(candidate.toolCallId)) return undefined
+        const passes =
+          whole.delete(candidate.toolCallId) ||
+          (opens && appCallPassesWhole(name, appServers))
         return {
           kind: TurnEventKind.ToolCallFinished,
           toolCallId: candidate.toolCallId,
           ...(opens ? { name } : {}),
-          output: "",
+          output: passes ? candidate.output : "",
           failed: candidate.failed,
           app: true,
         }
       }
+      case TurnEventKind.ToolCallOutputChunk:
+        return whole.has(candidate.toolCallId) ? candidate : undefined
       case TurnEventKind.PlanUpdated:
         return { kind: TurnEventKind.PlanUpdated, todos: candidate.todos }
       case TurnEventKind.ArtifactPublished:
@@ -145,12 +145,11 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
       // A correction is the conversation's own text, whoever steered.
       case TurnEventKind.SteerAccepted:
         return candidate
-      // Reasoning, a call's input and output, terminals, compaction, the
-      // model and subagents are never a guest's.
+      // Reasoning, a call's input, any other call's output, terminals,
+      // compaction, the model and subagents are never a guest's.
       case TurnEventKind.ThoughtChunk:
       case TurnEventKind.ToolCallInputChunk:
       case TurnEventKind.ToolCallInputEnded:
-      case TurnEventKind.ToolCallOutputChunk:
       case TurnEventKind.TerminalOutput:
       case TurnEventKind.CompactionUpdated:
       case TurnEventKind.ModelChanged:
@@ -161,13 +160,20 @@ export function createTurnProjector(shown: Set<string> = new Set()) {
   }
 }
 
-export function createTurnsMiddleware(): Middleware {
+export type GuestTurnsOptions = {
+  /** The MCP servers whose App calls pass their output; none by default. */
+  appServers?: readonly string[]
+}
+
+export function createTurnsMiddleware({
+  appServers = [],
+}: GuestTurnsOptions = {}): Middleware {
   /**
    * Every call whose card this guest was shown. It grows with the one invited
    * conversation alone, which is all a guest's member ever reaches.
    */
   const shown = new Set<string>()
-  const project = createTurnProjector(shown)
+  const project = createTurnProjector(shown, appServers)
 
   return {
     event(event): MemberEvent | undefined {

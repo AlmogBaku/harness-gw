@@ -321,7 +321,10 @@ export async function createConfiguredGateway(
     logger: dependencies.logger,
   }
   /** One guest listener: its HTTP app and ACP socket share staged uploads. */
-  const guestListener = (service: GuestInvitationService) => {
+  const guestListener = (
+    service: GuestInvitationService,
+    appServers: readonly string[]
+  ) => {
     const attachmentStages = createGuestAttachmentStages()
     return {
       runtimeInstance,
@@ -340,13 +343,16 @@ export async function createConfiguredGateway(
         channels,
         catalog,
         guestActiveExecutions: config.limits.guestActiveExecutions,
+        appServers,
         logger: dependencies.logger,
         ...clock,
       }),
     }
   }
   const guest =
-    config.guest && invitations ? guestListener(invitations) : undefined
+    config.guest && invitations
+      ? guestListener(invitations, config.guest.appServers)
+      : undefined
   const attachmentStages = new AttachmentStageRegistry()
   const push = config.push
     ? await createPushDelivery(

@@ -57,6 +57,8 @@ export type GuestAcpServiceOptions = {
   catalog: Catalog
   /** How many turns every guest together may hold at once. */
   guestActiveExecutions: number
+  /** The MCP servers whose App calls reach guests whole; none by default. */
+  appServers?: readonly string[]
   /** Where this listener's connections write their structured lines. */
   logger: Logger
   now?: () => number
@@ -170,6 +172,7 @@ function createGuestAuthentication(
             grant,
             catalog: options.catalog,
             guestActiveExecutions: options.guestActiveExecutions,
+            ...(options.appServers ? { appServers: options.appServers } : {}),
           }),
         },
       }
