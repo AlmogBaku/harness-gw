@@ -757,7 +757,11 @@ export function createAcpConnection(
   }
 
   /** Called on every inbound frame; resets the silence window. */
+  /** When the gateway was last heard from, on any transport. */
+  let lastInboundAt = Number.NEGATIVE_INFINITY
+
   function onInbound() {
+    lastInboundAt = clock.now()
     armSilenceTimer()
   }
 
@@ -906,14 +910,18 @@ export function createAcpConnection(
     parent?: AbortSignal
   ) {
     const deadline = new Deadline(REQUEST_DEADLINE_MS[tier], clock, parent)
+    const sentAt = clock.now()
     try {
       return await deadline.run((cancellationSignal) =>
         send(connection.agent, { cancellationSignal })
       )
     } catch (error) {
       if (deadline.signal.aborted && !parent?.aborted) {
-        if (tier === "probe") connection.close(error)
-        else sendLivenessProbeAsync()
+        // An unanswered probe proves a dead transport only if nothing else
+        // arrived either: frames still coming mean its reply is queued
+        // behind them, say one Session's long replay.
+        if (tier !== "probe") sendLivenessProbeAsync()
+        else if (lastInboundAt <= sentAt) connection.close(error)
       }
       throw error
     }
@@ -1595,8 +1603,9 @@ export function createAcpConnection(
         idle: presence.idle,
       }
       lastFocus = report
-      // The focus request is also the liveness probe: no reply in 10 s closes
-      // the transport, and the reconnect re-reports it via sendLivenessProbeAsync.
+      // The focus request is also the liveness probe: no reply in 20 s, and
+      // nothing else heard meanwhile, closes the transport; the reconnect
+      // re-reports it via sendLivenessProbeAsync.
       request("probe", (agent, options) =>
         agent.request(HGW_METHODS.session.focus, report, options)
       ).catch((err: unknown) => {

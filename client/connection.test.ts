@@ -26,7 +26,7 @@ import { useFakeClock } from "../test/support/fake-clock"
 import { captureLogs } from "../test/support/log-capture"
 
 import { createAcpConnection } from "./connection"
-import { PART_GRACE_MS } from "./limits"
+import { PART_GRACE_MS, REQUEST_DEADLINE_MS } from "./limits"
 import { pipedSockets } from "./test-socket"
 import type { AcpPendingRequest } from "./types"
 
@@ -90,6 +90,8 @@ function createGatewayAgent(
     refuseAgentUpdate?: number
     /** The hgw extension version `initialize` announces. */
     version?: number
+    /** Never answers `_hgw/session/focus`, as a reply held behind a replay. */
+    holdFocus?: boolean
     /** The entries `_hgw/agents/list` answers with. */
     agents?: readonly unknown[]
     /** The results `_hgw/sessions/search` answers with. */
@@ -248,7 +250,7 @@ function createGatewayAgent(
     })
     .onRequest(HGW_METHODS.session.focus, z.unknown(), ({ params }) => {
       record(HGW_METHODS.session.focus, params)
-      return {}
+      return options.holdFocus ? new Promise<never>(() => {}) : {}
     })
     .onConnect((connection) => {
       peer = connection.client
@@ -1105,6 +1107,37 @@ describe("ACP connection", () => {
 
     await clock.advance(20)
     expect(connection.sessionState(SESSION_ID)).toBe("joined")
+    connection.close()
+  })
+
+  it("keeps a transport whose probe reply is held while its frames keep arriving", async () => {
+    const clock = useFakeClock()
+    const proxy = createGatewayAgent({ holdFocus: true })
+    const pipe = pipedSockets(() => proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/v1/acp",
+      socketConstructor: pipe.WebSocket,
+    })
+    connection.start()
+    connection.subscribe(SESSION_ID, {})
+    const joined = connection.joined(SESSION_ID)
+    await clock.advance(20)
+    await joined
+
+    connection.focus(SESSION_ID, { foreground: true, idle: false })
+    // The probe's reply waits behind one Session's long replay, whose frames
+    // keep arriving: the transport is alive, so it stays.
+    for (let waited = 0; waited <= REQUEST_DEADLINE_MS.probe; waited += 5_000) {
+      await proxy.pushUpdate(
+        { sessionUpdate: "state_update", state: "running" },
+        { sequence: waited + 1, turnId: "run-1" }
+      )
+      await clock.advance(5_000)
+    }
+
+    expect(pipe.sockets).toHaveLength(1)
+    expect(connection.status).toBe("ready")
     connection.close()
   })
 
