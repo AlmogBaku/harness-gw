@@ -23,7 +23,7 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
-import { SECRET_TERMS } from "../../redaction"
+import { maskCredentials } from "../../redaction"
 
 import {
   HermesRpcRejectedError,
@@ -297,20 +297,12 @@ function nativeText(
     : undefined
 }
 
-/** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
-const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
-const credentialText = new RegExp(
-  String.raw`(?:\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)`,
-  "giu"
-)
 /**
  * A credential is nobody's to read, so it goes before the text leaves the
  * adapter. Paths and URLs stay: a question reaches every member of the
  * conversation, a guest included, in the words the agent wrote.
  */
-function publicText(value: string) {
-  return value.replace(credentialText, "[credential redacted]")
-}
+const publicText = maskCredentials
 
 function publicChoices(nativeChoices: string[] | null) {
   if (!nativeChoices) return null

@@ -17,6 +17,7 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
+import { maskRequestText } from "../../core/request-text"
 import type {
   AcpOutbound,
   PendingRequestToOutbound,
@@ -74,11 +75,18 @@ function permissionOptions(request: PendingRequest): PermissionOption[] {
   })
 }
 
+/** A request's own message as the card shows it: whole, masked, in order. */
+function shownMessage(request: PendingRequest) {
+  return request.message === undefined
+    ? undefined
+    : maskRequestText(request.message)
+}
+
 function permissionOutbound(request: PendingRequest): RequestOutbound {
   // The schema's `title` names the operation and the message explains it; a
   // request with only one of the two titles itself with it.
   const label = record(request.responseSchema)?.title
-  const words = request.message
+  const words = shownMessage(request)
   const title =
     typeof label === "string" && label
       ? label
@@ -106,9 +114,7 @@ function permissionOutbound(request: PendingRequest): RequestOutbound {
         [HGW_META_KEY]: {
           requestId: request.requestId,
           ...(request.expiresAt ? { expiresAt: request.expiresAt } : {}),
-          ...(request.message
-            ? { message: request.message.slice(0, 4_096) }
-            : {}),
+          ...(words ? { message: words.slice(0, 4_096) } : {}),
         },
       },
     },
@@ -128,7 +134,9 @@ function pendingQuestionsOf(request: PendingRequest): PendingQuestion[] {
 function questionsOf(request: PendingRequest): HgwQuestion[] {
   return pendingQuestionsOf(request).map((question) => ({
     ...(question.label ? { header: question.label.slice(0, 256) } : {}),
-    prompt: question.text ?? question.label ?? request.message ?? "Question",
+    prompt: maskRequestText(
+      question.text ?? question.label ?? request.message ?? "Question"
+    ),
     options: question.choices.map((label) => ({ label })),
     multiple: question.multiple,
     custom: question.custom,
@@ -167,7 +175,7 @@ function elicitationOutbound(request: PendingRequest): RequestOutbound {
   const questions = questionsOf(request)
   const form: ElicitationForm = {
     mode: "form",
-    message: request.message ?? "Input required",
+    message: shownMessage(request) ?? "Input required",
     requestedSchema: {
       type: "object",
       properties: Object.fromEntries(

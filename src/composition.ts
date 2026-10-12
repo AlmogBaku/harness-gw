@@ -1,6 +1,6 @@
 import type { Logger } from "../lifecycle"
 import { createOperatorAcpService } from "./acp/operator"
-import { createCatalog } from "./core/catalog"
+import { createCatalog, type Catalog } from "./core/catalog"
 import { createChannels } from "./core/channel"
 import {
   createRuntimeInstance,
@@ -30,6 +30,7 @@ import { createSessionRows, type SessionRows } from "./core/session-rows"
 import { createGuestAcpService } from "./guest/acp"
 import { createGuestApp } from "./guest/app"
 import { createGuestAttachmentStages } from "./guest/context"
+import { createAgentNames } from "./push/agent-names"
 import { createPushDispatcher } from "./push/dispatcher"
 import { createPresenceRegistry } from "./push/presence"
 import { openPushRegistrations } from "./push/registrations"
@@ -143,14 +144,15 @@ async function readMcpServerOverrides(
 /**
  * Everything one push-enabled deployment needs: the public key derived from the
  * configured private one, the stored devices, the presence the ACP listener
- * reports into, and the dispatcher that subscribes to the runtime. A state directory
- * the gateway cannot write fails startup here rather than at the first
- * notification.
+ * reports into, and the dispatcher that subscribes to the runtime and names
+ * Agents from the catalog. A state directory the gateway cannot write fails
+ * startup here rather than at the first notification.
  */
 async function createPushDelivery(
   push: NonNullable<GatewayConfig["push"]>,
   runtimeInstance: RuntimeInstance,
   sessionRows: SessionRows,
+  catalog: Pick<Catalog, "agents">,
   dependencies: ConfiguredGatewayDependencies,
   clock: { now?: () => number },
   readers: SecretReaders
@@ -159,6 +161,7 @@ async function createPushDelivery(
   const registrations = await openPushRegistrations({
     stateDir: push.stateDir,
     logger: dependencies.logger,
+    ...clock,
   })
   const publicKey = deriveVapidPublicKey(privateKey)
   const presence = createPresenceRegistry(clock)
@@ -172,6 +175,11 @@ async function createPushDelivery(
     }),
     // One operator owns every Agent on this surface.
     principalOf: () => OPERATOR_PRINCIPAL,
+    agentName: createAgentNames({
+      catalog,
+      logger: dependencies.logger,
+      ...clock,
+    }),
     logger: dependencies.logger,
     ...clock,
   })
@@ -353,6 +361,7 @@ export async function createConfiguredGateway(
         config.push,
         runtimeInstance,
         sessionRows,
+        catalog,
         dependencies,
         clock,
         readers

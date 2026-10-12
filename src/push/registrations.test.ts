@@ -35,6 +35,7 @@ async function stateDir() {
 }
 
 const NOW = 1_700_000_000_000
+const DAY_MS = 86_400_000
 
 function registration(suffix: string): PushRegistration {
   return {
@@ -75,10 +76,46 @@ describe("push registration file", () => {
       registration("device-2").subscription.endpoint
     )
 
-    const reopened = await openPushRegistrations({ stateDir: directory })
+    const reopened = await openPushRegistrations({
+      stateDir: directory,
+      now: () => NOW,
+    })
     expect(reopened.list("operator")).toEqual([
       { ...replacement, createdAt: new Date(NOW).toISOString() },
     ])
+  })
+
+  it("removes a device stored more than 90 days ago, when asked and on open", async () => {
+    const directory = await stateDir()
+    let now = NOW
+    const registrations = await openPushRegistrations({
+      stateDir: directory,
+      now: () => now,
+    })
+    await registrations.put("operator", registration("device-1"))
+    now += 30 * DAY_MS
+    await registrations.put("operator", registration("device-2"))
+    const endpoints = (list: { subscription: { endpoint: string } }[]) =>
+      list.map(({ subscription }) => subscription.endpoint)
+
+    now = NOW + 90 * DAY_MS
+    await registrations.prune()
+    expect(registrations.list("operator")).toHaveLength(2)
+    now += 1
+    await registrations.prune()
+    expect(endpoints(registrations.list("operator"))).toEqual([
+      registration("device-2").subscription.endpoint,
+    ])
+
+    const reopened = await openPushRegistrations({
+      stateDir: directory,
+      now: () => NOW + 120 * DAY_MS + 1,
+    })
+    expect(reopened.list("operator")).toEqual([])
+    const stored = JSON.parse(
+      await readFile(join(directory, PUSH_REGISTRATIONS_FILE), "utf8")
+    ) as { principals: Record<string, unknown[]> }
+    expect(stored.principals).toEqual({})
   })
 
   it("keeps the devices in an owner-only file and leaves nothing beside it", async () => {

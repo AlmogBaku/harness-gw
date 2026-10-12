@@ -22,6 +22,12 @@ export const PUSH_REGISTRATIONS_FILE = "push-subscriptions.json"
 /** How many devices one principal may register at once. */
 const MAX_PER_PRINCIPAL = 32
 
+/**
+ * A device stored longer ago than this is removed. A browser that still holds
+ * its subscription registers it again on its own, which stamps it anew.
+ */
+export const REGISTRATION_STALE_MS = 90 * 86_400_000
+
 /** One stored device: what the browser sent, and when it was recorded. */
 export const StoredRegistrationSchema = PushRegistrationSchema.extend({
   createdAt: z.string().datetime(),
@@ -59,6 +65,8 @@ export interface PushRegistrations {
   /** Replaces the device with the same endpoint; throws past the limit. */
   put(principalId: string, registration: PushRegistration): Promise<void>
   remove(principalId: string, endpoint: string): Promise<void>
+  /** Removes every device stored more than `REGISTRATION_STALE_MS` ago. */
+  prune(): Promise<void>
 }
 
 /** Fails closed: a state directory the proxy cannot write is a startup error. */
@@ -142,6 +150,23 @@ export async function openPushRegistrations({
       })
     )
 
+  /** Writes the file again only when a device was stale. */
+  const prune = async () => {
+    const cutoff = now() - REGISTRATION_STALE_MS
+    let pruned = false
+    for (const [principalId, devices] of principals) {
+      const fresh = devices.filter(
+        (device) => Date.parse(device.createdAt) >= cutoff
+      )
+      if (fresh.length === devices.length) continue
+      pruned = true
+      if (fresh.length === 0) principals.delete(principalId)
+      else principals.set(principalId, fresh)
+    }
+    if (pruned) await flush()
+  }
+  await prune()
+
   return {
     list(principalId) {
       return [...(principals.get(principalId) ?? [])]
@@ -176,5 +201,7 @@ export async function openPushRegistrations({
       else principals.set(principalId, remaining)
       await flush()
     },
+
+    prune,
   }
 }

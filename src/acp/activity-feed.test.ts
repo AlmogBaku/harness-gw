@@ -95,14 +95,14 @@ function lifecycle(
 }
 
 describe("createActivityFeed", () => {
-  it("hydrates unread rows, pending attention, and failed turns", async () => {
+  it("hydrates unread rows, pending attention, and failed turns, as replayed and dated by the row", async () => {
     const clock = useFakeClock()
     const { feed, sessionRows } = harness({
       sessions: [
         session({ id: "session-1", unread: true }),
         session({ id: "session-2", status: "waiting-for-input" }),
         session({ id: "session-3", status: "failed" }),
-        session({ id: "session-4", status: "failed" }),
+        session({ id: "session-4", status: "failed", updatedAt: undefined }),
         session({ id: "session-5" }),
       ],
       executions: {
@@ -110,8 +110,19 @@ describe("createActivityFeed", () => {
           state: "waiting-for-input",
           turnId: "run-2",
           requests: [
-            { requestId: "approval-1", kind: "permission" },
-            { requestId: "question-1", kind: "elicitation" },
+            {
+              requestId: "approval-1",
+              kind: "permission",
+              message: "Deploy\nnow?",
+            },
+            {
+              requestId: "question-1",
+              kind: "elicitation",
+              questions: [
+                { text: "Region?", choices: [], multiple: false, custom: true },
+                { text: "Why?", choices: [], multiple: false, custom: true },
+              ],
+            },
           ],
         },
         "stored-session-3": { state: "idle", turnId: "run-3", requests: [] },
@@ -122,40 +133,41 @@ describe("createActivityFeed", () => {
     feed.open((activity) => seen.push(activity))
     await clock.advance(0)
 
+    const replayed = (sessionId: string, occurredAt = AT) => ({
+      agentId: AGENT,
+      sessionId,
+      occurredAt,
+      replayed: true,
+    })
     expect(seen).toEqual([
-      expect.objectContaining({
-        type: "unread-changed",
-        agentId: AGENT,
-        sessionId: "session-1",
-        unread: true,
-      }),
-      expect.objectContaining({
+      { ...replayed("session-1"), type: "unread-changed", unread: true },
+      {
+        ...replayed("session-2"),
         type: "attention-requested",
-        sessionId: "session-2",
         requestId: "approval-1",
         attentionKind: "permission",
-      }),
-      expect.objectContaining({
+        requestText: "Deploy now?",
+      },
+      {
+        ...replayed("session-2"),
         type: "attention-requested",
-        sessionId: "session-2",
         requestId: "question-1",
         attentionKind: "question",
-      }),
-      expect.objectContaining({
+        requestText: "Region?",
+        requestMore: 1,
+      },
+      { ...replayed("session-3"), type: "turn-failed", turnId: "run-3" },
+      {
+        // An undated row is dated by the moment the feed re-sent it.
+        ...replayed("session-4", new Date().toISOString()),
         type: "turn-failed",
-        sessionId: "session-3",
-        turnId: "run-3",
-      }),
-      expect.objectContaining({
-        type: "turn-failed",
-        sessionId: "session-4",
         turnId: "session-4",
-      }),
+      },
     ])
     expect(sessionRows.get(AGENT, "session-1")?.unread).toBe(true)
   })
 
-  it("publishes live execution events and every unread flip until its stop", async () => {
+  it("publishes live execution events, with a request's preview, and every unread flip until its stop", async () => {
     const clock = useFakeClock()
     const { deliver, feed, sessionRows, unsubscribe } = harness({
       sessions: [session({ unread: true })],
@@ -171,7 +183,11 @@ describe("createActivityFeed", () => {
       turnId: "run-1",
       occurredAt: AT,
       kind: "attention-requested",
-      request: { requestId: "approval-1", kind: "permission" },
+      request: {
+        requestId: "approval-1",
+        kind: "permission",
+        message: "Deploy now?",
+      },
     })
     deliver({
       agentId: AGENT,
@@ -186,13 +202,21 @@ describe("createActivityFeed", () => {
     sessionRows.rememberList([session({ title: "Renamed", unread: false })])
 
     expect(seen).toEqual([
-      expect.objectContaining({ type: "unread-changed", unread: true }),
-      expect.objectContaining({ type: "turn-started", turnId: "run-1" }),
       expect.objectContaining({
+        type: "unread-changed",
+        unread: true,
+        replayed: true,
+      }),
+      expect.objectContaining({ type: "turn-started", turnId: "run-1" }),
+      {
+        agentId: AGENT,
+        sessionId: "session-1",
+        occurredAt: AT,
         type: "attention-requested",
         requestId: "approval-1",
         attentionKind: "permission",
-      }),
+        requestText: "Deploy now?",
+      },
       expect.objectContaining({
         type: "attention-resolved",
         requestId: "approval-1",
@@ -200,6 +224,8 @@ describe("createActivityFeed", () => {
       expect.objectContaining({ type: "turn-finished", turnId: "run-1" }),
       expect.objectContaining({ type: "unread-changed", unread: false }),
     ])
+    // Only hydration re-sends; everything after it happened live.
+    expect(seen.slice(1).filter((activity) => activity.replayed)).toEqual([])
 
     stop()
     deliver(lifecycle("turn-started", "run-2"))

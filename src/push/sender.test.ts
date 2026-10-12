@@ -1,11 +1,18 @@
 // @vitest-environment node
 
-import { generateKeyPairSync, randomBytes, type JsonWebKey } from "node:crypto"
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  type JsonWebKey,
+} from "node:crypto"
 import { beforeAll, describe, expect, it, vi } from "vitest"
 
 import type { PushMessage } from "../../protocol/push"
 import {
   createPushSender,
+  deriveTopicKey,
+  fitPushMessage,
   topicFor,
   type PushFetch,
   type PushSenderOptions,
@@ -78,7 +85,11 @@ describe("push sender", () => {
     expect(init.headers).toMatchObject({
       ttl: "3600",
       urgency: "high",
-      topic: topicFor("input"),
+      topic: await topicFor(
+        await deriveTopicKey(vapid.privateKey),
+        MESSAGE.agentId,
+        MESSAGE.sessionId
+      ),
       "content-encoding": "aes128gcm",
     })
     // The vendor pads every message to one size, so nothing about the
@@ -140,10 +151,52 @@ describe("push sender", () => {
     expect(post).not.toHaveBeenCalled()
   })
 
-  it("derives one stable opaque topic per category", () => {
-    expect(topicFor("input")).toMatch(/^[0-9a-f]{32}$/u)
-    expect(topicFor("input")).toBe(topicFor("input"))
-    expect(topicFor("input")).not.toBe(topicFor("completion"))
-    expect(topicFor("failure")).not.toBe(topicFor("completion"))
+  it("fits the largest message the contract allows into one record, dropping its request first", async () => {
+    const post = accepting(201)
+    // A lone surrogate is JSON-escaped to six bytes; an emoji is four bytes in two units.
+    const id = "\uD800".repeat(256)
+    const wide = (units: number) => "\u{1F600}".repeat(units / 2)
+    const largest: PushMessage = {
+      ...MESSAGE,
+      agentId: id,
+      sessionId: id,
+      agentName: wide(64),
+      sessionTitle: wide(120),
+      requestText: wide(200),
+      requestMore: 7,
+    }
+    const fitted: PushMessage = { ...largest }
+    delete fitted.requestText
+    delete fitted.requestMore
+
+    expect(fitPushMessage(largest)).toStrictEqual(fitted)
+    expect(fitPushMessage(MESSAGE)).toStrictEqual(MESSAGE)
+    await expect(sender(post).send(target, largest, "high")).resolves.toEqual({
+      result: "sent",
+    })
+    expect(post.mock.calls[0]![1].body.byteLength).toBe(4_096)
+  })
+
+  it("derives one keyed topic per Session that names neither id", async () => {
+    const key = await deriveTopicKey(vapid.privateKey)
+    const topic = await topicFor(key, "researcher", "session-1")
+
+    expect(topic).toMatch(/^[\w-]{32}$/u)
+    expect(await topicFor(key, "researcher", "session-1")).toBe(topic)
+    expect(await topicFor(key, "researcher", "session-2")).not.toBe(topic)
+    expect(
+      await topicFor(
+        await deriveTopicKey(privateScalar()),
+        "researcher",
+        "session-1"
+      )
+    ).not.toBe(topic)
+    const unkeyed = createHash("sha256")
+      .update(JSON.stringify(["researcher", "session-1"]))
+      .digest("base64url")
+      .slice(0, 32)
+    expect(topic).not.toBe(unkeyed)
+    expect(topic).not.toContain("researcher")
+    expect(topic).not.toContain("session-1")
   })
 })

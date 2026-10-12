@@ -36,6 +36,23 @@ export const SECRET_TERMS: readonly string[] = [
   "token",
 ]
 
+/** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
+const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
+const credentialText = new RegExp(
+  String.raw`(?:\b(?:${secretTerm})\s*[=:]\s*(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+\S+|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|\beyJ[\w-]+\.[\w-]+\.[\w-]+)`,
+  "giu"
+)
+
+/**
+ * `text` with every credential it spells out as `[credential redacted]`: a
+ * `token=…` assignment, a Basic or Bearer value, a known provider key prefix,
+ * or a JWT. Paths and URLs stay, so text a runtime wrote for the operator
+ * still reads as written.
+ */
+export function maskCredentials(text: string) {
+  return text.replace(credentialText, "[credential redacted]")
+}
+
 /**
  * The names a push subscription and a VAPID pair carry, which a log masks by
  * exact name: a subscription endpoint is a bearer capability to wake one

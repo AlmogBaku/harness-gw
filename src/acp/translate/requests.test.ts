@@ -137,6 +137,19 @@ describe("pendingRequestToOutbound approvals", () => {
     })
   })
 
+  it("shows a long multi-line message whole, with its credential masked", () => {
+    const steps = Array.from({ length: 40 }, (_, index) => `step ${index + 1}`)
+    const outbound = permissionOf({
+      ...approval,
+      message: [...steps, "export token=ghp_leaked"].join("\n"),
+      responseSchema: { ...approval.responseSchema, title: "run deploy.sh" },
+    })
+
+    const shown = [...steps, "export [credential redacted]"].join("\n")
+    expect(outbound.request.description).toBe(shown)
+    expect(HgwPermissionMetaSchema.parse(metaOf(outbound)).message).toBe(shown)
+  })
+
   it("titles an approval that carries no message", () => {
     const outbound = permissionOf({
       requestId: "approval-2",
@@ -165,7 +178,7 @@ const located: PendingRequest = {
       custom: true,
     },
     {
-      text: "Anything else? See https://docs.example.test/exports",
+      text: "Anything else? See https://docs.example.test/exports with token=ghp_leaked",
       choices: [],
       multiple: false,
       custom: true,
@@ -174,7 +187,7 @@ const located: PendingRequest = {
 }
 
 describe("pendingRequestToOutbound questions", () => {
-  it("shows every member the paths and URLs the agent wrote", () => {
+  it("shows every member the paths and URLs the agent wrote, and no credential", () => {
     const meta = HgwElicitationMetaSchema.parse(metaOf(elicitationOf(located)))
     expect(meta.questions[0]).toMatchObject({
       prompt: "Where should exports live? Not under /srv/aos/repo.",
@@ -184,7 +197,7 @@ describe("pendingRequestToOutbound questions", () => {
       ],
     })
     expect(meta.questions[1]?.prompt).toBe(
-      "Anything else? See https://docs.example.test/exports"
+      "Anything else? See https://docs.example.test/exports with [credential redacted]"
     )
   })
 

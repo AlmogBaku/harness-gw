@@ -1,4 +1,5 @@
 import type { PushCategory } from "../../protocol/push"
+import type { PendingRequest } from "../core/events"
 
 /** One Session an event arrived for, by the identity a browser knows it by. */
 export type CoalescedSession = {
@@ -10,6 +11,10 @@ export type CoalescedSession = {
    * oldest thing it would be told about happened.
    */
   occurredAtMs: number
+  /** Unix ms of the newest such event, which the Session's push is about. */
+  newestAtMs: number
+  /** What the newest event asks the operator, when it asks anything. */
+  request?: PendingRequest
 }
 
 /**
@@ -53,6 +58,12 @@ export type PushCoalescerOptions = {
   ): void
 }
 
+/** `schedule` on the real timers, for every push service that takes one. */
+export const defaultSchedule = (callback: () => void, delayMs: number) => {
+  const handle = setTimeout(callback, delayMs)
+  return () => clearTimeout(handle)
+}
+
 export interface PushCoalescer {
   add(
     principalId: string,
@@ -72,15 +83,28 @@ type Window = {
 const windowKey = (principalId: string, category: PushCategory) =>
   `${principalId}\u0000${category}`
 
-const sessionKey = ({ agentId, sessionId }: CoalescedSession) =>
+export const sessionKey = ({
+  agentId,
+  sessionId,
+}: Pick<CoalescedSession, "agentId" | "sessionId">) =>
   `${agentId}\u0000${sessionId}`
 
+/** One Session's entry once `next` joins it: the oldest moment, the newest event. */
+function merge(held: CoalescedSession, next: CoalescedSession) {
+  const newest = next.newestAtMs >= held.newestAtMs ? next : held
+  return {
+    ...newest,
+    occurredAtMs: Math.min(held.occurredAtMs, next.occurredAtMs),
+  }
+}
+
 /**
- * Collapses a burst of events into one push per principal and category. The
- * first event opens a window fixed from that instant, so a busy Agent can never
- * keep extending it, and the window is what a presence check is applied to:
- * somebody watching needs no push at all, and somebody who has just left holds
- * the window open for one grace, after which the next verdict settles it.
+ * Collapses a burst of events per principal and category into one entry per
+ * Session, each of which becomes one push. The first event opens a window
+ * fixed from that instant, so a busy Agent can never keep extending it, and
+ * the window is what a presence check is applied to: somebody watching needs
+ * no push at all, and somebody who has just left holds the window open for
+ * one grace, after which the next verdict settles it.
  */
 export function createPushCoalescer({
   now,
@@ -133,10 +157,11 @@ export function createPushCoalescer({
       const key = windowKey(principalId, category)
       const open = windows.get(key)
       if (open) {
-        // The window answers for the oldest event it holds per Session.
-        const previous = open.sessions.get(sessionKey(session))
-        if (previous && previous.occurredAtMs <= session.occurredAtMs) return
-        open.sessions.set(sessionKey(session), session)
+        const held = open.sessions.get(sessionKey(session))
+        open.sessions.set(
+          sessionKey(session),
+          held ? merge(held, session) : session
+        )
         return
       }
       const window: Window = {

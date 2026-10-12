@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest"
+import { mkdtemp, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { describe, expect, it, onTestFinished, vi } from "vitest"
 
 import { captureLogs, type LogCapture } from "../../test/support/log-capture"
+import type { AgentCatalogEntry } from "../../protocol"
 import {
   COALESCE_WINDOW_MS,
   PRESENCE_CLOSED_GRACE_MS,
@@ -9,17 +13,28 @@ import {
 import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
 import { createSessionRows, type SessionRow } from "../core/session-rows"
+import { createAgentNames, type AgentNamesOptions } from "./agent-names"
 import { createPushDispatcher } from "./dispatcher"
 import { createPresenceRegistry } from "./presence"
-import type { PushRegistrations, StoredRegistration } from "./registrations"
+import {
+  openPushRegistrations,
+  type PushRegistrations,
+  type StoredRegistration,
+} from "./registrations"
 import type { PushSendResult, PushSender } from "./sender"
 import { createTestTimers } from "./test-utils/timers"
 
 const START = 1_700_000_000_000
+const DAY_MS = 86_400_000
 const OPERATOR = "operator"
 const AGENT = "researcher"
 const SESSION = "session-1"
 const CONNECTION = "connection-1"
+
+const iso = (ms: number) => new Date(ms).toISOString()
+
+/** Lets every pending continuation run, so a push not sent is one never sent. */
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve))
 
 function device(
   suffix: string,
@@ -71,14 +86,62 @@ function occurred(
   return { ...base, kind }
 }
 
+/** A request that asks `texts` of the operator, one question each. */
+function asked(
+  texts: string[],
+  { sessionId = SESSION, agentId = AGENT, occurredAtMs = START } = {}
+): ExecutionEvent {
+  return {
+    agentId,
+    sessionId,
+    turnId: "run-1",
+    occurredAt: iso(occurredAtMs),
+    kind: "attention-requested",
+    request: {
+      requestId: `ask-${occurredAtMs}`,
+      kind: "elicitation",
+      questions: texts.map((text) => ({
+        text,
+        choices: [],
+        multiple: false,
+        custom: true,
+      })),
+    },
+  }
+}
+
+function entry(
+  id: string,
+  name: string,
+  overrides: Partial<AgentCatalogEntry> = {}
+): AgentCatalogEntry {
+  return {
+    summary: { kind: "ready", id, name },
+    visibility: "visible",
+    selectable: true,
+    editable: true,
+    avatarEditable: false,
+    revision: "revision-1",
+    ...overrides,
+  }
+}
+
+function catalogOf(...agents: AgentCatalogEntry[]) {
+  return { agents: async () => ({ revision: "revision-1", agents }) }
+}
+
 type HarnessOptions = {
   devices?: StoredRegistration[]
   rows?: SessionRow[]
   send?: (target: unknown) => Promise<PushSendResult>
+  /** Where Agent names come from; none means a push names no Agent. */
+  catalog?: AgentNamesOptions["catalog"]
+  registrations?: PushRegistrations
+  clock?: ReturnType<typeof createTestTimers>
 }
 
 function harness(options: HarnessOptions = {}) {
-  const clock = createTestTimers(START)
+  const clock = options.clock ?? createTestTimers(START)
   const observers = new Set<(event: ExecutionEvent) => void>()
   const unsubscribe = vi.fn()
   const runtimeInstance = {
@@ -99,7 +162,7 @@ function harness(options: HarnessOptions = {}) {
   if (options.rows) sessionRows.rememberList(options.rows)
 
   const stored = [...(options.devices ?? [device("device-1")])]
-  const registrations: PushRegistrations = {
+  const registrations: PushRegistrations = options.registrations ?? {
     list: vi.fn(() => [...stored]),
     put: vi.fn(async () => undefined),
     remove: vi.fn(async (_principalId: string, endpoint: string) => {
@@ -108,6 +171,7 @@ function harness(options: HarnessOptions = {}) {
       )
       if (index !== -1) stored.splice(index, 1)
     }),
+    prune: vi.fn(async () => undefined),
   }
 
   const send = vi.fn<PushSender["send"]>(
@@ -124,6 +188,16 @@ function harness(options: HarnessOptions = {}) {
     presence,
     sender,
     principalOf: () => OPERATOR,
+    ...(options.catalog
+      ? {
+          agentName: createAgentNames({
+            catalog: options.catalog,
+            logger: logs.logger,
+            now: clock.now,
+            schedule: clock.schedule,
+          }),
+        }
+      : {}),
     logger: logs.logger,
     now: clock.now,
     schedule: clock.schedule,
@@ -169,34 +243,180 @@ describe("push dispatcher", () => {
       subscription: { endpoint: "https://push.example/device-1" },
     })
     expect(message).toEqual({
-      v: 1,
+      v: 2,
       category: "input",
-      count: 1,
       agentId: AGENT,
       sessionId: SESSION,
-      occurredAt: new Date(START + COALESCE_WINDOW_MS.input).toISOString(),
+      occurredAt: iso(START),
       locale: "en",
     })
     expect(urgency).toBe("high")
   })
 
-  it("counts several Sessions into one push that names none of them", async () => {
-    const test = harness()
+  it("sends each Session its own push, naming its Agent, its title, and what it asks", async () => {
+    const test = harness({
+      rows: [
+        row({ title: "Quarterly\nnotes" }),
+        row({ id: "session-2", agentId: "writer", title: "Draft" }),
+      ],
+      catalog: catalogOf(entry(AGENT, "Researcher"), entry("writer", "Writer")),
+    })
 
-    test.publish(occurred("attention-requested", "session-1"))
-    test.publish(occurred("attention-requested", "session-2"))
+    test.publish(asked(["Which region?", "Why?"]))
     test.clock.advance(1_000)
-    test.publish(occurred("attention-requested", "session-3"))
+    test.publish(
+      asked(["Ship it?"], {
+        sessionId: "session-2",
+        agentId: "writer",
+        occurredAtMs: START + 1_000,
+      })
+    )
+    test.clock.advance(COALESCE_WINDOW_MS.input)
+
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledTimes(2))
+    const ids = { v: 2, category: "input", locale: "en" }
+    expect(test.send.mock.calls.map(([, message]) => message)).toEqual([
+      {
+        ...ids,
+        agentId: AGENT,
+        sessionId: SESSION,
+        occurredAt: iso(START),
+        agentName: "Researcher",
+        sessionTitle: "Quarterly notes",
+        requestText: "Which region?",
+        requestMore: 1,
+      },
+      {
+        ...ids,
+        agentId: "writer",
+        sessionId: "session-2",
+        occurredAt: iso(START + 1_000),
+        agentName: "Writer",
+        sessionTitle: "Draft",
+        requestText: "Ship it?",
+      },
+    ])
+  })
+
+  it("skips a push about an event older than one its Session was already sent", async () => {
+    const test = harness()
+    const categories = () =>
+      test.send.mock.calls.map(([, { category }]) => category)
+
+    test.publish(occurred("turn-finished", SESSION, START))
+    test.clock.advance(1_000)
+    test.publish(occurred("attention-requested", SESSION, START + 1_000))
+    test.clock.advance(COALESCE_WINDOW_MS.input)
+    await vi.waitFor(() => expect(categories()).toEqual(["input"]))
+
+    // The question came after the finished turn, so the completion window
+    // that closes later has nothing newer to say.
+    test.clock.advance(COALESCE_WINDOW_MS.completion)
+    await vi.waitFor(() => expect(test.logs.records()).toHaveLength(2))
+    expect(lines(test.logs)[1]).toEqual({
+      event: "push.suppressed",
+      category: "completion",
+      reason: "stale",
+      sessions: 1,
+    })
+
+    // A turn that finishes after the question is news again.
+    const finishedAt = test.clock.now()
+    test.publish(occurred("turn-finished", SESSION, finishedAt))
+    test.clock.advance(COALESCE_WINDOW_MS.completion)
+    await vi.waitFor(() =>
+      expect(categories()).toEqual(["input", "completion"])
+    )
+    expect(test.send.mock.calls[1]![1].occurredAt).toBe(iso(finishedAt))
+  })
+
+  it.each([
+    ["slow", () => new Promise<never>(() => {}), "timeout"],
+    ["failing", () => Promise.reject(new Error("catalog down")), "error"],
+  ])(
+    "sends without the Agent's name when the catalog is %s",
+    async (_case, agents, reason) => {
+      const test = harness({ catalog: { agents } })
+
+      test.publish(occurred("attention-requested"))
+      test.clock.advance(COALESCE_WINDOW_MS.input)
+      await flush()
+      test.clock.advance(1_000)
+
+      await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
+      expect(test.send.mock.calls[0]![1]).not.toHaveProperty("agentName")
+      expect(lines(test.logs)[0]).toEqual({
+        event: "push.agent_name.failed",
+        reason,
+      })
+    }
+  )
+
+  it.each<[string, Partial<AgentCatalogEntry>]>([
+    ["hidden", { visibility: "hidden" }],
+    ["not selectable", { selectable: false }],
+    [
+      "the creator",
+      {
+        summary: { kind: "ready", id: AGENT, name: "Creator", role: "creator" },
+      },
+    ],
+  ])("names no Agent that is %s", async (_case, overrides) => {
+    const test = harness({
+      catalog: catalogOf(entry(AGENT, "Researcher", overrides)),
+    })
+
+    test.publish(occurred("attention-requested"))
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
-    expect(test.send.mock.calls[0]![1]).toEqual({
-      v: 1,
-      category: "input",
-      count: 3,
-      occurredAt: new Date(START + COALESCE_WINDOW_MS.input).toISOString(),
-      locale: "en",
+    expect(test.send.mock.calls[0]![1]).not.toHaveProperty("agentName")
+  })
+
+  it("tells only a device registered in the last 30 days what a Session is about, and drops one past 90", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "aos-push-dispatch-"))
+    onTestFinished(() => rm(stateDir, { recursive: true }))
+    const clock = createTestTimers(START)
+    const registrations = await openPushRegistrations({
+      stateDir,
+      now: clock.now,
     })
+    const { subscription, locale, categories } = device("device-1")
+    const register = () =>
+      registrations.put(OPERATOR, { subscription, locale, categories })
+    const test = harness({ clock, registrations, rows: [row()] })
+    const ask = () => {
+      test.publish(asked(["Ship it?"], { occurredAtMs: clock.now() }))
+      clock.advance(COALESCE_WINDOW_MS.input)
+    }
+    await register()
+
+    clock.advance(31 * DAY_MS)
+    ask()
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
+    expect(Object.keys(test.send.mock.calls[0]![1]).sort()).toEqual([
+      "agentId",
+      "category",
+      "locale",
+      "occurredAt",
+      "sessionId",
+      "v",
+    ])
+
+    // The browser registering it again makes it fresh again.
+    await register()
+    ask()
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledTimes(2))
+    expect(test.send.mock.calls[1]![1]).toMatchObject({
+      sessionTitle: "Notes",
+      requestText: "Ship it?",
+    })
+
+    clock.advance(91 * DAY_MS)
+    ask()
+    await vi.waitFor(() => expect(registrations.list(OPERATOR)).toEqual([]))
+    await flush()
+    expect(test.send).toHaveBeenCalledTimes(2)
   })
 
   it("sends a finished run to every device at the slower cadence", async () => {
@@ -209,15 +429,14 @@ describe("push dispatcher", () => {
 
     test.clock.advance(COALESCE_WINDOW_MS.completion)
 
-    await vi.waitFor(() => expect(test.send).toHaveBeenCalledTimes(2))
-    expect(test.send.mock.calls.map(([, , urgency]) => urgency)).toEqual([
-      "normal",
-      "normal",
-    ])
-    expect(test.send.mock.calls[0]![1]).toMatchObject({
-      category: "completion",
-      count: 2,
-    })
+    // Two Sessions to each of two devices.
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledTimes(4))
+    expect(
+      test.send.mock.calls.map(([, { category }, urgency]) => [
+        category,
+        urgency,
+      ])
+    ).toEqual(Array(4).fill(["completion", "normal"]))
   })
 
   it("sends nothing while the operator is at the workspace", () => {
@@ -257,7 +476,6 @@ describe("push dispatcher", () => {
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
     expect(test.send.mock.calls[0]![1]).toMatchObject({
       category: "completion",
-      count: 1,
       sessionId: SESSION,
     })
   })
@@ -278,7 +496,6 @@ describe("push dispatcher", () => {
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
     expect(test.send.mock.calls[0]![1]).toMatchObject({
       category: "completion",
-      count: 1,
       sessionId: SESSION,
     })
   })
@@ -346,7 +563,6 @@ describe("push dispatcher", () => {
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
     expect(test.send.mock.calls[0]![1]).toMatchObject({
-      count: 1,
       sessionId: "session-2",
     })
   })
@@ -394,14 +610,13 @@ describe("push dispatcher", () => {
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(1)
 
-    test.clock.advance(PRESENCE_CLOSED_GRACE_MS)
-    expect(test.send).not.toHaveBeenCalled()
-    test.clock.advance(PRESENCE_GRACE_MS)
+    // The held window closes when the full grace ends, not a moment before.
+    test.clock.advance(lapsedAt + PRESENCE_GRACE_MS - test.clock.now() - 1)
+    expect(test.clock.pending()).toBe(1)
+    test.clock.advance(1)
+    expect(test.clock.pending()).toBe(0)
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
-    expect(test.send.mock.calls[0]![1]).toMatchObject({
-      occurredAt: new Date(lapsedAt + PRESENCE_GRACE_MS).toISOString(),
-    })
   })
 
   it("waits only long enough for a reconnect once every connection has gone", async () => {
@@ -420,12 +635,15 @@ describe("push dispatcher", () => {
     expect(test.send).not.toHaveBeenCalled()
     expect(test.clock.pending()).toBe(1)
 
-    test.clock.advance(PRESENCE_CLOSED_GRACE_MS)
+    // The held window closes when the closed grace ends, not a moment before.
+    test.clock.advance(
+      closedAt + PRESENCE_CLOSED_GRACE_MS - test.clock.now() - 1
+    )
+    expect(test.clock.pending()).toBe(1)
+    test.clock.advance(1)
+    expect(test.clock.pending()).toBe(0)
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
-    expect(test.send.mock.calls[0]![1]).toMatchObject({
-      occurredAt: new Date(closedAt + PRESENCE_CLOSED_GRACE_MS).toISOString(),
-    })
   })
 
   it("sends nothing when a reload reconnects inside the closed grace", () => {
@@ -496,18 +714,68 @@ describe("push dispatcher", () => {
     ])
   })
 
-  it("writes a line that names no device and no Session", async () => {
-    const test = harness()
+  it("writes lines that name no device, no Session, and nothing a push tells", async () => {
+    const content = {
+      rows: [row({ title: "Zebra title" })],
+      catalog: catalogOf(entry(AGENT, "Quokka name")),
+    }
+    const question = asked(["Walrus question?"])
+    // Sent, then held back while the operator looks on.
+    const shown = harness(content)
+    shown.publish(question)
+    shown.clock.advance(COALESCE_WINDOW_MS.input)
+    await vi.waitFor(() => expect(shown.send).toHaveBeenCalledOnce())
+    shown.presence.set(OPERATOR, CONNECTION, {
+      sessionId: null,
+      foreground: true,
+      idle: false,
+    })
+    shown.publish(asked(["Walrus question?"], { occurredAtMs: START + 5_000 }))
+    shown.clock.advance(COALESCE_WINDOW_MS.input)
+    // Sent without a name the catalog could not give.
+    const unnamed = harness({
+      ...content,
+      catalog: { agents: () => Promise.reject(new Error("catalog down")) },
+    })
+    unnamed.publish(question)
+    unnamed.clock.advance(COALESCE_WINDOW_MS.input)
+    await vi.waitFor(() => expect(unnamed.send).toHaveBeenCalledOnce())
+    // Not sent at all.
+    const broken = harness({
+      ...content,
+      registrations: {
+        list: () => {
+          throw new Error("registrations unreadable")
+        },
+        put: async () => undefined,
+        remove: async () => undefined,
+        prune: async () => undefined,
+      },
+    })
+    broken.publish(question)
+    broken.clock.advance(COALESCE_WINDOW_MS.input)
+    await vi.waitFor(() => expect(broken.logs.records()).toHaveLength(1))
 
-    test.publish(occurred("attention-requested"))
-    test.clock.advance(COALESCE_WINDOW_MS.input)
-
-    await vi.waitFor(() => expect(test.logs.records()).toHaveLength(1))
-    const line = JSON.stringify(lines(test.logs))
-    expect(line).not.toContain("push.example")
-    expect(line).not.toContain("p256dh")
-    expect(line).not.toContain(SESSION)
-    expect(line).not.toContain(AGENT)
+    const written = [shown, unnamed, broken].flatMap((test) => lines(test.logs))
+    expect(new Set(written.map(({ event }) => event))).toEqual(
+      new Set([
+        "push.dispatched",
+        "push.suppressed",
+        "push.agent_name.failed",
+        "push.deliver.failed",
+      ])
+    )
+    const text = JSON.stringify(written)
+    for (const told of [
+      "push.example",
+      "p256dh",
+      SESSION,
+      AGENT,
+      "Quokka",
+      "Zebra",
+      "Walrus",
+    ])
+      expect(text).not.toContain(told)
   })
 
   it("ignores the events no device is notified about", async () => {
