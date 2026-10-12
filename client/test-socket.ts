@@ -85,6 +85,16 @@ export class PipedSocket extends EventTarget {
     this.#end(1006, "", false)
   }
 
+  /**
+   * The socket fails as a browser reports it: a bare `error` event, which the
+   * ACP SDK errors its stream with, then the drop's abnormal close.
+   */
+  fail() {
+    if (this.readyState === CLOSED) return
+    this.dispatchEvent(new Event("error"))
+    this.drop()
+  }
+
   /** The proxy closes the socket with `code`. */
   closeFromGateway(code: number, reason = "") {
     this.#end(code, reason, true)
