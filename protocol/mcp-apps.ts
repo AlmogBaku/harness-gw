@@ -160,7 +160,10 @@ export const MCP_APP_SANDBOX_CSP = [
     ...LOOPBACK_SOURCES("http"),
     ...LOOPBACK_SOURCES("ws"),
   ].join(" "),
-  "worker-src 'self' blob:",
+  // A view authors its own workers as blob or data URLs; the sandbox fetches
+  // no script by address, and an opaque origin starts only a classic worker,
+  // which MapLibre takes as a data URL ending in .cjs.
+  "worker-src 'self' blob: data:",
   "frame-src https:",
   "base-uri https:",
   "object-src 'none'",
