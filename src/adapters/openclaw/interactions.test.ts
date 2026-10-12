@@ -97,9 +97,7 @@ describe("OpenClaw interactions", () => {
   ])("rejects an impossible question record with %s", (_label, alter) => {
     const interactions = new OpenClawInteractions({ request: vi.fn() })
 
-    expect(() =>
-      interactions.acceptQuestion(scope, alter(question))
-    ).toThrowError(
+    expect(() => interactions.acceptQuestion(scope, alter(question))).toThrow(
       expect.objectContaining({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     )
   })
@@ -402,7 +400,7 @@ describe("OpenClaw interactions", () => {
           allowedDecisions: ["allow-session"],
         },
       })
-    ).toThrowError(
+    ).toThrow(
       expect.objectContaining({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     )
   })
@@ -636,7 +634,7 @@ describe("OpenClaw interactions", () => {
 
     expect(() =>
       interactions.acceptQuestion(scope, { ...question, id: "question-64" })
-    ).toThrowError(
+    ).toThrow(
       expect.objectContaining({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
     )
     expect(request).not.toHaveBeenCalled()

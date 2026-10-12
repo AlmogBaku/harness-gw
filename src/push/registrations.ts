@@ -24,7 +24,7 @@ const MAX_PER_PRINCIPAL = 32
 
 /** One stored device: what the browser sent, and when it was recorded. */
 export const StoredRegistrationSchema = PushRegistrationSchema.extend({
-  createdAt: z.string().datetime(),
+  createdAt: z.iso.datetime(),
 })
 export type StoredRegistration = z.infer<typeof StoredRegistrationSchema>
 

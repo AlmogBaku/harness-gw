@@ -219,7 +219,7 @@ export const HgwSessionInfoMetaSchema = readObject({
   agentId: IdentifierSchema,
   status: SessionStatusSchema,
   archived: z.boolean(),
-  createdAt: z.string().datetime().optional(),
+  createdAt: z.iso.datetime().optional(),
   unread: z.boolean().optional(),
   pinned: z.boolean().optional(),
   /** External platform the Session came from; absent for AOS-native Sessions. */
@@ -464,7 +464,7 @@ export const HgwStateMetaSchema = readObject({
    * the turn's span, live and on replay alike, so the browser reads a turn's
    * duration from the wire rather than from its own clock.
    */
-  at: z.string().datetime().optional(),
+  at: z.iso.datetime().optional(),
   /** Stop was acknowledged but the provider has not settled yet. */
   execution: z.literal("stopping").optional(),
   /**
@@ -499,8 +499,8 @@ export const HgwToolCallMetaSchema = readObject({
   argsTextDelta: z.string().optional(),
   argsText: z.string().optional(),
   /** When the call started and finished, as the provider timed it. */
-  startedAt: z.string().datetime().optional(),
-  completedAt: z.string().datetime().optional(),
+  startedAt: z.iso.datetime().optional(),
+  completedAt: z.iso.datetime().optional(),
   /** How long the call ran, when the provider reports a span, not the ends. */
   durationMs: CountSchema.optional(),
   /** The subagent this call spawned; later updates patch it by `id`. */
@@ -544,7 +544,7 @@ export const HgwAvailableCommandsMetaSchema = readObject({
 /** `RequestPermissionRequest._meta.hgw` */
 export const HgwPermissionMetaSchema = readObject({
   requestId: IdentifierSchema,
-  expiresAt: z.string().datetime().optional(),
+  expiresAt: z.iso.datetime().optional(),
   message: z.string().max(4096).optional(),
 })
 
@@ -571,7 +571,7 @@ export type HgwQuestion = z.infer<typeof HgwQuestionSchema>
 /** `CreateElicitationRequest._meta.hgw`: lossless projection of the questions. */
 export const HgwElicitationMetaSchema = readObject({
   requestId: IdentifierSchema,
-  expiresAt: z.string().datetime().optional(),
+  expiresAt: z.iso.datetime().optional(),
   questions: z.array(HgwQuestionSchema).min(1).max(64),
 })
 
@@ -629,7 +629,7 @@ export const HgwErrorNotificationSchema = readObject({
 const ActivityBase = {
   agentId: IdentifierSchema,
   sessionId: IdentifierSchema,
-  occurredAt: z.string().datetime(),
+  occurredAt: z.iso.datetime(),
 }
 
 /**

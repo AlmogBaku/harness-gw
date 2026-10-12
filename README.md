@@ -97,7 +97,7 @@ Without Docker, run the same CLI from a checkout with `bun run serve --config
 ## Use the SDK
 
 ```bash
-npm install @harness-gw/sdk @agentclientprotocol/sdk @modelcontextprotocol/sdk zod
+npm install @harness-gw/sdk @agentclientprotocol/sdk @modelcontextprotocol/core zod
 ```
 
 ```ts

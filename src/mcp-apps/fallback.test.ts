@@ -1,12 +1,10 @@
 // @vitest-environment node
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js"
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ReadResourceRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js"
+  isJSONRPCRequest,
+  McpServer,
+  WebStandardStreamableHTTPServerTransport,
+} from "@modelcontextprotocol/server"
 import { afterEach, describe, expect, it } from "vitest"
 
 import { captureLogs } from "../../test/support/log-capture"
@@ -33,22 +31,10 @@ import { createMcpToolNames } from "./tool-names"
 
 const VIEW_URI = "ui://weather/forecast"
 const TOOLS = [
-  {
-    name: "show-forecast",
-    inputSchema: { type: "object" as const },
-    _meta: { ui: { resourceUri: VIEW_URI } },
-  },
-  {
-    name: "refresh_forecast",
-    inputSchema: { type: "object" as const },
-    _meta: { ui: { visibility: ["app"] } },
-  },
-  {
-    name: "delete_station",
-    inputSchema: { type: "object" as const },
-    _meta: { ui: { visibility: ["model"] } },
-  },
-  { name: "plain_lookup", inputSchema: { type: "object" as const } },
+  { name: "show-forecast", _meta: { ui: { resourceUri: VIEW_URI } } },
+  { name: "refresh_forecast", _meta: { ui: { visibility: ["app"] } } },
+  { name: "delete_station", _meta: { ui: { visibility: ["model"] } } },
+  { name: "plain_lookup" },
 ]
 
 /**
@@ -64,39 +50,39 @@ function appServer(authorization?: string) {
       request.headers.get("authorization") !== authorization
     )
       return new Response(null, { status: 401 })
-    const server = new Server(
-      { name: "weather", version: "1.0.0" },
-      { capabilities: { tools: {}, resources: {} } }
-    )
-    server.setRequestHandler(ListToolsRequestSchema, () => {
-      seen.listTools += 1
-      return { tools: TOOLS }
-    })
-    server.setRequestHandler(CallToolRequestSchema, (call) => {
-      seen.calls.push(call.params.name)
-      return { content: [{ type: "text", text: `ran ${call.params.name}` }] }
-    })
-    server.setRequestHandler(ReadResourceRequestSchema, (read) => ({
-      contents: [
-        {
-          uri: read.params.uri,
-          mimeType: "text/html;profile=mcp-app",
-          text: "<!doctype html><p>Forecast</p>",
-          _meta: {
-            ui: {
-              csp: {
-                connectDomains: [
-                  "https://api.weather.test",
-                  "wss://live.weather.test",
-                  "javascript:x",
-                ],
+    if (request.method === "POST") {
+      const message: unknown = await request.clone().json()
+      if (isJSONRPCRequest(message) && message.method === "tools/list")
+        seen.listTools += 1
+    }
+    const server = new McpServer({ name: "weather", version: "1.0.0" })
+    for (const { name, _meta } of TOOLS)
+      server.registerTool(name, { _meta }, () => {
+        seen.calls.push(name)
+        return { content: [{ type: "text", text: `ran ${name}` }] }
+      })
+    for (const uri of [VIEW_URI, "ui://aos-ui/artifact"])
+      server.registerResource(uri, uri, {}, () => ({
+        contents: [
+          {
+            uri,
+            mimeType: "text/html;profile=mcp-app",
+            text: "<!doctype html><p>Forecast</p>",
+            _meta: {
+              ui: {
+                csp: {
+                  connectDomains: [
+                    "https://api.weather.test",
+                    "wss://live.weather.test",
+                    "javascript:x",
+                  ],
+                },
+                prefersBorder: false,
               },
-              prefersBorder: false,
             },
           },
-        },
-      ],
-    }))
+        ],
+      }))
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,

@@ -1,10 +1,9 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import {
-  ErrorCode,
-  McpError,
+  Client,
+  ProtocolError,
+  StreamableHTTPClientTransport,
   type Tool,
-} from "@modelcontextprotocol/sdk/types.js"
+} from "@modelcontextprotocol/client"
 
 import {
   CallToolResultSchema,
@@ -156,7 +155,10 @@ export function createMcpAppClient(
     const headers = override?.headers
     if (headers && !isHttpsOrLoopback(target))
       throw new McpAppConnectionRefusedError()
-    const client = new Client({ name: "harness-gw", version: "1.0.0" })
+    const client = new Client(
+      { name: "harness-gw", version: "1.0.0" },
+      { listMaxPages: MAX_TOOL_PAGES }
+    )
     await client.connect(
       new StreamableHTTPClientTransport(target, {
         ...(options.fetch ? { fetch: options.fetch } : {}),
@@ -194,8 +196,7 @@ export function createMcpAppClient(
       // is the link.
       const key = keyOf(server)
       const pooled = pool.get(key)
-      const answered =
-        error instanceof McpError && error.code !== ErrorCode.RequestTimeout
+      const answered = error instanceof ProtocolError
       if (pooled && !answered) drop(key, pooled)
       throw error
     }
@@ -206,20 +207,11 @@ export function createMcpAppClient(
     const server = endpointOf(key)
     const started = performance.now()
     try {
-      return await request(server, async (client) => {
-        const tools: Tool[] = []
-        let cursor: string | undefined
-        for (let page = 0; page < MAX_TOOL_PAGES; page += 1) {
-          const result = await client.listTools(
-            cursor ? { cursor } : {},
-            CATALOG_REQUEST
-          )
-          tools.push(...result.tools)
-          cursor = result.nextCursor
-          if (!cursor) break
-        }
-        return tools
-      })
+      return await request(
+        server,
+        async (client) =>
+          (await client.listTools(undefined, CATALOG_REQUEST)).tools
+      )
     } catch (err) {
       logger?.warn(
         {

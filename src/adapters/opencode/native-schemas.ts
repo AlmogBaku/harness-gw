@@ -6,9 +6,9 @@ import { validIdentifier } from "../../core/identifier"
 const IdentifierSchema = z.string().refine(validIdentifier)
 
 const NativeTimeSchema = z.object({
-  created: z.number().finite().nonnegative(),
-  updated: z.number().finite().nonnegative().optional(),
-  archived: z.number().finite().nonnegative().optional(),
+  created: z.number().nonnegative(),
+  updated: z.number().nonnegative().optional(),
+  archived: z.number().nonnegative().optional(),
 })
 
 export const OpenCodeAgentSchema = z.object({
@@ -136,12 +136,12 @@ const NativePromptFileAttachmentSchema = z.object({
 })
 
 const NativeMessageTimeSchema = z.object({
-  created: z.number().finite().nonnegative(),
+  created: z.number().nonnegative(),
 })
 
 /** When a stored part or turn was created and, once it settled, completed. */
 const NativeSpanTimeSchema = NativeMessageTimeSchema.extend({
-  completed: z.number().finite().nonnegative().optional(),
+  completed: z.number().nonnegative().optional(),
 })
 
 const NativeToolStateSchema = z.discriminatedUnion("status", [
