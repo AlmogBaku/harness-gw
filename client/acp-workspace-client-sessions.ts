@@ -337,6 +337,12 @@ export function createAcpSessionStore({
     dispose() {
       leaveActivity()
     },
+    /**
+     * A connection that starts over re-sends every request still open as it
+     * hydrates, so one the old connection left open and the new one does not
+     * name has been settled while nobody was listening.
+     */
+    forgetOpenRequests: () => openRequests.clear(),
     put,
     rowsFor,
     /** The provider's title, as a list page or a subscribed Session reports it. */

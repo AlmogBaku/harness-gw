@@ -424,6 +424,9 @@ type ActivityType =
   | "attention-requested"
   | "attention-resolved"
 
+/** What the feed tells the client, or the connection starting over. */
+type FeedStep = ReturnType<typeof activity> | "reconnect"
+
 /** One `_hgw/activity` item about the listed Session. */
 function activity(type: ActivityType, requestId = "request-1") {
   const base = {
@@ -799,22 +802,49 @@ describe("ACP workspace client", () => {
     expect(statuses).toEqual(["idle", "running"])
   })
 
-  it.each<[ActivityType, SessionMetadata["status"], SessionMetadata["status"]]>(
+  it.each<
+    [string, SessionMetadata["status"], FeedStep[], SessionMetadata["status"]]
+  >([
+    ["turn-started", "idle", [activity("turn-started")], "running"],
     [
-      ["turn-started", "idle", "running"],
-      ["attention-requested", "running", "waiting-for-input"],
-      ["attention-resolved", "waiting-for-input", "running"],
-      ["turn-finished", "running", "idle"],
-      ["turn-failed", "running", "failed"],
-    ]
-  )(
-    "moves a held Session nobody subscribes to on the feed's %s, from %s to %s",
-    async (type, from, to) => {
-      const { client, setListed, emitNotification } = createClient()
+      "attention-requested",
+      "running",
+      [activity("attention-requested")],
+      "waiting-for-input",
+    ],
+    [
+      "attention-resolved",
+      "waiting-for-input",
+      [activity("attention-resolved")],
+      "running",
+    ],
+    ["turn-finished", "running", [activity("turn-finished")], "idle"],
+    ["turn-failed", "running", [activity("turn-failed")], "failed"],
+    // The new connection's hydration re-sends no request that was open on
+    // the old one, so that request no longer holds the Session waiting.
+    [
+      "attention-resolved after a reconnect",
+      "running",
+      [
+        activity("attention-requested", "request-1"),
+        "reconnect",
+        activity("attention-requested", "request-2"),
+        activity("attention-resolved", "request-2"),
+      ],
+      "running",
+    ],
+  ])(
+    "moves a held Session nobody subscribes to on the feed's %s, from %s",
+    async (_case, from, steps, to) => {
+      const { client, setListed, emitNotification, emitStatus } = createClient()
       setListed(listedWith(from))
       await client.getSessionMetadata([SESSION_ID])
 
-      emitNotification(HGW_METHODS.notify.activity, activity(type))
+      for (const step of steps)
+        if (step === "reconnect") {
+          emitStatus("reconnecting")
+          emitStatus("ready")
+        } else emitNotification(HGW_METHODS.notify.activity, step)
 
       expect(client.sessionStatus(SESSION_ID)).toBe(to)
     }
