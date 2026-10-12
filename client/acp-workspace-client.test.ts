@@ -408,6 +408,36 @@ function createFakeConnection() {
   }
 }
 
+/** A list entry that reports the Session in `status`. */
+function listedWith(status: SessionMetadata["status"]): SessionInfo {
+  const entry = listEntry()
+  return {
+    ...entry,
+    _meta: { [HGW_META_KEY]: { ...sessionInfoMeta(true), status } },
+  }
+}
+
+type ActivityType =
+  | "turn-started"
+  | "turn-finished"
+  | "turn-failed"
+  | "attention-requested"
+  | "attention-resolved"
+
+/** One `_hgw/activity` item about the listed Session. */
+function activity(type: ActivityType, requestId = "request-1") {
+  const base = {
+    agentId: AGENT_ID,
+    sessionId: SESSION_ID,
+    occurredAt: UPDATED_AT,
+    type,
+  }
+  if (type === "attention-requested")
+    return { ...base, requestId, attentionKind: "question" }
+  if (type === "attention-resolved") return { ...base, requestId }
+  return { ...base, turnId: "run-1" }
+}
+
 function createFakeRest() {
   return {
     adoptSessionOwnership: vi.fn(),
@@ -769,6 +799,73 @@ describe("ACP workspace client", () => {
     expect(statuses).toEqual(["idle", "running"])
   })
 
+  it.each<[ActivityType, SessionMetadata["status"], SessionMetadata["status"]]>(
+    [
+      ["turn-started", "idle", "running"],
+      ["attention-requested", "running", "waiting-for-input"],
+      ["attention-resolved", "waiting-for-input", "running"],
+      ["turn-finished", "running", "idle"],
+      ["turn-failed", "running", "failed"],
+    ]
+  )(
+    "moves a held Session nobody subscribes to on the feed's %s, from %s to %s",
+    async (type, from, to) => {
+      const { client, setListed, emitNotification } = createClient()
+      setListed(listedWith(from))
+      await client.getSessionMetadata([SESSION_ID])
+
+      emitNotification(HGW_METHODS.notify.activity, activity(type))
+
+      expect(client.sessionStatus(SESSION_ID)).toBe(to)
+    }
+  )
+
+  it("keeps a Session waiting while another of its requests is open, counting them while it is subscribed", async () => {
+    const { client, emitNotification, emitUpdate } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    const release = client.subscribeSession(SESSION_ID)
+    emitUpdate({ sessionUpdate: "state_update", state: "requires_action" })
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-requested", "request-1")
+    )
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-requested", "request-2")
+    )
+    release()
+
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-resolved", "request-1")
+    )
+    expect(client.sessionStatus(SESSION_ID)).toBe("waiting-for-input")
+    emitNotification(
+      HGW_METHODS.notify.activity,
+      activity("attention-resolved", "request-2")
+    )
+    expect(client.sessionStatus(SESSION_ID)).toBe("running")
+  })
+
+  it("leaves a subscribed Session's status to its own stream, and holds no row the feed names", async () => {
+    const { client, join, emitNotification, emitUpdate } = createClient()
+    await join()
+    emitNotification(HGW_METHODS.notify.activity, activity("turn-finished"))
+    expect(client.sessionStatus(SESSION_ID)).toBe("running")
+    emitUpdate({
+      sessionUpdate: "state_update",
+      state: "idle",
+      stopReason: "end_turn",
+    })
+    expect(client.sessionStatus(SESSION_ID)).toBe("idle")
+
+    emitNotification(HGW_METHODS.notify.activity, {
+      ...activity("turn-started"),
+      sessionId: UNLISTED_SESSION_ID,
+    })
+    expect(client.sessionStatus(UNLISTED_SESSION_ID)).toBe("unknown")
+  })
+
   it("publishes Session Todos from the plan update", async () => {
     const { client, join, emitUpdate } = createClient()
     await join()
@@ -794,7 +891,7 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("maps workspace activity and ignores read-state events", async () => {
+  it("maps workspace activity, its preview and replay mark, and ignores read-state events", async () => {
     const { client, emitNotification } = createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
@@ -806,6 +903,17 @@ describe("ACP workspace client", () => {
       type: "attention-requested",
       requestId: "request-1",
       attentionKind: "permission",
+    })
+    emitNotification(HGW_METHODS.notify.activity, {
+      agentId: AGENT_ID,
+      sessionId: SESSION_ID,
+      occurredAt: UPDATED_AT,
+      replayed: true,
+      type: "attention-requested",
+      requestId: "request-2",
+      attentionKind: "question",
+      requestText: "Which region?",
+      requestMore: 2,
     })
     emitNotification(HGW_METHODS.notify.activity, {
       agentId: AGENT_ID,
@@ -825,12 +933,28 @@ describe("ACP workspace client", () => {
         requestId: "request-1",
         attentionKind: "permission",
       },
+      {
+        id: `${SESSION_ID}:request-2:attention-requested`,
+        agentId: AGENT_ID,
+        sessionId: SESSION_ID,
+        occurredAt: UPDATED_AT,
+        replayed: true,
+        type: "attention-requested",
+        requestId: "request-2",
+        attentionKind: "question",
+        requestText: "Which region?",
+        requestMore: 2,
+      },
     ])
+    // A live item carries no replay mark and no preview it was not sent.
+    expect(events[0]).not.toHaveProperty("replayed")
+    expect(events[0]).not.toHaveProperty("requestText")
   })
 
   it("reports an Agent the catalog gained once a creator run stops", async () => {
     const clock = useFakeClock()
-    const { client, join, emitUpdate, setAgents } = createClient()
+    const { client, join, emitUpdate, emitNotification, setAgents } =
+      createClient()
     const events: unknown[] = []
     client.subscribeActivity((event) => events.push(event))
     setAgents([creatorEntry()])
@@ -841,6 +965,12 @@ describe("ACP workspace client", () => {
 
     emitUpdate({ sessionUpdate: "state_update", state: "running" })
     setAgents([creatorEntry(), catalogEntry()])
+    // The feed can tell of the turn's end before the Session's own stream does.
+    emitNotification(HGW_METHODS.notify.activity, {
+      ...activity("turn-finished"),
+      agentId: CREATOR_ID,
+      sessionId,
+    })
     emitUpdate({
       sessionUpdate: "state_update",
       state: "idle",
@@ -849,6 +979,7 @@ describe("ACP workspace client", () => {
     await clock.advance(0)
 
     expect(events).toEqual([
+      expect.objectContaining({ type: "turn-finished", sessionId }),
       {
         id: `${sessionId}:${AGENT_ID}`,
         type: "agent-ready",

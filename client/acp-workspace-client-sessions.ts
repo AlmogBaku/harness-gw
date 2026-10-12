@@ -56,6 +56,20 @@ function statusFromState(update: StateUpdate): SessionStatus {
 }
 
 /**
+ * The status a feed event moves a Session to. A resolved request means the
+ * turn runs on only once no other request of the Session is open.
+ */
+const FEED_STATUS: Readonly<
+  Partial<Record<HgwActivityNotification["type"], SessionStatus>>
+> = {
+  "turn-started": "running",
+  "attention-requested": "waiting-for-input",
+  "attention-resolved": "running",
+  "turn-finished": "idle",
+  "turn-failed": "failed",
+}
+
+/**
  * Workspace events as the feed sent them, a request's preview and the replay
  * mark included; read state travels as a row change instead.
  */
@@ -118,6 +132,10 @@ export function createAcpSessionStore({
   /** Sessions mid-replay, with the newest status that replay has sent. */
   const replaying = new Map<string, SessionStatus | undefined>()
   const subscriptions = new Set<MetadataSubscription>()
+  /** How many holders subscribe each Session; its own stream outranks the feed. */
+  const subscribed = new Map<string, number>()
+  /** Every Session's open requests, as the feed reports them. */
+  const openRequests = new Map<string, Set<string>>()
   const todoListeners = new Map<string, Set<(todos: TodoItem[]) => void>>()
   const activityListeners = new Set<(event: WorkspaceActivityEvent) => void>()
   const invalidationListeners = new Map<string, Set<() => void>>()
@@ -270,11 +288,35 @@ export function createAcpSessionStore({
       update: (update, meta) => acceptUpdate(sessionId, update, meta),
       replay: () => holdReplayedStatus(sessionId),
     })
+    subscribed.set(sessionId, (subscribed.get(sessionId) ?? 0) + 1)
     return () => {
       leave()
+      const holders = (subscribed.get(sessionId) ?? 1) - 1
+      if (holders > 0) subscribed.set(sessionId, holders)
+      else subscribed.delete(sessionId)
       todos.delete(sessionId)
       replaying.delete(sessionId)
     }
+  }
+
+  /**
+   * Keeps a held row's status live from the feed, for the Sessions nobody
+   * subscribes to: a subscribed Session's own `state_update` is authoritative,
+   * and a turn it ends must still read as an end. Open requests are counted
+   * for every Session, so one that stops being subscribed counts right.
+   */
+  function noteActivity(notification: HgwActivityNotification) {
+    const { sessionId, type } = notification
+    const open = openRequests.get(sessionId) ?? new Set<string>()
+    if (type === "attention-requested") open.add(notification.requestId)
+    else if (type === "attention-resolved") open.delete(notification.requestId)
+    else if (type === "turn-finished" || type === "turn-failed") open.clear()
+    if (open.size > 0) openRequests.set(sessionId, open)
+    else openRequests.delete(sessionId)
+    const status = FEED_STATUS[type]
+    if (!status || subscribed.has(sessionId)) return
+    if (type === "attention-resolved" && open.size > 0) return
+    patch(sessionId, { status })
   }
 
   const leaveActivity = subscribeHgwNotification(
@@ -284,6 +326,7 @@ export function createAcpSessionStore({
     (notification) => {
       if (notification.type === "unread-changed")
         return patch(notification.sessionId, { unread: notification.unread })
+      noteActivity(notification)
       const event = activityEventOf(notification)
       if (event) emitActivity(event)
     }
