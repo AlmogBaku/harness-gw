@@ -160,9 +160,10 @@ export const MCP_APP_SANDBOX_CSP = [
     ...LOOPBACK_SOURCES("http"),
     ...LOOPBACK_SOURCES("ws"),
   ].join(" "),
-  // A view authors its own workers as blob or data URLs; the sandbox fetches
-  // no script by address, and an opaque origin starts only a classic worker,
-  // which MapLibre takes as a data URL ending in .cjs.
+  // A view authors its own workers as blob or data URLs, since the sandbox
+  // fetches no script by address. Chromium starts no module worker from a blob
+  // URL in an opaque origin, so a module worker, such as MapLibre's, comes as a
+  // data URL.
   "worker-src 'self' blob: data:",
   "frame-src https:",
   "base-uri https:",
