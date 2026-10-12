@@ -1,5 +1,6 @@
 import {
   SESSION_CATALOG_MAX_WINDOW,
+  type AgentCatalogEntry,
   type AgentCatalogResponse,
   type AgentUpdatePatch,
   type AgentUpdateResponse,
@@ -85,12 +86,17 @@ export type Catalog = {
   markRead(agentId: string, sessionId: string): Promise<void>
   delete(scope: SessionScope): Promise<void>
   /**
-   * The Session list changed and must be read again. `signaled` says whether
-   * the runtime reports its own changes; a change made here is always told.
+   * The Session list or an Agent changed and must be read again. `signaled`
+   * says whether the runtime reports its own changes; a change made here, an
+   * Agent write included, is always told.
    */
   readonly invalidation: {
     readonly signaled: boolean
     subscribe(listener: () => void): () => void
+  }
+  /** Each Agent a write here changed, as the runtime confirmed it. */
+  readonly agentUpdates: {
+    subscribe(listener: (agent: AgentCatalogEntry) => void): () => void
   }
 }
 
@@ -111,6 +117,7 @@ export function createCatalog({
   clock = defaultClock,
 }: CatalogOptions): Catalog {
   const invalidated = new Set<() => void>()
+  const agentUpdated = new Set<(agent: AgentCatalogEntry) => void>()
   const subscribeChanges = runtime.subscribeCatalogChanges?.bind(runtime)
   /**
    * The runtime's own change feed, started by the first listener and kept
@@ -200,8 +207,13 @@ export function createCatalog({
     info: () => runtime.runtimeInfo(),
     agents: () => runtime.listAgents(),
     folder: (agentId) => runtime.agentFolder(agentId),
-    updateAgent: (agentId, patch, revision) =>
-      runtime.updateAgent(agentId, patch, revision),
+    async updateAgent(agentId, patch, revision) {
+      const updated = await runtime.updateAgent(agentId, patch, revision)
+      // Whoever reads Agents learns the write now, not when a cache lapses.
+      for (const listener of [...agentUpdated]) listener(updated.agent)
+      invalidate()
+      return updated
+    },
     invited: (agentId, ref, create) =>
       runtime.resolveInvitedSession(agentId, ref, create),
     scope,
@@ -303,6 +315,15 @@ export function createCatalog({
           })
         return () => {
           invalidated.delete(listener)
+        }
+      },
+    },
+
+    agentUpdates: {
+      subscribe(listener) {
+        agentUpdated.add(listener)
+        return () => {
+          agentUpdated.delete(listener)
         }
       },
     },

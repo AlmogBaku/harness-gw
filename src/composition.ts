@@ -30,7 +30,7 @@ import { createSessionRows, type SessionRows } from "./core/session-rows"
 import { createGuestAcpService } from "./guest/acp"
 import { createGuestApp } from "./guest/app"
 import { createGuestAttachmentStages } from "./guest/context"
-import { createAgentNames } from "./push/agent-names"
+import { createAgentFacts } from "./push/agent-facts"
 import { createPushDispatcher } from "./push/dispatcher"
 import { createPresenceRegistry } from "./push/presence"
 import { openPushRegistrations } from "./push/registrations"
@@ -152,7 +152,7 @@ async function createPushDelivery(
   push: NonNullable<GatewayConfig["push"]>,
   runtimeInstance: RuntimeInstance,
   sessionRows: SessionRows,
-  catalog: Pick<Catalog, "agents">,
+  catalog: Pick<Catalog, "agents" | "agentUpdates">,
   dependencies: ConfiguredGatewayDependencies,
   clock: { now?: () => number },
   readers: SecretReaders
@@ -175,7 +175,7 @@ async function createPushDelivery(
     }),
     // One operator owns every Agent on this surface.
     principalOf: () => OPERATOR_PRINCIPAL,
-    agentName: createAgentNames({
+    agentFacts: createAgentFacts({
       catalog,
       logger: dependencies.logger,
       ...clock,

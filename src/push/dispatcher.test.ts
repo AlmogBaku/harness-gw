@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { describe, expect, it, onTestFinished, vi } from "vitest"
 
 import { captureLogs, type LogCapture } from "../../test/support/log-capture"
-import type { AgentCatalogEntry } from "../../protocol"
+import type { AgentCatalogEntry, AgentCatalogResponse } from "../../protocol"
 import {
   COALESCE_WINDOW_MS,
   PRESENCE_CLOSED_GRACE_MS,
@@ -13,7 +13,7 @@ import {
 import type { ExecutionEvent } from "../core/events"
 import type { RuntimeInstance } from "../core/runtime"
 import { createSessionRows, type SessionRow } from "../core/session-rows"
-import { createAgentNames, type AgentNamesOptions } from "./agent-names"
+import { createAgentFacts } from "./agent-facts"
 import { createPushDispatcher } from "./dispatcher"
 import { createPresenceRegistry } from "./presence"
 import {
@@ -127,6 +127,10 @@ function entry(
   }
 }
 
+function muted(agent: AgentCatalogEntry): AgentCatalogEntry {
+  return { ...agent, summary: { ...agent.summary, muted: true } }
+}
+
 function catalogOf(...agents: AgentCatalogEntry[]) {
   return { agents: async () => ({ revision: "revision-1", agents }) }
 }
@@ -135,8 +139,8 @@ type HarnessOptions = {
   devices?: StoredRegistration[]
   rows?: SessionRow[]
   send?: (target: unknown) => Promise<PushSendResult>
-  /** Where Agent names come from; none means a push names no Agent. */
-  catalog?: AgentNamesOptions["catalog"]
+  /** Where Agent facts come from; none means every push goes, unnamed. */
+  catalog?: { agents: () => Promise<AgentCatalogResponse> }
   registrations?: PushRegistrations
   clock?: ReturnType<typeof createTestTimers>
 }
@@ -181,6 +185,7 @@ function harness(options: HarnessOptions = {}) {
   const sender: PushSender = { send }
   const presence = createPresenceRegistry({ now: clock.now })
   const logs = captureLogs()
+  const agentUpdated = new Set<(agent: AgentCatalogEntry) => void>()
 
   const dispatcher = createPushDispatcher({
     runtimeInstance,
@@ -191,8 +196,16 @@ function harness(options: HarnessOptions = {}) {
     principalOf: () => OPERATOR,
     ...(options.catalog
       ? {
-          agentName: createAgentNames({
-            catalog: options.catalog,
+          agentFacts: createAgentFacts({
+            catalog: {
+              agents: options.catalog.agents,
+              agentUpdates: {
+                subscribe(listener) {
+                  agentUpdated.add(listener)
+                  return () => agentUpdated.delete(listener)
+                },
+              },
+            },
             logger: logs.logger,
             now: clock.now,
             schedule: clock.schedule,
@@ -207,6 +220,10 @@ function harness(options: HarnessOptions = {}) {
   return {
     clock,
     dispatcher,
+    /** An Agent write the catalog confirmed. */
+    agentUpdated(agent: AgentCatalogEntry) {
+      for (const listener of agentUpdated) listener(agent)
+    },
     presence,
     rows: sessionRows,
     registrations,
@@ -355,31 +372,158 @@ describe("push dispatcher", () => {
       await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
       expect(test.send.mock.calls[0]![1]).not.toHaveProperty("agentName")
       expect(lines(test.logs)[0]).toEqual({
-        event: "push.agent_name.failed",
+        event: "push.agent_facts.failed",
         reason,
       })
     }
   )
 
-  it.each<[string, Partial<AgentCatalogEntry>]>([
-    ["hidden", { visibility: "hidden" }],
-    ["not selectable", { selectable: false }],
+  it.each<[string, AgentCatalogEntry, "quiet" | "unnamed"]>([
+    ["muted", muted(entry(AGENT, "Researcher")), "quiet"],
+    [
+      "hidden and not the creator",
+      entry(AGENT, "Researcher", { visibility: "hidden" }),
+      "quiet",
+    ],
+    [
+      "not selectable",
+      entry(AGENT, "Researcher", { selectable: false }),
+      "unnamed",
+    ],
     [
       "the creator",
-      {
+      entry(AGENT, "Creator", {
+        visibility: "hidden",
         summary: { kind: "ready", id: AGENT, name: "Creator", role: "creator" },
-      },
+      }),
+      "unnamed",
     ],
-  ])("names no Agent that is %s", async (_case, overrides) => {
-    const test = harness({
-      catalog: catalogOf(entry(AGENT, "Researcher", overrides)),
-    })
+    ["not in the catalog", entry("writer", "Writer"), "unnamed"],
+  ])(
+    "sends nothing for an Agent that is quiet, and names no other: %s",
+    async (_case, agent, outcome) => {
+      const test = harness({ rows: [row()], catalog: catalogOf(agent) })
 
-    test.publish(occurred("attention-requested"))
+      test.publish(asked(["Ship it?"]))
+      test.clock.advance(COALESCE_WINDOW_MS.input)
+      await flush()
+
+      if (outcome === "quiet") {
+        expect(test.send).not.toHaveBeenCalled()
+        expect(lines(test.logs)).toEqual([
+          {
+            event: "push.suppressed",
+            category: "input",
+            reason: "quiet",
+            sessions: 1,
+          },
+        ])
+        return
+      }
+      expect(test.send).toHaveBeenCalledOnce()
+      expect(test.send.mock.calls[0]![1]).toMatchObject({
+        sessionTitle: "Notes",
+        requestText: "Ship it?",
+      })
+      expect(test.send.mock.calls[0]![1]).not.toHaveProperty("agentName")
+    }
+  )
+
+  it("honors a mute from the next push, without waiting out the cached read", async () => {
+    const agents = vi.fn(catalogOf(entry(AGENT, "Researcher")).agents)
+    const test = harness({ catalog: { agents } })
+    const ask = () => {
+      test.publish(asked(["Ship it?"], { occurredAtMs: test.clock.now() }))
+      test.clock.advance(COALESCE_WINDOW_MS.input)
+    }
+    ask()
+    await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
+
+    test.agentUpdated(muted(entry(AGENT, "Researcher")))
+    ask()
+    await flush()
+
+    expect(test.send).toHaveBeenCalledOnce()
+    expect(agents).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ["slow", () => new Promise<never>(() => {})],
+    ["failing", () => Promise.reject(new Error("catalog down"))],
+  ])(
+    "keeps a muted Agent quiet when a later read is %s",
+    async (_case, later) => {
+      const agents = vi
+        .fn<() => Promise<AgentCatalogResponse>>()
+        .mockImplementationOnce(
+          catalogOf(muted(entry(AGENT, "Researcher"))).agents
+        )
+        .mockImplementation(later)
+      const test = harness({ catalog: { agents } })
+      const ask = async () => {
+        test.publish(asked(["Ship it?"], { occurredAtMs: test.clock.now() }))
+        test.clock.advance(COALESCE_WINDOW_MS.input)
+        await flush()
+        test.clock.advance(1_000)
+        await flush()
+      }
+      await ask()
+
+      // The read has lapsed; the last one that succeeded still answers.
+      test.clock.advance(61_000)
+      await ask()
+
+      expect(agents).toHaveBeenCalledTimes(2)
+      expect(test.send).not.toHaveBeenCalled()
+    }
+  )
+
+  it("keeps a mute written while a read was out, whatever that read says", async () => {
+    const read = Promise.withResolvers<AgentCatalogResponse>()
+    const agents = vi
+      .fn<() => Promise<AgentCatalogResponse>>()
+      .mockReturnValueOnce(read.promise)
+    const test = harness({ catalog: { agents } })
+    test.publish(asked(["Ship it?"]))
+    test.clock.advance(COALESCE_WINDOW_MS.input)
+    await flush()
+
+    test.agentUpdated(muted(entry(AGENT, "Researcher")))
+    read.resolve({
+      revision: "revision-1",
+      agents: [entry(AGENT, "Researcher")],
+    })
+    await flush()
+
+    expect(test.send).not.toHaveBeenCalled()
+    expect(lines(test.logs)).toContainEqual(
+      expect.objectContaining({ reason: "quiet" })
+    )
+  })
+
+  it("pushes after an unmute even when the next read fails", async () => {
+    const agents = vi
+      .fn<() => Promise<AgentCatalogResponse>>()
+      .mockImplementationOnce(
+        catalogOf(muted(entry(AGENT, "Researcher"))).agents
+      )
+      .mockRejectedValue(new Error("catalog down"))
+    const test = harness({ catalog: { agents } })
+    test.publish(asked(["Ship it?"]))
+    test.clock.advance(COALESCE_WINDOW_MS.input)
+    await flush()
+    expect(test.send).not.toHaveBeenCalled()
+
+    test.agentUpdated(entry(AGENT, "Researcher"))
+    test.clock.advance(61_000)
+    test.publish(asked(["Ship it?"], { occurredAtMs: test.clock.now() }))
     test.clock.advance(COALESCE_WINDOW_MS.input)
 
     await vi.waitFor(() => expect(test.send).toHaveBeenCalledOnce())
-    expect(test.send.mock.calls[0]![1]).not.toHaveProperty("agentName")
+    expect(agents).toHaveBeenCalledTimes(2)
+    expect(test.send.mock.calls[0]![1]).toMatchObject({
+      agentName: "Researcher",
+    })
   })
 
   it("tells only a device registered in the last 30 days what a Session is about, and drops one past 90", async () => {
@@ -764,13 +908,27 @@ describe("push dispatcher", () => {
     broken.publish(question)
     broken.clock.advance(COALESCE_WINDOW_MS.input)
     await vi.waitFor(() => expect(broken.logs.records()).toHaveLength(1))
+    // Held back because the Agent is muted.
+    const quiet = harness({
+      ...content,
+      catalog: catalogOf(muted(entry(AGENT, "Quokka name"))),
+    })
+    quiet.publish(question)
+    quiet.clock.advance(COALESCE_WINDOW_MS.input)
+    await vi.waitFor(() =>
+      expect(lines(quiet.logs)).toContainEqual(
+        expect.objectContaining({ reason: "quiet" })
+      )
+    )
 
-    const written = [shown, unnamed, broken].flatMap((test) => lines(test.logs))
+    const written = [shown, unnamed, broken, quiet].flatMap((test) =>
+      lines(test.logs)
+    )
     expect(new Set(written.map(({ event }) => event))).toEqual(
       new Set([
         "push.dispatched",
         "push.suppressed",
-        "push.agent_name.failed",
+        "push.agent_facts.failed",
         "push.deliver.failed",
       ])
     )

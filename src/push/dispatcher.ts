@@ -10,6 +10,7 @@ import {
   type PushMessage,
 } from "../../protocol/push"
 import { previewText, requestPreview } from "../core/request-text"
+import type { AgentFacts } from "./agent-facts"
 import type { RuntimeInstance } from "../core/runtime"
 import type { SessionRows } from "../core/session-rows"
 import {
@@ -56,8 +57,8 @@ export type PushDispatcherOptions = {
   sender: PushSender
   /** Which principal one Agent's events notify. */
   principalOf(agentId: string): string
-  /** The name a push may show for an Agent; never rejects. */
-  agentName?: (agentId: string) => Promise<string | undefined>
+  /** What a push needs to know of its Agent; never rejects. */
+  agentFacts?: (agentId: string) => Promise<AgentFacts>
   logger?: Logger
   now?: () => number
   schedule?: (callback: () => void, delayMs: number) => () => void
@@ -70,10 +71,11 @@ export interface PushDispatcher {
 /**
  * Turns the coordinator's execution events into device pushes: one window per
  * principal and category, gated by what the workspace already shows, then one
- * push per Session to every device that asked for that category. A device
- * registered in the last 30 days is also told the Agent's name, the Session's
- * title, and what is asked; the lines this writes name none of them, and no
- * device or Session either.
+ * push per Session to every device that asked for that category. A quiet
+ * Agent, muted or hidden and not the creator, sends none. A device registered
+ * in the last 30 days is also told the Agent's name, the Session's title, and
+ * what is asked; the lines this writes name none of them, and no Agent,
+ * device, or Session either.
  */
 export function createPushDispatcher({
   runtimeInstance,
@@ -82,7 +84,7 @@ export function createPushDispatcher({
   presence,
   sender,
   principalOf,
-  agentName,
+  agentFacts = async () => ({ quiet: false }),
   logger,
   now = Date.now,
   schedule = defaultSchedule,
@@ -91,14 +93,15 @@ export function createPushDispatcher({
   const lastSent = new Map<string, number>()
 
   /**
-   * One line for a window that had candidates and sent nothing: a count, the
-   * reason, and for a read decision the two moments it turned on. Timestamps
-   * identify nothing, and they are the only way to tell a read that really came
-   * after the event from a stamp that merely looks newer than one.
+   * One line for Sessions a window held back: a count, the reason, and for a
+   * read decision the two moments it turned on. The gate reports a window it
+   * emptied; delivery reports every Session it skips. Timestamps identify
+   * nothing, and they are the only way to tell a read that really came after
+   * the event from a stamp that merely looks newer than one.
    */
   const suppressed = (
     category: PushCategory,
-    reason: SuppressionReason | "stale",
+    reason: SuppressionReason | "quiet" | "stale",
     sessions: number,
     decision?: { readAtMs: number; occurredAtMs: number }
   ) => {
@@ -177,12 +180,10 @@ export function createPushDispatcher({
     })
   }
 
-  const contentOf = async ({
-    agentId,
-    sessionId,
-    request,
-  }: CoalescedSession): Promise<PushContent> => {
-    const name = await agentName?.(agentId)
+  const contentOf = (
+    { agentId, sessionId, request }: CoalescedSession,
+    name: string | undefined
+  ): PushContent => {
     const title = previewText(
       sessionRows.get(agentId, sessionId)?.title ?? "",
       PUSH_TEXT_LIMITS.sessionTitle
@@ -213,22 +214,31 @@ export function createPushDispatcher({
       .list(principalId)
       .filter((device) => device.categories[category])
     if (devices.length === 0) return
-    const sessions = unsent(candidates)
-    if (sessions.length === 0)
-      return suppressed(category, "stale", candidates.length)
-    const told = devices.some(fresh)
-    const messages = await Promise.all(
-      sessions.map(async (session) => ({
-        ids: {
-          v: 2 as const,
-          category,
-          agentId: session.agentId,
-          sessionId: session.sessionId,
-          occurredAt: new Date(session.newestAtMs).toISOString(),
-        },
-        content: told ? await contentOf(session) : {},
-      }))
+    const facts = new Map(
+      await Promise.all(
+        [...new Set(candidates.map(({ agentId }) => agentId))].map(
+          async (agentId) => [agentId, await agentFacts(agentId)] as const
+        )
+      )
     )
+    const heard = candidates.filter(({ agentId }) => !facts.get(agentId)?.quiet)
+    if (heard.length < candidates.length)
+      suppressed(category, "quiet", candidates.length - heard.length)
+    const sessions = unsent(heard)
+    if (sessions.length < heard.length)
+      suppressed(category, "stale", heard.length - sessions.length)
+    if (sessions.length === 0) return
+    const told = devices.some(fresh)
+    const messages = sessions.map((session) => ({
+      ids: {
+        v: 2 as const,
+        category,
+        agentId: session.agentId,
+        sessionId: session.sessionId,
+        occurredAt: new Date(session.newestAtMs).toISOString(),
+      },
+      content: told ? contentOf(session, facts.get(session.agentId)?.name) : {},
+    }))
     const settled = await Promise.allSettled(
       messages.flatMap(({ ids, content }) =>
         devices.map(async (device) => ({
