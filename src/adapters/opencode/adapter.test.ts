@@ -518,6 +518,7 @@ describe("OpenCode server adapter", () => {
       { avatar: "ring/blue" },
       { avatar: null },
       { visibility: "hidden" as const },
+      { muted: true },
     ])
       await expect(
         adapter.updateAgent("research", patch, revision)

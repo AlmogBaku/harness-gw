@@ -696,10 +696,13 @@ describe("OpenClaw Agent avatars", () => {
       catalog.agents.find((agent) => agent.summary.id === id)!.revision
     native.requests.length = 0
 
-    // A patch that touches visibility is unsupported as a whole.
+    // A patch that touches visibility or the mute is unsupported as a whole,
+    // so no mute is dropped beside an avatar that is written.
     for (const patch of [
       { visibility: "hidden" as const },
       { visibility: "visible" as const, avatar: "ring/blue" },
+      { muted: true },
+      { avatar: "ring/blue", muted: false },
     ]) {
       const error = await rejection(
         workspace.updateAgent("agent-a", patch, revisionOf("agent-a"))
