@@ -556,7 +556,7 @@ a sentence's closing period stays.
 | An elicitation's own message on the ask card                                                                                                      | broad    |
 | `requestText` in `_hgw/activity` and in Web Push                                                                                                  | broad    |
 | `sessionTitle` and `agentName` in Web Push                                                                                                        | broad    |
-| A tool call's title, arguments, result and content, its streamed output, its terminal's command and output, and its subagent's goal and summary | broad    |
+| A tool call's title, arguments, result and content, its streamed output, and its terminal's command and output                                      | broad    |
 | The answers an answered question records                                                                                                          | broad    |
 | An MCP App view's tool input and result                                                                                                           | broad    |
 
@@ -564,10 +564,10 @@ Tool data is masked on its way to the browser, live and replayed, for every
 runtime and both listeners. A JSON value, and text that parses as one, is
 masked by key and by value: a secret-named key keeps its name and loses any
 value but a boolean or `null`, and JSON with nothing to mask is sent as
-written. A path that carries a credential is dropped rather than masked,
-since masked it would name no file: a location, a diff that names it, a
-subagent's file, a terminal's working directory. A patch that carries one is
-dropped from its diff. Each text is cut to 262,144 UTF-16 units, a
+written. A path or a patch that carries a credential is the adapter's to drop
+rather than mask, since masked it would name no file or no longer apply: on
+Hermes, the one runtime that reports them, a location, a diff, and a
+subagent's file. Each text is cut to 262,144 UTF-16 units, a
 terminal's output keeping its tail: plain text before it is masked, so a huge
 output costs no more to mask, and JSON after, so no secret-named key is cut
 out of reach. An MCP App view's files are served from the stored call, never

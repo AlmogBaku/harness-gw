@@ -38,7 +38,6 @@ import {
   stateOutbound,
   TodosSchema,
   maskedToolText,
-  publicPath,
   toolContentOutbound,
   ACP_STOP_REASON,
   diffContent,
@@ -443,10 +442,9 @@ function terminalStep(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.TerminalOutput>
 ): Step {
-  const { terminalId, exit } = event
+  const { terminalId, cwd, exit } = event
   const command =
     event.command === undefined ? undefined : maskedToolText(event.command)
-  const cwd = event.cwd === undefined ? undefined : publicPath(event.cwd)
   const data =
     event.data === undefined ? undefined : maskedToolText(event.data, "tail")
   const first = state.terminals[terminalId] === undefined

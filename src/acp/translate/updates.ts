@@ -19,7 +19,7 @@ import {
 } from "../../../protocol/acp"
 import type { AcpOutbound, Built, TranslateContext } from "../types"
 import { StopReason, type ToolDiff } from "../../core/events"
-import { containsCredential, maskCredentials, maskJson } from "../../redaction"
+import { maskCredentials, maskJson } from "../../redaction"
 
 /**
  * The `session/update` values the gateway emits, each carrying the `_meta.hgw`
@@ -155,49 +155,9 @@ export function maskedToolText(text: string, keep: "head" | "tail" = "head") {
   return bounded(masked === json ? text : JSON.stringify(masked), keep)
 }
 
-/** A path a tool names, or `undefined` when a credential sits in it: masked, it would name no file. */
-export function publicPath(path: string) {
-  return containsCredential(path) ? undefined : path
-}
-
-/**
- * A call's content item as it may leave the gateway: text masked, a diff that
- * names a path carrying a credential dropped whole, and a patch carrying one
- * dropped from its diff, since masked it would no longer apply.
- */
-function maskedContent(
-  content: Built<ToolCallContent>
-): Built<ToolCallContent>[] {
-  if (content.type === "content") return [maskedStreamed(content)]
-  if (content.type !== "diff") return [content]
-  const named = content.changes.flatMap((change) =>
-    Object.values(change).filter((value) => typeof value === "string")
-  )
-  if (named.some((path) => publicPath(path) === undefined)) return []
-  return content.patch && containsCredential(content.patch.text)
-    ? [{ ...content, patch: undefined }]
-    : [content]
-}
-
-/** A subagent's report with its prose masked and every path carrying a credential dropped. */
-function maskedSubagent(subagent: NonNullable<ToolMeta["subagent"]>) {
-  const { goal, summary, filesRead, filesWritten } = subagent
-  const paths = (files: readonly string[]) =>
-    files.filter((file) => publicPath(file) !== undefined)
-  return {
-    ...subagent,
-    ...(goal === undefined ? {} : { goal: maskCredentials(goal) }),
-    ...(summary === undefined ? {} : { summary: maskCredentials(summary) }),
-    ...(filesRead === undefined ? {} : { filesRead: paths(filesRead) }),
-    ...(filesWritten === undefined
-      ? {}
-      : { filesWritten: paths(filesWritten) }),
-  }
-}
-
 /** A tool call update's every field a reader sees, masked as tool data. */
 function maskedCall(call: Omit<Built<ToolCallUpdate>, "_meta">) {
-  const { title, rawInput, rawOutput, content, locations } = call
+  const { title, rawInput, rawOutput, content } = call
   return {
     ...call,
     ...(typeof title === "string" ? { title: maskedToolText(title) } : {}),
@@ -210,35 +170,34 @@ function maskedCall(call: Omit<Built<ToolCallUpdate>, "_meta">) {
               ? maskedToolText(rawOutput)
               : maskJson(rawOutput),
         }),
-    ...(content ? { content: content.flatMap(maskedContent) } : {}),
-    ...(locations
+    ...(content
       ? {
-          locations: locations.filter(
-            (location) => publicPath(location.path) !== undefined
+          content: content.map((item) =>
+            item.type === "content" ? maskedStreamed(item) : item
           ),
         }
       : {}),
   }
 }
 
-/** A tool call's meta with its arguments text and its subagent masked. */
+/** A tool call's meta with its arguments text masked. */
 function maskedMeta(extra: ToolMeta | undefined) {
   if (!extra) return {}
-  const { argsText, argsTextDelta, subagent } = extra
+  const { argsText, argsTextDelta } = extra
   return {
     ...extra,
     ...(argsText === undefined ? {} : { argsText: maskedToolText(argsText) }),
     ...(argsTextDelta === undefined
       ? {}
       : { argsTextDelta: maskedToolText(argsTextDelta) }),
-    ...(subagent === undefined ? {} : { subagent: maskedSubagent(subagent) }),
   }
 }
 
 /**
- * One tool call update, live or replayed, for any runtime: every field a reader
+ * One tool call update, live or replayed, for any runtime: every text a reader
  * sees is masked here, the one place each runtime's tool data passes on its
- * way to a browser.
+ * way to a browser. A path or a patch a mask would break is the adapter's to
+ * drop, since only it knows which of its fields name a file.
  */
 export function toolOutbound(
   context: TranslateContext,

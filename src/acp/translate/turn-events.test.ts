@@ -458,23 +458,9 @@ describe("translateTurnEvent tool data masking", () => {
   // each row is one field a reader sees, for Hermes, OpenClaw, and OpenCode.
   it.each<[string, TurnEvent[], Record<string, unknown>[]]>([
     [
-      "the title and a location naming a credential",
-      [
-        {
-          ...open,
-          title: `deploy --${assigned("token")}`,
-          locations: [
-            { path: "/srv/app" },
-            { path: `/srv/${assigned("token")}` },
-          ],
-        },
-      ],
-      [
-        {
-          title: `deploy --${assigned("token", M)}`,
-          locations: [{ path: "/srv/app" }],
-        },
-      ],
+      "the title",
+      [{ ...open, title: `deploy --${assigned("token")}` }],
+      [{ title: `deploy --${assigned("token", M)}` }],
     ],
     [
       "the arguments, which stay JSON",
@@ -493,7 +479,7 @@ describe("translateTurnEvent tool data masking", () => {
       [{ rawInput: { command: `export ${assigned("TOKEN", M)}`, apiKey: M } }],
     ],
     [
-      "the result, its content, and a diff",
+      "the result and its content",
       [
         open,
         {
@@ -501,22 +487,6 @@ describe("translateTurnEvent tool data masking", () => {
           toolCallId: "c1",
           output: `password: ${SECRET}`,
           failed: false,
-          diffs: [
-            {
-              changes: [
-                { operation: DiffOperation.Modify, path: "/srv/app/a.ts" },
-              ],
-              patch: `--- a/a.ts\n+${assigned("const token")}`,
-            },
-            {
-              changes: [
-                {
-                  operation: DiffOperation.Add,
-                  path: `/srv/${assigned("token")}`,
-                },
-              ],
-            },
-          ],
         },
       ],
       [
@@ -526,10 +496,6 @@ describe("translateTurnEvent tool data masking", () => {
             {
               type: "content",
               content: { type: "text", text: `password: ${M}` },
-            },
-            {
-              type: "diff",
-              changes: [{ operation: "modify", path: "/srv/app/a.ts" }],
             },
           ],
         },
@@ -555,7 +521,7 @@ describe("translateTurnEvent tool data masking", () => {
       ],
     ],
     [
-      "a terminal's command and output, and a working directory naming a credential",
+      "a terminal's command and output",
       [
         open,
         {
@@ -563,7 +529,6 @@ describe("translateTurnEvent tool data masking", () => {
           terminalId: "t1",
           toolCallId: "c1",
           command: `export ${assigned("TOKEN")}`,
-          cwd: `/srv/${assigned("token")}`,
           data: `password: ${SECRET}`,
         },
       ],
@@ -575,32 +540,6 @@ describe("translateTurnEvent tool data masking", () => {
         {
           sessionUpdate: "terminal_output_chunk",
           data: Buffer.from(`password: ${M}`).toString("base64"),
-        },
-      ],
-    ],
-    [
-      "a subagent's goal and the files it read",
-      [
-        {
-          ...open,
-          subagent: {
-            id: "s1",
-            goal: `log in with ${assigned("password")}`,
-            filesRead: ["/srv/app/a.ts", `/srv/${assigned("token")}`],
-          },
-        },
-      ],
-      [
-        {
-          _meta: {
-            [HGW_META_KEY]: expect.objectContaining({
-              subagent: {
-                id: "s1",
-                goal: `log in with ${assigned("password", M)}`,
-                filesRead: ["/srv/app/a.ts"],
-              },
-            }),
-          },
         },
       ],
     ],
