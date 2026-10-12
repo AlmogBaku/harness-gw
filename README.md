@@ -156,8 +156,9 @@ Use [Bun](https://bun.sh).
 
 ```bash
 bun install
-bun run typecheck
-bun run lint
+bun run typecheck   # TypeScript 7
+bun run lint        # Oxlint, type-aware
+bun run format      # oxfmt
 bun run test        # unit and integration
 bun run test:gate   # build and packaging checks
 bun run build       # the SDK's dist/
