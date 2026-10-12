@@ -660,6 +660,30 @@ describe("ACP workspace client", () => {
     ])
   })
 
+  it("publishes live rows once a read has answered for a Session it did not find", async () => {
+    const { client, join, emitUpdate } = createClient()
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID, UNLISTED_SESSION_ID], (rows) =>
+      published.push(rows)
+    )
+    // The read answers for both: one is listed, the other the catalog lacks.
+    await client.getSessionMetadata([SESSION_ID, UNLISTED_SESSION_ID])
+    expect(published.at(-1)?.map(({ sessionId }) => sessionId)).toEqual([
+      SESSION_ID,
+    ])
+    await join()
+
+    emitUpdate(
+      { sessionUpdate: "session_info_update" },
+      { agentId: AGENT_ID, status: "waiting-for-input", archived: false }
+    )
+
+    // The missing row costs only itself: the listed one still goes live.
+    expect(
+      published.at(-1)?.map(({ sessionId, status }) => [sessionId, status])
+    ).toEqual([[SESSION_ID, "waiting-for-input"]])
+  })
+
   it("acks read state optimistically before the provider write", async () => {
     const { client, argsOf, emitNotification } = createClient()
     const published = await watchRows(client)

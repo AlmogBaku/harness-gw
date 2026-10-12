@@ -455,6 +455,7 @@ export function createAcpWorkspaceClient({
     },
     async getSessionMetadata(sessionIds: string[]) {
       await readRows(sessionIds)
+      store.answer(sessionIds)
       return store.rowsFor(sessionIds)
     },
     subscribeSessionMetadata: store.subscribeMetadata,
