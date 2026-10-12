@@ -1,6 +1,8 @@
 // @vitest-environment node
 
-import { generateKeyPairSync, randomBytes, type JsonWebKey } from "node:crypto"
+import { generateKeyPairSync, randomBytes, type webcrypto } from "node:crypto"
+
+type JsonWebKey = webcrypto.JsonWebKey
 import { beforeAll, describe, expect, it, vi } from "vitest"
 
 import type { PushMessage } from "../../protocol/push"

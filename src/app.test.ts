@@ -498,7 +498,9 @@ function fileGateway(
   const logs = captureLogs()
   const files: AppFileOptions = {
     ...appFileSettings(undefined),
-    passes: createFilePassService(),
+    // Passes read one instant, so a renewal gives back its view's own pass
+    // however slowly the case runs.
+    passes: createFilePassService({ now: () => Date.UTC(2026, 0, 1) }),
     calls: createAppFileCalls(),
     logger: logs.logger,
     ...setup.files,

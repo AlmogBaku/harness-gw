@@ -592,7 +592,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     let observationFailed = false
     let observationFailure: unknown
     let reading = false
-    let dirty = false
+    let dirty: boolean
     try {
       source = await this.#client.sessions.events(scope.providerSessionId, {
         ...(after < 0 ? {} : { after: String(after) }),

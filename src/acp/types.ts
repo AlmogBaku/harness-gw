@@ -16,7 +16,7 @@ import type {
   SessionModelsResponse,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
-import type { HgwExtensions } from "../../protocol/acp"
+import type { Built, HgwExtensions } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
 import type {
   ExecutionEvent,
@@ -176,12 +176,14 @@ export const initialTranslateState: TranslateState = {
   replayedCorrections: 0,
 }
 
+export type { Built }
+
 /**
  * One thing to send after translating a turn event. Session-scoped updates and
  * notifications omit `sessionId`; the attachment adds it when sending.
  */
 export type AcpOutbound =
-  | { kind: "update"; update: SessionUpdate }
+  | { kind: "update"; update: Built<SessionUpdate> }
   | {
       kind: "steer-accepted"
       turnId: string

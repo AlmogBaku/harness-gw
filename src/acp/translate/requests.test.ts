@@ -1,3 +1,7 @@
+import type {
+  CreateElicitationResponse,
+  RequestPermissionOutcome,
+} from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -394,7 +398,7 @@ describe("replyFromPermission", () => {
     })
   })
 
-  it.each([
+  it.each<[string, RequestPermissionOutcome]>([
     ["a cancelled prompt", { outcome: "cancelled" }],
     ["an unknown outcome", { outcome: "_dismissed" }],
   ])("cancels the request on %s", (_label, outcome) => {
@@ -429,8 +433,11 @@ describe("replyFromElicitation", () => {
     })
   })
 
-  it.each([["decline"], ["cancel"]])("cancels the request on %s", (action) => {
-    expect(replyFromElicitation(questions, { action })).toEqual({
+  it.each<[string, CreateElicitationResponse]>([
+    ["decline", { action: "decline" }],
+    ["cancel", { action: "cancel" }],
+  ])("cancels the request on %s", (_label, response) => {
+    expect(replyFromElicitation(questions, response)).toEqual({
       requestId: "clarify-1",
       status: "cancelled",
     })

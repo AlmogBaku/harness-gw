@@ -1,4 +1,4 @@
-import type { Tool } from "@modelcontextprotocol/sdk/types.js"
+import type { Tool } from "@modelcontextprotocol/client"
 
 import type { Logger } from "../../lifecycle"
 import type { CallToolResult } from "../../protocol/mcp-apps"

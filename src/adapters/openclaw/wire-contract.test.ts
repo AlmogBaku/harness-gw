@@ -18,7 +18,7 @@ vi.mock("@openclaw/gateway-client", async (importOriginal) =>
 /**
  * OpenClaw's push names no assistant message: an agent event carries its run
  * and sequence alone (`AgentEventSchema`, and each `ChatEventSchema` state, in
- * `@openclaw/gateway-protocol` 2026.9.4), and only a stored transcript row has
+ * `@openclaw/gateway-protocol` 2026.10.2), and only a stored transcript row has
  * an id (`readSessionMessageIdentity` in `@openclaw/gateway-client`). The
  * adapter names its live messages itself, so a reload cannot give them back.
  */

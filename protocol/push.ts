@@ -59,7 +59,7 @@ export const PushMessageSchema = z
     count: z.number().int().min(1),
     agentId: IdentifierSchema.optional(),
     sessionId: IdentifierSchema.optional(),
-    occurredAt: z.string().datetime(),
+    occurredAt: z.iso.datetime(),
     locale: PushLocaleSchema,
   })
   .refine(

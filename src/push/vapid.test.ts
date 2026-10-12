@@ -1,4 +1,6 @@
-import { generateKeyPairSync, type JsonWebKey } from "node:crypto"
+import { generateKeyPairSync, type webcrypto } from "node:crypto"
+
+type JsonWebKey = webcrypto.JsonWebKey
 import { describe, expect, it } from "vitest"
 
 import { deriveVapidPublicKey } from "./vapid"

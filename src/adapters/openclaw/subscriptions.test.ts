@@ -59,6 +59,7 @@ describe("OpenClaw Session subscriptions", () => {
           key: "agent:research:main",
           agentId: "research",
           includeApprovals: true,
+          subscriptionId: expect.any(String),
         },
       },
       {
@@ -67,6 +68,7 @@ describe("OpenClaw Session subscriptions", () => {
           key: "agent:research:main",
           agentId: "research",
           includeApprovals: true,
+          subscriptionId: expect.any(String),
         },
       },
     ])
@@ -82,6 +84,7 @@ describe("OpenClaw Session subscriptions", () => {
         params: {
           key: "agent:research:main",
           agentId: "research",
+          subscriptionId: expect.any(String),
         },
       },
     ])
@@ -320,6 +323,7 @@ describe("OpenClaw Session subscriptions", () => {
           key: "agent:research:main",
           agentId: "research",
           includeApprovals: true,
+          subscriptionId: expect.any(String),
         },
       },
       {
@@ -328,6 +332,7 @@ describe("OpenClaw Session subscriptions", () => {
           key: "agent:research:main",
           agentId: "research",
           includeApprovals: true,
+          subscriptionId: expect.any(String),
         },
       },
     ])

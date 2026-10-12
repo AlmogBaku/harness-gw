@@ -17,7 +17,7 @@ import {
   type HgwToolCallMetaSchema,
   formatArtifactUri,
 } from "../../../protocol/acp"
-import type { AcpOutbound, TranslateContext } from "../types"
+import type { AcpOutbound, Built, TranslateContext } from "../types"
 import { StopReason, type ToolDiff } from "../../core/events"
 
 /**
@@ -41,7 +41,7 @@ export function turnMeta(context: TranslateContext) {
   return { sequence: context.sequence, turnId: context.turnId }
 }
 
-export function update(value: SessionUpdate): AcpOutbound {
+export function update(value: Built<SessionUpdate>): AcpOutbound {
   return { kind: "update", update: value }
 }
 
@@ -50,6 +50,9 @@ type ExtraMeta<Schema extends z.ZodObject> = Omit<
   z.input<Schema>,
   "sequence" | "turnId"
 >
+
+/** A stop reason ACP names, or a `_`-prefixed one the gateway owns. */
+type IdleStopReason = (typeof ACP_STOP_REASON)[StopReason] | `_${string}`
 
 /**
  * `at` says when the state took effect: a live run reads the clock, and a replay
@@ -61,7 +64,7 @@ export function stateOutbound(
   state:
     | { state: "running" }
     | { state: "requires_action" }
-    | { state: "idle"; stopReason: string; usage?: Usage },
+    | { state: "idle"; stopReason: IdleStopReason; usage?: Usage },
   extra?: ExtraMeta<typeof HgwStateMetaSchema>
 ): AcpOutbound {
   const at = extra?.at ?? new Date(context.now?.() ?? Date.now()).toISOString()
@@ -78,7 +81,7 @@ export function chunkOutbound(
   sessionUpdate:
     "agent_message_chunk" | "agent_thought_chunk" | "user_message_chunk",
   messageId: string,
-  content: string | ContentBlock,
+  content: string | Built<ContentBlock>,
   extra?: ExtraMeta<typeof HgwChunkMetaSchema>
 ): AcpOutbound {
   return update({
@@ -115,7 +118,7 @@ type ToolMeta = Omit<ExtraMeta<typeof HgwToolCallMetaSchema>, "messageId">
 export function toolOutbound(
   context: TranslateContext,
   messageId: string,
-  call: Omit<ToolCallUpdate, "_meta">,
+  call: Omit<Built<ToolCallUpdate>, "_meta">,
   extra?: ToolMeta
 ): AcpOutbound {
   return update({
@@ -130,7 +133,7 @@ export function toolContentOutbound(
   context: TranslateContext,
   messageId: string,
   toolCallId: string,
-  content: ToolCallContent
+  content: Built<ToolCallContent>
 ): AcpOutbound {
   return update({
     sessionUpdate: "tool_call_content_chunk",
@@ -144,7 +147,7 @@ export function toolContentOutbound(
 export function planUpdate(
   todos: SessionTodos,
   meta: { sequence: number; turnId?: string }
-): SessionUpdate {
+): Built<SessionUpdate> {
   return {
     sessionUpdate: "plan_update",
     plan: {
@@ -170,7 +173,7 @@ export const ACP_STOP_REASON = {
 } as const satisfies Record<StopReason, string>
 
 /** A call's text output as ACP tool content. */
-export function textContent(text: string): ToolCallContent {
+export function textContent(text: string): Built<ToolCallContent> {
   return { type: "content", content: { type: "text", text } }
 }
 
@@ -178,14 +181,17 @@ export function textContent(text: string): ToolCallContent {
  * A settled call's output as the text its content shows, live and stored
  * alike: a string as itself, any other value as its JSON.
  */
-export function outputContent(output: unknown): ToolCallContent {
+export function outputContent(output: unknown): Built<ToolCallContent> {
   return textContent(
     typeof output === "string" ? output : JSON.stringify(output)
   )
 }
 
 /** A call's changed files and patch as ACP diff content. */
-export function diffContent({ changes, patch }: ToolDiff): ToolCallContent {
+export function diffContent({
+  changes,
+  patch,
+}: ToolDiff): Built<ToolCallContent> {
   return {
     type: "diff",
     changes,

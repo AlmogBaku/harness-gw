@@ -185,7 +185,7 @@ export const CostSchema = z.strictObject({
 export type Cost = z.infer<typeof CostSchema>
 
 /** Timestamps are UTC ISO 8601, as `Date.prototype.toISOString` writes them. */
-const TimestampSchema = z.string().datetime()
+const TimestampSchema = z.iso.datetime()
 
 /** How far a delegated subagent has got. */
 export const SubagentStatus = {
@@ -275,7 +275,7 @@ function turnEvent<
 export const TurnEventSchema = z.discriminatedUnion("kind", [
   turnEvent(TurnEventKind.TurnStarted, {
     /** When the turn began, stamped by the coordinator that saw it start. */
-    startedAt: z.string().datetime().optional(),
+    startedAt: z.iso.datetime().optional(),
   }),
   turnEvent(TurnEventKind.TurnEnded, {
     /** Absent reads as `EndTurn`, or `Cancelled` once Stop was requested. */

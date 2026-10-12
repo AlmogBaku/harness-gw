@@ -76,9 +76,8 @@ const UiSchema = z
     lang: z.enum(["en", "he"]).optional(),
     name: SingleLineSchema(128).optional(),
     logoUrl: z
-      .string()
-      .max(512)
       .url()
+      .max(512)
       .refine((value) => {
         const url = new URL(value)
         return url.protocol === "https:" && !url.username && !url.password

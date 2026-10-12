@@ -227,7 +227,7 @@ export function createHermesHttp(options: HermesHttpOptions): HermesHttp {
         )
           throw error
         if (write && sent) throw new HermesRpcUncertainError({ cause: error })
-        throw new Error("Hermes request failed")
+        throw new Error("Hermes request failed", { cause: error })
       }
     },
     async stream(path: string, init: HermesStreamInit) {

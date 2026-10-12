@@ -1,9 +1,7 @@
 import {
   CallToolResultSchema,
   ReadResourceResultSchema,
-  type CallToolResult,
-  type ReadResourceResult,
-} from "@modelcontextprotocol/sdk/types.js"
+} from "@modelcontextprotocol/core"
 import { z } from "zod"
 
 /**
@@ -14,7 +12,8 @@ import { z } from "zod"
  */
 
 export { CallToolResultSchema, ReadResourceResultSchema }
-export type { CallToolResult, ReadResourceResult }
+export type CallToolResult = z.infer<typeof CallToolResultSchema>
+export type ReadResourceResult = z.infer<typeof ReadResourceResultSchema>
 
 const DomainListSchema = z.array(z.string().min(1).max(2048)).max(64)
 
@@ -74,7 +73,7 @@ export type McpUiPermissions = z.infer<typeof McpUiPermissionsSchema>
  */
 export const McpAppFilesSchema = z.strictObject({
   addresses: z.record(z.string(), z.string().startsWith("/").max(8_192)),
-  expiresAt: z.string().datetime().optional(),
+  expiresAt: z.iso.datetime().optional(),
 })
 export type McpAppFiles = z.infer<typeof McpAppFilesSchema>
 
@@ -161,7 +160,10 @@ export const MCP_APP_SANDBOX_CSP = [
     ...LOOPBACK_SOURCES("http"),
     ...LOOPBACK_SOURCES("ws"),
   ].join(" "),
-  "worker-src 'self' blob:",
+  // A view authors its own workers as blob or data URLs; the sandbox fetches
+  // no script by address, and an opaque origin starts only a classic worker,
+  // which MapLibre takes as a data URL ending in .cjs.
+  "worker-src 'self' blob: data:",
   "frame-src https:",
   "base-uri https:",
   "object-src 'none'",

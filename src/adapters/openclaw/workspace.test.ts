@@ -440,7 +440,7 @@ const SECRET = "sk-sentinel-0000-do-not-leak"
 type NativeAgent = { id: string; kind: "agent"; identity?: { avatar?: string } }
 
 /**
- * A gateway whose `config.patch` behaves like OpenClaw 2026.9.4's
+ * A gateway whose `config.patch` behaves like OpenClaw 2026.10.2's
  * (`src/config/merge-patch.ts`): it merges the one Agent entry by id, so a
  * later `agents.list` shows the stored avatar.
  */

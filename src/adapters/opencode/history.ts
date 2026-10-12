@@ -1,3 +1,5 @@
+import type { z } from "zod"
+
 import type { SessionMessage } from "../../../protocol"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { publicJsonValue, type JsonValue } from "../json-value"
@@ -10,7 +12,7 @@ import {
 } from "./native-schemas"
 import { canonicalOpenCodeToolCall, openCodeToolKind } from "./tool-names"
 
-export type NativeMessage = typeof OpenCodeNativeMessageSchema._output
+export type NativeMessage = z.output<typeof OpenCodeNativeMessageSchema>
 type ProjectedHistory = SessionMessage[]
 
 function safeFilename(value: string | undefined) {
