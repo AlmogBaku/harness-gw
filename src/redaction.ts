@@ -46,9 +46,11 @@ const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
 /**
  * A name that ends in a `SECRET_TERMS` word after a separator, as the log
  * redactor reads a field name: `DB_PASSWORD`, `x-api-key`. A word that only
- * ends in the letters, such as `bypass`, is not one.
+ * ends in the letters, such as `bypass`, is not one. The words before the term
+ * are bounded in length and number, so a long run of separated words such as
+ * `a-a-a-…` costs one pass, not one pass per word.
  */
-const secretName = String.raw`(?:[a-z0-9]+[-_])*(?:${secretTerm})`
+const secretName = String.raw`(?:[a-z0-9]{1,32}[-_]){0,6}(?:${secretTerm})`
 /** A JWT, whole: a credential wherever it stands. */
 const JWT = String.raw`\beyJ[\w-]+\.[\w-]+\.[\w-]+`
 /** An RFC 6750 bearer token of at least 8 characters, ending in no dot. */
@@ -59,9 +61,10 @@ const PLAIN_VALUE = String.raw`[^\s$()|&;<>\x60'"{}*?\[\]\\/.~][^\s$()|&;<>\x60'
 const WORD_END = String.raw`(?=[\s;&|()<>"'\x60]|$)`
 /**
  * A URL's password, after its `scheme://user:` and before its `@`, and not
- * shell syntax, so the URL still shows the host it reaches.
+ * shell syntax, so the URL still shows the host it reaches. A scheme is at
+ * most 32 characters, so a long run of word characters costs one pass.
  */
-const URL_PASSWORD = String.raw`\b(?<userinfo>[a-z][\w+.-]*://[^\s:/@]*:)[^\s:/@$(){}\x60'"]+(?=@)`
+const URL_PASSWORD = String.raw`\b(?<userinfo>[a-z][\w+.-]{0,31}://[^\s:/@]*:)[^\s:/@$(){}\x60'"]+(?=@)`
 /** A value already masked, which neither strength masks again. */
 const ALREADY_MASKED = String.raw`(?!(?:(?:basic|bearer)\s+)?\[credential redacted\])`
 
