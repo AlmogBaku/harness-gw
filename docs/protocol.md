@@ -483,7 +483,10 @@ text, line breaks included.
 The gateway masks a credential as `[credential redacted]` at one of two
 strengths. A term is any word of `SECRET_TERMS` (`src/redaction.ts`), in any
 case, with `-` or `_` allowed between its letters (`api_key`, `apiKey`,
-`password`, `token`, …).
+`password`, `token`, …). A name that ends in a term after a `-` or `_` is
+read as that term, the way a logged field name is (`DB_PASSWORD`,
+`AWS_SECRET_ACCESS_KEY`, `x-api-key`); a word that only ends in a term's
+letters, such as `bypass`, is not.
 
 A bearer token is at least 8 characters of `[A-Za-z0-9._~+/-]`, the RFC 6750
 token characters, whose last character may also be `=` and is never `.`, so
@@ -516,9 +519,22 @@ a sentence's closing period stays.
     characters or `-` including a digit, or `xoxb-`, `xoxa-`, `xoxp-`,
     `xoxr-` or `xoxs-` and the word characters and `-` after it; so
     `rm -rf sk-backups` stays.
-- **Both** mask a JWT (`eyJ…` in three dot-separated parts), and neither
-  masks a value that is already `[credential redacted]`, so masking text
-  twice, at either strength, leaves one placeholder per credential.
+- **Both** mask:
+  - a JWT (`eyJ…` in three dot-separated parts);
+  - a URL's password: in `scheme://user:password@host`, a password with no
+    whitespace and none of ``: / @ $ ( ) { } ` ' "`` goes, and the scheme,
+    user and host stay;
+  - then, every provider key
+    [`@sanity-labs/secret-scan`](https://github.com/sanity-labs/secret-scan)
+    knows by its shape, whole: its rules come from TruffleHog's detectors
+    (Stripe, Tailscale, AWS and others), most anchored on a provider prefix,
+    and its generic ones gated by length and entropy (`Bearer` and 20 or more
+    random characters, `sk-` and 40 or more). A match that is a URL or a
+    URL's scheme stays, because the scanner's database rules take the whole
+    URL or only its scheme.
+- **Neither** masks a value that is already `[credential redacted]`, so
+  masking text twice, at either strength, leaves one placeholder per
+  credential.
 
 | Text                                                    | Strength |
 | ------------------------------------------------------- | -------- |

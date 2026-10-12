@@ -156,6 +156,9 @@ const AUTHORIZATION = (scheme: string, value: string) =>
   ["Authorization", `${scheme} ${value}`].join(": ")
 /** A `term=value` assignment built in two parts, so no scanner reads it as a leak. */
 const assigned = (term: string, value: string) => [term, value].join("=")
+const STRIPE_KEY = ["sk", "live", "a1B2".repeat(6)].join("_")
+const DATABASE_URL = (password: string) =>
+  ["postgres://app", `${password}@db.invalid:5432/app`].join(":")
 
 describe("maskCredentials", () => {
   it.each([
@@ -216,7 +219,34 @@ describe("maskCredentials", () => {
     ["narrow", "push ghp_leaked0000 now", "push ghp_leaked0000 now"],
     ["narrow", `push ${GITHUB_KEY} now`, `push ${M} now`],
     ["narrow", `use ${OPENAI_KEY} now`, `use ${M} now`],
+    // A name that ends in a credential word counts, as a logged field's does.
+    [
+      "narrow",
+      `export ${assigned("AWS_SECRET_ACCESS_KEY", SAMPLE)}`,
+      `export ${assigned("AWS_SECRET_ACCESS_KEY", M)}`,
+    ],
+    [
+      "narrow",
+      `export ${assigned("DB_PASSWORD", SAMPLE)}`,
+      `export ${assigned("DB_PASSWORD", M)}`,
+    ],
+    ["narrow", assigned("bypass", "true"), assigned("bypass", "true")],
+    // A provider key the scanner knows by its shape, wherever it stands.
+    ["narrow", `use ${STRIPE_KEY} now`, `use ${M} now`],
+    // A URL loses only its password, and a URL without one stays whole.
+    ["narrow", `psql ${DATABASE_URL(SAMPLE)}`, `psql ${DATABASE_URL(M)}`],
+    [
+      "narrow",
+      "psql postgres://db.invalid:5432/app",
+      "psql postgres://db.invalid:5432/app",
+    ],
+    [
+      "narrow",
+      "psql postgres://app@db.invalid/app",
+      "psql postgres://app@db.invalid/app",
+    ],
     // A preview or a question masks anything credential-shaped.
+    ["broad", assigned("GITHUB_TOKEN", SAMPLE), M],
     ["broad", assigned("token", "AbCdEfGh_IjKlMnOp"), M],
     ["broad", assigned("password", "P@ssw0rd!2024"), M],
     ["broad", assigned("password", '"hunter2hunter2"'), M],
@@ -238,6 +268,7 @@ describe("maskCredentials", () => {
   it.each([
     [assigned("token", SAMPLE), assigned("token", M)],
     [AUTHORIZATION("Bearer", OPAQUE), AUTHORIZATION("Bearer", M)],
+    [DATABASE_URL(SAMPLE), DATABASE_URL(M)],
   ])(
     "masks %s once when a broad mask follows a narrow one",
     (text, expected) => {

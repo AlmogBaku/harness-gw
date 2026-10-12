@@ -1,3 +1,5 @@
+import { redact } from "@sanity-labs/secret-scan"
+
 /** What every masked field, URL credential, and credential value becomes. */
 const REDACTED = "[REDACTED]"
 
@@ -41,6 +43,12 @@ const MASKED = "[credential redacted]"
 
 /** A `SECRET_TERMS` word as prose spells it: any case, `-` or `_` optional. */
 const secretTerm = SECRET_TERMS.map((term) => [...term].join("[-_]?")).join("|")
+/**
+ * A name that ends in a `SECRET_TERMS` word after a separator, as the log
+ * redactor reads a field name: `DB_PASSWORD`, `x-api-key`. A word that only
+ * ends in the letters, such as `bypass`, is not one.
+ */
+const secretName = String.raw`(?:[a-z0-9]+[-_])*(?:${secretTerm})`
 /** A JWT, whole: a credential wherever it stands. */
 const JWT = String.raw`\beyJ[\w-]+\.[\w-]+\.[\w-]+`
 /** An RFC 6750 bearer token of at least 8 characters, ending in no dot. */
@@ -49,6 +57,11 @@ const BEARER_TOKEN = String.raw`[A-Za-z0-9._~+/-]{7,}[A-Za-z0-9_~+/=-]`
 const PLAIN_VALUE = String.raw`[^\s$()|&;<>\x60'"{}*?\[\]\\/.~][^\s$()|&;<>\x60'"{}*?\[\]\\]*`
 /** Where a shell word ends. */
 const WORD_END = String.raw`(?=[\s;&|()<>"'\x60]|$)`
+/**
+ * A URL's password, after its `scheme://user:` and before its `@`, and not
+ * shell syntax, so the URL still shows the host it reaches.
+ */
+const URL_PASSWORD = String.raw`\b(?<userinfo>[a-z][\w+.-]*://[^\s:/@]*:)[^\s:/@$(){}\x60'"]+(?=@)`
 /** A value already masked, which neither strength masks again. */
 const ALREADY_MASKED = String.raw`(?!(?:(?:basic|bearer)\s+)?\[credential redacted\])`
 
@@ -59,15 +72,15 @@ const ALREADY_MASKED = String.raw`(?!(?:(?:basic|bearer)\s+)?\[credential redact
  * preview, a title, a question. `narrow` takes only a value that cannot be
  * shell syntax, a token an `Authorization` header names, and a key of a real
  * key's length, for text an operator approves: a permission must still show
- * what it would run.
+ * what it would run. Both take a URL's password.
  */
 const CREDENTIAL_MASKS = {
   broad: new RegExp(
-    String.raw`\b(?:${secretTerm})\s*[=:]\s*${ALREADY_MASKED}(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+(?<token>${BEARER_TOKEN})|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|${JWT}`,
+    String.raw`\b${secretName}\s*[=:]\s*${ALREADY_MASKED}(?:(?:basic|bearer)\s+)?[^\s,;]+|\b(?:basic|bearer)\s+(?<token>${BEARER_TOKEN})|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|${JWT}|${URL_PASSWORD}`,
     "giu"
   ),
   narrow: new RegExp(
-    String.raw`\b(?<header>authorization\s*:\s*(?:bearer|basic)\s+)${BEARER_TOKEN}|\b(?<term>(?:${secretTerm})[=:])(?:(?<quote>["'])${PLAIN_VALUE}\k<quote>|${PLAIN_VALUE})${WORD_END}|\bgh[opsur]_[A-Za-z0-9]{30,}|\bsk-(?=[\w-]*\d)[\w-]{20,}|\bxox[baprs]-[\w-]+|${JWT}`,
+    String.raw`\b(?<header>authorization\s*:\s*(?:bearer|basic)\s+)${BEARER_TOKEN}|\b(?<term>${secretName}[=:])(?:(?<quote>["'])${PLAIN_VALUE}\k<quote>|${PLAIN_VALUE})${WORD_END}|\bgh[opsur]_[A-Za-z0-9]{30,}|\bsk-(?=[\w-]*\d)[\w-]{20,}|\bxox[baprs]-[\w-]+|${JWT}|${URL_PASSWORD}`,
     "giu"
   ),
 }
@@ -79,10 +92,12 @@ export type MaskStrength = keyof typeof CREDENTIAL_MASKS
  */
 const TOKEN_KINDS = [/[A-Z]/u, /[a-z]/u, /[0-9]/u, /[._~+/=-]/u]
 
-type MaskGroups = Partial<Record<"token" | "header" | "term" | "quote", string>>
+type MaskGroups = Partial<
+  Record<"token" | "header" | "term" | "quote" | "userinfo", string>
+>
 
 function masked(match: string, ...args: unknown[]) {
-  const { token, header, term, quote } = args.at(-1) as MaskGroups
+  const { token, header, term, quote, userinfo } = args.at(-1) as MaskGroups
   // "Basic Authentication" is prose; a token mixes kinds of character.
   if (token !== undefined) {
     const counted = token.charAt(0).toLowerCase() + token.slice(1)
@@ -91,20 +106,36 @@ function masked(match: string, ...args: unknown[]) {
       : match
   }
   if (header !== undefined) return `${header}${MASKED}`
+  if (userinfo !== undefined) return `${userinfo}${MASKED}`
   if (term !== undefined) return `${term}${quote ?? ""}${MASKED}${quote ?? ""}`
   return MASKED
 }
 
 /**
+ * `text` with every provider key the secret scanner knows by its shape masked.
+ * Its database rules take a whole URL or only its scheme, so a URL is left to
+ * the masks, which take just its password.
+ */
+function maskKnownKeys(text: string) {
+  return redact(text, (secret) =>
+    secret.text.includes("://") || text.startsWith("://", secret.end)
+      ? secret.text
+      : MASKED
+  )
+}
+
+/**
  * `text` with every credential it spells out as `[credential redacted]`, at
- * the given strength. Paths and URLs stay, so text a runtime wrote for the
- * operator still reads as written.
+ * the given strength: every credential a name, a header, a key prefix, or a
+ * URL announces, then every other provider key the secret scanner knows by
+ * its shape. Paths and URLs stay, so text a runtime wrote for the operator
+ * still reads as written.
  */
 export function maskCredentials(
   text: string,
   strength: MaskStrength = "broad"
 ) {
-  return text.replace(CREDENTIAL_MASKS[strength], masked)
+  return maskKnownKeys(text.replace(CREDENTIAL_MASKS[strength], masked))
 }
 
 /**
