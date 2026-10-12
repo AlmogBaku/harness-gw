@@ -1,14 +1,18 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
 import { methods } from "@agentclientprotocol/sdk/experimental/v2"
 
-import { ACP_PROTOCOL_VERSION, HGW_METHODS } from "../../protocol/acp"
+import {
+  ACP_PROTOCOL_VERSION,
+  HGW_MAX_FRAME_BYTES,
+  HGW_METHODS,
+} from "../../protocol/acp"
 import { authenticationRequired } from "./validation"
 
 /** The WebSocket shape a prepared ACP upgrade drives. */
 export type AcpWebSocket = Parameters<PreparedWebSocketUpgrade["accept"]>[0]
 
 /** One inbound frame may carry a whole prompt, matching `boundedJson`'s ceiling. */
-const MAX_FRAME_BYTES = 1_100_000
+const MAX_FRAME_BYTES = HGW_MAX_FRAME_BYTES
 const DEFAULT_INPUT_WINDOW_MS = 1_000
 const DEFAULT_INPUT_FRAMES_PER_WINDOW = 64
 /**

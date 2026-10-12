@@ -1,3 +1,4 @@
+import { HGW_MAX_FRAME_BYTES } from "../protocol/acp"
 import type { Logger } from "../lifecycle"
 import { sleep, withinGrace } from "./grace"
 import { guardOrigins, type OriginPolicy } from "./origins"
@@ -28,7 +29,7 @@ const WS_IDLE_TIMEOUT_S = 120
  * bounds the wait instead.
  */
 const HTTP_IDLE_TIMEOUT_S = 255
-const WS_MAX_PAYLOAD = 1_100_000
+const WS_MAX_PAYLOAD = HGW_MAX_FRAME_BYTES
 const WS_BACKPRESSURE_LIMIT = 16 * 1_024 * 1_024
 /** A WebSocket's `readyState` while it is open. */
 const WS_OPEN = 1

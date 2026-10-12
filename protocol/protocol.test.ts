@@ -981,7 +981,7 @@ describe("AOS v1 normalized protocol", () => {
     const codes = Object.values(HGW_JSONRPC_ERRORS)
     expect(new Set(codes).size).toBe(codes.length)
     for (const code of codes) {
-      expect(code).toBeGreaterThanOrEqual(-31015)
+      expect(code).toBeGreaterThanOrEqual(-31016)
       expect(code).toBeLessThanOrEqual(-31010)
     }
   })

@@ -544,6 +544,34 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  it("refuses a prompt or steer whose frame the gateway would not take, sending nothing", async () => {
+    const proxy = createGatewayAgent()
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+    const tooLarge = expect.objectContaining({
+      code: HGW_JSONRPC_ERRORS.requestTooLarge,
+    })
+
+    await expect(
+      connection.prompt(
+        SESSION_ID,
+        [{ type: "text", text: "a".repeat(1_100_000) }],
+        {}
+      )
+    ).rejects.toEqual(tooLarge)
+    // Bytes decide, not characters: each of these takes two in UTF-8.
+    await expect(
+      connection.steer({
+        sessionId: SESSION_ID,
+        requestId: "request-1",
+        text: "א".repeat(600_000),
+      })
+    ).rejects.toEqual(tooLarge)
+    expect(proxy.callsOf(methods.agent.session.prompt)).toHaveLength(0)
+    expect(proxy.callsOf(HGW_METHODS.session.steer)).toHaveLength(0)
+    connection.close()
+  })
+
   it("replays a Session from the start when asked", async () => {
     const proxy = createGatewayAgent()
     const connection = connectInProcess(proxy)

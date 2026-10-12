@@ -639,6 +639,11 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | `-31013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
 | `-31014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
 | `-31015` | `unsupported`            | Runtime cannot store a requested Agent field                |
+| `-31016` | `requestTooLarge`        | Params too large for one frame (`HGW_MAX_FRAME_BYTES`)      |
+
+`requestTooLarge` is raised by the client before a prompt or steer is sent,
+so one oversized request fails alone instead of closing the shared socket. The
+gateway never sends it, and it has no machine name below.
 
 Codes `-32001` through `-32009` are no longer used.
 

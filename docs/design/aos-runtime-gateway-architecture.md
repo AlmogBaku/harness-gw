@@ -543,7 +543,9 @@ ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
 (method not found), `-32602` (invalid request), `-32800` (request cancelled);
 HGW block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
 revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
-`-31015` unsupported. Codes `-32001` through `-32009` are no longer used.
+`-31015` unsupported, `-31016` requestTooLarge (raised by the client before
+sending; never sent by the gateway). Codes `-32001` through `-32009` are no
+longer used.
 
 **Vendor stop reasons** on `state_update { state: "idle" }`: `_hgw_error`,
 `_hgw_uncertain` (`protocol/acp.ts`).

@@ -37,6 +37,7 @@ import {
   HGW_AUTH_METHOD_INVITE,
   HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
+  HGW_MAX_FRAME_BYTES,
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
@@ -607,6 +608,25 @@ const AgentsListEntriesSchema = HgwAgentsListResponseSchema.extend({
 const SessionSearchEntriesSchema = HgwSessionSearchResponseSchema.extend({
   sessions: z.array(z.unknown()),
 })
+
+/** Room a request's JSON-RPC envelope takes in its frame beside the params. */
+const FRAME_ENVELOPE_BYTES = 1_024
+const frameEncoder = new TextEncoder()
+
+/**
+ * Refuses params whose frame the gateway's socket would not take. An
+ * oversized frame closes the tab's one socket, and the transport would send
+ * the same frame again on every reconnect, so one large prompt would take
+ * every Session down with it; refused here, it costs only its own call.
+ */
+function assertFrameFits(params: unknown) {
+  const bytes = frameEncoder.encode(JSON.stringify(params)).byteLength
+  if (bytes > HGW_MAX_FRAME_BYTES - FRAME_ENVELOPE_BYTES)
+    throw new RequestError(
+      HGW_JSONRPC_ERRORS.requestTooLarge,
+      "Request too large to send"
+    )
+}
 
 export function createAcpConnection(
   options: AcpConnectionOptions
@@ -1524,12 +1544,14 @@ export function createAcpConnection(
     history: (sessionId) => sessions.get(sessionId)?.history,
 
     async prompt(sessionId, blocks: ContentBlock[], meta) {
+      const params = {
+        sessionId,
+        prompt: blocks,
+        _meta: { [HGW_META_KEY]: meta },
+      }
+      assertFrameFits(params)
       const response = await write(sessionId, "long", (agent, options) =>
-        agent.request(
-          methods.agent.session.prompt,
-          { sessionId, prompt: blocks, _meta: { [HGW_META_KEY]: meta } },
-          options
-        )
+        agent.request(methods.agent.session.prompt, params, options)
       )
       return { messageId: response.messageId }
     },
@@ -1565,6 +1587,7 @@ export function createAcpConnection(
     },
 
     async steer(steer) {
+      assertFrameFits(steer)
       return HgwSteerResponseSchema.parse(
         await write(steer.sessionId, "medium", (agent, options) =>
           agent.request(HGW_METHODS.session.steer, steer, options)
