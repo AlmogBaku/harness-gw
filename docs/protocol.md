@@ -189,8 +189,9 @@ What a guest is shown:
   hand it. Arguments never pass, since they may name host paths.
 - A published Artifact the provider holds reaches the guest by its id alone,
   live and in a replay alike; inline Artifact data never does.
-- Questions (`elicitation/create`) reach the guest unchanged, and the guest may
-  answer them.
+- Questions (`elicitation/create`) reach the guest whole, and the guest may
+  answer them. A question names its tool call only when the guest was shown
+  that call.
 - Permission requests are never shown to a guest. One raised in a turn the
   guest started is declined for it: with `deny`, or `cancelled` when `deny` is
   not offered. One raised in another member's turn is hidden and left for the
@@ -608,7 +609,10 @@ SDK client (`acp-approvals.ts`) holds each request for the connection's
 lifetime. A request still pending when a client reconnects is sent again.
 
 **Elicitation** (`HgwElicitationMetaSchema`):
-`{ requestId, expiresAt?, questions[] }`. Each question carries
+`{ requestId, expiresAt?, questions[] }`. A question is scoped to its Session,
+plus the `toolCallId` that asked it when the adapter knows the call. It never
+uses ACP's request scope, which names a JSON-RPC request outside any Session,
+so its id rides only in `_meta.hgw.requestId`. Each question carries
 `{ id?, header, prompt, options[], multiple?, custom? }`. A multi-select
 question must declare `items.enum` in the ACP property schema
 (`src/acp/translate/requests.ts`); a free-text answer

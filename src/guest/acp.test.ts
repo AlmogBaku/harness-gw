@@ -1143,6 +1143,53 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
+  // Read on the raw wire, since an SDK client drops a request scope beside a
+  // Session one. ACP's request scope names a JSON-RPC request outside any
+  // Session, and a tool call the guest was never shown isn't named either.
+  it("scopes a question to the invited Session alone on the wire", async () => {
+    const test = harness({
+      existing: true,
+      handle: () =>
+        asking(
+          { ...QUESTION, toolCallId: "call-hidden" },
+          test.start.mock.calls.length
+        ),
+    })
+    const socket = await wire(test.listener)
+    await socket.request(methods.agent.initialize, {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      info: { name: "aos-guest-browser", version: "1" },
+      capabilities: { elicitation: { form: {} } },
+    })
+    await socket.request(methods.agent.auth.login, {
+      methodId: HGW_AUTH_METHOD_INVITE,
+      _meta: { [HGW_META_KEY]: { token: await invite(test.invitations) } },
+    })
+    await socket.request(methods.agent.session.resume, {
+      sessionId: REF,
+      cwd: "/",
+    })
+    void socket.request(methods.agent.session.prompt, {
+      sessionId: REF,
+      prompt: [{ type: "text", text: "Export the notes" }],
+    })
+
+    const asked = await vi.waitFor(() => {
+      const frame = socket.frames.find(
+        (candidate) => candidate.method === methods.client.elicitation.create
+      )
+      if (!frame) throw new Error("No question was asked")
+      return frame
+    })
+    expect(asked.params).toMatchObject({
+      sessionId: REF,
+      _meta: { [HGW_META_KEY]: { requestId: QUESTION.requestId } },
+    })
+    expect(asked.params).not.toHaveProperty("requestId")
+    expect(asked.params).not.toHaveProperty("toolCallId")
+    socket.close()
+  })
+
   it("asks a question in the operator's own words and gives the runtime its answer as sent", async () => {
     const test = harness({
       existing: true,

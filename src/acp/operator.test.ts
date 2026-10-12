@@ -405,6 +405,25 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
+  // ACP scopes a question to its Session and, optionally, to the tool call
+  // that asked it, so a client can show it on that call.
+  it("names the tool call that asked a question", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Clarify it")
+
+    source.emit(turnStarted())
+    source.emit(turnQuestioned("call-clarify"))
+
+    const asked = await askedElicitation(test)
+    expect(asked.params).toMatchObject({
+      sessionId: CREATED,
+      toolCallId: "call-clarify",
+      _meta: { [HGW_META_KEY]: { requestId: CLARIFY } },
+    })
+    source.finish()
+    test.close()
+  })
+
   it("delivers a multi-select question the SDK accepts", async () => {
     const test = await harness({
       question: async () => ({

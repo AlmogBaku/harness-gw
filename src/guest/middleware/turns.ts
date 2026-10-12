@@ -197,9 +197,15 @@ export function createTurnsMiddleware({
             shown.has(event.request.toolCallId)
             ? event
             : undefined
+        // A question reaches a guest whole, but names only a call it was shown.
+        case "request-asked": {
+          const { toolCallId, ...request } = event.request
+          return toolCallId === undefined || shown.has(toolCallId)
+            ? event
+            : { ...event, request }
+        }
         // What is not a turn's passes: the feeds layer chose the readings and
         // the commands layer projects the command list.
-        case "request-asked":
         case "history":
         case "request-withdrawn":
         case "execution":

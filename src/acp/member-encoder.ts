@@ -350,12 +350,19 @@ export function createMemberEncoder({
       throw new Error("The elicitation carries no mode")
     // A client that cannot answer is not asked; its state shows the wait.
     if (!elicits(outbound.request.mode)) return undefined
-    // An elicitation is scoped to a Session or to one request; this one is
-    // both, so a client that reads either scope can still route it.
+    // A runtime's question belongs to its Session and, when one asked it, to a
+    // tool call. ACP's request scope names a JSON-RPC request outside any
+    // Session, so it is never this one's; the request id rides in `_meta.hgw`.
     const response = await client
       .request(
         methods.client.elicitation.create,
-        { ...outbound.request, sessionId, requestId: request.requestId },
+        {
+          ...outbound.request,
+          sessionId,
+          ...(request.toolCallId === undefined
+            ? {}
+            : { toolCallId: request.toolCallId }),
+        },
         { cancellationSignal: signal }
       )
       .catch(declined(signal, { action: "cancel" as const }))
