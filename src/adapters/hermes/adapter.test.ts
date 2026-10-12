@@ -633,7 +633,11 @@ describe("Hermes server adapter", () => {
     let profiles: unknown[] = [
       profile("alpha"),
       profile(""),
-      profile("beta", { display_name: "b".repeat(257) }),
+      // A warning names a skipped row by its ids alone, never its content.
+      profile("beta", {
+        display_name: "b".repeat(257),
+        env: { API_KEY: "fake-key-for-test" },
+      }),
       "not a profile",
       profile("alpha", { display_name: "Second alpha" }),
     ]
@@ -648,15 +652,23 @@ describe("Hermes server adapter", () => {
 
     expect(catalog.agents.map(({ summary }) => summary.name)).toEqual(["alpha"])
     expect(
-      logs.records().map(({ message, fields }) => [message, fields.profile])
+      logs.records().map(({ message, fields }) => [message, fields])
     ).toEqual([
-      ["hermes.profile.skipped", undefined],
-      ["hermes.profile.skipped", "beta"],
-      ["hermes.profile.skipped", undefined],
-      ["hermes.profile.skipped", "alpha"],
+      ["hermes.profile.skipped", {}],
+      ["hermes.profile.skipped", { profile: "beta" }],
+      ["hermes.profile.skipped", {}],
+      ["hermes.profile.skipped", { profile: "alpha" }],
     ])
 
     profiles = [profile(""), "not a profile"]
+    await expect(adapter.listAgents()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
+    // What survives a skip holds no Agent a person can pick.
+    profiles = [
+      profile("creator", { ui_meta: { aos: { role: "creator" } } }),
+      profile(""),
+    ]
     await expect(adapter.listAgents()).rejects.toBeInstanceOf(
       HermesUnavailableError
     )
@@ -1526,13 +1538,13 @@ describe("Hermes server adapter", () => {
     expect(page.sessions.map(({ id }) => id)).toEqual(["one", "two", "three"])
     expect(http).toHaveBeenCalledTimes(3)
     expect(
-      logs.records().map(({ message, fields }) => [message, fields.sessionId])
-    ).toEqual([
-      ["hermes.session.skipped", "bad-flag"],
-      ["hermes.session.skipped", "bad-title"],
-      ["hermes.session.skipped", "bad-time"],
-      ["hermes.session.skipped", "bad-owner"],
-    ])
+      logs.records().map(({ message, fields }) => [message, fields])
+    ).toEqual(
+      ["bad-flag", "bad-title", "bad-time", "bad-owner"].map((sessionId) => [
+        "hermes.session.skipped",
+        { profile: "researcher", sessionId },
+      ])
+    )
 
     rows = [{ ...good("bad-pin"), pinned: 1 }]
     await expect(

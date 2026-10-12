@@ -163,8 +163,11 @@ describe("OpenClaw workspace reads", () => {
     )
     expect(second.total).toBe(3)
     expect(
-      logs.records().map(({ message, fields }) => [message, fields.sessionId])
-    ).toContainEqual(["openclaw.session.skipped", "agent:analyst:bad"])
+      logs.records().map(({ message, fields }) => [message, fields])
+    ).toContainEqual([
+      "openclaw.session.skipped",
+      { agentId: "analyst", sessionId: "agent:analyst:bad" },
+    ])
 
     // A bad last row ends the list where the good rows do.
     rows = [row("agent:analyst:0"), { key: "" }]
@@ -208,9 +211,9 @@ describe("OpenClaw workspace reads", () => {
     ).toEqual([["openclaw.agent.unavailable", "beta"]])
 
     failures.set("alpha", new OpenClawClientRequestError("timeout"))
-    await expect(workspace.listAllSessions(50, 0)).rejects.toBeInstanceOf(
-      OpenClawClientRequestError
-    )
+    const outage = await workspace.listAllSessions(50, 0).catch((e) => e)
+    expect(outage).toBeInstanceOf(OpenClawWorkspaceUnavailableError)
+    expect(outage.cause).toBeInstanceOf(OpenClawClientRequestError)
 
     const authentication = new OpenClawClientConnectionError("authentication")
     failures.clear()
@@ -221,7 +224,8 @@ describe("OpenClaw workspace reads", () => {
   it("[CL1-WORKSPACE-024] keeps the other Agents when one Agent row is malformed, and fails when none can be read", async () => {
     let agents: Array<Record<string, unknown>> = [
       { id: "analyst", name: "Analyst", kind: "agent" },
-      { id: "broken", name: "Broken", kind: "robot" },
+      // A warning names a skipped row by its id alone, never its content.
+      { id: "broken", name: "Broken", kind: "robot", token: "fake-token" },
       { id: "verbose", name: "n".repeat(257), kind: "agent" },
       { id: "hidden", name: "Hidden", kind: "agent" },
     ]
@@ -231,15 +235,22 @@ describe("OpenClaw workspace reads", () => {
       const { agentId } = params as { agentId: string }
       return { sessions: [{ key: `agent:${agentId}:main`, agentId }] }
     })
+    const logs = captureLogs()
     const workspace = createOpenClawWorkspace({
       client: native,
       hiddenAgentIds: ["hidden"],
-      log: captureLogs().logger,
+      log: logs.logger,
     })
 
     const catalog = await workspace.listAgents()
 
     expect(catalog.agents.map(({ summary }) => summary.id)).toEqual(["analyst"])
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields])
+    ).toEqual([
+      ["openclaw.agent.skipped", { agentId: "broken" }],
+      ["openclaw.agent.skipped", { agentId: "verbose" }],
+    ])
     await expect(
       workspace.getSession("analyst", "agent:analyst:main")
     ).resolves.toMatchObject({ id: "agent:analyst:main" })
@@ -258,6 +269,15 @@ describe("OpenClaw workspace reads", () => {
     agents = [
       { id: "broken", name: "Broken", kind: "robot" },
       { id: "verbose", name: "n".repeat(257), kind: "agent" },
+    ]
+    await expect(workspace.listAgents()).rejects.toBeInstanceOf(
+      OpenClawWorkspaceUnavailableError
+    )
+    // What survives a skip holds no Agent a person can pick.
+    agents = [
+      { id: "system", name: "System", kind: "system" },
+      { id: OPENCLAW_CREATOR_AGENT_ID, name: "Creator", kind: "agent" },
+      { id: "broken", name: "Broken", kind: "robot" },
     ]
     await expect(workspace.listAgents()).rejects.toBeInstanceOf(
       OpenClawWorkspaceUnavailableError

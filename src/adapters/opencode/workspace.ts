@@ -12,6 +12,7 @@ import {
   type SessionCatalogResponse,
 } from "../../../protocol"
 import * as ids from "../../core/ids"
+import { loggedId } from "../../core/identifier"
 import { inviteSessionKey } from "../../core/invite-key"
 import type { SessionPatch } from "../../core/runtime"
 import {
@@ -85,17 +86,6 @@ function revision(parts: readonly string[]) {
 
 /** The most Sessions one search answers: one catalog page. */
 const SEARCH_LIMIT = 100
-/** The most of an id read off a rejected row that a warning carries. */
-const LOGGED_ID_LENGTH = 256
-
-/** The id a rejected row names, bounded for a warning; never its content. */
-function loggedId(row: unknown) {
-  const id =
-    typeof row === "object" && row !== null
-      ? (row as Record<string, unknown>).id
-      : undefined
-  return typeof id === "string" ? id.slice(0, LOGGED_ID_LENGTH) : undefined
-}
 
 /** One native Agent as its catalog entry. */
 function catalogEntry(agent: OpenCodeAgent) {
@@ -204,7 +194,7 @@ export function createOpenCodeWorkspaceOperations(input: {
         if (!session || seenIds.has(session.id)) {
           skipped += 1
           input.log?.warn(
-            { sessionId: loggedId(row) },
+            { sessionId: loggedId(row, "id") },
             "opencode.session.skipped"
           )
           continue
@@ -353,12 +343,16 @@ export function createOpenCodeWorkspaceOperations(input: {
           : undefined
         if (!entry?.success) {
           skipped += 1
-          input.log?.warn({ agentId: loggedId(row) }, "opencode.agent.skipped")
+          input.log?.warn(
+            { agentId: loggedId(row, "id") },
+            "opencode.agent.skipped"
+          )
           continue
         }
         agents.push(entry.data)
       }
-      if (skipped > 0 && agents.length === 0)
+      // A skip that leaves no Agent a person can pick is an outage.
+      if (skipped > 0 && !agents.some(({ selectable }) => selectable))
         throw new OpenCodeWorkspaceUnavailableError()
       agents.sort((left, right) =>
         left.summary.id.localeCompare(right.summary.id)

@@ -24,6 +24,7 @@ import { createAcpComposerStore } from "./acp-workspace-client-composer"
 import { createAcpSessionStore, rowOf } from "./acp-workspace-client-sessions"
 import type { AcpConnection } from "./types"
 import { SILENT_LOGGER } from "./connection"
+import { loggedId } from "./log"
 
 /**
  * The workspace surface over one ACP connection: Agent and Session ownership,
@@ -69,9 +70,6 @@ export type AcpWorkspaceClientOptions = {
   /** Where background failures are logged; silent by default. */
   logger?: Logger
 }
-
-/** The most of an id read off a rejected entry that a warning carries. */
-const LOGGED_ID_LENGTH = 256
 
 export function createAcpWorkspaceClient({
   connection,
@@ -163,7 +161,7 @@ export function createAcpWorkspaceClient({
       } catch (error) {
         unreadable = error
         clientLog.warn(
-          { id: session.sessionId.slice(0, LOGGED_ID_LENGTH) },
+          { id: loggedId(session, "sessionId") },
           "sessions.row_skipped"
         )
         continue

@@ -68,7 +68,7 @@ import {
   STABLE_AFTER_MS,
   type RequestTier,
 } from "./limits"
-import { loggedStream } from "./log"
+import { loggedId, loggedStream } from "./log"
 import type {
   AcpConnection,
   AcpConnectionOutage,
@@ -576,9 +576,6 @@ export function sessionMachine(
     })
 }
 
-/** The most of an id read off a rejected entry that a warning carries. */
-const LOGGED_ID_LENGTH = 256
-
 /**
  * The entries of a list answer, each read on its own: one this client cannot
  * read is left out, and `skipped` hears it. Entries none of which can be read
@@ -602,19 +599,6 @@ function readEach<T>(
   }
   if (entries.length > 0 && kept.length === 0) throw unreadable
   return kept
-}
-
-/** The id at `path` in an entry not yet read, bounded for a warning. */
-function loggedId(entry: unknown, ...path: string[]) {
-  let value = entry
-  for (const key of path)
-    value =
-      typeof value === "object" && value !== null
-        ? (value as Record<string, unknown>)[key]
-        : undefined
-  return typeof value === "string"
-    ? value.slice(0, LOGGED_ID_LENGTH)
-    : undefined
 }
 
 const AgentsListEntriesSchema = HgwAgentsListResponseSchema.extend({

@@ -175,10 +175,10 @@ describe("OpenCode workspace operations", () => {
 
     expect(page.sessions.map(({ id }) => id)).toEqual(["one", "two"])
     expect(
-      logs.records().map(({ message, fields }) => [message, fields.sessionId])
+      logs.records().map(({ message, fields }) => [message, fields])
     ).toEqual([
-      ["opencode.session.skipped", "untitled"],
-      ["opencode.session.skipped", "one"],
+      ["opencode.session.skipped", { sessionId: "untitled" }],
+      ["opencode.session.skipped", { sessionId: "one" }],
     ])
     // An invite read that skipped a row cannot tell its Session is not there.
     await expect(
@@ -202,7 +202,12 @@ describe("OpenCode workspace operations", () => {
     })
     let agents: unknown[] = [
       agent({}),
-      agent({ id: "broken", mode: "sometimes" }),
+      // An Agent's request can carry credential headers; no warning repeats it.
+      agent({
+        id: "broken",
+        mode: "sometimes",
+        request: { headers: { authorization: "Bearer fake-token" } },
+      }),
       agent({ id: "verbose", description: "d".repeat(4_097) }),
     ]
     const logs = captureLogs()
@@ -217,13 +222,21 @@ describe("OpenCode workspace operations", () => {
       "research",
     ])
     expect(
-      logs.records().map(({ message, fields }) => [message, fields.agentId])
+      logs.records().map(({ message, fields }) => [message, fields])
     ).toEqual([
-      ["opencode.agent.skipped", "broken"],
-      ["opencode.agent.skipped", "verbose"],
+      ["opencode.agent.skipped", { agentId: "broken" }],
+      ["opencode.agent.skipped", { agentId: "verbose" }],
     ])
 
     agents = [agent({ id: "broken", mode: "sometimes" })]
+    await expect(operations.listAgents()).rejects.toBeInstanceOf(
+      OpenCodeWorkspaceUnavailableError
+    )
+    // What survives a skip holds no Agent a person can pick.
+    agents = [
+      agent({ id: "hidden", hidden: true }),
+      agent({ id: "broken", mode: "sometimes" }),
+    ]
     await expect(operations.listAgents()).rejects.toBeInstanceOf(
       OpenCodeWorkspaceUnavailableError
     )

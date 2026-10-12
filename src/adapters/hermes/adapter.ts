@@ -90,6 +90,7 @@ import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
 import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
+import { loggedId } from "../../core/identifier"
 import { inviteSessionKey } from "../../core/invite-key"
 import { sessionPlatform } from "../../core/session-platform"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -354,16 +355,6 @@ function catalogEntry(profile: unknown) {
   if (!isRecord(profile) || !trimmedText(profile.name)) return undefined
   const entry = AgentCatalogEntrySchema.safeParse(projectProfile(profile))
   return entry.success ? entry.data : undefined
-}
-
-/** The most of an id read off a rejected row that a warning carries. */
-const LOGGED_ID_LENGTH = 256
-
-/** The id a rejected row names, bounded for a warning; never its content. */
-function loggedId(row: unknown, key: string) {
-  return isRecord(row)
-    ? trimmedText(row[key])?.slice(0, LOGGED_ID_LENGTH)
-    : undefined
 }
 
 /**
@@ -1208,17 +1199,19 @@ export class HermesServerAdapter implements ServerRuntime {
 
   /**
    * The catalog, one profile row at a time. A row that is not an Agent, or
-   * repeats an Agent's name, costs that row alone and leaves a warning; only
-   * no row being readable is an outage.
+   * repeats an Agent's name, costs that row alone and leaves a warning; a
+   * skip that leaves no Agent a person can pick is an outage.
    */
   async listAgents(): Promise<AgentCatalogResponse> {
     try {
       const profiles = await this.#profiles()
       const agents: AgentCatalogEntry[] = []
       const named = new Set<string>()
+      let skipped = 0
       for (const profile of profiles) {
         const agent = catalogEntry(profile)
         if (!agent || named.has(agent.summary.id)) {
+          skipped += 1
           this.#log?.warn(
             { profile: loggedId(profile, "name") },
             "hermes.profile.skipped"
@@ -1228,7 +1221,7 @@ export class HermesServerAdapter implements ServerRuntime {
         named.add(agent.summary.id)
         agents.push(agent)
       }
-      if (profiles.length > 0 && agents.length === 0)
+      if (skipped > 0 && !agents.some(({ selectable }) => selectable))
         throw new HermesUnavailableError()
       return AgentCatalogResponseSchema.parse({
         revision: catalogRevision(agents),
@@ -1384,8 +1377,11 @@ export class HermesServerAdapter implements ServerRuntime {
     // write that races another client is rejected by Hermes rather than by a
     // second read here.
     const profile = (await this.#profiles()).find(
+      // The copy the catalog lists: the first readable row of that name.
       (row): row is NativeRecord =>
-        isRecord(row) && trimmedText(row.name) === agentId
+        isRecord(row) &&
+        trimmedText(row.name) === agentId &&
+        catalogEntry(row) !== undefined
     )
     if (!profile) throw new HermesAgentNotFoundError()
     const current = projectProfile(profile)

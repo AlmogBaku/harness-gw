@@ -441,10 +441,10 @@ describe("ACP connection", () => {
       logs
         .records()
         .filter(({ message }) => message.endsWith("_skipped"))
-        .map(({ message, fields }) => [message, fields.id])
+        .map(({ message, fields }) => [message, fields])
     ).toEqual([
-      ["agents.entry_skipped", "verbose"],
-      ["sessions.result_skipped", "broken"],
+      ["agents.entry_skipped", { id: "verbose" }],
+      ["sessions.result_skipped", { id: "broken" }],
     ])
 
     const unreadable = connect({
