@@ -62,6 +62,8 @@ export type GatewaySocketPeer = {
   /** Whether the socket is open, rather than closing or closed. */
   isOpen(): boolean
   close(code: number, reason: string): void
+  /** Bytes Bun still holds unsent for this socket. */
+  bufferedAmount(): number
 }
 
 export type GatewaySocketService<Upgrade extends SocketUpgrade> = {
@@ -106,6 +108,7 @@ type SocketPeer<Upgrade extends SocketUpgrade> = {
   readonly readyState: number
   send(raw: string): number
   close(code?: number, reason?: string): void
+  getBufferedAmount(): number
 }
 type UpgradeServer = {
   upgrade<Upgrade extends SocketUpgrade>(
@@ -240,6 +243,7 @@ export function startGatewayServer<
                 send: (raw) => peer.send(raw),
                 isOpen: () => peer.readyState === WS_OPEN,
                 close: (code, reason) => peer.close(code, reason),
+                bufferedAmount: () => peer.getBufferedAmount(),
               })
               // A service that closed its own peer while opening it has run
               // the close handler already, so the peer is never counted.

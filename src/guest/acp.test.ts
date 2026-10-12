@@ -640,6 +640,7 @@ async function wire(listener: GuestAcpServiceOptions) {
   const closed: Array<{ code: number; reason: string }> = []
   const replies = new Map<Frame["id"], (reply: Frame) => void>()
   const socket = service.open(upgrade, {
+    bufferedAmount: () => 0,
     send: (raw) => {
       const frame = JSON.parse(raw) as Frame
       const sent = frames.push(frame)

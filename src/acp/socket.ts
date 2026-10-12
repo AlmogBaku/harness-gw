@@ -46,6 +46,11 @@ export type AcpSocketOptions = {
    */
   send(raw: string): void
   /**
+   * Bytes the concrete WebSocket still holds unsent. The ACP SDK pauses its
+   * output on it; without it, the SDK never limits what it sends.
+   */
+  bufferedAmount?: () => number
+  /**
    * Whether the connection's credential has lapsed. From then on no frame
    * passes either way: a request is refused, and the connection closes.
    */
@@ -146,8 +151,11 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         options.publicErrors ? publicFrame(raw, options.publicErrors) : raw
       )
     },
+    get bufferedAmount() {
+      return options.bufferedAmount?.() ?? 0
+    },
     close(code, reason) {
-      closePeer(code ?? 1000, reason ?? "")
+      closePeer(peerCloseCode(code ?? 1000, reason ?? ""), reason ?? "")
     },
     addEventListener(type, listener) {
       const existing = listeners.get(type)
@@ -186,6 +194,19 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
       listeners.clear()
     },
   }
+}
+
+/**
+ * The ACP SDK closes with 1008 for every limit it enforces. Its buffer and
+ * stall limits mean a reader that fell behind, which is transient: those
+ * leave with 4409, which the client reconnects on, so a tab that slept
+ * through a large replay comes back. Its other limits stay terminal.
+ */
+const READER_FELL_BEHIND = 4409
+const READER_LIMITS = /\b(maxBufferedBytes|maxOutputStallMs)\b/u
+
+function peerCloseCode(code: number, reason: string) {
+  return code === 1008 && READER_LIMITS.test(reason) ? READER_FELL_BEHIND : code
 }
 
 /** The id of the one JSON-RPC request a frame carries, if it carries one. */

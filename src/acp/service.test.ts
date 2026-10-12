@@ -113,6 +113,7 @@ function peer() {
       close(code: number, reason: string) {
         closed.push({ code, reason })
       },
+      bufferedAmount: () => 0,
     },
     nextFrame() {
       return new Promise<void>((resolve) => {
@@ -203,6 +204,48 @@ describe("ACP WebSocket service", () => {
     expect(acp.sockets()).toBe(0)
   })
 
+  it("holds output while the peer's buffer is full, and closes a reader stalled past the limit so it reconnects", async () => {
+    const clock = useFakeClock()
+    const { acp } = service()
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
+    )
+    const transport = peer()
+    const full = 9 * 1_024 * 1_024
+    let buffered = 0
+    const socket = acp.open(upgrade, {
+      ...transport.peer,
+      bufferedAmount: () => buffered,
+    })
+    const request = (id: number) =>
+      socket.receive(JSON.stringify({ jsonrpc: "2.0", id, method: "nope" }))
+    socket.receive(initializeFrame(7))
+    await clock.advance(10)
+    expect(transport.frames).toHaveLength(1)
+
+    buffered = full
+    request(8)
+    await clock.advance(1_000)
+    // A full buffer holds the reply back instead of overflowing the socket.
+    expect(transport.frames).toHaveLength(1)
+    expect(transport.closed).toEqual([])
+
+    buffered = 0
+    await clock.advance(1_000)
+    expect(transport.frames).toHaveLength(2)
+
+    // A reader that drains nothing for the stall limit is closed with a code
+    // the client reconnects on, never the terminal 1008.
+    buffered = full
+    request(9)
+    await clock.advance(61_000)
+    expect(transport.closed).toEqual([
+      { code: 4409, reason: expect.stringContaining("maxOutputStallMs") },
+    ])
+  })
+
   it("warns of a dropped send only while its socket is open", async () => {
     const logs = captureLogs()
     const acp = createAcpService({
@@ -224,6 +267,7 @@ describe("ACP WebSocket service", () => {
     let open = true
     let written: (() => void) | undefined
     const socket = acp.open(upgrade, {
+      bufferedAmount: () => 0,
       send() {
         written?.()
         return sent

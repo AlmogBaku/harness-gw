@@ -82,6 +82,25 @@ describe("ACP WebSocket shim", () => {
     expect(closed).toEqual([{ code: 1008, reason: "ACP rate exceeded" }])
   })
 
+  it("passes the SDK's buffer and stall closes on as 4409, and its other limit closes as 1008", () => {
+    const stalled = harness()
+    stalled.socket.socket.close(
+      1008,
+      "Connection output stalled for maxOutputStallMs (60000)"
+    )
+    const exceeded = harness()
+    exceeded.socket.socket.close(
+      1008,
+      "Connection exceeds maxBufferedBytes (1)"
+    )
+    const idLength = harness()
+    idLength.socket.socket.close(1008, "Connection exceeds maxIdLength (1024)")
+
+    expect(stalled.closed.map(({ code }) => code)).toEqual([4409])
+    expect(exceeded.closed.map(({ code }) => code)).toEqual([4409])
+    expect(idLength.closed.map(({ code }) => code)).toEqual([1008])
+  })
+
   it("closes with 1008 when the inbound byte window overflows", () => {
     const { socket, closed } = harness({ maxInputBytesPerWindow: 8 })
 

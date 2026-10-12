@@ -75,6 +75,7 @@ export function acpBridge(service: BridgedAcpService) {
         return
       }
       this.#connection = service.open(upgrade, {
+        bufferedAmount: () => 0,
         send: (raw) => {
           // A frame already written reaches the client before any close.
           this.frames.push(raw)

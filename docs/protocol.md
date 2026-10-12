@@ -84,11 +84,16 @@ Close codes the gateway sends:
 
 | Code   | Meaning                                                                                                                                            | Client action                 |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `1008` | Policy violation (expired credential, rate or size exceeded)                                                                                       | No reconnect; ends connection |
+| `1008` | Policy violation (expired credential, rate exceeded)                                                                                               | No reconnect; ends connection |
 | `1013` | Gateway at capacity                                                                                                                                | Backs off 30–60 s with jitter |
 | `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
+| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, or its waiting requests passed that buffer                       | Normal reconnect              |
 
 Any other code triggers a normal reconnect.
+
+A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
+itself before the gateway reads it, so the client never sends one: it refuses
+an oversized prompt or steer locally with `requestTooLarge`.
 
 ## Handshake: `initialize` and `auth/login`
 
