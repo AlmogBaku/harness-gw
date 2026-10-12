@@ -372,7 +372,8 @@ export function createOpenClawWorkspace(input: {
    * goes on by OpenClaw's own row count, and only the whole read keeping
    * nothing of the rows OpenClaw sent is unreadable. Pages keep one size, so
    * a run of skipped rows costs a page rather than a call per row, and no row
-   * past the catalog window is read, since none is shown.
+   * past the catalog window is read: with rows skipped, a readable one
+   * beyond it is left unlisted, and the list ends there.
    */
   const fetchPrefix = async (agentId: string, prefix: number) => {
     const sessions: Session[] = []

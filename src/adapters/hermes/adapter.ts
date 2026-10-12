@@ -1576,7 +1576,8 @@ export class HermesServerAdapter implements ServerRuntime {
    * the gap. Only the whole read keeping nothing of the rows Hermes sent is an
    * unreadable list: a refill page can hold nothing but skipped rows. Pages
    * keep one size, so a run of skipped rows costs a page rather than a call
-   * per row, and no row past the catalog window is read, since none is shown.
+   * per row, and no row past the catalog window is read: with rows skipped, a
+   * readable one beyond it is left unlisted, and the list ends there.
    */
   async #sessionPrefix(
     profile: string,
