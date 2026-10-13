@@ -118,8 +118,6 @@ export const HGW_JSONRPC_ERRORS = {
    * the gateway never sends it, so it has no machine name on the wire.
    */
   requestTooLarge: -31016,
-  /** A method that exists, refused to this connection's principal. */
-  forbidden: -31017,
 } as const
 
 /**

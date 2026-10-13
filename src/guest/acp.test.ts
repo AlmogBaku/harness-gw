@@ -1075,26 +1075,9 @@ describe("guest ACP listener", () => {
   // The session capability a guest is offered promises session/new and
   // session/list, so refusing them as unknown would contradict it: they exist,
   // but not for a guest.
-  it("refuses the session methods its capability promises as forbidden", async () => {
-    const test = harness({ existing: true })
-    const socket = await loggedInWire(
-      test.listener,
-      await invite(test.invitations)
-    )
-
-    for (const [method, params] of [
-      [methods.agent.session.new, { cwd: "/" }],
-      [methods.agent.session.list, {}],
-      [methods.agent.session.list, { cwd: "/srv/agent" }],
-    ] as const)
-      expect(await socket.request(method, params), method).toMatchObject({
-        error: { code: -31017, message: "forbidden" },
-      })
-    expect(test.listAllSessions).not.toHaveBeenCalled()
-    socket.close()
-  })
-
-  it("refuses the methods an operator owns as unknown, however their params are spelled", async () => {
+  // ACP's method-not-found covers a method that "does not exist or is not
+  // available", which is what an operator's method is to a guest.
+  it("refuses the methods an operator owns as not available, however their params are spelled", async () => {
     const test = harness({ existing: true })
     const socket = await loggedInWire(
       test.listener,
@@ -1112,12 +1095,17 @@ describe("guest ACP listener", () => {
       [HGW_METHODS.agents.update, { sessionId: 5 }],
       [HGW_METHODS.sessions.search, { _meta: { hgw: { query: "notes" } } }],
       [methods.agent.session.fork, { sessionId: REF, cwd: "/" }],
+      // The session capability promises both, but not to a guest.
+      [methods.agent.session.new, { cwd: "/" }],
+      [methods.agent.session.list, {}],
+      [methods.agent.session.list, { cwd: "/srv/agent" }],
     ] as const)
       expect(await socket.request(method, params), method).toMatchObject({
         error: { code: METHOD_NOT_FOUND },
       })
     expect(test.updateSession).not.toHaveBeenCalled()
     expect(test.forkSession).not.toHaveBeenCalled()
+    expect(test.listAllSessions).not.toHaveBeenCalled()
     socket.close()
   })
 

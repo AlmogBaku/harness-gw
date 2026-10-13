@@ -1,10 +1,9 @@
-import { methods } from "@agentclientprotocol/sdk/experimental/v2"
+import { methods, RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
 import { type SessionHistoryResponse } from "../../protocol"
 import {
-  HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_POSITION,
@@ -561,9 +560,9 @@ describe("operator ACP listener", () => {
     }
   )
 
-  // ACP forbids loading, resuming, closing or prompting a child; the gateway
-  // refuses every other request naming one too, read-only ones among them.
-  it("refuses every request naming a child as forbidden", async () => {
+  // ACP permits a client nothing on a child its capabilities do not name, and
+  // no ordinary Session's method: each is a method not available.
+  it("refuses every request naming a child as a method not available", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Review it")
     source.emit(turnStarted())
@@ -596,7 +595,10 @@ describe("operator ACP listener", () => {
       await expect(
         test.agent.request(method, params),
         method
-      ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.forbidden })
+      ).rejects.toMatchObject({
+        code: RequestError.methodNotFound("").code,
+        data: { method },
+      })
     source.finish()
     test.close()
   })

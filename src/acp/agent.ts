@@ -76,7 +76,6 @@ import type { AcpConnectionContext, HgwAcpAgentFactory } from "./types"
 import {
   authenticationRequired,
   errorNotificationOf,
-  forbidden,
   invalidParams,
   notFound,
   parseMeta,
@@ -92,19 +91,6 @@ import {
  * the member stack, and leaves what reaches a Session's members to its
  * channel.
  */
-
-/**
- * The methods an empty session capability promises (ACP v2 `SessionCapabilities`):
- * every connection that offers sessions has them.
- */
-const SESSION_BASELINE: ReadonlySet<string> = new Set([
-  methods.agent.session.new,
-  methods.agent.session.list,
-  methods.agent.session.resume,
-  methods.agent.session.close,
-  methods.agent.session.prompt,
-  methods.agent.session.cancel,
-])
 
 /** Extension methods with no params still need a parser for the SDK. */
 const withoutParams = () => undefined
@@ -245,15 +231,19 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Refuses a method the stack does not admit, before its params are decoded,
-   * so a refused method is unavailable however its params are spelled. A
-   * method the session capability promises exists for every connection, so
-   * refusing it is `forbidden` rather than unknown.
+   * so a refused method is unavailable however its params are spelled. ACP's
+   * method-not-found means a method that does not exist or is not available,
+   * which is what a refused one is. So is any method naming a child Session,
+   * which permits a client nothing its capabilities do not name, and nothing
+   * of an ordinary Session's.
    */
-  function admit(method: string, kind: CommandKind) {
-    if (admits(stack(), kind)) return
-    throw SESSION_BASELINE.has(method)
-      ? forbidden()
-      : RequestError.methodNotFound(method)
+  function admit(method: string, kind: CommandKind, params?: unknown) {
+    const named = (params as { sessionId?: unknown } | undefined)?.sessionId
+    if (
+      !admits(stack(), kind) ||
+      (typeof named === "string" && sessions.child(named))
+    )
+      throw RequestError.methodNotFound(method)
   }
 
   /**
@@ -267,11 +257,6 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     execute: CommandNext<K>,
     requestId?: JsonRpcId
   ): Promise<CommandResults[K]> {
-    // A child Session belongs to the Session that owns it: ACP forbids a
-    // client loading, resuming, closing or prompting one, and the gateway
-    // refuses every other request naming one too.
-    const named = (command as { sessionId?: unknown }).sessionId
-    if (typeof named === "string" && sessions.child(named)) throw forbidden()
     // A command acts for the identity it began as: one that a logout, or the
     // next login, replaced while it was held reaches nothing.
     const { authentication } = context
@@ -633,7 +618,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     methods.agent.session.fork,
     async ({ params, client, requestId }) => {
-      admit(methods.agent.session.fork, "fork")
+      admit(methods.agent.session.fork, "fork", params)
       // Only a runtime that forks is offered it.
       if (!context.channels.forks)
         throw RequestError.methodNotFound(methods.agent.session.fork)
@@ -742,7 +727,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       const replay = replayCursor(params.replayFrom)
       if (replay.from === "before") {
         const { cursor } = replay
-        admit(method, "older-page")
+        admit(method, "older-page", params)
         const { page } = await perform(
           "older-page",
           { sessionId: params.sessionId, cursor },
@@ -760,7 +745,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           },
         }
       }
-      admit(method, "resume")
+      admit(method, "resume", params)
       const meta = parseMeta(HgwSessionResumeMetaSchema, params._meta)
       const agentId = agentOf(meta.agentId)
       const resumed = await perform(
@@ -791,7 +776,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     methods.agent.session.prompt,
     async ({ params, client, signal, requestId }) => {
-      admit(methods.agent.session.prompt, "send")
+      admit(methods.agent.session.prompt, "send", params)
       const meta = parseMeta(HgwPromptMetaSchema, params._meta)
       if (params.prompt.some(isUnadvertisedBlock)) throw invalidParams()
       const text = promptText(params.prompt)
@@ -855,7 +840,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     methods.agent.session.setConfigOption,
     async ({ params, requestId }) => {
-      admit(methods.agent.session.setConfigOption, "set-config")
+      admit(methods.agent.session.setConfigOption, "set-config", params)
       const write = translators.configWriteOf(params.configId, params.value)
       const { models } = await perform(
         "set-config",
@@ -877,7 +862,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onRequest(methods.agent.session.close, async ({ params, requestId }) => {
-    admit(methods.agent.session.close, "close")
+    admit(methods.agent.session.close, "close", params)
     await perform(
       "close",
       { sessionId: params.sessionId },
@@ -898,7 +883,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.delete, async ({ params, requestId }) => {
-    admit(methods.agent.session.delete, "delete")
+    admit(methods.agent.session.delete, "delete", params)
     await perform(
       "delete",
       { sessionId: params.sessionId },
@@ -942,7 +927,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     HGW_METHODS.session.update,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(HGW_METHODS.session.update, "update")
+      admit(HGW_METHODS.session.update, "update", raw)
       const params = HgwSessionUpdateRequestSchema.parse(raw)
       const patch: MemberCommands["update"]["patch"] =
         params.unread === false
@@ -971,7 +956,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     HGW_METHODS.session.steer,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(HGW_METHODS.session.steer, "steer")
+      admit(HGW_METHODS.session.steer, "steer", raw)
       const params = HgwSteerRequestSchema.parse(raw)
       return await perform(
         "steer",
@@ -995,7 +980,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     HGW_METHODS.session.focus,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(HGW_METHODS.session.focus, "focus")
+      admit(HGW_METHODS.session.focus, "focus", raw)
       const { sessionId, foreground, idle } = HgwFocusRequestSchema.parse(raw)
       // A report naming no Session changes nothing; its answer is what the
       // browser probes its link for.

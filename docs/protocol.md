@@ -195,8 +195,7 @@ invited conversation by its reference alone; any other Session id is
 | `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
 | `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
-| `session/new`, `session/list` | `-31017` forbidden: the session capability promises both, so they exist, but not for a guest. |
-| `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
+| `session/new`, `session/list`, `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded: ACP's code for a method that "does not exist or is not available", which these are to a guest, though the session capability promises `session/new` and `session/list`. |
 
 `session/prompt` and `_hgw/session/steer` refuse, with `-32602`, text that
 starts with `/` (after any leading whitespace or zero-width characters) and
@@ -716,6 +715,37 @@ On the guest listener, Artifact reads share a per-invitation budget of 16 in
 flight and 600 per 10 minutes, on every guest path that reads an Artifact.
 Past it, the route answers 503 `turn_capacity_exceeded`.
 
+## Child Sessions
+
+A subagent a turn spawns is an ACP v2 child Session. The parent announces each
+child with `subagent_update` on its own Session before any traffic of the
+child's: the outer `sessionId` is the parent, `update.sessionId` the child.
+Later reports patch it.
+
+- `title` and `description` are the runtime's display text for the child, and
+  `state` mirrors its work: `running`, `requires_action`, or `idle` with
+  `end_turn`, `cancelled` or `error`.
+- `capabilities` is `{ cancel: {} }` only where the runtime stops the child
+  alone, and `{}` otherwise; ACP replaces it whole.
+- `_meta.hgw` (`HgwChildSessionMetaSchema`, `protocol/acp.ts`) carries what ACP
+  has no field for: `toolCallId`, the parent's call that spawned the child, and
+  the child's `model`, `filesRead`, `filesWritten`, `durationMs` and `summary`.
+
+The child's own updates arrive under its id on the same connection, numbered
+in the parent turn's sequence, and its tokens in its own idle usage. Its
+approvals and questions are asked with the child's `sessionId`, and an answer
+settles the parent turn's wait. `session/cancel` naming the child stops its
+work, where `cancel` is offered, through the Session that owns it; any other
+cancel naming one does nothing. Every other request naming a child answers
+`-32601`: a child permits a client nothing its capabilities do not name. A
+child id is never a top-level Session's, and nothing of a child is shown
+before its announcement.
+
+A guest is shown nothing of a child: no announcement, event, question or
+approval. A child's approval or question in a turn the guest started waits
+for an operator, who sees it on the child. Child reports and events pass the
+credentials middleware like any turn's tool data.
+
 ## Interactions: permission and elicitation
 
 ACP delivers pending interactions as `session/request_permission` or
@@ -755,7 +785,7 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | -------- | -------------------- | ---------------------------------------------------- |
 | `-32000` | `authRequired()`     | Authentication required (guest: no valid invitation) |
 | `-32002` | `resourceNotFound()` | Agent or Session does not exist                      |
-| `-32601` | `methodNotFound()`   | Method not recognized                                |
+| `-32601` | `methodNotFound()`   | Method does not exist, or is not available here      |
 | `-32602` | `invalidParams()`    | Request parameters failed validation                 |
 | `-32800` | `requestCancelled()` | Request timed out or the transport closed            |
 
@@ -770,7 +800,6 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | `-31014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
 | `-31015` | `unsupported`            | Runtime cannot store a requested Agent field                |
 | `-31016` | `requestTooLarge`        | Params too large for one frame (`HGW_MAX_FRAME_BYTES`)      |
-| `-31017` | `forbidden`              | The method exists, but not for this principal               |
 
 `requestTooLarge` is raised by the client before a prompt or steer is sent,
 so one oversized request fails alone instead of closing the shared socket. The
@@ -795,7 +824,6 @@ The machine name an error travels as — the `message` of a public reply, and th
 | `-31013` | `temporarily_unavailable` |
 | `-31014` | `uncertain_mutation`      |
 | `-31015` | `unsupported`             |
-| `-31017` | `forbidden`               |
 | (other)  | `internal_error`          |
 
 ## HTTP API
