@@ -438,13 +438,40 @@ export type SessionPlanActivityMessage = z.infer<
   typeof SessionPlanActivityMessageSchema
 >
 
+/**
+ * A compaction the provider stored: where it summarized the conversation's
+ * context, under the id its live `compaction_update` carried, and the summary
+ * where it keeps one. It replays as that compaction, completed.
+ */
+export const SessionCompactionActivityMessageSchema = z.strictObject({
+  id: IdentifierSchema,
+  role: z.literal("activity"),
+  activityType: z.literal("COMPACTION"),
+  content: z.strictObject({
+    compactionId: IdentifierSchema,
+    summary: z.string().max(1_000_000).optional(),
+  }),
+})
+export type SessionCompactionActivityMessage = z.infer<
+  typeof SessionCompactionActivityMessageSchema
+>
+
+/** A stored row of the Session's activity, not of its conversation. */
+export const SessionActivityMessageSchema = z.discriminatedUnion(
+  "activityType",
+  [SessionPlanActivityMessageSchema, SessionCompactionActivityMessageSchema]
+)
+export type SessionActivityMessage = z.infer<
+  typeof SessionActivityMessageSchema
+>
+
 export const SessionHistoryResponseSchema = z.strictObject({
   sessionId: IdentifierSchema,
   messages: z
     .array(
       z.discriminatedUnion("role", [
         SessionMessageSchema,
-        SessionPlanActivityMessageSchema,
+        SessionActivityMessageSchema,
       ])
     )
     .max(501),

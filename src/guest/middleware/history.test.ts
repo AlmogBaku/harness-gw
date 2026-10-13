@@ -344,6 +344,39 @@ describe("guest history projection", () => {
     expect(projected.messages.map((message) => message.id)).toEqual(["ask"])
   })
 
+  // A guest is not shown compaction live, so its history holds none either;
+  // only the plan, which it is shown, passes, and any activity added later is
+  // hidden until it is allowed.
+  it("passes the plan alone of the Session's activity", () => {
+    const plan = {
+      id: "plan",
+      role: "activity" as const,
+      activityType: "PLAN" as const,
+      content: { todos: [] },
+    }
+    const projected = projectGuestHistory(
+      {
+        ...page([{ id: "ask", role: "user", text: "Hello" }]),
+        messages: [
+          plan,
+          {
+            id: "compacted",
+            role: "activity",
+            activityType: "COMPACTION",
+            content: { compactionId: "k1", summary: "Private summary" },
+          },
+          ...page([{ id: "ask", role: "user", text: "Hello" }]).messages,
+        ],
+      },
+      "ref"
+    )
+
+    expect(projected.messages.map((message) => message.id)).toEqual([
+      "plan",
+      "ask",
+    ])
+  })
+
   it("keeps a long message whole", () => {
     const text = "x".repeat(20_000)
     const projected = projectGuestHistory(

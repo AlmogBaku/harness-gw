@@ -534,6 +534,29 @@ describe("withoutLiveRows", () => {
     ).toEqual([user("u1", "list the files"), plan, { ...agent, id: "a11" }])
   })
 
+  // A running turn's compaction is both stored and in its journal: the replay
+  // shows it, so a reload mid-turn shows one divider.
+  it("drops a compaction the replay names by its id, keeping an earlier turn's", () => {
+    const compaction = (id: string, compactionId: string) => ({
+      id,
+      role: "activity" as const,
+      activityType: "COMPACTION" as const,
+      content: { compactionId },
+    })
+    const stored = page([
+      compaction("row-1", "k1"),
+      user("u1", "list the files"),
+      compaction("row-2", "k1"),
+      compaction("row-3", "k2"),
+    ])
+
+    expect(withoutLiveRows(stored, new Set(["k1"])).messages).toEqual([
+      compaction("row-1", "k1"),
+      user("u1", "list the files"),
+      compaction("row-3", "k2"),
+    ])
+  })
+
   it("keeps an earlier turn's row whose tool call id the live turn reused", () => {
     const earlier = called("a1", "call-read")
     const stored = page([earlier, user("u1", "list the files")])

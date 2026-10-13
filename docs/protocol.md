@@ -391,6 +391,15 @@ the stored prompt answer (if it arrived before the storage deadline).
 Catch-up uses only standard ACP session updates; no `_hgw/session_invalidated`
 or `_hgw/steer_accepted` is sent.
 
+A compaction the provider stored replays as the completed `compaction_update`
+its live turn showed, under the same `compactionId`, with the summary where the
+provider keeps one (OpenCode does; Hermes does not). History carries it as an
+`{ role: "activity", activityType: "COMPACTION" }` row
+(`SessionCompactionActivityMessageSchema`, `protocol/index.ts`). A resume while
+the turn still runs shows that compaction once, from the turn's replay. A guest
+is shown no compaction, live or in history: of the Session's activity, its
+history passes the plan alone.
+
 | ACP event                   | Meaning                                                                                                           |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `agent_message_chunk`       | Streaming assistant prose                                                                                         |
@@ -398,6 +407,7 @@ or `_hgw/steer_accepted` is sent.
 | `tool_call_update`          | Tool lifecycle and argument deltas                                                                                |
 | `state_update`              | Run state transitions                                                                                             |
 | `plan_update`               | Session Todos in `_meta.hgw.todos`                                                                                |
+| `compaction_update`         | The provider compacted the conversation's context, with its summary once completed where the provider keeps one  |
 | `usage_update`              | Context window usage                                                                                              |
 | `session_info_update`       | Session metadata changes                                                                                          |
 | `available_commands_update` | Slash commands and capabilities in `_meta.hgw.capabilities` (`HgwAvailableCommandsMetaSchema`, `protocol/acp.ts`) |

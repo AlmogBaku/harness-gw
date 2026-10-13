@@ -19,7 +19,7 @@ import {
   formatArtifactUri,
 } from "../../../protocol/acp"
 import type { AcpOutbound, Built, TranslateContext } from "../types"
-import { StopReason, type ToolDiff } from "../../core/events"
+import { CompactionStatus, StopReason, type ToolDiff } from "../../core/events"
 
 /**
  * The `session/update` values the gateway emits, each carrying the `_meta.hgw`
@@ -192,6 +192,41 @@ export const ACP_STOP_REASON = {
   [StopReason.Refusal]: "refusal",
   [StopReason.Cancelled]: "cancelled",
 } as const satisfies Record<StopReason, string>
+
+const ACP_COMPACTION_STATUS = {
+  [CompactionStatus.Started]: "in_progress",
+  [CompactionStatus.Completed]: "completed",
+  [CompactionStatus.Failed]: "failed",
+  [CompactionStatus.Cancelled]: "cancelled",
+} as const satisfies Record<CompactionStatus, string>
+
+/**
+ * A compaction as ACP shows it, live and replayed alike: the summary once it
+ * completed, the error once it failed.
+ */
+export function compactionUpdate({
+  compactionId,
+  status,
+  summary,
+  error,
+}: {
+  compactionId: string
+  status: CompactionStatus
+  summary?: string
+  error?: string
+}): Built<SessionUpdate> {
+  return {
+    sessionUpdate: "compaction_update",
+    compactionId,
+    status: ACP_COMPACTION_STATUS[status],
+    ...(status === CompactionStatus.Completed && summary !== undefined
+      ? { summary: [{ type: "text", text: summary }] }
+      : {}),
+    ...(status === CompactionStatus.Failed && error !== undefined
+      ? { error }
+      : {}),
+  }
+}
 
 /** A call's text output as ACP tool content. */
 export function textContent(text: string): Built<ToolCallContent> {

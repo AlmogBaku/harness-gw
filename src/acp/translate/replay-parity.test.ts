@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest"
 
 import type { SessionHistoryResponse } from "../../../protocol"
 import { HGW_META_KEY } from "../../../protocol/acp"
-import { TurnEventKind, type TurnEvent } from "../../core/events"
+import {
+  CompactionStatus,
+  TurnEventKind,
+  type TurnEvent,
+} from "../../core/events"
 import {
   initialTranslateState,
   type AcpOutbound,
@@ -203,6 +207,10 @@ const textOf = (value: Record<string, unknown>) =>
  */
 function folded(previous: Item | undefined, item: Item) {
   if (previous?.kind !== item.kind) return undefined
+  if (item.kind === "compaction_update")
+    return previous.value.compactionId === item.value.compactionId
+      ? { ...previous.value, ...item.value }
+      : undefined
   if (item.kind === "tool_call_update")
     return previous.value.toolCallId === item.value.toolCallId
       ? {
@@ -254,10 +262,10 @@ function stream(outbound: readonly AcpOutbound[]): Item[] {
   return flow
 }
 
-function live(): AcpOutbound[] {
+function live(events: readonly TurnEvent[] = liveEvents): AcpOutbound[] {
   let state: TranslateState = initialTranslateState
   const outbound: AcpOutbound[] = []
-  for (const event of liveEvents) {
+  for (const event of events) {
     const step = translateTurnEvent(state, event, liveContext)
     state = step.state
     outbound.push(...step.outbound)
@@ -269,6 +277,56 @@ describe("replay parity", () => {
   it("replays a turn as the stream the live run sent", () => {
     expect(stream(translateHistory(storedHistory))).toEqual(stream(live()))
   })
+
+  // OpenCode stores a compaction's summary; Hermes stores none.
+  it.each([
+    ["with its summary", "The notes so far."],
+    ["without one", undefined],
+  ])(
+    "replays a compaction %s as the divider the live run showed",
+    (_stored, summary) => {
+      const compacted: TurnEvent[] = [
+        { kind: TurnEventKind.TurnStarted },
+        {
+          kind: TurnEventKind.CompactionUpdated,
+          compactionId: "k1",
+          status: CompactionStatus.Started,
+        },
+        {
+          kind: TurnEventKind.CompactionUpdated,
+          compactionId: "k1",
+          status: CompactionStatus.Completed,
+          ...(summary === undefined ? {} : { summary }),
+        },
+        { kind: TurnEventKind.MessageChunk, messageId: ASSISTANT, text: "On." },
+        { kind: TurnEventKind.TurnEnded },
+      ]
+      const stored: SessionHistoryResponse = {
+        ...storedHistory,
+        messages: [
+          {
+            id: "k1",
+            role: "activity",
+            activityType: "COMPACTION",
+            content: {
+              compactionId: "k1",
+              ...(summary === undefined ? {} : { summary }),
+            },
+          },
+          {
+            id: ASSISTANT,
+            role: "assistant",
+            content: [{ type: "text", text: "On." }],
+            createdAt: STARTED_AT,
+            completedAt: FINISHED_AT,
+          },
+        ],
+        total: 2,
+      }
+
+      expect(stream(translateHistory(stored))).toEqual(stream(live(compacted)))
+    }
+  )
 
   it("keeps the execution order the turn was produced in", () => {
     expect(stream(live()).map((item) => item.kind)).toEqual([

@@ -10,7 +10,6 @@ import {
   HgwSubagentSchema,
 } from "../../../protocol/acp"
 import {
-  CompactionStatus,
   isAwaitingStopFailure,
   isUnobservedFailure,
   sumTokenCounts,
@@ -35,6 +34,7 @@ import {
   planUpdate,
   turnMeta,
   stateOutbound,
+  compactionUpdate,
   turnError,
   TodosSchema,
   toolContentOutbound,
@@ -45,13 +45,6 @@ import {
   toolOutbound,
   update,
 } from "./updates"
-
-const ACP_COMPACTION_STATUS = {
-  [CompactionStatus.Started]: "in_progress",
-  [CompactionStatus.Completed]: "completed",
-  [CompactionStatus.Failed]: "failed",
-  [CompactionStatus.Cancelled]: "cancelled",
-} as const satisfies Record<CompactionStatus, string>
 
 /**
  * The message a patch hangs off. The adapter names every message where it is
@@ -498,20 +491,7 @@ function compactionOutbound(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.CompactionUpdated>
 ): AcpOutbound[] {
-  const { compactionId, status, summary, error } = event
-  return [
-    turnUpdate(context, {
-      sessionUpdate: "compaction_update",
-      compactionId,
-      status: ACP_COMPACTION_STATUS[status],
-      ...(status === CompactionStatus.Completed && summary !== undefined
-        ? { summary: [{ type: "text", text: summary }] }
-        : {}),
-      ...(status === CompactionStatus.Failed && error !== undefined
-        ? { error }
-        : {}),
-    }),
-  ]
+  return [turnUpdate(context, compactionUpdate(event))]
 }
 
 function subagentOutbound(

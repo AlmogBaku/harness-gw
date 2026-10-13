@@ -13,15 +13,18 @@ import type {
   TranslateContext,
   TranslateHistory,
 } from "../types"
+import { CompactionStatus } from "../../core/events"
 import {
   artifactOutbound,
   chunkOutbound,
+  compactionUpdate,
   diffContent,
   outputContent,
   planUpdate,
   stateOutbound,
   turnError,
   toolOutbound,
+  turnMeta,
   update,
 } from "./updates"
 
@@ -265,7 +268,20 @@ export const translateHistory = ((history) => {
   const outbound: AcpOutbound[] = []
   for (const message of history.messages) {
     if (message.role === "activity")
-      outbound.push(update(planUpdate(message.content.todos, { sequence: 0 })))
+      outbound.push(
+        update(
+          message.activityType === "PLAN"
+            ? planUpdate(message.content.todos, { sequence: 0 })
+            : // A stored compaction is one that completed.
+              {
+                ...compactionUpdate({
+                  ...message.content,
+                  status: CompactionStatus.Completed,
+                }),
+                _meta: { [HGW_META_KEY]: turnMeta(context) },
+              }
+        )
+      )
     else if (message.role === "assistant")
       outbound.push(
         ...turnOpeningOutbound(message),

@@ -734,6 +734,7 @@ function rowIds({ event }: SequencedTurnEvent): string[] {
     ...("toolCallId" in event && event.toolCallId !== undefined
       ? [event.toolCallId]
       : []),
+    ...("compactionId" in event ? [event.compactionId] : []),
   ]
 }
 

@@ -50,8 +50,10 @@ export function projectGuestHistory(
     // Pages count back from the newest, so the setup turn may open any page.
     if (message.role === "user" && isFirstTurnEnvelope(message.content))
       continue
+    // Only the plan of the Session's activity is shown to a guest: any other
+    // kind, compaction among them, stays hidden until it is allowed here.
     if (message.role === "activity") {
-      messages.push(message)
+      if (message.activityType === "PLAN") messages.push(message)
       continue
     }
     const content = message.content.flatMap(
