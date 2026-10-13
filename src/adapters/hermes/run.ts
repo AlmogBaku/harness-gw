@@ -44,6 +44,8 @@ import {
 } from "./tool-data"
 import { hermesCompactionId, hermesRowMessageId } from "./history"
 import type { HermesPublishedArtifacts } from "./published-artifacts"
+import type { HermesChildSessions } from "./child-sessions"
+import { acceptSubagent, releaseChildren, stopChild } from "./run-children"
 import type { HermesMediaOptions } from "./media-artifacts"
 import { boundedNativeBytes, publicReason, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
@@ -69,7 +71,6 @@ import {
   persistedTurnRows,
   stableNativeId,
   statusNotice,
-  subagentPatch,
   terminalText,
   tokenUsage,
   usageCost,
@@ -184,6 +185,7 @@ export class HermesTurnEngine {
   readonly #lostInteractionGraceMs: number
   readonly #mcpToolNames?: McpToolNames
   readonly #publishedArtifacts?: HermesPublishedArtifacts
+  readonly #childSessions?: HermesChildSessions
   readonly #media: HermesMediaOptions
 
   constructor(
@@ -195,6 +197,8 @@ export class HermesTurnEngine {
       mcpToolNames?: McpToolNames
       /** Grants each MEDIA-line artifact before its assistant row persists. */
       publishedArtifacts?: HermesPublishedArtifacts
+      /** Keeps each child a turn announced, for a reload to announce again. */
+      childSessions?: HermesChildSessions
       /** Whether the media a turn delivers becomes Artifacts; on by default. */
       media?: HermesMediaOptions
       /** Without it, a watch retries every failure and logs nothing. */
@@ -204,6 +208,7 @@ export class HermesTurnEngine {
     this.#native = native
     this.#mcpToolNames = options.mcpToolNames
     this.#publishedArtifacts = options.publishedArtifacts
+    this.#childSessions = options.childSessions
     this.#media = options.media ?? {}
     this.#log = options.log ?? { warn: () => undefined }
     this.#watch = {
@@ -229,6 +234,9 @@ export class HermesTurnEngine {
       fail: (active, failure) => this.#fail(active, failure),
       detach: (active, failure) => this.#detach(active, failure),
       settle: (active) => this.#settle(active),
+      emit: (active, event) => this.#emit(active, event),
+      recordChild: (active, report, parent) =>
+        this.#childSessions?.record(active.scope, report, parent),
     }
   }
 
@@ -714,6 +722,8 @@ export class HermesTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => stopTurn(this.#host, active),
+      stopChild: (childSessionId) =>
+        stopChild(this.#host, active, childSessionId),
       // Gap: Hermes answers `session.redirect` with `{status, text}` alone
       // (tui_gateway/methods_session.py:2171 at v2026.9.24) and no push names
       // the correction's row, so a live steer keeps its `requestId` while a
@@ -862,10 +872,9 @@ export class HermesTurnEngine {
         return this.#acceptTerminal(active, event.type, payload)
       case "status.update":
         return this.#acceptStatus(active, payload)
-      case "subagent.spawn_requested":
       case "subagent.start":
       case "subagent.complete":
-        return this.#acceptSubagent(active, event.type, payload)
+        return acceptSubagent(this.#host, active, event.type, payload)
       case "error": {
         // Hermes also uses `error` for advisory failures (a rejected pending
         // model switch): reconcile liveness before any terminal turn event.
@@ -1019,36 +1028,6 @@ export class HermesTurnEngine {
       status: CompactionStatus.Cancelled,
     })
     compaction.open = undefined
-  }
-
-  /**
-   * Hermes names no call on a subagent frame, and `delegate_task` runs its
-   * children while the call is open: a subagent belongs to the latest open
-   * delegation when first seen, and to that call from then on.
-   */
-  #acceptSubagent(
-    active: ActiveTurn,
-    type: string,
-    payload: Record<string, unknown>
-  ) {
-    const subagent = subagentPatch(type, payload)
-    if (!subagent) return
-    const toolCallId =
-      active.subagents.get(subagent.id) ?? this.#openDelegation(active)
-    if (!toolCallId) return
-    active.subagents.set(subagent.id, toolCallId)
-    this.#emit(active, {
-      kind: TurnEventKind.SubagentUpdated,
-      toolCallId,
-      subagent,
-    })
-  }
-
-  #openDelegation(active: ActiveTurn) {
-    let open: string | undefined
-    for (const [toolCallId, tool] of active.tools)
-      if (tool.name === "delegate_subagent" && !tool.ended) open = toolCallId
-    return open
   }
 
   #acceptUsage(active: ActiveTurn, value: unknown) {
@@ -1379,6 +1358,7 @@ export class HermesTurnEngine {
     active.catchUp = undefined
     active.queue.close()
     safelyUnsubscribe(active.unsubscribe)
+    releaseChildren(active)
   }
 
   /** A public failure, on the model the Session last reported. */
@@ -1429,6 +1409,7 @@ export class HermesTurnEngine {
     // Session idle; without one nothing observes this Session any more.
     if (this.#settling.get(sessionKey(active.scope))?.active !== active)
       safelyUnsubscribe(active.unsubscribe)
+    releaseChildren(active)
     active.queue.close()
     active.resolveSettled()
     const key = sessionKey(active.scope)

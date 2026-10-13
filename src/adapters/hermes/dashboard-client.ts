@@ -47,13 +47,15 @@ export class HermesDashboardClient {
   /**
    * Hermes' search of one profile: id matches first, then message content,
    * one row per conversation. Answers `{ results }`, at most `limit` rows.
+   * A delegated child's Session is no conversation of the list, so its
+   * `subagent` source is left out too.
    */
   searchSessions(profile: string, query: string, limit: number) {
     const params = new URLSearchParams({
       q: query,
       profile,
       limit: String(limit),
-      exclude_sources: "cron,tool,kanban",
+      exclude_sources: "cron,tool,kanban,subagent",
     })
     return this.http(`/api/sessions/search?${params}`)
   }

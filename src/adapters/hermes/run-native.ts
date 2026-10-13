@@ -21,7 +21,7 @@ import {
   type HermesRpcTransport,
 } from "./gateway"
 import { isSessionGone, type AttachmentObserver } from "./attachment-registry"
-import { isRecord, trimmedText } from "./native"
+import { isRecord, nativeId, trimmedText } from "./native"
 import { projectHermesHistory } from "./history"
 import { publishedArtifact } from "./media-artifacts"
 import {
@@ -42,7 +42,11 @@ import {
   retryTransient,
   type HermesRetrySchedule,
 } from "./transient-rejections"
-import type { HermesRecovery } from "./run-frames"
+import {
+  nativeEvent,
+  nativeEventSessionId,
+  type HermesRecovery,
+} from "./run-frames"
 import type { HermesTurnScope } from "./run-state"
 import { ServerTurnSteerUncertainError } from "../../core/runtime"
 
@@ -153,6 +157,23 @@ export interface HermesTurnNative {
     signal?: AbortSignal
   ): Promise<HermesSubmitOutcome>
   interrupt(liveSessionId: string): Promise<"interrupted" | "gone">
+  /**
+   * Follows a child Session a turn delegated to through Hermes' watch mirror:
+   * a lazy `session.resume` of the child's stored id opens a live Session
+   * Hermes mirrors the child's relayed progress into. `observer` hears each of
+   * its frames once and in order, from its first; what the child did before
+   * the watch opened was never mirrored. The returned stop closes the watch.
+   */
+  watchChild(
+    scope: HermesTurnScope,
+    childSessionId: string,
+    observer: (event: unknown) => void
+  ): Promise<() => void>
+  /**
+   * Stops one child's work, its own children's included, on the parent's live
+   * Session; the parent's turn runs on.
+   */
+  interruptChild(liveSessionId: string, subagentId: string): Promise<void>
   redirect(
     liveSessionId: string,
     text: string
@@ -615,6 +636,94 @@ export class HermesNativeRuntime implements HermesTurnNative {
       throwUnavailable(error)
     }
     return "interrupted"
+  }
+
+  async watchChild(
+    scope: HermesTurnScope,
+    childSessionId: string,
+    observer: (event: unknown) => void
+  ) {
+    const subscribe = this.#transport.subscribeEvents
+    if (!subscribe) throw new HermesUnavailableError()
+    const watch: { liveSessionId?: string; held?: unknown[] } = { held: [] }
+    let lastSeen = 0
+    const deliver = (event: unknown) => {
+      const seq = nativeEvent(event)?.seq
+      if (seq !== undefined) {
+        if (seq <= lastSeen) return
+        lastSeen = seq
+      }
+      observer(event)
+    }
+    // Subscribed before the watch opens, and read from its first frame once
+    // it has, so a frame between the resume's answer and the catch-up is kept.
+    const unsubscribe = subscribe.call(this.#transport, (event: unknown) => {
+      if (
+        watch.liveSessionId === undefined ||
+        nativeEventSessionId(event) !== watch.liveSessionId
+      )
+        return
+      if (watch.held) watch.held.push(event)
+      else deliver(event)
+    })
+    try {
+      const payload = await this.#transport.request("session.resume", {
+        session_id: childSessionId,
+        profile: scope.agentId,
+        lazy: true,
+      })
+      watch.liveSessionId = isRecord(payload)
+        ? nativeId(payload.session_id, 256)
+        : undefined
+      if (!watch.liveSessionId) throw new HermesUnavailableError()
+      const { events } = await this.#since(
+        watch.liveSessionId,
+        0,
+        MAX_REPLAY_RESPONSE_BYTES
+      )
+      for (const event of events) deliver(event)
+      for (const event of watch.held ?? []) deliver(event)
+      watch.held = undefined
+    } catch (error) {
+      unsubscribe()
+      if (watch.liveSessionId) this.#closeWatch(watch.liveSessionId)
+      throwUnavailable(error)
+    }
+    const liveSessionId = watch.liveSessionId
+    let stopped = false
+    return () => {
+      if (stopped) return
+      stopped = true
+      unsubscribe()
+      this.#closeWatch(liveSessionId)
+    }
+  }
+
+  /** A watch is Hermes' live Session alone: closing it leaves the child stored. */
+  #closeWatch(liveSessionId: string) {
+    this.#transport
+      .request("session.close", { session_id: liveSessionId })
+      .catch((err: unknown) =>
+        this.#log?.warn({ err }, "hermes.child.watch_close_failed")
+      )
+  }
+
+  async interruptChild(liveSessionId: string, subagentId: string) {
+    try {
+      // Hermes answers `found: false` for a child already gone: nothing is
+      // left to stop.
+      await this.#transport.request("subagent.interrupt", {
+        session_id: liveSessionId,
+        subagent_id: subagentId,
+      })
+    } catch (error) {
+      if (error instanceof HermesRpcRejectedError) {
+        this.#logRejection("subagent.interrupt", error)
+        throw new HermesUnavailableError({ cause: error })
+      }
+      if (error instanceof HermesRpcUncertainError) throw error
+      throwUnavailable(error)
+    }
   }
 
   async redirect(liveSessionId: string, text: string) {

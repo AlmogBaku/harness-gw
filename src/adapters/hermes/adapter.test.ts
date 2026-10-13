@@ -754,7 +754,7 @@ describe("Hermes server adapter", () => {
       const { sessions } = await adapter.searchSessions("alpha", "plan")
 
       expect(http.mock.calls.map(([path]) => path)).toEqual([
-        "/api/sessions/search?q=plan&profile=alpha&limit=100&exclude_sources=cron%2Ctool%2Ckanban",
+        "/api/sessions/search?q=plan&profile=alpha&limit=100&exclude_sources=cron%2Ctool%2Ckanban%2Csubagent",
       ])
       expect(sessions).toHaveLength(1)
       expect(sessions[0]).toMatchObject({
@@ -763,6 +763,32 @@ describe("Hermes server adapter", () => {
       })
       expect(sessions[0]).not.toHaveProperty("unread")
       expect(sessions[0]).not.toHaveProperty("pinned")
+    })
+
+    it("leaves a delegated child out of the matches and keeps a fork", async () => {
+      const { adapter } = searching((profile) => ({
+        results: [
+          {
+            id: "20261013_101500_c0ffee",
+            profile,
+            source: "subagent",
+            parent_session_id: "s-1",
+            last_active: 30,
+          },
+          {
+            id: "s-fork",
+            profile,
+            source: "aos-ui",
+            parent_session_id: "s-1",
+            last_active: 20,
+          },
+          { id: "s-1", profile, source: "aos-ui", last_active: 10 },
+        ],
+      }))
+
+      const { sessions } = await adapter.searchSessions("alpha", "notes")
+
+      expect(sessions.map(({ id }) => id)).toEqual(["s-fork", "s-1"])
     })
 
     it("merges every profile's matches newest first", async () => {
@@ -997,6 +1023,120 @@ describe("Hermes server adapter", () => {
       HermesAgentNotFoundError
     )
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  describe("reading a child Session's transcript", () => {
+    const CHILD = "20261013_101500_c0ffee"
+    /** Stored Sessions by id, each with its own rows, served as Hermes does. */
+    function stored(
+      sessions: Record<
+        string,
+        { row: Record<string, unknown>; rows?: unknown[] }
+      >,
+      rawHistoryPage = 2
+    ) {
+      const http = vi.fn(async (path: string) => {
+        const url = new URL(path, "http://native.test")
+        const [, id, messages] =
+          /^\/api\/sessions\/([^/]+)(\/messages)?$/u.exec(url.pathname) ?? []
+        const session = sessions[decodeURIComponent(id ?? "")]
+        if (!session) throw new HermesHttpError(404)
+        if (!messages) return { id, profile: "researcher", ...session.row }
+        if (!session.rows) throw new HermesHttpError(404)
+        const limit = Number(url.searchParams.get("limit"))
+        const end = session.rows.length - Number(url.searchParams.get("offset"))
+        return {
+          session_id: id,
+          messages: session.rows.slice(Math.max(0, end - limit), end),
+        }
+      })
+      return new HermesServerAdapter(
+        { ...rpcRouter(), http },
+        { rawHistoryPage }
+      )
+    }
+    const delegated = { source: "subagent", parent_session_id: "stored" }
+
+    it("reads a delegated child's whole transcript as one page", async () => {
+      const adapter = stored({
+        [CHILD]: {
+          row: delegated,
+          rows: [
+            { row_id: 1, role: "user", content: "Inspect the notes" },
+            { row_id: 2, role: "assistant", content: "Child at work." },
+            { row_id: 3, role: "user", content: "And the appendix" },
+            { row_id: 4, role: "assistant", content: "Done." },
+            { row_id: 5, role: "user", content: "Thanks" },
+          ],
+        },
+      })
+
+      const page = await adapter.childHistory("researcher", "stored", CHILD)
+
+      expect(page).toMatchObject({ sessionId: CHILD, total: 5, offset: 0 })
+      expect(page.messages.map(({ id }) => id)).toEqual([
+        "hermes-row-1",
+        "hermes-row-1-1",
+        "hermes-row-3",
+        "hermes-row-3-1",
+        "hermes-row-5",
+      ])
+      expect(page).not.toHaveProperty("truncated")
+    })
+
+    it("follows a child's delegated parents up to the Session", async () => {
+      const adapter = stored({
+        [CHILD]: { row: delegated, rows: [] },
+        "20261013_101530_beef01": {
+          row: { source: "subagent", parent_session_id: CHILD },
+          rows: [{ row_id: 1, role: "user", content: "Count the pages" }],
+        },
+      })
+
+      await expect(
+        adapter.childHistory("researcher", "stored", "20261013_101530_beef01")
+      ).resolves.toMatchObject({ total: 1 })
+    })
+
+    it.each([
+      [
+        "a fork of the Session",
+        { source: "aos-ui", parent_session_id: "stored" },
+      ],
+      [
+        "another Session's child",
+        { source: "subagent", parent_session_id: "elsewhere" },
+      ],
+    ])("answers %s as not found", async (_case, row) => {
+      const adapter = stored({ [CHILD]: { row, rows: [] } })
+
+      await expect(
+        adapter.childHistory("researcher", "stored", CHILD)
+      ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    })
+
+    it("answers a child Hermes stored no row of yet with an empty transcript", async () => {
+      const adapter = stored({ [CHILD]: { row: delegated } })
+
+      await expect(
+        adapter.childHistory("researcher", "stored", CHILD)
+      ).resolves.toMatchObject({ messages: [], total: 0 })
+    })
+
+    it("keeps the newest messages of a transcript past the page bound", async () => {
+      const rows = Array.from({ length: 520 }, (_, index) => ({
+        row_id: index + 1,
+        role: "user",
+        content: `Prompt ${index + 1}`,
+      }))
+      const adapter = stored({ [CHILD]: { row: delegated, rows } }, 1_000)
+
+      const page = await adapter.childHistory("researcher", "stored", CHILD)
+
+      expect(page.messages).toHaveLength(500)
+      expect(page.messages[0]?.id).toBe("hermes-row-21")
+      expect(page.truncated).toBe(true)
+    })
   })
 
   describe("forking a Session", () => {

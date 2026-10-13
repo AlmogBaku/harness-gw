@@ -2,6 +2,7 @@ import type { SessionMessage } from "../../../protocol"
 import { StopReason, ToolKind } from "../../core/events"
 import { describe, expect, it } from "vitest"
 
+import { childActivity } from "./child-sessions"
 import { hermesTurnStart, projectHermesHistory } from "./history"
 import {
   assistantText,
@@ -546,6 +547,38 @@ describe("server-side Hermes history projection", () => {
       "hermes-row-14",
       "hermes-row-15",
     ])
+  })
+
+  it("places each child a call spawned after the message that made the call", () => {
+    const child = childActivity({
+      childSessionId: "20261013_101500_c0ffee",
+      toolCallId: "d1",
+      title: "Inspect the notes",
+      status: "idle",
+    })
+    const messages = projectHermesHistory(
+      [
+        userRow("u1", "Delegate it", { rowId: 1 }),
+        assistantToolCall(
+          "a2",
+          [{ toolCallId: "d1", name: "delegate_task", args: { goal: "Go" } }],
+          { rowId: 2 }
+        ),
+        toolRow("d1", "delegate_task", { results: [] }),
+        assistantText("a3", "Done.", { rowId: 3 }),
+      ],
+      undefined,
+      {},
+      { children: (toolCallId) => (toolCallId === "d1" ? [child] : []) }
+    )
+
+    expect(messages.map(({ id }) => id)).toEqual([
+      "hermes-row-1",
+      "hermes-row-1-1",
+      "hermes-child:20261013_101500_c0ffee",
+      "hermes-row-1-2",
+    ])
+    expect(messages[2]).toEqual(child)
   })
 
   it("keeps each reply a branch copied as its own response", () => {

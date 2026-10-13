@@ -47,8 +47,6 @@ runWireContract("Hermes", hermesRuntime, {
     // (`tools/clarify_tool.py:9`), so none takes its choices alone.
     choiceOnlyQuestion:
       "Hermes always offers a typed answer beside the choices",
-    childAnnouncedBeforeItsEvents:
-      "pending: the Hermes lane reports subagents as child Sessions",
   },
 })
 runWireListenerContract("Hermes", hermesRuntime)

@@ -1,4 +1,5 @@
 import type {
+  SessionChildActivityMessage,
   SessionCompactionActivityMessage,
   SessionMessage,
 } from "../../../protocol"
@@ -219,7 +220,9 @@ export function hermesCompactionId(turnBase: string, count: number) {
 }
 
 /** A stored row of Session activity the projection places among messages. */
-export type HermesActivityMessage = SessionCompactionActivityMessage
+export type HermesActivityMessage =
+  | SessionCompactionActivityMessage
+  | SessionChildActivityMessage
 
 /** What the projection makes of durable rows: messages and activity. */
 export type HermesHistoryMessage = SessionMessage | HermesActivityMessage
@@ -287,12 +290,20 @@ function isCopiedReply(value: JsonRecord, prose: boolean) {
 /**
  * Converts provider-native durable rows into the strict public history shape.
  * `branched`: the rows are a fork's, whose copied replies each stand alone.
+ * `children`: the child Sessions a call spawned, each placed after the message
+ * that made the call.
  */
 export function projectHermesHistory(
   rows: readonly unknown[],
   resolve?: McpToolNameResolver,
   media: HermesMediaOptions = {},
-  { branched = false }: { branched?: boolean } = {}
+  {
+    branched = false,
+    children,
+  }: {
+    branched?: boolean
+    children?: (toolCallId: string) => readonly SessionChildActivityMessage[]
+  } = {}
 ): HermesHistoryMessage[] {
   const messages: SessionMessage[] = []
   /** Activity rows, each after the messages that preceded it. */
@@ -562,6 +573,8 @@ export function projectHermesHistory(
           ...(locations ? { locations } : {}),
         })
         calls.set(toolCallId, { messageIndex, partIndex })
+        for (const child of children?.(toolCallId) ?? [])
+          activities.push({ before: messageIndex + 1, message: child })
       }
     }
     // Only an assistant message spans more than one row, so only its end is

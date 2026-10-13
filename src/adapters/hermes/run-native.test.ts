@@ -683,6 +683,124 @@ describe("Hermes typed branch", () => {
   })
 })
 
+describe("Hermes child watch", () => {
+  /** One frame Hermes mirrored into the watch `live-watch`. */
+  const mirrored = (seq: number, sessionId = "live-watch") => ({
+    type: "message.delta",
+    session_id: sessionId,
+    seq,
+    payload: { text: `part ${seq}` },
+  })
+  const seqs = (events: readonly unknown[]) =>
+    events.map((event) => (event as { seq: number }).seq)
+
+  it("opens a child's watch by a lazy resume and hears each frame once, from its first", async () => {
+    const { native, router } = runtime({
+      "session.resume": async () => ({ session_id: "live-watch" }),
+      "session.events.since": async () => ({
+        epoch: "e1",
+        latest_seq: 2,
+        events: [mirrored(1), mirrored(2)],
+      }),
+      "session.close": async () => ({ closed: true }),
+    })
+    const heard: unknown[] = []
+
+    const stop = await native.watchChild(scope, "child-1", (event) =>
+      heard.push(event)
+    )
+    router.publish(mirrored(2))
+    router.publish(mirrored(3))
+    router.publish(mirrored(4, "live-secret"))
+    stop()
+    stop()
+    router.publish(mirrored(5))
+
+    expect(seqs(heard)).toEqual([1, 2, 3])
+    expect(router.calls("session.resume").map(({ params }) => params)).toEqual([
+      { session_id: "child-1", profile: "researcher", lazy: true },
+    ])
+    expect(
+      router.calls("session.events.since").map(({ params }) => params)
+    ).toEqual([{ session_id: "live-watch", last_seen: 0 }])
+    await vi.waitFor(() =>
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-watch" }]
+      )
+    )
+  })
+
+  it("keeps a frame Hermes mirrored while the watch read its first frames", async () => {
+    const heard: unknown[] = []
+    const { native, router } = runtime({
+      "session.resume": async () => ({ session_id: "live-watch" }),
+      "session.events.since": async () => {
+        router.publish(mirrored(3))
+        return {
+          epoch: "e1",
+          latest_seq: 2,
+          events: [mirrored(1), mirrored(2)],
+        }
+      },
+    })
+
+    await native.watchChild(scope, "child-1", (event) => heard.push(event))
+
+    expect(seqs(heard)).toEqual([1, 2, 3])
+  })
+
+  it("reports a child Hermes cannot reach and hears nothing of it", async () => {
+    const heard: unknown[] = []
+    const { native, router } = runtime({
+      "session.resume": async () => {
+        throw new HermesRpcRejectedError(4007, "session not found")
+      },
+    })
+
+    await expect(
+      native.watchChild(scope, "child-1", (event) => heard.push(event))
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    router.publish(mirrored(1))
+
+    expect(heard).toEqual([])
+  })
+
+  it("stops one child on the parent's live Session", async () => {
+    const { native, router } = runtime({
+      "subagent.interrupt": async () => ({ found: true, subagent_id: "sa-1" }),
+    })
+
+    await native.interruptChild("live-secret", "sa-1")
+
+    expect(
+      router.calls("subagent.interrupt").map(({ params }) => params)
+    ).toEqual([{ session_id: "live-secret", subagent_id: "sa-1" }])
+  })
+
+  it.each([
+    [
+      "a refusal as an outage",
+      () => new HermesRpcRejectedError(4001, "not owned"),
+      HermesUnavailableError,
+    ],
+    [
+      "a lost answer as uncertain",
+      () => new HermesRpcUncertainError(),
+      HermesRpcUncertainError,
+    ],
+  ])("reports %s of a child's stop", async (_case, failure, expected) => {
+    const { native } = runtime({
+      "subagent.interrupt": async () => {
+        throw failure()
+      },
+    })
+
+    await expect(
+      native.interruptChild("live-secret", "sa-1")
+    ).rejects.toBeInstanceOf(expected)
+  })
+})
+
 describe("Hermes native interrupt", () => {
   it("reports an acknowledged interrupt", async () => {
     const { native, router } = runtime({

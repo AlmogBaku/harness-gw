@@ -50,11 +50,19 @@ const REDIRECT_SCAFFOLD = "[Context from the interrupted assistant response]"
 type Fault = "none" | "native" | "refused" | "down"
 type Reply = { result: unknown } | { error: { code: number; message: string } }
 
-/** A stored Session besides the one the fake runs: a fork Hermes branched. */
+/**
+ * A stored Session besides the one the fake runs: a fork Hermes branched, or
+ * a child a turn delegated to.
+ */
 type OtherSession = {
   rows: Record<string, unknown>[]
   title: string
   parent: string
+  /**
+   * `subagent` for a delegated child, which Hermes leaves out of its list
+   * (`tools/delegate_tool.py` builds the child with `platform="subagent"`).
+   */
+  source: string
   /** The live Session a resume or a branch bound it to. */
   liveId?: string
 }
@@ -213,6 +221,9 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   const closed: string[] = []
   /** Every socket method Hermes received, in order. */
   const received: string[] = []
+  /** The child Sessions waiting for a watch, each told its live id once open. */
+  const watchers = new Map<string, (liveId: string) => void>()
+  let nextChild = 1
 
   const socket = () => sockets.at(-1)
   /** Each live Session numbers its own frames (`event_replay._stamp_event`). */
@@ -342,6 +353,14 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         const other = others.get(String(params.session_id))
         if (other) {
           other.liveId ??= `live-${String(params.session_id)}`
+          // A lazy resume opens the watch Hermes mirrors a child into, once
+          // its answer is out (`_resume_lazy`).
+          const watching = watchers.get(String(params.session_id))
+          if (params.lazy === true && watching) {
+            watchers.delete(String(params.session_id))
+            const liveId = other.liveId
+            setImmediate(() => watching(liveId))
+          }
           return {
             result: {
               session_id: other.liveId,
@@ -423,6 +442,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
           })),
           title,
           parent: STORED_ID,
+          source: "aos-ui",
           liveId: `live-${storedId}`,
         })
         return {
@@ -555,17 +575,17 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     const base = `/api/sessions/${encodeURIComponent(STORED_ID)}`
     const listed = saved && !deleted
     if (url.pathname === "/api/sessions") {
-      // A fork stays listed by its `_branched_from` marker.
+      // A fork stays listed by its `_branched_from` marker, and a delegated
+      // child is left out (`db.session_count(exclude_children=True)`).
       const sessions = [
         ...(listed
           ? [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }]
           : []),
-        ...[...others].map(([id, { title, parent }]) => ({
-          id,
-          profile: PROFILE,
-          title,
-          parent_session_id: parent,
-        })),
+        ...[...others].flatMap(([id, { title, parent, source }]) =>
+          source === "subagent"
+            ? []
+            : [{ id, profile: PROFILE, title, parent_session_id: parent }]
+        ),
       ]
       return json(200, { sessions, total: sessions.length })
     }
@@ -584,8 +604,13 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
             profile: PROFILE,
             title: other.title,
             parent_session_id: other.parent,
+            source: other.source,
             // `db.get_session` serves the row's JSON column as stored.
-            model_config: JSON.stringify({ _branched_from: other.parent }),
+            model_config: JSON.stringify(
+              other.source === "subagent"
+                ? { _delegate_from: other.parent }
+                : { _branched_from: other.parent }
+            ),
           })
     }
     // A listing names no Session; each entry carries the real path Hermes
@@ -854,6 +879,105 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
      */
     async quiet() {
       toolProgress = false
+    },
+
+    /**
+     * A `delegate_task` call inside the running turn, whose one child says
+     * "Child at work." and completes, all stored: the child's Session under
+     * its own stored id, with its parent and Hermes' `subagent` source, as
+     * `tools/delegate_tool.py` stores it. Hermes mirrors a child only into a
+     * watch a lazy resume opened, so the child streams once one has. Resolves
+     * with the child's stored id, the one the adapter reports it under.
+     */
+    async spawnChild() {
+      startStreaming()
+      const n = nextChild++
+      const childId = `20261013_120000_c${String(n).padStart(5, "0")}`
+      const callId = `call-delegate-${n}`
+      const goal = "Inspect the notes"
+      emit(turn.toolStart(callId, "delegate_task", { goal }))
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: callId,
+            type: "function",
+            function: {
+              name: "delegate_task",
+              arguments: JSON.stringify({ goal }),
+            },
+          },
+        ],
+      })
+      const child: OtherSession = {
+        rows: [],
+        title: goal,
+        parent: STORED_ID,
+        source: "subagent",
+      }
+      others.set(childId, child)
+      const storeChild = (row: Record<string, unknown>) =>
+        child.rows.push({
+          id: nextRowId++,
+          session_id: childId,
+          timestamp: Date.now() / 1000,
+          ...row,
+        })
+      // `_identity_kwargs` rides on every relayed frame of the child.
+      const identity = {
+        subagent_id: `sa-0-${n}`,
+        child_session_id: childId,
+        goal,
+        depth: 0,
+        task_index: 0,
+        task_count: 1,
+        model: "contract-model",
+      }
+      const watched = new Promise<string>((resolve) =>
+        watchers.set(childId, resolve)
+      )
+      emit(turn.frame("subagent.start", identity))
+      storeChild({ role: "user", content: goal })
+      const mirror = nativeTurn(await watched)
+      emit(mirror.frame("message.start"))
+      emit(mirror.delta("Child at work."))
+      storeChild({
+        role: "assistant",
+        content: "Child at work.",
+        finish_reason: "stop",
+      })
+      emit(
+        turn.frame("subagent.complete", {
+          ...identity,
+          status: "completed",
+          summary: "Child at work.",
+          duration_seconds: 1.5,
+          input_tokens: 12,
+          output_tokens: 4,
+        })
+      )
+      emit(mirror.frame("message.complete", { text: "Child at work." }))
+      const result = {
+        results: [
+          {
+            task_index: 0,
+            status: "completed",
+            summary: "Child at work.",
+            duration_seconds: 1.5,
+          },
+        ],
+        total_duration_seconds: 1.5,
+      }
+      emit(turn.toolComplete(callId, "delegate_task", result))
+      store({
+        role: "tool",
+        tool_call_id: callId,
+        tool_name: "delegate_task",
+        content: JSON.stringify(result),
+      })
+      return childId
     },
 
     /**
