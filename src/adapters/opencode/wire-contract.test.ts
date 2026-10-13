@@ -44,6 +44,10 @@ runWireContract(
       // the fake cannot honestly spawn a child through a gateway turn.
       childAnnouncedBeforeItsEvents:
         "pending: whether gateway turns spawn children needs the live OpenCode check",
+      // The Session reports rewind unavailable (`native-rewind-unproven`),
+      // which the row checks in its place.
+      rewindReplacesTurn:
+        "pending: rewind through OpenCode's revert needs the live OpenCode check",
       // Every question and permission carries a presentable form, so the
       // adapter holds none back, and OpenCode lists each pending one
       // (`GET /api/session/{sessionID}/question` and `…/permission`), so a

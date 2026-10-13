@@ -5,7 +5,9 @@
  * runtime it composes; the real gateway is built around it by
  * `createConfiguredGateway`, and the SDK's own client reaches its ACP services
  * through `acpBridge`, the calls the network listener makes. A row the runtime
- * cannot express is named in `gaps` with its reason and listed as skipped.
+ * cannot express is named in `gaps` with its reason and listed as skipped,
+ * unless the gateway reports that reason itself: then the case checks the
+ * report in its place.
  *
  * The client is plain: it reaches the Agent at the Agent's own address,
  * sends no `_meta` of its own, registers no `_hgw/*` handler, and reads
@@ -41,6 +43,7 @@ import {
   HGW_ACP_AGENTS_PATH,
   HGW_ACP_PATH,
   HGW_AUTH_METHOD_INVITE,
+  HgwAvailableCommandsMetaSchema,
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
   HGW_METHODS,
@@ -78,6 +81,7 @@ export type WireContractRow =
   | "forkJoinsNewSession"
   | "childAnnouncedBeforeItsEvents"
   | "compactionReplaysAsLive"
+  | "rewindReplacesTurn"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -447,6 +451,44 @@ async function operatorSession({ clock, connectPlain }: WireHarness) {
   return { plain, sessionId }
 }
 
+/** A fresh operator client that joined `sessionId` from the start. */
+async function reload({ clock, connectPlain }: WireHarness, sessionId: string) {
+  const reader = connectPlain()
+  await until(clock, reader.initialize())
+  await until(clock, resumeFromStart(reader, sessionId))
+  return reader
+}
+
+/**
+ * An Edit of the user message `rewindSourceId` with `text`, or with none a
+ * Retry, which sends that message's own text again; answers as the prompt did.
+ */
+function rewindPrompt(
+  { connection }: WireClient,
+  sessionId: string,
+  rewindSourceId: string,
+  text: string
+) {
+  return connection.agent.request(methods.agent.session.prompt, {
+    sessionId,
+    prompt: text ? [{ type: "text", text }] : [],
+    _meta: { [HGW_META_KEY]: { rewindSourceId } },
+  })
+}
+
+/**
+ * A new Session `plain` made, and what it reports of Edit and Retry in the
+ * capabilities that follow its creation.
+ */
+async function rewindReported({ clock }: WireHarness, plain: WireClient) {
+  const reported = plain.next(SessionUpdate.isAvailableCommandsUpdate)
+  const sessionId = await until(clock, newSession(plain))
+  const { capabilities } = HgwAvailableCommandsMetaSchema.parse(
+    (await until(clock, reported))._meta?.[HGW_META_KEY]
+  )
+  return { sessionId, rewind: capabilities.interactions.rewind }
+}
+
 /**
  * The runtime asks its question; resolves once `plain` holds it, with what
  * settles once the runtime holds an answer.
@@ -746,14 +788,33 @@ export function runWireContract(
   createRuntime: () => WireRuntime,
   { gaps = {} }: WireContractOptions = {}
 ) {
+  /**
+   * One row. Where the runtime names it a gap whose reason the gateway itself
+   * reports, `gapCheck` runs in its place and checks that report.
+   */
   function row(
     id: WireContractRow,
     title: string,
     body: (harness: WireHarness) => Promise<void>,
-    limits?: SubscriberLimits
+    {
+      limits,
+      gapCheck,
+    }: {
+      limits?: SubscriberLimits
+      gapCheck?: Readonly<{
+        title: string
+        body: (harness: WireHarness) => Promise<void>
+      }>
+    } = {}
   ) {
-    if (gaps[id] !== undefined) it.skip(`${title} (gap: ${gaps[id]})`)
-    else it(title, wireCase(createRuntime, body, limits))
+    const gap = gaps[id]
+    if (gap === undefined) it(title, wireCase(createRuntime, body, limits))
+    else if (gapCheck)
+      it(
+        `${gapCheck.title} (gap: ${gap})`,
+        wireCase(createRuntime, gapCheck.body, limits)
+      )
+    else it.skip(`${title} (gap: ${gap})`)
   }
 
   describe(
@@ -1141,6 +1202,64 @@ export function runWireContract(
       )
 
       row(
+        "rewindReplacesTurn",
+        "replaces the turn an Edit names with its new text, and a Retry's with its own text again, where the Session reports rewind",
+        async (harness) => {
+          const { clock, turn } = harness
+          const plain = harness.connectPlain()
+          await until(clock, plain.initialize())
+          const { sessionId, rewind } = await rewindReported(harness, plain)
+          expect(rewind).toMatchObject({ status: "available" })
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          /** The Session as a reload reads it now, ids aside. */
+          const stored = async () => {
+            const { updates } = await reload(harness, sessionId)
+            return {
+              users: userSide(updates),
+              agent: agentSide(updates).messages.map(({ text }) => text),
+            }
+          }
+          /** Rewinds the user message, plays its turn, and reads again. */
+          const rewound = async (
+            { users }: Awaited<ReturnType<typeof stored>>,
+            text: string
+          ) => {
+            const idle = plain.nextIdle()
+            await until(
+              clock,
+              rewindPrompt(plain, sessionId, users[0]!.id, text)
+            )
+            await until(clock, turn.firstResponse())
+            await until(clock, turn.secondResponse())
+            await until(clock, idle)
+            return stored()
+          }
+          const played = await stored()
+          const edited = await rewound(played, "list the folders")
+          const retried = await rewound(edited, "")
+
+          const texts = ({ users }: typeof played) =>
+            users.map(({ text }) => text)
+          expect(texts(edited)).toEqual(["list the folders"])
+          expect(texts(retried)).toEqual(["list the folders"])
+          // The rewound turn's replies go with it, so one turn is stored.
+          expect(edited.agent).toEqual(played.agent)
+          expect(retried.agent).toEqual(played.agent)
+        },
+        {
+          gapCheck: {
+            title: "reports Edit and Retry unavailable on its Session",
+            async body(harness) {
+              const plain = harness.connectPlain()
+              await until(harness.clock, plain.initialize())
+              const { rewind } = await rewindReported(harness, plain)
+              expect(rewind).toMatchObject({ status: "unavailable" })
+            },
+          },
+        }
+      )
+
+      row(
         "reloadMidTurn",
         "rebuilds a turn waiting on a question from history, then its state and question, then answers",
         async (harness) => {
@@ -1214,7 +1333,7 @@ export function runWireContract(
             expect(rebuildNotices(client)).toEqual([])
           }
         },
-        TIGHT_LIMITS
+        { limits: TIGHT_LIMITS }
       )
 
       row(

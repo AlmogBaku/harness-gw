@@ -343,11 +343,14 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
    * them for an Edit or a Retry: everything from the user row it names is
    * dropped, and the survivors are stored again as new rows. Truncation needs
    * `confirm_truncate` (4029), a row Hermes holds (4018), and its own consent
-   * to drop every row (4028).
+   * to drop every row (4028). A cut also names the user row it dropped, whose
+   * text a Retry sends again.
    */
   function truncated(
     params: Record<string, unknown>
-  ): { rows: unknown[] } | Extract<Reply, { error: unknown }> {
+  ):
+    | { rows: unknown[]; source?: Record<string, unknown> }
+    | Extract<Reply, { error: unknown }> {
     const target = params.truncate_before_row_id
     if (target === undefined) return { rows }
     truncations.push({
@@ -374,6 +377,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         ...(row as Record<string, unknown>),
         id: nextRowId++,
       })),
+      source: rows[index] as Record<string, unknown>,
     }
   }
 
@@ -531,7 +535,13 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         running = true
         turnRows = []
         compactions = 0
-        const text = typeof params.text === "string" ? params.text : ""
+        const typed = typeof params.text === "string" ? params.text : ""
+        // A Retry: a cut with no text of its own, however padded, sends the
+        // dropped user row's text again as written.
+        const text =
+          cut.source && !typed.trim() && typeof cut.source.content === "string"
+            ? cut.source.content
+            : typed
         const userRowId = store({ role: "user", content: text })
         return { result: { status: "streaming", user_row_id: userRowId } }
       }
