@@ -3672,6 +3672,58 @@ describe("History pages", () => {
     test.close()
   })
 
+  // A child's transcript is part of the page that named it: tagged as that
+  // page is, so no reader takes it for the live turn's.
+  it("tags the transcript of a child an older page names as that page", async () => {
+    const transcript: SessionHistoryResponse["messages"] = conversation(12)
+    transcript[4] = {
+      id: "child-row",
+      role: "activity",
+      activityType: "CHILD_SESSION",
+      content: { childSessionId: "child-1", title: "Review the notes" },
+    }
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      childHistory: async () => ({
+        sessionId: "child-1",
+        messages: [
+          {
+            id: "child-message",
+            role: "assistant",
+            content: [{ type: "text", text: "Two notes were stale" }],
+            createdAt: NOW,
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+    })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    await settled()
+    const from = test.recorder.entries.length
+
+    await older(test, cursorOf(5))
+    await settled()
+
+    const childUpdates = test.recorder.entries
+      .slice(from)
+      .flatMap(({ method, params }) => {
+        const sent = params as { sessionId: string; update: SentUpdate }
+        return method === methods.client.session.update &&
+          sent.sessionId === "child-1"
+          ? [sent.update]
+          : []
+      })
+    expect(childUpdates).not.toHaveLength(0)
+    for (const update of childUpdates)
+      expect(pageTag(update)).toEqual({ cursor: cursorOf(5) })
+    test.close()
+  })
+
   it("reads a page without rejoining, following, or reporting the Session", async () => {
     const test = await harness({
       historyReach: REACH,

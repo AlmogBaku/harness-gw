@@ -1328,6 +1328,7 @@ class Membership {
           parentSessionId: this.#addressed.sessionId,
           childSessionId,
           page: transcript,
+          ...(older ? { older } : {}),
         })
     }
   }

@@ -86,7 +86,11 @@ function createGatewayAgent(
     history?: HgwHistoryCursor
     /** What a `_hgw/before` page read streams, and the cursor it replies with. */
     page?: {
-      updates: readonly (readonly [SessionUpdate, Record<string, unknown>])[]
+      /** Each update, and the Session it names when not the one read. */
+      updates: readonly (
+        | readonly [SessionUpdate, Record<string, unknown>]
+        | readonly [SessionUpdate, Record<string, unknown>, string]
+      )[]
       history?: HgwHistoryCursor
     }
     /**
@@ -175,9 +179,9 @@ function createGatewayAgent(
       const replayFrom = params.replayFrom
       if (replayFrom?.type === HGW_REPLAY_BEFORE) {
         const { cursor } = HgwReplayBeforeSchema.parse(replayFrom)
-        for (const [update, meta] of options.page?.updates ?? [])
+        for (const [update, meta, sessionId] of options.page?.updates ?? [])
           await peer?.notify(methods.client.session.update, {
-            sessionId: params.sessionId,
+            sessionId: sessionId ?? params.sessionId,
             update: {
               ...update,
               _meta: {
@@ -1103,6 +1107,68 @@ describe("ACP connection", () => {
         { sequence: 5, turnId: "run-1" }
       )
       await vi.waitFor(() => expect(live).toHaveLength(2))
+      connection.close()
+    })
+
+    // A child's transcript is part of the page that named it, and its
+    // positions are that page's, never the live turn's.
+    it("gives the child listener a child transcript a page carries, moving no rejoin position", async () => {
+      const clock = useFakeClock()
+      const gateway = createGatewayAgent({
+        page: {
+          updates: [
+            [
+              { sessionUpdate: "subagent_update", sessionId: CHILD_ID },
+              { sequence: 1, turnId: "history" },
+            ],
+            [
+              {
+                sessionUpdate: "agent_message",
+                messageId: "child-message",
+                content: [{ type: "text", text: "Two notes were stale" }],
+              },
+              { sequence: 2, turnId: "history" },
+              CHILD_ID,
+            ],
+          ],
+          history: {},
+        },
+      })
+      const pipe = pipedSockets(() => gateway.app)
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        url: "ws://gateway.test/api/v1/acp",
+        socketConstructor: pipe.WebSocket,
+      })
+      connection.start()
+      await connection.initialized
+      const children: string[] = []
+      connection.subscribe(SESSION_ID, {
+        agentId: AGENT_ID,
+        child: (childSessionId, update) =>
+          children.push(`${childSessionId} ${update.sessionUpdate}`),
+      })
+      await connection.joined(SESSION_ID)
+      await gateway.pushUpdate(
+        { sessionUpdate: "state_update", state: "running" },
+        { sequence: 4, turnId: "run-1" }
+      )
+
+      const page = await connection.resumePage(SESSION_ID, "cursor-1")
+
+      expect(page.updates.map(({ update }) => update.sessionUpdate)).toEqual([
+        "subagent_update",
+      ])
+      expect(children).toEqual([`${CHILD_ID} agent_message`])
+      pipe.sockets[0]?.drop()
+      await clock.advance(250)
+      expect(
+        gateway.callsOf(methods.agent.session.resume).at(-1)
+      ).toHaveProperty("replayFrom", {
+        type: HGW_REPLAY_POSITION,
+        turnId: "run-1",
+        from: 5,
+      })
       connection.close()
     })
 

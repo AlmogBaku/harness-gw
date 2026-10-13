@@ -129,13 +129,14 @@ export type SessionEvent =
   /**
    * The whole transcript of a child Session a history page named, addressed
    * to the child's own id as its live events are. It follows the page whose
-   * row announced the child.
+   * row announced the child, and is part of an `older` page as that page is.
    */
   | {
       kind: "child-history"
       parentSessionId: string
       childSessionId: string
       page: SessionHistoryResponse
+      older?: { cursor: string; offset: number }
     }
   /** A user prompt: another member's, or this member's own echo. */
   | {

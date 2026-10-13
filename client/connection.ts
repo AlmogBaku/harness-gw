@@ -887,6 +887,24 @@ export function createAcpConnection(
     })
   }
 
+  /** Gives one update of a child Session to the listeners of the Session that owns it. */
+  function deliverChild(
+    open: OpenSession,
+    childSessionId: string,
+    update: SessionUpdate,
+    meta: Record<string, unknown> | undefined
+  ) {
+    for (const { listener } of open.listeners)
+      callEach(
+        listener.child ? [listener.child] : [],
+        logger,
+        "acp.listener.failed",
+        childSessionId,
+        update,
+        meta
+      )
+  }
+
   const app = client({ name: clientInfo.name })
     .onNotification(methods.client.session.update, ({ params }) => {
       // Every `_meta.hgw` the protocol defines for an update belongs to the
@@ -904,7 +922,11 @@ export function createAcpConnection(
       // long over, so a live listener or the rejoin position would take its
       // state markers for the running turn's.
       if (HgwHistoryPageTagSchema.safeParse(meta).data?.historyPage) {
-        open.page?.push({ update: params.update, meta })
+        // A child's transcript on that page is the child's, so its own
+        // listener has it; its positions are the page's as well.
+        if (owner !== undefined)
+          deliverChild(open, params.sessionId, params.update, meta)
+        else open.page?.push({ update: params.update, meta })
         return
       }
       // Every turn meta extends the chunk meta, and reads drop unknown keys,
@@ -919,15 +941,7 @@ export function createAcpConnection(
       // A child's own update goes to the listeners of the Session that owns
       // it; its position is that Session's turn's too.
       if (owner !== undefined) {
-        for (const { listener } of open.listeners)
-          callEach(
-            listener.child ? [listener.child] : [],
-            logger,
-            "acp.listener.failed",
-            params.sessionId,
-            params.update,
-            meta
-          )
+        deliverChild(open, params.sessionId, params.update, meta)
         return
       }
       for (const { listener } of open.listeners)

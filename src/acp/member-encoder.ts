@@ -601,7 +601,12 @@ export function createMemberEncoder({
           event.childSessionId
         ))
           if (outbound.kind === "update")
-            await update(event.childSessionId, outbound.update)
+            await update(
+              event.childSessionId,
+              event.older
+                ? pageUpdate(outbound.update, event.older.cursor)
+                : outbound.update
+            )
         return
       case "request-asked":
         return ask(sessionId, event.request)
