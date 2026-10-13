@@ -2853,6 +2853,39 @@ describe("OpenClaw run engine child Sessions", () => {
     })
   })
 
+  it("keeps a child running whose transcript holds no reply of its run yet", async () => {
+    const native = spawning()
+    // Its run is not active yet, and nothing of it is stored.
+    native.histories[CHILD] = {
+      sessionKey: CHILD,
+      sessionId: "child-transcript",
+      messages: [],
+      sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+    }
+    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+    const child = childStream(subscriptions)
+    child.agent("assistant", { delta: "Started late." })
+    child.chat("final")
+    chat(subscriptions, "run-a", { state: "final" })
+    const lines = outline(await drain(handle.events))
+
+    expect(lines).toContain(
+      `${CHILD}> ${TurnEventKind.MessageChunk} Started late.`
+    )
+    expect(
+      lines.filter((line) =>
+        line.startsWith(`${CHILD}> ${TurnEventKind.TurnEnded}`)
+      )
+    ).toHaveLength(1)
+  })
+
   it("shows a child that finished before it was followed from its stored reply", async () => {
     const native = spawning()
     native.histories[CHILD] = {

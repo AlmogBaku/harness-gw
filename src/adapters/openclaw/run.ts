@@ -920,10 +920,11 @@ class ChildStream {
       this.#appendText(remainder(this.#text, inFlight.text))
       return
     }
+    // Only its run's stored reply ends it: a run not yet started reads idle.
     if (
       this.runId === undefined ||
-      history.activeRunIds?.includes(this.runId) ||
-      !authoritativelyIdle(history)
+      !authoritativelyIdle(history) ||
+      !hasCompletedHistoryRun(history, this.runId)
     )
       return
     this.#appendText(
