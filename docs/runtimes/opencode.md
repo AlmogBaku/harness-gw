@@ -141,8 +141,9 @@ capability reports available.
 ## Agent icons
 
 OpenCode has no native Agent write, so every `_hgw/agents/update` call,
-`muted` included, returns the `-31015 unsupported` error, and `avatarEditable`
-and `muteEditable` are `false` for every Agent.
+`muted` included, answers ACP's `-32602` invalid params, which the SDK reads as
+`AgentUpdateError` with the code `unsupported`, and `avatarEditable` and
+`muteEditable` are `false` for every Agent.
 
 An operator may hand-write an `avatar: ring/blue` key in the Agent file's
 frontmatter. The gateway reads it from `request.body.avatar` and treats it as
@@ -166,6 +167,8 @@ OpenCode ships it, enabling the gateway to store icons without frontmatter.
 
 - AOS reads the native Agent catalog, creates, renames, pins, archives, and deletes Sessions, and projects Session Todos, but Agent visibility, Agent icon writes, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the gateway `voice` block is configured; see [Use voice](https://github.com/AlmogBaku/aos-ui/blob/main/docs/chat-voice.md).
 - Runs support streaming, reconnect, Stop, attachments, questions, and permissions. Edit/regenerate and active-turn steering are unavailable.
+- A compaction OpenCode runs during a turn shows again, with its summary, when the Session is reloaded. One still open when its turn ends closes as cancelled.
+- Sessions cannot be forked. A child Session OpenCode's `task` tool makes outside the gateway stays out of every list and search, and naming it by id answers not found.
 - An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`. OpenCode cannot create that reserved Session safely because its pinned API has no title-bearing creation and a separate rename is not atomic; a new invitation therefore cannot create a Session on first Send.
 - AOS never restarts OpenCode automatically. Restart it under operator control after changing its configuration, once active work has finished.
 
