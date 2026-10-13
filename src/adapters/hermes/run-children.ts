@@ -117,6 +117,31 @@ function openDelegation(active: ActiveTurn) {
   return open
 }
 
+/**
+ * Whether the run still follows its children: during its turn, and after it
+ * as the Session's background activity.
+ */
+function following(active: ActiveTurn) {
+  return !active.detached && (!active.terminal || active.background === true)
+}
+
+/** Whether a child the turn spawned is still at work. */
+export function childrenAtWork(active: ActiveTurn) {
+  for (const child of active.children.values()) if (!child.done) return true
+  return false
+}
+
+/**
+ * Whether a `subagent.*` frame is of this turn's: a child it spawned, or a
+ * child's child, named by its `parent_id`.
+ */
+export function spawned(active: ActiveTurn, payload: Record<string, unknown>) {
+  return [payload.subagent_id, payload.parent_id].some((value) => {
+    const subagentId = stableNativeId(value)
+    return subagentId !== undefined && active.children.has(subagentId)
+  })
+}
+
 function childOf(active: ActiveTurn, childSessionId: string) {
   for (const child of active.children.values())
     if (child.childSessionId === childSessionId) return child
@@ -266,7 +291,7 @@ async function watch(
     (event) => acceptChildFrame(host, active, child, event)
   )
   // The child, or the run, ended while its watch opened.
-  if (child.stream.ended || active.terminal || active.detached) stop()
+  if (child.stream.ended || !following(active)) stop()
   else child.stopWatch = stop
 }
 
@@ -375,7 +400,7 @@ export function acceptChildFrame(
   child: ChildRun,
   value: unknown
 ) {
-  if (active.terminal || active.detached || child.stream.ended) return
+  if (!following(active) || child.stream.ended) return
   const event = nativeEvent(value)
   if (!event) return
   const payload = payloadOf(event)

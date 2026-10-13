@@ -16,6 +16,7 @@ import { providerSessionId, sessionId } from "../../core/ids"
 import {
   ServerTurnConflictError,
   type ServerTurnEngine,
+  type ServerTurnListener,
   type SessionScope,
 } from "../../core/runtime"
 import { describe, expect, it, vi } from "vitest"
@@ -47,6 +48,7 @@ import {
   failedToolThenRecovery,
   nativeTurn,
   terminalErrorThenIdle,
+  type NativeFrame,
   type NativeTurnBuilder,
 } from "./test-utils/native-events"
 import { assistantToolCall, toolRow } from "./test-utils/history-rows"
@@ -5790,6 +5792,139 @@ describe("Hermes child Sessions", () => {
     })
     expect(events.indexOf(reports.at(-1)!)).toBeLessThan(
       events.findIndex((event) => event.kind === TurnEventKind.TurnEnded)
+    )
+  })
+
+  /**
+   * A turn whose child is still at work when it ends, on a Session someone
+   * watches: every observer of the parent's live Session sees its frames.
+   */
+  async function outlived() {
+    const observers = new Map<string, Set<AttachmentObserver>>()
+    let latestSeq = 0
+    const publish = (event: NativeFrame) => {
+      latestSeq = Math.max(latestSeq, event.seq)
+      for (const observer of observers.get("live-secret") ?? [])
+        observer({ kind: "event", event })
+    }
+    const delegation = delegating({
+      // A later turn attaches where the Session's frames reached.
+      cursor: async () => ({ epoch: "epoch-1", latestSeq }),
+      subscribeLive: async (liveSessionId, observer) => {
+        const live = observers.get(liveSessionId) ?? new Set()
+        observers.set(liveSessionId, live.add(observer))
+        return () => {
+          live.delete(observer)
+        }
+      },
+    })
+    const listener = {
+      onTurn: vi.fn(),
+      onError: vi.fn(),
+      onChild: vi.fn<NonNullable<ServerTurnListener["onChild"]>>(),
+    }
+    delegation.engine.subscribeTurns(scope, listener)
+    await vi.waitFor(() => expect(observers.get("live-secret")?.size).toBe(1))
+    const turnInput = input()
+    const handle = await delegation.engine.start(scope, turnInput)
+    const t = nativeTurn("live-secret", 1)
+    publish(t.messageStart("m1"))
+    publish(t.toolStart("delegate-1", "delegate_task", { goal: "Inspect" }))
+    publish(started(t))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    publish(t.toolComplete("delegate-1", "delegate_task", { results: [] }))
+    publish(t.complete("m1", "Done."))
+    const events = await collect(handle)
+    return {
+      ...delegation,
+      publish,
+      listener,
+      turnId: turnInput.turnId,
+      t,
+      events,
+    }
+  }
+
+  // A background delegation outlives the turn that ran it: while someone
+  // watches the Session, its child goes on reporting to it, the parent idle.
+  it("follows a child that outlives its turn through the Session while someone watches", async () => {
+    const {
+      engine,
+      mirror,
+      mirrored,
+      watches,
+      interrupts,
+      publish,
+      listener,
+      t,
+      events,
+      ...turn
+    } = await outlived()
+
+    expect(JSON.stringify(events)).not.toContain(ChildSessionStatus.Unknown)
+    mirrored(mirror.frame("message.start"))
+    mirrored(mirror.delta("Still working."))
+    await engine.stopChild(scope, CHILD)
+    expect(interrupts).toEqual([["live-secret", "sa-0-1"]])
+    publish(
+      t.frame("subagent.complete", {
+        subagent_id: "sa-0-1",
+        child_session_id: CHILD,
+        depth: 0,
+        status: "interrupted",
+        summary: "Still working.",
+      })
+    )
+    await vi.waitFor(() => expect(watches[0]?.stopped).toBe(true))
+
+    expect(listener.onChild).toHaveBeenCalledWith(turn.turnId, {
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: CHILD,
+      event: expect.objectContaining({
+        kind: TurnEventKind.MessageChunk,
+        text: "Still working.",
+      }),
+    })
+    expect(listener.onChild).toHaveBeenCalledWith(
+      turn.turnId,
+      expect.objectContaining({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: CHILD,
+        status: ChildSessionStatus.Cancelled,
+      })
+    )
+    // Over, the child has nothing left to stop.
+    await engine.stopChild(scope, CHILD)
+    expect(interrupts).toHaveLength(1)
+  })
+
+  // Hermes reports every child on the parent's live Session, whichever turn
+  // runs there now: a child an earlier turn spawned is that turn's still.
+  it("reports a child that outlived its turn to the Session, not to the next turn", async () => {
+    const { engine, publish, listener, t, turnId } = await outlived()
+    publish(t.idle())
+    const next = await engine.start(scope, input())
+    publish(t.messageStart("m2"))
+    publish(
+      t.frame("subagent.complete", {
+        subagent_id: "sa-0-1",
+        child_session_id: CHILD,
+        depth: 0,
+        status: "completed",
+        summary: "Notes read.",
+      })
+    )
+    publish(t.complete("m2", "Next."))
+    const events = await collect(next)
+
+    expect(ofKind(events, TurnEventKind.ChildSessionUpdated)).toEqual([])
+    expect(listener.onChild).toHaveBeenCalledWith(
+      turnId,
+      expect.objectContaining({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: CHILD,
+        status: ChildSessionStatus.Idle,
+      })
     )
   })
 

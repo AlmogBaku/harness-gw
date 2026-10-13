@@ -735,8 +735,8 @@ Later reports patch it.
   turns. Each carries the `_meta.hgw` of the turn that spawned it, with
   `background: true`, so no reader takes it as a position in that turn's
   stream; its requests are answered, and its `cancel` honored, without any
-  turn. A runtime that cannot follow a child past its turn reports it
-  `unknown`, with `capabilities` `{}`.
+  turn. A child nobody watches past its turn, or one its runtime cannot
+  follow, is reported `unknown`, with `capabilities` `{}`.
 - `capabilities` is `{ cancel: {} }` only where the runtime stops the child
   alone, and `{}` otherwise; ACP replaces it whole.
 - `_meta.hgw` (`HgwChildSessionMetaSchema`, `protocol/acp.ts`) carries what ACP

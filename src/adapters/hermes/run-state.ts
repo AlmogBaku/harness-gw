@@ -98,6 +98,13 @@ export type ActiveTurn = {
   uncertain: boolean
   /** The queue is closed and the native observer released; nothing may emit. */
   detached: boolean
+  /**
+   * The turn ends with children still at work, which go on as the Session's
+   * background activity while someone watches it.
+   */
+  outlives?: true
+  /** The turn ended, and its children at work report to the Session. */
+  background?: true
   terminal: boolean
   /** Hermes accepted this turn but has not started it yet (queue, steer). */
   awaitingStart: boolean
