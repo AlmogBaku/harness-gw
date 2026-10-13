@@ -211,6 +211,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   const branches: Record<string, unknown>[] = []
   /** Every live Session `session.close` tore down. */
   const closed: string[] = []
+  /** Every socket method Hermes received, in order. */
+  const received: string[] = []
 
   const socket = () => sockets.at(-1)
   /** Each live Session numbers its own frames (`event_replay._stamp_event`). */
@@ -520,6 +522,15 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
             },
           },
         }
+      // `/branch` and its alias `/fork`, as `commands.catalog` lists them
+      // (`hermes_cli/commands.py:74`).
+      case "commands.catalog":
+        return {
+          result: {
+            pairs: [["/branch", "Branch the current session"]],
+            canon: { "/branch": "/branch", "/fork": "/branch" },
+          },
+        }
       case "session.close": {
         const liveId = String(params.session_id)
         closed.push(liveId)
@@ -536,6 +547,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     if (TRANSPORT_METHODS.has(method))
       return { result: method === "gateway.ping" ? { ok: true } : {} }
     calls += 1
+    received.push(method)
     return fault === "native" ? { error: NATIVE_FAILURE } : rpc(method, params)
   }
 
@@ -689,6 +701,9 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
 
     /** Every live Session `session.close` tore down, in order. */
     closedSessions: () => [...closed],
+
+    /** Every socket method Hermes received, in order. */
+    received: () => [...received],
 
     /** The dashboard requests Hermes received for `pathname`. */
     httpRequests: (pathname: string) =>

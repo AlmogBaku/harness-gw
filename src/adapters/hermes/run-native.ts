@@ -31,6 +31,12 @@ import {
 } from "./slash-commands"
 import { HermesTurnRewindConflictError, publicDetail } from "./run-failures"
 import {
+  branchLiveSession,
+  HermesForkRefusedError,
+  HermesForkUncertainError,
+  type HermesBranch,
+} from "./fork"
+import {
   DEFAULT_RETRY_SCHEDULE,
   isTransientRejection,
   retryTransient,
@@ -205,6 +211,9 @@ export type HermesNativeOptions = {
   /** When a transient `prompt.submit` refusal is tried again. */
   retry?: HermesRetrySchedule
 }
+
+/** The catalog's name for the command that forks: `/branch`, alias `/fork`. */
+const BRANCH_COMMAND = "branch"
 
 /** A replayed ring page may legitimately be large; a single reply is bounded. */
 const MAX_REPLAY_RESPONSE_BYTES = 6 * 1_048_576
@@ -435,6 +444,13 @@ export class HermesNativeRuntime implements HermesTurnNative {
       )
     }
 
+    // Hermes' own `/branch` (alias `/fork`) runs in the slash worker, whose
+    // handler ends this Session and switches only the worker to the branch;
+    // the fork runs here instead, as the fork action runs it. Only an alias
+    // the catalog resolves is caught, not a user's own quick command.
+    if (invocation?.name.toLowerCase() === BRANCH_COMMAND)
+      return this.#branch(liveSessionId, invocation.args)
+
     if (invocation) {
       let execution: HermesSlashExecution
       try {
@@ -471,6 +487,48 @@ export class HermesNativeRuntime implements HermesTurnNative {
           this.#log?.warn({ err }, "hermes.native.detach_failed")
       )
     return outcome
+  }
+
+  /**
+   * A typed `/branch`: the Session forked through `session.branch`, answered
+   * in band like any command that completes, naming the new Session. A fork
+   * Hermes may have stored without saying so is uncertain, and a live Session
+   * it no longer holds is gone, so the run rebinds and sends it once more.
+   */
+  async #branch(
+    liveSessionId: string,
+    name: string
+  ): Promise<HermesSubmitOutcome> {
+    let branch: HermesBranch
+    try {
+      branch = await branchLiveSession(this.#transport, liveSessionId, {
+        ...(name ? { name } : {}),
+        retry: this.#retry,
+        ...(this.#log ? { log: this.#log } : {}),
+      })
+    } catch (error) {
+      if (error instanceof HermesForkUncertainError)
+        return { acknowledgement: "uncertain" }
+      if (error instanceof HermesForkRefusedError)
+        return {
+          acknowledgement: "rejected",
+          reason: "invalid",
+          ...(error.detail === undefined ? {} : { detail: error.detail }),
+        }
+      if (isSessionGone(error)) {
+        this.#attachments.invalidate(liveSessionId)
+        return { acknowledgement: "rejected", reason: "session-gone" }
+      }
+      throwUnavailable(error)
+    }
+    const named = branch.title
+      ? `"${branch.title}" (${branch.storedSessionId})`
+      : branch.storedSessionId
+    return {
+      acknowledgement: "accepted",
+      status: "streaming",
+      completion: { output: `Forked this Session into ${named}.` },
+    }
   }
 
   /**

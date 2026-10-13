@@ -574,6 +574,115 @@ describe("Hermes native submit outcomes", () => {
   })
 })
 
+describe("Hermes typed branch", () => {
+  /** Hermes' catalog lists `/branch` with its alias `/fork`. */
+  function branching(branch: RpcHandler) {
+    return runtime({
+      "commands.catalog": async () => ({
+        pairs: [["/branch", "Branch the current session"]],
+        canon: { "/fork": "/branch", "/branch": "/branch" },
+      }),
+      "session.branch": branch,
+      "session.close": async () => ({ closed: true }),
+    })
+  }
+  const branched = async () => ({
+    session_id: "live-branch",
+    stored_session_id: "stored-fork",
+    title: "Notes #2",
+    parent: "stored",
+    message_count: 2,
+    messages: [],
+    info: {},
+  })
+
+  it.each([
+    ["/branch", {}],
+    ["/fork", {}],
+    ["/FORK  Second try", { name: "Second try" }],
+  ])(
+    "forks %s in place of the slash worker, naming the new Session",
+    async (text, name) => {
+      const { native, router } = branching(branched)
+
+      await expect(
+        native.submit("live-secret", { scope, text, turnId: "run-1" })
+      ).resolves.toEqual({
+        acknowledgement: "accepted",
+        status: "streaming",
+        completion: {
+          output: 'Forked this Session into "Notes #2" (stored-fork).',
+        },
+      })
+      // The slash worker's `/branch` ends the original Session.
+      expect(router.calls("slash.exec")).toHaveLength(0)
+      expect(router.calls("command.dispatch")).toHaveLength(0)
+      expect(router.calls("prompt.submit")).toHaveLength(0)
+      expect(
+        router.calls("session.branch").map(({ params }) => params)
+      ).toEqual([{ session_id: "live-secret", ...name }])
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-branch" }]
+      )
+    }
+  )
+
+  it("reports a fork Hermes stored but could not start as uncertain", async () => {
+    const { native } = branching(async () => {
+      throw new HermesRpcRejectedError(5000, "agent init failed on branch")
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "/branch", turnId: "run-1" })
+    ).resolves.toEqual({ acknowledgement: "uncertain" })
+  })
+
+  it("refuses a branch of nothing with Hermes' own words", async () => {
+    const { native } = branching(async () => {
+      throw new HermesRpcRejectedError(
+        4008,
+        "nothing to branch — send a message first"
+      )
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "/branch", turnId: "run-1" })
+    ).resolves.toEqual({
+      acknowledgement: "rejected",
+      reason: "invalid",
+      detail: "nothing to branch — send a message first",
+    })
+  })
+
+  it("reports a live Session Hermes no longer holds as gone, so the run rebinds", async () => {
+    const { native, attachments } = branching(async () => {
+      throw new HermesRpcRejectedError(4001, "session not found")
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "/branch", turnId: "run-1" })
+    ).resolves.toEqual({ acknowledgement: "rejected", reason: "session-gone" })
+    expect(attachments.invalidate).toHaveBeenCalledWith("live-secret")
+  })
+
+  it("never forks a branch sent with attachments", async () => {
+    const { native, router } = branching(branched)
+
+    await expect(
+      native.submit("live-secret", {
+        scope,
+        text: "/branch",
+        turnId: "run-1",
+        hasAttachments: true,
+      })
+    ).resolves.toEqual({
+      acknowledgement: "rejected",
+      reason: "command-with-attachments",
+    })
+    expect(router.calls("session.branch")).toHaveLength(0)
+  })
+})
+
 describe("Hermes native interrupt", () => {
   it("reports an acknowledged interrupt", async () => {
     const { native, router } = runtime({

@@ -14,6 +14,7 @@ import {
 } from "./gateway"
 import { isSessionGone } from "./attachment-registry"
 import { isRecord, nativeId, trimmedText } from "./native"
+import { publicDetail } from "./run-failures"
 import {
   DEFAULT_RETRY_SCHEDULE,
   retryTransient,
@@ -41,7 +42,11 @@ export class HermesForkUncertainError extends Error {
 
 /** The Session holds nothing Hermes can fork yet: no visible message. */
 export class HermesForkRefusedError extends Error {
-  constructor(options?: ErrorOptions) {
+  constructor(
+    /** Hermes' own words for the refusal, bounded. */
+    readonly detail: string | undefined,
+    options?: ErrorOptions
+  ) {
     super("The Session has no conversation to fork yet", options)
     this.name = "HermesForkRefusedError"
   }
@@ -88,7 +93,9 @@ export async function branchLiveSession(
       )
       if (isSessionGone(error)) throw error
       if (error.code === NOTHING_TO_BRANCH)
-        throw new HermesForkRefusedError({ cause: error })
+        throw new HermesForkRefusedError(publicDetail(error.nativeMessage), {
+          cause: error,
+        })
       if (error.code === STORED_THEN_FAILED)
         throw new HermesForkUncertainError({ cause: error })
     }
