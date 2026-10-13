@@ -134,6 +134,7 @@ type HarnessOptions = Pick<
   | "question"
   | "translation"
   | "childHistory"
+  | "forks"
 > & { history?: SessionHistoryResponse }
 
 async function harness({ history, ...options }: HarnessOptions = {}) {
