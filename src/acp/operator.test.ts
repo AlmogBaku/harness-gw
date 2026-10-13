@@ -6,6 +6,7 @@ import { type SessionHistoryResponse } from "../../protocol"
 import {
   HGW_METHODS,
   HGW_META_KEY,
+  HGW_REPLAY_BEFORE,
   HGW_REPLAY_POSITION,
   HgwActivityNotificationSchema,
 } from "../../protocol/acp"
@@ -630,7 +631,7 @@ describe("operator ACP listener", () => {
   // ACP permits a client nothing on a child its capabilities do not name, and
   // no ordinary Session's method: each is a method not available.
   it("refuses every request naming a child as a method not available", async () => {
-    const test = await harness()
+    const test = await harness({ forks: true })
     const { source } = await runningTurn(test, "Review it")
     source.emit(turnStarted())
     source.emit({
@@ -642,23 +643,54 @@ describe("operator ACP listener", () => {
       "the child's announcement"
     )
     const child = { sessionId: "child-1" }
+    // Every request that names a Session, from the method tables, so one
+    // added later fails here until it is refused for a child too. A cancel
+    // is a notification, which answers nothing, and is tested on its own.
+    const named: Record<string, Record<string, unknown>> = {
+      [methods.agent.session.resume]: { ...child, cwd: "/" },
+      [methods.agent.session.fork]: { ...child, cwd: "/" },
+      [methods.agent.session.prompt]: {
+        ...child,
+        prompt: [{ type: "text", text: "Hi" }],
+      },
+      [methods.agent.session.close]: child,
+      [methods.agent.session.delete]: child,
+      [methods.agent.session.setConfigOption]: {
+        ...child,
+        configId: "model",
+        type: "id",
+        value: "opus",
+      },
+      [HGW_METHODS.session.update]: { ...child, title: "Renamed" },
+      [HGW_METHODS.session.focus]: child,
+      [HGW_METHODS.session.part]: child,
+      [HGW_METHODS.session.steer]: { ...child, requestId: "s", text: "Hi" },
+    }
+    const unnamed = new Set<string>([
+      methods.agent.session.new,
+      methods.agent.session.list,
+      methods.agent.session.cancel,
+    ])
+    expect(Object.keys(named).sort()).toEqual(
+      [
+        ...Object.values(methods.agent.session),
+        ...Object.values(HGW_METHODS.session),
+      ]
+        .filter((method) => !unnamed.has(method))
+        .sort()
+    )
 
     for (const [method, params] of [
-      [methods.agent.session.resume, { ...child, cwd: "/" }],
+      ...Object.entries(named),
+      // An older page names its Session as a resume does.
       [
-        methods.agent.session.prompt,
-        { ...child, prompt: [{ type: "text", text: "Hi" }] },
+        methods.agent.session.resume,
+        {
+          ...child,
+          cwd: "/",
+          replayFrom: { type: HGW_REPLAY_BEFORE, cursor: "MA" },
+        },
       ],
-      [methods.agent.session.close, child],
-      [methods.agent.session.delete, child],
-      [
-        methods.agent.session.setConfigOption,
-        { ...child, configId: "model", type: "id", value: "opus" },
-      ],
-      [HGW_METHODS.session.update, { ...child, title: "Renamed" }],
-      [HGW_METHODS.session.focus, child],
-      [HGW_METHODS.session.part, child],
-      [HGW_METHODS.session.steer, { ...child, requestId: "s", text: "Hi" }],
     ] as [string, Record<string, unknown>][])
       await expect(
         test.agent.request(method, params),
