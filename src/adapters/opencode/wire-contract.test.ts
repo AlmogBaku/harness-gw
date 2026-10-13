@@ -42,8 +42,6 @@ runWireContract(
         "pending: OpenCode forks only if the live check of its older route passes",
       childAnnouncedBeforeItsEvents:
         "pending: the live check decides whether gateway turns spawn children",
-      compactionReplaysAsLive:
-        "pending: the OpenCode lane stores its compaction as a compaction row",
       // Every question and permission carries a presentable form, so the
       // adapter holds none back, and OpenCode lists each pending one
       // (`GET /api/session/{sessionID}/question` and `…/permission`), so a

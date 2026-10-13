@@ -111,6 +111,7 @@ export function fakeOpenCode() {
   let calls = 0
   let replies = 0
   let steps = 0
+  let compactions = 0
   let serverEvents = 0
   /** The question the running turn blocks on, and what settles its wait. */
   let asked:
@@ -333,6 +334,36 @@ export function fakeOpenCode() {
     })
   }
 
+  /**
+   * The running turn compacts its context, as the release's own compaction
+   * does: both its events and the message it stores carry one id, and that
+   * message keeps the summary its end streamed. Resolves with that id.
+   */
+  async function compact() {
+    compactions += 1
+    const messageID = `compaction-${compactions}`
+    const summary = "The conversation so far: three names were read."
+    const started = append("session.next.compaction.started", {
+      messageID,
+      reason: "auto",
+    })
+    append("session.next.compaction.ended", {
+      messageID,
+      reason: "auto",
+      text: summary,
+      recent: "Reading the file.",
+    })
+    messages.push({
+      id: messageID,
+      type: "compaction",
+      reason: "auto",
+      summary,
+      recent: "Reading the file.",
+      time: { created: created(started) },
+    })
+    return messageID
+  }
+
   async function finish() {
     running = false
     for (const answer of [...held]) answer.idle?.()
@@ -438,8 +469,11 @@ export function fakeOpenCode() {
 
     finish,
 
+    compact,
+
     /** The wire contract's turn: two model responses, each its own step. */
     turn: {
+      compact,
       async firstResponse() {
         step({
           reasoning: "I should read the file.",
