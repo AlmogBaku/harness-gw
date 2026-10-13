@@ -44,7 +44,7 @@ import {
 } from "./history"
 import { OpenClawInteractionPublicError } from "./interactions"
 import { createOpenClawMcpApps } from "./mcp-apps"
-import { OpenClawTurnPublicError } from "./run"
+import { OpenClawRewindRefusedError, OpenClawTurnPublicError } from "./run"
 import {
   createOpenClawMcpToolNames,
   type OpenClawMcpToolNames,
@@ -56,6 +56,7 @@ import {
 } from "./native-schemas"
 import {
   createOpenClawWorkspace,
+  OpenClawForkRefusedError,
   OpenClawWorkspaceOwnershipError,
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
@@ -110,6 +111,9 @@ export function openClawPublicError(cause: unknown) {
     return failureOf("revision_conflict", cause)
   if (
     cause instanceof OpenClawContentPublicError ||
+    // A rewind or fork OpenClaw refused is refused again on a retry.
+    cause instanceof OpenClawRewindRefusedError ||
+    cause instanceof OpenClawForkRefusedError ||
     (cause instanceof OpenClawInteractionPublicError &&
       cause.code === "HGW_INVALID_INTERACTION")
   )
@@ -281,6 +285,20 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#history.history(agentId, providerSessionId, limit, offset)
   }
 
+  /** A child Session's whole transcript, once its row names the Session. */
+  async childHistory(
+    agentId: string,
+    providerSessionId: string,
+    childSessionId: string
+  ) {
+    await this.#start()
+    return this.#history.childHistory(
+      agentId,
+      providerSessionId,
+      childSessionId
+    )
+  }
+
   async getSession(agentId: string, providerSessionId: string) {
     await this.#start()
     return this.#workspace.getSession(agentId, providerSessionId)
@@ -290,6 +308,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
     void _title
     await this.#start()
     return this.#workspace.createSession(agentId)
+  }
+
+  /** A fork through `sessions.create`, answered as `createSession` answers. */
+  async forkSession(agentId: string, providerSessionId: string) {
+    await this.#start()
+    return this.#workspace.forkSession(agentId, providerSessionId)
   }
 
   async updateSession(

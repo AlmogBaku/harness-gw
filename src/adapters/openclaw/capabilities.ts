@@ -21,10 +21,10 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
         status: "unavailable" as const,
         reason: "active-turn-steering-unavailable" as const,
       },
-      rewind: {
-        status: "unavailable" as const,
-        reason: "native-rewind-unsupported" as const,
-      },
+      // `sessions.rewind` drops the user turn an Edit or Retry names, and every
+      // turn after it, from the Session's active path before the prompt that
+      // replaces them is sent.
+      rewind: { status: "available" as const, scope: "user-turn" as const },
       approvals: {
         status: "available" as const,
         protocol: INTERACTION_PROTOCOL,

@@ -478,3 +478,206 @@ describe("OpenClaw history AOS tools and artifacts", () => {
     )
   })
 })
+
+describe("OpenClaw history child Sessions", () => {
+  const PARENT = "agent:research:main"
+  const CHILD = "agent:research:subagent:child-a"
+
+  /** A turn whose call spawned `child`, and its reply. */
+  function spawningTurn(child = CHILD) {
+    const details = {
+      status: "accepted",
+      childSessionKey: child,
+      runId: "child-run",
+    }
+    return [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Delegate" }],
+        __openclaw: { id: "u1", seq: 1 },
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call-spawn",
+            name: "sessions_spawn",
+            arguments: { task: "Count the names.", label: "Counter" },
+          },
+        ],
+        __openclaw: { id: "a1", seq: 2 },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn",
+        toolName: "sessions_spawn",
+        content: [{ type: "text", text: JSON.stringify(details) }],
+        details,
+        isError: false,
+        __openclaw: { id: "t1", seq: 3 },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Delegated." }],
+        __openclaw: { id: "a2", seq: 4 },
+      },
+    ]
+  }
+
+  /** A Gateway holding each Session's transcript and each child's row. */
+  function gateway(
+    transcripts: Record<string, unknown[]>,
+    rows: Record<string, Record<string, unknown>> = {}
+  ) {
+    const requests: Array<{ method: string; params: Record<string, unknown> }> =
+      []
+    const history = createOpenClawHistory({
+      authority: authority(),
+      client: {
+        request: wireRequest(
+          async (method, params: Record<string, unknown>) => {
+            requests.push({ method, params })
+            if (method === "chat.history")
+              return {
+                messages: transcripts[String(params.sessionKey)] ?? [],
+                sessionInfo: { activeRunIds: [] },
+              }
+            if (method === "sessions.list") {
+              const row = rows[String(params.search)]
+              return {
+                sessions: row
+                  ? [{ key: params.search, agentId: params.agentId, ...row }]
+                  : [],
+              }
+            }
+            throw new Error(`Unexpected method ${method}`)
+          }
+        ),
+      },
+      subscribeSession: async () => () => undefined,
+    })
+    return { history, requests }
+  }
+
+  it("[CL1-HISTORY-007] keeps a confirmed child as a CHILD_SESSION row after the call that spawned it", async () => {
+    const { history, requests } = gateway(
+      { [PARENT]: spawningTurn() },
+      { [CHILD]: { spawnedBy: PARENT, spawnDepth: 1, status: "done" } }
+    )
+
+    const page = await history.history("research", PARENT, 200, 0)
+
+    expect(page.messages).toEqual([
+      expect.objectContaining({ id: "u1", role: "user" }),
+      expect.objectContaining({ id: "a1", role: "assistant", content: [] }),
+      {
+        id: `openclaw-child:${CHILD}`,
+        role: "activity",
+        activityType: "CHILD_SESSION",
+        content: {
+          childSessionId: CHILD,
+          toolCallId: "call-spawn",
+          title: "Counter",
+          description: "Count the names.",
+          status: "idle",
+        },
+      },
+      expect.objectContaining({ id: "a2", role: "assistant" }),
+    ])
+    expect(requests).toContainEqual({
+      method: "sessions.list",
+      params: expect.objectContaining({ agentId: "research", search: CHILD }),
+    })
+  })
+
+  it.each([
+    ["names another parent", { spawnedBy: "agent:research:other" }],
+    ["is a top-level Session", {}],
+    ["is unlisted", undefined],
+  ])(
+    "[CL1-HISTORY-008] keeps no row for a spawned child whose own row %s",
+    async (_case, row) => {
+      const { history } = gateway(
+        { [PARENT]: spawningTurn() },
+        row ? { [CHILD]: row } : {}
+      )
+
+      const page = await history.history("research", PARENT, 200, 0)
+
+      expect(page.messages.map(({ role }) => role)).toEqual([
+        "user",
+        "assistant",
+        "assistant",
+      ])
+    }
+  )
+
+  it("[CL1-HISTORY-009] reads a child's whole transcript under its id once its row names the Session", async () => {
+    const { history, requests } = gateway(
+      {
+        [CHILD]: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Count the names." }],
+            __openclaw: { id: "c1", seq: 1 },
+          },
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Child at work." },
+              // The child's media has no Session to be read under.
+              { type: "image", data: "aGk=", mimeType: "image/png" },
+            ],
+            __openclaw: { id: "c2", seq: 2 },
+          },
+        ],
+      },
+      {
+        [CHILD]: { spawnedBy: PARENT, spawnDepth: 1 },
+        "agent:research:subagent:stranger": { spawnedBy: "agent:research:x" },
+      }
+    )
+
+    await expect(
+      history.childHistory("research", PARENT, CHILD)
+    ).resolves.toEqual({
+      sessionId: CHILD,
+      messages: [
+        expect.objectContaining({
+          id: "c1",
+          role: "user",
+          content: [{ type: "text", text: "Count the names." }],
+        }),
+        expect.objectContaining({
+          id: "c2",
+          role: "assistant",
+          content: [{ type: "text", text: "Child at work." }],
+        }),
+      ],
+      total: 2,
+      limit: 500,
+      offset: 0,
+      nextOffset: 2,
+      execution: { status: "idle" },
+    })
+    expect(requests).toContainEqual({
+      method: "chat.history",
+      params: { agentId: "research", sessionKey: CHILD, limit: 500, offset: 0 },
+    })
+    await expect(
+      history.childHistory(
+        "research",
+        PARENT,
+        "agent:research:subagent:stranger"
+      )
+    ).rejects.toThrow()
+    expect(
+      requests.filter(
+        ({ method, params }) =>
+          method === "chat.history" &&
+          params.sessionKey === "agent:research:subagent:stranger"
+      )
+    ).toEqual([])
+  })
+})

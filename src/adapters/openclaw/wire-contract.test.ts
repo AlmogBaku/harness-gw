@@ -57,10 +57,6 @@ runWireContract(
   },
   {
     gaps: {
-      forkJoinsNewSession:
-        "pending: the OpenClaw lane forks through sessions.create",
-      childAnnouncedBeforeItsEvents:
-        "pending: the OpenClaw lane reports spawned sessions as children",
       compactionReplaysAsLive:
         "out of scope: OpenClaw compaction replay is ALM-42",
       sameIdsLiveAndAfterReload: LIVE_IDS_ADAPTER_MADE,

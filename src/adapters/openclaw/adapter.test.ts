@@ -14,7 +14,9 @@ import {
   idleTurns,
   stubOpenClawClient,
 } from "./test-utils/fake-openclaw"
+import { OpenClawRewindRefusedError } from "./run"
 import {
+  OpenClawForkRefusedError,
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
 } from "./workspace"
@@ -222,6 +224,13 @@ describe("OpenClaw ServerRuntime assembly", () => {
     expect(
       adapter.publicError(new OpenClawWorkspaceRevisionConflictError())?.kind
     ).toBe("revision_conflict")
+    // A refused fork or rewind is refused again on a retry.
+    expect(adapter.publicError(new OpenClawForkRefusedError())?.kind).toBe(
+      "invalid_request"
+    )
+    expect(adapter.publicError(new OpenClawRewindRefusedError())?.kind).toBe(
+      "invalid_request"
+    )
     expect(
       adapter.publicError(new Error("token=private-value"))
     ).toBeUndefined()
@@ -242,9 +251,9 @@ describe("OpenClaw ServerRuntime assembly", () => {
       adapter.workspaceCapabilities("research", sessionKey)
     ).resolves.toEqual(
       expect.objectContaining({
-        // The gateway drives no OpenClaw rewind yet.
+        // Edit and Retry rewind through `sessions.rewind`.
         interactions: expect.objectContaining({
-          rewind: expect.objectContaining({ status: "unavailable" }),
+          rewind: { status: "available", scope: "user-turn" },
         }),
         content: expect.objectContaining({
           attachments: expect.objectContaining({

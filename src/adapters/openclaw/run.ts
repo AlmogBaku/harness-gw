@@ -1,11 +1,13 @@
 import { z } from "zod"
 
 import {
+  ChildSessionStatus,
   isRepliesTurn,
   StopReason,
   TurnEventKind,
   TurnInputSchema,
   type Cost,
+  type OwnTurnEvent,
   type PendingRequest,
   type RequestReply,
   type TokenUsage,
@@ -17,6 +19,7 @@ import {
   validateChatHistoryParams,
   validateChatSendParams,
   validateSessionsAbortParams,
+  validateSessionsRewindParams,
   type EventFrame,
 } from "@openclaw/gateway-protocol"
 import { Check } from "typebox/value"
@@ -41,6 +44,15 @@ import * as ids from "../../core/ids"
 import { createLink, type LinkOptions } from "../../core/link"
 import { defaultClock } from "../../../lifecycle"
 import type { OpenClawMcpToolNames } from "./mcp-tool-names"
+import {
+  childRowRefusal,
+  keyAgentId,
+  MAX_SPAWN_DEPTH,
+  SPAWN_TOOL,
+  spawnedChild,
+  spawnFacts,
+  type SpawnedChild,
+} from "./children"
 import { OpenClawClientRequestError } from "./client"
 import {
   OpenClawContentPublicError,
@@ -50,9 +62,11 @@ import {
 import {
   aosToolsPatch,
   enablesAosTools,
+  isSpawnedSession,
   openClawPatchSessionParams,
   openClawSessionSearchParams,
   parseOpenClawSessions,
+  type OpenClawSession,
 } from "./native-schemas"
 import {
   OpenClawSessionSubscriptions,
@@ -70,6 +84,8 @@ const MAX_QUEUE_BYTES = 8_000_000
 const MAX_SESSION_LOOKUP_ROWS = 100
 /** Native runs remembered as AOS's own, so a settling one is never adopted. */
 const MAX_ADMITTED_RUNS = 1_024
+/** Child Sessions remembered with the Session that spawned them. */
+const MAX_CHILD_OWNERS = 1_024
 const encoder = new TextEncoder()
 
 export type OpenClawRunRequestOptions = Readonly<{
@@ -105,15 +121,25 @@ export type OpenClawBoundReplies = Readonly<{
     scope: SessionScope,
     replies: readonly RequestReply[]
   ): Promise<OpenClawBoundRepliesResult>
-  /** Reconstructs one exact native wait from current Gateway authority. */
+  /**
+   * Reconstructs one exact native wait from current Gateway authority, on the
+   * Session or on one of its confirmed `children`; `sessionKey` names the
+   * Session that raised it.
+   */
   discover?(
     scope: SessionScope & { nativeRunId: string },
-    approvalReplay: unknown
-  ): Promise<{ requests: PendingRequest[] } | undefined>
-  /** Remembers one approval the Session raised while the bound run runs. */
+    approvalReplay: unknown,
+    children?: ReadonlySet<string>
+  ): Promise<{ requests: PendingRequest[]; sessionKey?: string } | undefined>
+  /**
+   * Remembers one approval the Session raised while the bound run runs, or
+   * one a child Session the run spawned raised, `childSessionId`, under the
+   * child's key.
+   */
   accept?(
     scope: SessionScope & { nativeRunId: string },
-    approval: unknown
+    approval: unknown,
+    childSessionId?: string
   ): PendingRequest
 }>
 
@@ -128,6 +154,17 @@ export class OpenClawTurnPublicError extends Error {
   ) {
     super(message, options)
     this.name = "OpenClawRunPublicError"
+  }
+}
+
+/**
+ * An Edit or Retry OpenClaw cannot rewind to: it refused the rewind, or the
+ * Session holds no user turn the rewind names. Nothing changed.
+ */
+export class OpenClawRewindRefusedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("OpenClaw cannot rewind this Session to that message", options)
+    this.name = "OpenClawRewindRefusedError"
   }
 }
 
@@ -242,6 +279,8 @@ type OpenTool = {
   startedAt?: number
   /** The partial output already streamed as `ToolCallOutputChunk`s. */
   output: string
+  /** A spawn's arguments, which announce the child it spawns. */
+  args?: unknown
 }
 
 type ActiveRun = {
@@ -257,8 +296,15 @@ type ActiveRun = {
    * stream and observer while OpenClaw waits, and runs on once they end.
    */
   waitingOn?: Set<string>
-  /** The Session key those approvals were raised under. */
-  approvalSessionKey?: string
+  /** The Session that raised each approval of the wait, by its id. */
+  approvalKeys: Map<string, string>
+  /** The child Sessions this run spawned, at every depth, by key. */
+  children: Map<string, ChildRun>
+  /**
+   * A spawning call's finish, by its stream and call: it names the child, so
+   * it waits until the child is confirmed and announced.
+   */
+  held: Map<string, TurnEvent[]>
   /** Called once OpenClaw ends every approval of the wait without an answer. */
   resumed?: () => void
   terminal: boolean
@@ -324,6 +370,22 @@ type WaitingRun = {
   lease: OpenClawSessionLease
   stopping: boolean
   terminal: boolean
+}
+
+/** A child Session a run spawned, confirmed as the spawner's, and followed. */
+type ChildRun = {
+  /** Its Session key, the id it is reported under. */
+  readonly key: string
+  /** Its Agent, which may differ from its parent's. */
+  readonly agentId: string
+  /** The Session whose call spawned it: the turn's own, or another child's. */
+  readonly parentKey: string
+  /** How many spawns deep it is; the turn's own children are at 1. */
+  readonly depth: number
+  readonly stream: ChildStream
+  lease?: OpenClawSessionLease
+  /** Its live events while its transcript is read, replayed after it. */
+  pending?: EventFrame[]
 }
 
 function settlement() {
@@ -722,6 +784,30 @@ function admittedRun(value: unknown) {
 }
 
 /**
+ * The user turn an Edit or Retry rewinds before, found in the Session's own
+ * history by the id OpenClaw stores it under (`__openclaw.id`), which is the
+ * id its history page names it by. A Retry sends that turn's text again, so it
+ * needs text, and nothing besides that it could not send again.
+ */
+function rewindTarget(
+  history: HistorySnapshot,
+  entryId: string,
+  retry: boolean
+) {
+  const row = history.messages.map(record).find((candidate) => {
+    const envelope = record(candidate?.__openclaw)
+    return candidate?.role === "user" && envelope?.id === entryId
+  })
+  if (!row) throw new OpenClawRewindRefusedError()
+  if (!retry) return { entryId }
+  const text = messageText(row)
+  const parts = Array.isArray(row.content) ? row.content : []
+  if (!text?.trim() || parts.some((part) => record(part)?.type !== "text"))
+    throw new OpenClawRewindRefusedError()
+  return { entryId, text }
+}
+
+/**
  * Whether a failed write may have landed: the client's word for its own
  * failure, and a sent request for a failure after its answer.
  */
@@ -735,6 +821,338 @@ function providerUnavailable(cause: unknown) {
     "OpenClaw is temporarily unavailable.",
     { cause }
   )
+}
+
+/** What `cumulative` adds to `previous`, or nothing when it does not extend it. */
+function remainder(previous: string, cumulative: string | undefined) {
+  if (cumulative === undefined || !cumulative.startsWith(previous))
+    return undefined
+  return cumulative.slice(previous.length)
+}
+
+/** One tool call of a child's own run. */
+type ChildTool = {
+  name: string
+  messageId: string
+  ended: boolean
+  startedAt?: number
+  /** A spawn's arguments, which announce the grandchild it spawns. */
+  args?: unknown
+}
+
+/** Where a child Session's own run goes. */
+type ChildSink = Readonly<{
+  /** One event of the child's own stream. */
+  emit(event: OwnTurnEvent): void
+  /** The child's run ended so. */
+  ended(status: ChildSessionStatus): void
+  /**
+   * A call of the child's spawned a child of its own; `finish` is the call's
+   * finish, which names that child and so waits on its announcement.
+   */
+  spawned(
+    toolCallId: string,
+    child: SpawnedChild,
+    args: unknown,
+    finish: OwnTurnEvent[]
+  ): void
+}>
+
+/**
+ * One child Session's own run as its own turn, read from the events its
+ * Session streams and from its transcript: its text, thoughts, plan, tool
+ * calls, usage and end, each message named after the child's run. Only the
+ * run its spawn started is read.
+ */
+class ChildStream {
+  /** The run its spawn named, or the first one its Session streams. */
+  runId: string | undefined
+  terminal = false
+  readonly #sink: ChildSink
+  readonly #tools = new Map<string, ChildTool>()
+  #text = ""
+  #reasoning = ""
+  #lastAgentSeq = -1
+  #lastChatSeq = -1
+  #usage?: TokenUsage[]
+  #planFingerprint?: string
+
+  constructor(runId: string | undefined, sink: ChildSink) {
+    this.runId = runId
+    this.#sink = sink
+  }
+
+  /** One native event of the child's Session. */
+  accept(event: EventFrame) {
+    if (this.terminal) return
+    const payload = record(event.payload)
+    if (!payload || !validId(payload.runId)) return
+    this.runId ??= payload.runId
+    if (payload.runId !== this.runId) return
+    const sequence = nonnegativeInteger(payload.seq)
+    if (sequence === undefined) return
+    if (event.event === "chat") {
+      if (sequence <= this.#lastChatSeq) return
+      this.#lastChatSeq = sequence
+      this.#chat(payload)
+      return
+    }
+    if (event.event !== "agent" && event.event !== "session.tool") return
+    if (sequence <= this.#lastAgentSeq) return
+    this.#lastAgentSeq = sequence
+    this.#agent(payload.stream, record(payload.data), payload.ts)
+  }
+
+  /**
+   * The child's transcript: what its run in flight streamed so far, or the
+   * reply its run ended with. A run still starting shows nothing yet.
+   */
+  catchUp(history: HistorySnapshot) {
+    if (this.terminal) return
+    const inFlight = history.inFlightRun
+    if (inFlight && (this.runId ?? inFlight.runId) === inFlight.runId) {
+      this.runId = inFlight.runId
+      for (const event of inFlight.events ?? []) {
+        if (event.seq <= this.#lastAgentSeq) continue
+        this.#lastAgentSeq = event.seq
+        this.#agent(event.stream, event.data, event.ts)
+      }
+      this.#appendText(remainder(this.#text, inFlight.text))
+      return
+    }
+    // Only its run's stored reply ends it: a run not yet started reads idle.
+    if (
+      this.runId === undefined ||
+      !authoritativelyIdle(history) ||
+      !hasCompletedHistoryRun(history, this.runId)
+    )
+      return
+    this.#appendText(
+      remainder(this.#text, completedHistoryText(history, this.runId))
+    )
+    this.#end()
+  }
+
+  get #messageId() {
+    return `${this.runId ?? "child"}:assistant`
+  }
+
+  #agent(
+    stream: unknown,
+    data: Record<string, unknown> | undefined,
+    ts: unknown
+  ) {
+    if (typeof stream !== "string" || !data) return
+    if (stream === "assistant") {
+      this.#appendText(
+        boundedText(data.delta) ?? remainder(this.#text, boundedText(data.text))
+      )
+      return
+    }
+    if (stream === "thinking") {
+      const delta =
+        boundedText(data.delta) ??
+        remainder(this.#reasoning, boundedText(data.text))
+      if (!delta) return
+      if (!this.#fits(this.#reasoning + delta)) return
+      this.#reasoning += delta
+      this.#sink.emit({
+        kind: TurnEventKind.ThoughtChunk,
+        messageId: `${this.#messageId}:thought`,
+        text: delta,
+      })
+      return
+    }
+    if (stream === "usage") {
+      const { usage } = nativeUsage(data)
+      if (usage) this.#usage = usage
+      return
+    }
+    if (stream === "plan") {
+      const todos = data.steps === undefined ? undefined : planTodos(data)
+      const fingerprint = JSON.stringify(todos)
+      if (!todos || fingerprint === this.#planFingerprint) return
+      this.#planFingerprint = fingerprint
+      this.#sink.emit({ kind: TurnEventKind.PlanUpdated, todos })
+      return
+    }
+    if (stream === "tool") this.#tool(data, ts)
+  }
+
+  #tool(data: Record<string, unknown>, ts: unknown) {
+    const toolCallId = validId(data.toolCallId) ? data.toolCallId : undefined
+    if (!toolCallId) return
+    if (data.phase === "start") {
+      if (this.#tools.has(toolCallId)) return
+      const tool = this.#startTool(
+        toolCallId,
+        toolName(data.name, unresolved),
+        safeJson(data.args),
+        epochMs(ts)
+      )
+      if (tool.name === SPAWN_TOOL) tool.args = safeClone(data.args)
+      return
+    }
+    if (data.phase !== "result") return
+    const tool =
+      this.#tools.get(toolCallId) ??
+      this.#startTool(toolCallId, toolName(data.name, unresolved), "{}")
+    if (tool.ended) return
+    const failed = data.isError === true
+    const finish = this.#endTool(
+      toolCallId,
+      tool,
+      safeJson(data.result),
+      failed,
+      epochMs(ts)
+    )
+    const spawned =
+      tool.name === SPAWN_TOOL && !failed
+        ? spawnedChild(data.result)
+        : undefined
+    if (spawned) this.#sink.spawned(toolCallId, spawned, tool.args, finish)
+    else for (const event of finish) this.#sink.emit(event)
+  }
+
+  #startTool(
+    toolCallId: string,
+    name: string,
+    input: string,
+    startedMs?: number
+  ) {
+    const startedAt = isoTime(startedMs)
+    const tool: ChildTool = {
+      name,
+      messageId: this.#messageId,
+      ended: false,
+      ...(startedMs === undefined ? {} : { startedAt: startedMs }),
+    }
+    this.#tools.set(toolCallId, tool)
+    this.#sink.emit({
+      kind: TurnEventKind.ToolCallStarted,
+      toolCallId,
+      title: name,
+      name,
+      toolKind: openClawToolKind(name),
+      ...(startedAt ? { startedAt } : {}),
+      parentMessageId: tool.messageId,
+    })
+    this.#sink.emit({
+      kind: TurnEventKind.ToolCallInputChunk,
+      toolCallId,
+      delta: input,
+    })
+    return tool
+  }
+
+  /** The events that finish `tool`, which is ended from here on. */
+  #endTool(
+    toolCallId: string,
+    tool: ChildTool,
+    output: string,
+    failed: boolean,
+    completedMs?: number
+  ): OwnTurnEvent[] {
+    tool.ended = true
+    const completedAt = isoTime(completedMs)
+    const durationMs =
+      completedMs !== undefined && tool.startedAt !== undefined
+        ? completedMs - tool.startedAt
+        : undefined
+    return [
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId },
+      {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId,
+        output,
+        failed,
+        ...(completedAt ? { completedAt } : {}),
+        ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
+      },
+    ]
+  }
+
+  #chat(payload: Record<string, unknown>) {
+    const { usage } = nativeUsage(payload.usage)
+    if (usage) this.#usage = usage
+    if (payload.state === "delta") {
+      const delta = boundedText(payload.deltaText)
+      this.#appendText(
+        payload.replace === true ? remainder(this.#text, delta) : delta
+      )
+      return
+    }
+    if (
+      payload.state !== "final" &&
+      payload.state !== "aborted" &&
+      payload.state !== "error"
+    )
+      return
+    this.#appendText(remainder(this.#text, messageText(payload.message)))
+    if (payload.state === "final")
+      return this.#end(nativeStopReason(payload.stopReason))
+    if (payload.state === "aborted") return this.#end(StopReason.Cancelled)
+    // A refusal is the model's answer, not a failure of the run.
+    if (payload.errorKind === "refusal") return this.#end(StopReason.Refusal)
+    const failure = (typeof payload.errorKind === "string" &&
+      Object.hasOwn(NATIVE_FAILURES, payload.errorKind) &&
+      NATIVE_FAILURES[payload.errorKind]) || {
+      code: "HGW_PROVIDER_RUN_FAILED",
+      message: "OpenClaw could not complete this child Session's work.",
+    }
+    this.#fail(failure.code, failure.message)
+  }
+
+  #fits(text: string) {
+    if (encoder.encode(text).byteLength <= MAX_TEXT_BYTES) return true
+    this.#fail(
+      "HGW_RESET_REQUIRED",
+      "OpenClaw child output exceeded the safe stream boundary."
+    )
+    return false
+  }
+
+  #appendText(delta: string | undefined) {
+    if (!delta || !this.#fits(this.#text + delta)) return
+    this.#text += delta
+    this.#sink.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: this.#messageId,
+      text: delta,
+    })
+  }
+
+  /** Every call the run left open ends with it. */
+  #endOpenTools(output: string, failed: boolean) {
+    for (const [toolCallId, tool] of this.#tools)
+      if (!tool.ended)
+        for (const event of this.#endTool(toolCallId, tool, output, failed))
+          this.#sink.emit(event)
+  }
+
+  #end(stopReason?: StopReason) {
+    if (this.terminal) return
+    this.terminal = true
+    this.#endOpenTools(safeJson({ status: "completed" }), false)
+    this.#sink.emit({
+      kind: TurnEventKind.TurnEnded,
+      ...(stopReason ? { stopReason } : {}),
+      ...(this.#usage ? { usage: this.#usage } : {}),
+    })
+    this.#sink.ended(
+      stopReason === StopReason.Cancelled
+        ? ChildSessionStatus.Cancelled
+        : ChildSessionStatus.Idle
+    )
+  }
+
+  #fail(code: string, message: string) {
+    if (this.terminal) return
+    this.terminal = true
+    this.#endOpenTools(safeJson({ status: "error" }), true)
+    this.#sink.emit({ kind: TurnEventKind.TurnFailed, code, message })
+    this.#sink.ended(ChildSessionStatus.Failed)
+  }
 }
 
 /** Where a recovery continues an OpenClaw run: its subscription and last event. */
@@ -773,6 +1191,15 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #waiting = new Map<string, WaitingRun>()
   /** Every native run a segment was bound to, oldest first. */
   readonly #admitted = new Set<string>()
+  /**
+   * Every child Session registered, with the Session whose turn spawned it
+   * and the Session that spawned it, oldest first, so no other Session's turn
+   * takes it as its own and a rediscovered request can name its lineage.
+   */
+  readonly #childOwners = new Map<
+    string,
+    { scope: string; parentKey: string }
+  >()
 
   constructor(options: {
     client: OpenClawRunRequestClient
@@ -808,6 +1235,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
     const text = isRepliesTurn(input) ? undefined : input.prompt
+    const rewindSourceId = isRepliesTurn(input)
+      ? undefined
+      : input.rewindSourceId
+    // A Retry is an empty prompt that sends the turn it rewinds again.
+    const retry = rewindSourceId !== undefined && !text?.trim()
     const stagedAttachments = readOpenClawChatAttachments(attachmentStage)
     if (attachmentStage && !stagedAttachments)
       throw new Error(
@@ -824,10 +1256,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         throw new Error(
           "OpenClaw request replies require one bound native interaction"
         )
-    } else if (
-      !text?.trim() ||
-      ("rewindSourceId" in input && input.rewindSourceId !== undefined)
-    )
+    } else if (!text?.trim() && !retry)
       throw new Error(
         "AOS turns require exactly one authorized plain-text turn"
       )
@@ -839,8 +1268,13 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     // OpenClaw holds its run open on its own approval, so the answer
     // continues the run that asked it.
     const kept = replies ? this.#active.get(key) : undefined
+    // The answer settles the approval it names, raised by the run's own
+    // Session or by one of its children.
+    const answeredKey = kept?.waitingOn
+      ? kept.approvalKeys.get(replies![0]!.requestId)
+      : undefined
     const interactionSessionKey = kept?.waitingOn
-      ? kept.approvalSessionKey
+      ? answeredKey
       : waiting?.nativeInteractionSessionKey
     const interactionScope = interactionSessionKey
       ? {
@@ -858,7 +1292,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       kept.turnId = input.turnId
       kept.waitingOn = undefined
       kept.resumed = undefined
+      kept.approvalKeys.delete(replies![0]!.requestId)
       await this.#respond(kept, interactionScope, replies!)
+      this.#childRunsAgain(kept, answeredKey)
       return this.#handle(kept)
     }
     if (this.#active.has(key)) throw new ServerTurnConflictError()
@@ -900,14 +1336,18 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         replies && baseline.inFlightRun?.runId === repliesBinding?.runId
           ? baseline.inFlightRun
           : undefined
-      const sendParams = replies
-        ? undefined
-        : stagedAttachments
+      // Checked against the turns the Session holds before anything is written.
+      const rewind =
+        rewindSourceId === undefined
+          ? undefined
+          : rewindTarget(baseline, rewindSourceId, retry)
+      const sendFor = (message: string) => {
+        const params = stagedAttachments
           ? prepareOpenClawChatAttachments(
               {
                 sessionKey: baseline.sessionKey,
                 agentId: scope.agentId,
-                message: text!,
+                message,
                 idempotencyKey: input.turnId,
                 attachments: stagedAttachments.attachments,
               },
@@ -916,11 +1356,19 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           : {
               sessionKey: baseline.sessionKey,
               agentId: scope.agentId,
-              message: text!,
+              message,
               idempotencyKey: input.turnId,
             }
-      if (sendParams && !validateChatSendParams(sendParams))
-        throw new Error("Invalid OpenClaw chat.send request")
+        if (
+          encoder.encode(message).byteLength > MAX_TURN_BYTES ||
+          !validateChatSendParams(params)
+        )
+          throw new Error("Invalid OpenClaw chat.send request")
+        return params
+      }
+      let sendParams = replies
+        ? undefined
+        : sendFor(retry ? rewind!.text! : text!)
       if (!replies)
         await this.#enableAosTools(scope.agentId, baseline.sessionKey)
       await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
@@ -964,6 +1412,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         textStarted: false,
         reasoning: "",
         tools: new Map(),
+        approvalKeys: new Map(),
+        children: new Map(),
+        held: new Map(),
         ...(replies ? {} : { stored: storageReceipt() }),
         ...settlement(),
       }
@@ -982,6 +1433,36 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (replies) {
         await this.#respond(active, interactionScope, replies)
         return this.#handle(active)
+      }
+
+      // Rewind and send are two writes: once the rewind landed, a send that
+      // then fails leaves the Session changed, so the turn is uncertain.
+      if (rewind) {
+        let moved: { editorText?: string } | undefined
+        try {
+          moved = await this.#rewind(active, rewind.entryId)
+        } catch (error) {
+          this.#active.delete(key)
+          active.queue.close()
+          active.resolveSettled()
+          throw error
+        }
+        try {
+          if (moved && retry)
+            sendParams = sendFor(
+              moved.editorText?.trim() ? moved.editorText : rewind.text!
+            )
+        } catch {
+          moved = undefined
+        }
+        if (!moved) {
+          this.#markUncertain(
+            active,
+            "HGW_SEND_UNCERTAIN",
+            "OpenClaw may have rewound this Session without sending the turn."
+          )
+          return this.#handle(active)
+        }
       }
 
       let sent = false
@@ -1006,7 +1487,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             "OpenClaw may have accepted this turn."
           )
       } catch (error) {
-        if (mayHaveLanded(error, sent)) {
+        if (rewind || mayHaveLanded(error, sent)) {
           active.uncertain = true
           this.#markUncertain(
             active,
@@ -1040,8 +1521,59 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (error instanceof ServerSessionNotFoundError) throw error
       if (error instanceof OpenClawTurnPublicError) throw error
       if (error instanceof OpenClawContentPublicError) throw error
+      if (error instanceof OpenClawRewindRefusedError) throw error
       throw providerUnavailable(error)
     }
+  }
+
+  /**
+   * Rewinds the Session before the user turn `entryId`, then reads the
+   * transcript the rewind moved it to, which the run's events and its
+   * reconciliation are read against. Resolves with the text OpenClaw hands
+   * back for that turn, or `undefined` when the rewind may have landed without
+   * its outcome being known. A refusal changed nothing.
+   */
+  async #rewind(
+    active: ActiveRun,
+    entryId: string
+  ): Promise<{ editorText?: string } | undefined> {
+    const params = {
+      sessionKey: active.nativeSessionKey,
+      agentId: active.scope.agentId,
+      entryId,
+    }
+    if (!validateSessionsRewindParams(params))
+      throw new OpenClawRewindRefusedError()
+    let sent = false
+    let answer: unknown
+    try {
+      answer = await this.#client.request<unknown>("sessions.rewind", params, {
+        onSent: () => {
+          sent = true
+        },
+      })
+    } catch (error) {
+      if (mayHaveLanded(error, sent)) return undefined
+      if (
+        error instanceof OpenClawClientRequestError &&
+        error.kind === "rejected"
+      )
+        throw new OpenClawRewindRefusedError({ cause: error })
+      throw providerUnavailable(error)
+    }
+    // A rewind drops stored turns, so the turn it rewinds before is recorded.
+    this.#watch.logger.warn(
+      { sessionId: active.scope.sessionId, entryId },
+      "openclaw.rewind.applied"
+    )
+    try {
+      const moved = await this.#history(active.scope, active.lease)
+      active.nativeSessionId = moved.sessionId
+    } catch {
+      return undefined
+    }
+    const editorText = boundedText(record(answer)?.editorText)
+    return editorText === undefined ? {} : { editorText }
   }
 
   async recover(
@@ -1215,13 +1747,21 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         }
         const nativeRunId = uniqueActiveRunId(history)
         if (!nativeRunId) return notDiscovered()
+        // A child's approval reaches its parent's audience, so the replay
+        // holds them too; only a confirmed child's may be the wait.
+        const children = await this.#askingChildren(
+          scope,
+          approvalReplayKey,
+          approvalReplay.replay
+        )
         const discovered = await this.#replies.discover(
           {
             ...scope,
             providerSessionId: ids.providerSessionId(approvalReplayKey),
             nativeRunId,
           },
-          approvalReplay.replay
+          approvalReplay.replay,
+          new Set(children.keys())
         )
         // A run nothing waits on is running; one the gateway bound is its own.
         const adopting = !discovered && !this.#admittedRun(scope, nativeRunId)
@@ -1256,11 +1796,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           // so `fromStart` stays unset.
           return { state: "running" as const, handle: this.#handle(active) }
         }
+        const askedBy = discovered.sessionKey ?? approvalReplayKey
         const waiting: WaitingRun = {
           scope,
           turnId,
           nativeRunId,
-          nativeInteractionSessionKey: approvalReplayKey,
+          nativeInteractionSessionKey: askedBy,
           nativeSessionId: history.sessionId,
           lease,
           stopping: false,
@@ -1270,8 +1811,31 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         this.#waiting.set(key, waiting)
         await retireExisting()
         lease = undefined
+        // A child asking is announced, with every child above it, before
+        // the request that names it.
+        const lineage = children.get(askedBy) ?? []
+        const announced = lineage.map(
+          ({ key: child, parentKey }, depth): TurnEvent => {
+            const report: OwnTurnEvent = {
+              kind: TurnEventKind.ChildSessionUpdated,
+              childSessionId: child,
+              status:
+                depth === lineage.length - 1
+                  ? ChildSessionStatus.WaitingForInput
+                  : ChildSessionStatus.Running,
+            }
+            return parentKey === approvalReplayKey
+              ? report
+              : {
+                  kind: TurnEventKind.ChildSessionEvent,
+                  childSessionId: parentKey,
+                  event: report,
+                }
+          }
+        )
         const events: TurnEvent[] = [
           { kind: TurnEventKind.TurnStarted },
+          ...announced,
           {
             kind: TurnEventKind.TurnRequiresAction,
             requests: discovered.requests,
@@ -1416,8 +1980,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ),
       MAX_SESSION_LOOKUP_ROWS
     ).filter((row) => row.key === sessionKey)
-    // A Session OpenClaw no longer lists was deleted natively: it is gone.
-    if (rows.length !== 1) throw new ServerSessionNotFoundError()
+    // A Session OpenClaw no longer lists was deleted natively: it is gone. A
+    // spawned child is its parent's, never a Session a turn starts on.
+    if (rows.length !== 1 || isSpawnedSession(rows[0]!))
+      throw new ServerSessionNotFoundError()
     const current = rows[0]!.toolOverrides
     if (enablesAosTools(current)) return
     await this.#client.request(
@@ -1510,6 +2076,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       textStarted: false,
       reasoning: "",
       tools: new Map(),
+      approvalKeys: new Map(),
+      children: new Map(),
+      held: new Map(),
       ...settlement(),
     }
     holder.active = active
@@ -1563,13 +2132,16 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (payload?.phase !== "pending")
       return this.#withdrawn(active, approval.id)
     const sessionKey = approval.sourceSessionKey
+    if (!validId(sessionKey) || active.waitingOn?.has(approval.id)) return
+    // A child's approval reaches its parent's audience: only a child this run
+    // registered may ask, under the turn's own Agent, which `accept` checks.
+    const child = active.children.get(sessionKey)
     if (
-      !validId(sessionKey) ||
-      (sessionKey !== active.nativeSessionKey &&
-        sessionKey !== active.lease.approvalReplayKey) ||
-      active.waitingOn?.has(approval.id)
+      sessionKey !== active.nativeSessionKey &&
+      sessionKey !== active.lease.approvalReplayKey &&
+      !child
     )
-      return
+      return this.#droppedApproval("unregistered-source")
     let request: PendingRequest
     try {
       request = this.#replies.accept(
@@ -1578,14 +2150,23 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           providerSessionId: ids.providerSessionId(sessionKey),
           nativeRunId: active.nativeRunId,
         },
-        approval
+        approval,
+        child?.key
       )
     } catch (err) {
-      this.#watch.logger.warn({ err }, "openclaw.approval.rejected")
-      return
+      const code = record(err)?.code
+      return this.#droppedApproval(
+        typeof code === "string" ? code : "invalid-approval"
+      )
     }
-    active.approvalSessionKey = sessionKey
+    active.approvalKeys.set(approval.id, sessionKey)
     active.waitingOn = new Set([...(active.waitingOn ?? []), approval.id])
+    if (child)
+      this.#streamOf(active, child.parentKey).push({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: child.key,
+        status: ChildSessionStatus.WaitingForInput,
+      })
     active.queue.push({
       kind: TurnEventKind.TurnRequiresAction,
       requests: [request],
@@ -1593,12 +2174,32 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     active.queue.push({ kind: TurnEventKind.TurnStarted })
   }
 
+  /** An approval no Session of this run may raise; only why is told. */
+  #droppedApproval(code: string) {
+    this.#watch.logger.warn({ code }, "openclaw.approval.dropped")
+  }
+
   /** OpenClaw ended one approval the run waited on, answered by no one here. */
   #withdrawn(active: ActiveRun, approvalId: string) {
     const waiting = active.waitingOn
-    if (!waiting?.delete(approvalId) || waiting.size > 0) return
+    if (!waiting?.delete(approvalId)) return
+    const raisedBy = active.approvalKeys.get(approvalId)
+    active.approvalKeys.delete(approvalId)
+    this.#childRunsAgain(active, raisedBy)
+    if (waiting.size > 0) return
     active.waitingOn = undefined
     active.resumed?.()
+  }
+
+  /** A child that waited on its approval works on, unless its run ended. */
+  #childRunsAgain(active: ActiveRun, key: string | undefined) {
+    const child = key === undefined ? undefined : active.children.get(key)
+    if (!child || child.stream.terminal) return
+    this.#streamOf(active, child.parentKey).push({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: child.key,
+      status: ChildSessionStatus.Running,
+    })
   }
 
   /** Reconciles a bound run after its subscription was replaced. */
@@ -1625,11 +2226,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           lastSeen: active.lastSeen,
         }),
       ...(active.stored ? { stored: active.stored.promise } : {}),
+      // `sessions.abort` on a child's key stops that child alone.
+      stopChild: (childSessionId) => this.#stopChild(active, childSessionId),
       wait: {
         continue: (turnId) => {
           active.turnId = turnId
           active.waitingOn = undefined
           active.resumed = undefined
+          active.approvalKeys.clear()
         },
         onResumed: (listener) => {
           // OpenClaw may have ended the wait before anyone listened for it.
@@ -1989,13 +2593,15 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (data.phase === "start") {
       if (active.tools.has(toolCallId)) return
       const name = toolName(data.name, resolve)
-      this.#startTool(
+      const tool = this.#startTool(
         active,
         toolCallId,
         name,
         this.#toolEvents ? safeJson(data.args) : "{}",
         epochMs(ts)
       )
+      if (name === SPAWN_TOOL && this.#toolEvents)
+        tool.args = safeClone(data.args)
       return
     }
     if (data.phase === "update") {
@@ -2020,15 +2626,25 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       this.#startTool(active, toolCallId, toolName(data.name, resolve), "{}")
     if (tool.ended) return
     const failed = data.isError === true
-    this.#endTool(
+    const spawned =
+      tool.name === SPAWN_TOOL && !failed && this.#toolEvents
+        ? spawnedChild(data.result)
+        : undefined
+    const output = this.#toolEvents
+      ? safeJson(data.result)
+      : safeJson({ status: "completed", isError: failed })
+    if (!spawned) {
+      this.#endTool(active, toolCallId, tool, output, failed, epochMs(ts))
+      return
+    }
+    tool.ended = true
+    this.#spawned(
       active,
+      { key: active.nativeSessionKey, depth: 0 },
       toolCallId,
-      tool,
-      this.#toolEvents
-        ? safeJson(data.result)
-        : safeJson({ status: "completed", isError: failed }),
-      failed,
-      epochMs(ts)
+      spawned,
+      tool.args,
+      this.#toolEnd(toolCallId, tool, output, failed, epochMs(ts))
     )
   }
 
@@ -2074,20 +2690,389 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     completedMs?: number
   ) {
     tool.ended = true
+    for (const event of this.#toolEnd(
+      toolCallId,
+      tool,
+      output,
+      failed,
+      completedMs
+    ))
+      active.queue.push(event)
+  }
+
+  /** The events that finish `tool`. */
+  #toolEnd(
+    toolCallId: string,
+    tool: OpenTool,
+    output: string,
+    failed: boolean,
+    completedMs?: number
+  ): OwnTurnEvent[] {
     const completedAt = isoTime(completedMs)
     const durationMs =
       completedMs !== undefined && tool.startedAt !== undefined
         ? completedMs - tool.startedAt
         : undefined
-    active.queue.push({ kind: TurnEventKind.ToolCallInputEnded, toolCallId })
-    active.queue.push({
-      kind: TurnEventKind.ToolCallFinished,
-      toolCallId,
-      output,
-      failed,
-      ...(completedAt ? { completedAt } : {}),
-      ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
-    })
+    return [
+      { kind: TurnEventKind.ToolCallInputEnded, toolCallId },
+      {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId,
+        output,
+        failed,
+        ...(completedAt ? { completedAt } : {}),
+        ...(durationMs !== undefined && durationMs >= 0 ? { durationMs } : {}),
+      },
+    ]
+  }
+
+  /**
+   * The stream of `key` within the run: the turn's own for its Session, and
+   * otherwise one child's, whose every event is reported under its id.
+   */
+  #streamOf(active: ActiveRun, key: string) {
+    const wrap = (event: OwnTurnEvent): TurnEvent =>
+      key === active.nativeSessionKey
+        ? event
+        : {
+            kind: TurnEventKind.ChildSessionEvent,
+            childSessionId: key,
+            event,
+          }
+    return {
+      wrap,
+      push: (event: OwnTurnEvent) => active.queue.push(wrap(event)),
+    }
+  }
+
+  /**
+   * A spawn result of `parent`'s stream named a child Session. The spawning
+   * call's finish names the child, so it waits while the child is confirmed:
+   * then the child is announced in `parent`'s stream, the call finishes, and
+   * the child is followed. A child that is not confirmed registers nothing,
+   * and its call finishes as it is.
+   */
+  #spawned(
+    active: ActiveRun,
+    parent: Readonly<{ key: string; depth: number }>,
+    toolCallId: string,
+    spawned: SpawnedChild,
+    args: unknown,
+    finish: OwnTurnEvent[]
+  ) {
+    const stream = this.#streamOf(active, parent.key)
+    const held = `${parent.key}\u0000${toolCallId}`
+    active.held.set(held, finish.map(stream.wrap))
+    void this.#confirmChild(active, parent, spawned)
+      .then((child) => {
+        const waiting = active.held.get(held)
+        // A run that ended has already finished the call, announcing nothing.
+        if (!waiting || active.terminal) return
+        active.held.delete(held)
+        if (child) {
+          stream.push({
+            kind: TurnEventKind.ChildSessionUpdated,
+            childSessionId: child.key,
+            toolCallId,
+            ...spawnFacts(args),
+            status: ChildSessionStatus.Running,
+            cancellable: true,
+          })
+          this.#streamOf(active, child.key).push({
+            kind: TurnEventKind.TurnStarted,
+          })
+        }
+        for (const event of waiting) active.queue.push(event)
+        return child && this.#followChild(active, child)
+      })
+      .catch(() =>
+        this.#watch.logger.warn(
+          { code: "child-unannounced" },
+          "openclaw.child.dropped"
+        )
+      )
+  }
+
+  /**
+   * Registers the child a spawn result named, once its own row confirms it:
+   * `spawnedBy` names the Session whose call spawned it, its Agent is the one
+   * its key names, it is no deeper than OpenClaw nests, and it is neither the
+   * turn's own Session nor another Session's child. A child carries those
+   * markers, so it is never a Session the list holds. Anything else is
+   * dropped, and only why is logged.
+   */
+  async #confirmChild(
+    active: ActiveRun,
+    parent: Readonly<{ key: string; depth: number }>,
+    spawned: SpawnedChild
+  ): Promise<ChildRun | undefined> {
+    const drop = (code: string) => {
+      this.#watch.logger.warn({ code }, "openclaw.child.dropped")
+      return undefined
+    }
+    const { key } = spawned
+    const agentId = keyAgentId(key) ?? active.scope.agentId
+    const owner = this.#childOwners.get(key)
+    if (
+      key === active.nativeSessionKey ||
+      active.children.has(key) ||
+      (owner !== undefined && owner.scope !== scopeKey(active.scope))
+    )
+      return drop("child-known")
+    let row: OpenClawSession
+    try {
+      const rows = parseOpenClawSessions(
+        await this.#client.request<unknown>(
+          "sessions.list",
+          openClawSessionSearchParams(agentId, key)
+        ),
+        MAX_SESSION_LOOKUP_ROWS
+      ).filter((candidate) => candidate.key === key)
+      if (rows.length !== 1) return drop("child-unlisted")
+      row = rows[0]!
+    } catch {
+      return drop("child-unread")
+    }
+    const depth = row.spawnDepth ?? parent.depth + 1
+    const refusal = childRowRefusal(row, parent.key, agentId, depth)
+    if (refusal) return drop(refusal)
+    if (active.terminal || active.children.has(key)) return undefined
+    const child: ChildRun = {
+      key,
+      agentId,
+      parentKey: parent.key,
+      depth,
+      stream: new ChildStream(spawned.runId, {
+        emit: (event) => this.#streamOf(active, key).push(event),
+        ended: (status) =>
+          this.#streamOf(active, parent.key).push({
+            kind: TurnEventKind.ChildSessionUpdated,
+            childSessionId: key,
+            status,
+          }),
+        spawned: (toolCallId, grandchild, args, finish) =>
+          this.#spawned(
+            active,
+            { key, depth },
+            toolCallId,
+            grandchild,
+            args,
+            finish
+          ),
+      }),
+    }
+    active.children.set(key, child)
+    this.#rememberChild(active.scope, key, parent.key)
+    return child
+  }
+
+  #rememberChild(scope: SessionScope, key: string, parentKey: string) {
+    this.#childOwners.delete(key)
+    this.#childOwners.set(key, { scope: scopeKey(scope), parentKey })
+    if (this.#childOwners.size > MAX_CHILD_OWNERS)
+      this.#childOwners.delete(this.#childOwners.keys().next().value!)
+  }
+
+  /**
+   * The child Sessions an approval replay of `rootKey` holds asks from, each
+   * with its lineage from `rootKey` down: one this process registered under
+   * the Session, or one whose own row confirms it as `rootKey`'s child now,
+   * as after a restart. Any other asking Session is dropped, telling only why.
+   */
+  async #askingChildren(scope: SessionScope, rootKey: string, replay: unknown) {
+    const found = new Map<string, Array<{ key: string; parentKey: string }>>()
+    const approvals = record(replay)?.approvals
+    for (const approval of Array.isArray(approvals) ? approvals : []) {
+      const key = record(approval)?.sourceSessionKey
+      if (!validId(key) || key === rootKey || found.has(key)) continue
+      const lineage =
+        this.#registeredLineage(scope, rootKey, key) ??
+        (await this.#confirmedLineage(scope, rootKey, key))
+      if (lineage) found.set(key, lineage)
+    }
+    return found
+  }
+
+  /** `key`'s lineage from `rootKey` down, as this process registered it. */
+  #registeredLineage(scope: SessionScope, rootKey: string, key: string) {
+    const lineage: Array<{ key: string; parentKey: string }> = []
+    for (let current = key; lineage.length < MAX_SPAWN_DEPTH;) {
+      const owner = this.#childOwners.get(current)
+      if (!owner || owner.scope !== scopeKey(scope)) return undefined
+      lineage.unshift({ key: current, parentKey: owner.parentKey })
+      if (owner.parentKey === rootKey) return lineage
+      current = owner.parentKey
+    }
+    return undefined
+  }
+
+  /** `key` as `rootKey`'s own child, once its row confirms it so. */
+  async #confirmedLineage(scope: SessionScope, rootKey: string, key: string) {
+    const agentId = keyAgentId(key) ?? scope.agentId
+    let refusal: string | undefined
+    try {
+      const rows = parseOpenClawSessions(
+        await this.#client.request<unknown>(
+          "sessions.list",
+          openClawSessionSearchParams(agentId, key)
+        ),
+        MAX_SESSION_LOOKUP_ROWS
+      ).filter((candidate) => candidate.key === key)
+      refusal =
+        rows.length === 1
+          ? childRowRefusal(rows[0]!, rootKey, agentId, 1)
+          : "child-unlisted"
+    } catch {
+      refusal = "child-unread"
+    }
+    if (refusal) {
+      this.#droppedApproval(refusal)
+      return undefined
+    }
+    this.#rememberChild(scope, key, rootKey)
+    return [{ key, parentKey: rootKey }]
+  }
+
+  /**
+   * Follows one registered child: subscribes its Session, which is what
+   * carries its own events, and every Session's tool events, which its tool
+   * calls need, then reads its transcript for what it did before the
+   * subscription, holding its live events until then. A child that cannot be
+   * followed streams no more, but stays announced.
+   */
+  async #followChild(active: ActiveRun, child: ChildRun) {
+    child.pending = []
+    try {
+      child.lease = await this.#subscriptions.acquire(
+        { agentId: child.agentId, sessionKey: child.key },
+        (event) => this.#observeChild(active, child, event),
+        async () => {
+          child.pending ??= []
+          await this.#catchUpChild(active, child)
+        },
+        // A child whose subscription is lost streams no more; its transcript
+        // is still read whole on a reload.
+        () => undefined
+      )
+      if (active.terminal) return this.#releaseChild(child)
+      await this.#subscriptions
+        .sessionEvents()
+        .catch(() =>
+          this.#watch.logger.warn(
+            { code: "session-events-unsubscribed" },
+            "openclaw.child.degraded"
+          )
+        )
+      await this.#catchUpChild(active, child)
+    } catch {
+      child.pending = undefined
+      this.#watch.logger.warn(
+        { code: "child-unfollowed" },
+        "openclaw.child.dropped"
+      )
+    }
+  }
+
+  /** Shows what `child` did that its live events did not, then those events. */
+  async #catchUpChild(active: ActiveRun, child: ChildRun) {
+    try {
+      const sessionKey = child.lease?.key ?? child.key
+      const params = {
+        sessionKey,
+        agentId: child.agentId,
+        limit: 200,
+        maxBytes: 1_000_000,
+      }
+      if (!validateChatHistoryParams(params))
+        throw new Error("Invalid OpenClaw chat.history request")
+      const history = validateHistory(
+        await this.#client.request<unknown>("chat.history", params),
+        sessionKey,
+        child.agentId
+      )
+      if (!history) throw new Error("Invalid OpenClaw chat.history response")
+      if (!active.terminal) child.stream.catchUp(history)
+    } finally {
+      const pending = child.pending ?? []
+      child.pending = undefined
+      if (!active.terminal)
+        for (const event of pending) child.stream.accept(event)
+    }
+  }
+
+  /** One event of a child's Session: its own stream, or a grandchild's ask. */
+  #observeChild(active: ActiveRun, child: ChildRun, event: EventFrame) {
+    if (active.terminal) return
+    // A grandchild's approval reaches its parent child's audience.
+    if (event.event === "session.approval")
+      return this.#acceptApproval(active, event)
+    if (event.event === "session.message") return
+    if (child.pending) {
+      if (child.pending.length < MAX_QUEUE_EVENTS) child.pending.push(event)
+      return
+    }
+    child.stream.accept(event)
+  }
+
+  /**
+   * Stops one child's work alone, with `sessions.abort` on its key; the
+   * child's own stream confirms it, and the turn runs on.
+   */
+  async #stopChild(active: ActiveRun, childSessionId: string) {
+    const child = active.children.get(childSessionId)
+    if (!child || active.terminal || child.stream.terminal) return
+    const params = {
+      key: child.key,
+      agentId: child.agentId,
+      ...(child.stream.runId ? { runId: child.stream.runId } : {}),
+    }
+    if (!validateSessionsAbortParams(params))
+      throw new Error("Invalid OpenClaw sessions.abort request")
+    let sent = false
+    let acknowledged: unknown
+    try {
+      acknowledged = await this.#client.request<unknown>(
+        "sessions.abort",
+        params,
+        {
+          onSent: () => {
+            sent = true
+          },
+        }
+      )
+    } catch (error) {
+      if (mayHaveLanded(error, sent))
+        throw new OpenClawTurnPublicError(
+          "HGW_STOP_UNCERTAIN",
+          "OpenClaw may have accepted the Stop request.",
+          { cause: error }
+        )
+      throw new ServerTurnStopNotDispatchedError(providerUnavailable(error))
+    }
+    // A child with no run left to abort ended unseen: its transcript says how.
+    if (record(acknowledged)?.status === "no-active-run")
+      await this.#catchUpChild(active, child).catch(() => undefined)
+  }
+
+  #releaseChild(child: ChildRun) {
+    const lease = child.lease
+    child.lease = undefined
+    lease
+      ?.release()
+      .catch((err: unknown) =>
+        this.#watch.logger.warn({ err }, "openclaw.lease.release_failed")
+      )
+  }
+
+  /**
+   * The run ends: every spawning call still waiting on its child finishes,
+   * announcing nothing, and no child is followed any longer.
+   */
+  #endChildren(active: ActiveRun) {
+    for (const events of active.held.values())
+      for (const event of events) active.queue.push(event)
+    active.held.clear()
+    for (const child of active.children.values()) this.#releaseChild(child)
   }
 
   /** Settles every tool the native run left open when the turn ends. */
@@ -2280,6 +3265,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   #finish(active: ActiveRun, stopReason?: StopReason) {
     if (active.terminal) return
+    this.#endChildren(active)
     active.terminal = true
     this.#endOpenTools(
       active,
@@ -2310,6 +3296,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     origin: { provider?: string; model?: string } = {}
   ) {
     if (active.terminal) return
+    this.#endChildren(active)
     active.terminal = true
     this.#endOpenTools(active, safeJson({ status: "error" }), true)
     const failed: TurnEvent = {

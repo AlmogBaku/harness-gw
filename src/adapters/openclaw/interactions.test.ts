@@ -691,6 +691,60 @@ describe("OpenClaw interactions", () => {
     ).resolves.toEqual({ status: "expired" })
     expect(request).toHaveBeenCalledTimes(1)
   })
+  it("takes a child Session's approval under the child's key, names the child, and rechecks it there", async () => {
+    const child = "agent:agent-a:subagent:child"
+    const childApproval = { ...approval, sourceSessionKey: child }
+    const answered = {
+      ...approvalRecord,
+      status: "allowed",
+      resolvedAtMs: 2,
+      // A terminal record names its source only here.
+      source: { agentId: "agent-a", sessionKey: child },
+      decision: "allow-once",
+      reason: "user",
+    }
+    const request = vi.fn(async (method: string) =>
+      method === "approval.get" ? { approval: answered } : undefined
+    )
+    const x = new OpenClawInteractions({ request })
+    const childScope = { ...repliesScope, providerSessionId: child }
+
+    const pending = x.accept(
+      { ...childScope, nativeRunId: scope.runId },
+      childApproval,
+      child
+    )
+
+    expect(pending).toMatchObject({
+      requestId: "approval-a",
+      childSessionId: child,
+    })
+    await expect(
+      x.validate(childScope, [
+        { requestId: "approval-a", status: "resolved", payload: "once" },
+      ])
+    ).resolves.toEqual({ runId: scope.runId })
+    await expect(
+      x.dispatch(childScope, [
+        { requestId: "approval-a", status: "resolved", payload: "once" },
+      ])
+    ).resolves.toEqual({ status: "already-resolved" })
+    // Another Agent's child never asks this turn.
+    expect(() =>
+      x.accept(
+        { ...childScope, nativeRunId: scope.runId },
+        {
+          ...childApproval,
+          id: "approval-b",
+          presentation: { ...approval.presentation, agentId: "agent-b" },
+        },
+        child
+      )
+    ).toThrow(
+      expect.objectContaining({ code: "HGW_PROVIDER_INVALID_RESPONSE" })
+    )
+  })
+
   it("reconciles a known approval through an equivalent scope value", async () => {
     const request = vi.fn(async (method: string) =>
       method === "question.list"
