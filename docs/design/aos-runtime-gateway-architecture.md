@@ -545,14 +545,16 @@ except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 `src/acp/validation.ts`.
 
 **JSON-RPC extension codes** (`protocol/acp.ts`, `HGW_JSONRPC_ERRORS`):
-ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
-(method not found), `-32602` (invalid request), `-32800` (request cancelled);
-HGW block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
-revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
-`-31015` unsupported, `-31016` requestTooLarge (raised by the client before
+ACP standard codes `-32000` (authentication required), `-32002` (resource not
+found), `-32601` (method not found), `-32602` (invalid params), `-32800`
+(request cancelled); HGW block `-31010` turnInProgress, `-31011` staleRequest,
+`-31012` revisionConflict, `-31013` temporarilyUnavailable, `-31014`
+uncertainMutation, `-31016` requestTooLarge (raised by the client before
 sending; never sent by the gateway). A method a connection may not use, a
 guest's `session/new` among them, answers ACP's `-32601`, whose meaning
-includes "not available". Codes `-32001` through `-32009` are no longer used.
+includes "not available", and a request the runtime cannot take, such as an
+Agent field it has no place for, answers `-32602`. Codes `-32001` through
+`-32009`, and `-31015`, are no longer used.
 
 **Stop reasons and states** are ACP's own: a failed turn ends `idle` with the
 `error` stop reason, and a turn the gateway cannot observe reports the

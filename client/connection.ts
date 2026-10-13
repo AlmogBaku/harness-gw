@@ -223,7 +223,8 @@ const SESSION_STATES = new Map<unknown, AcpSessionState>([
 
 /** The Agent update refusals a caller can act on, as typed errors. */
 function agentUpdateError(error: unknown) {
-  if (codeOf(error) === HGW_JSONRPC_ERRORS.unsupported)
+  // ACP's invalid params: a field this runtime cannot take.
+  if (codeOf(error) === RequestError.invalidParams().code)
     return new AgentUpdateError(
       "unsupported",
       "This runtime cannot store that Agent field"

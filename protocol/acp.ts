@@ -112,7 +112,6 @@ export const HGW_JSONRPC_ERRORS = {
   revisionConflict: -31012,
   temporarilyUnavailable: -31013,
   uncertainMutation: -31014,
-  unsupported: -31015,
   /**
    * Params too large for one frame. The client raises it before sending and
    * the gateway never sends it, so it has no machine name on the wire.

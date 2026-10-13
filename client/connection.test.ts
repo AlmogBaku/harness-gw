@@ -673,7 +673,8 @@ describe("ACP connection", () => {
   })
 
   it.each([
-    [HGW_JSONRPC_ERRORS.unsupported, "unsupported"],
+    // ACP's invalid params: a field this runtime cannot take.
+    [RequestError.invalidParams().code, "unsupported"],
     [HGW_JSONRPC_ERRORS.revisionConflict, "conflict"],
   ] as const)(
     "names an Agent update refused with code %i as %s",

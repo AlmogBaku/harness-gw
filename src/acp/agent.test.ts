@@ -446,7 +446,8 @@ describe("AOS ACP agent", () => {
         return agentId === AGENT ? undefined : "/srv/writer/"
       },
     })
-    const UNSUPPORTED = { code: HGW_JSONRPC_ERRORS.unsupported }
+    // The Agent has no working folder, so no `cwd` names it.
+    const UNSUPPORTED = { code: INVALID_PARAMS.code }
     const onAgent = { _meta: { [HGW_META_KEY]: { agentId: AGENT } } }
 
     const page = await test.list()
@@ -1694,7 +1695,7 @@ describe("Agent updates", () => {
         revision: "rev-1",
         avatar: "ring/blue",
       })
-    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.unsupported })
+    ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 })

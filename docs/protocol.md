@@ -254,8 +254,8 @@ first create opened rather than creating a second one.
 rule: `cwd` must equal the Agent's folder exactly (folded on the string; `..`
 and trailing separators are allowed, but a relative path is refused), or be
 empty, which names the Agent's folder; the SDK client always sends it empty.
-Any other `cwd` returns invalid params naming the folder; an Agent with no
-folder returns unsupported. A non-empty `mcpServers` or `additionalDirectories`
+Any other `cwd` returns invalid params naming the folder, and so does any `cwd`
+for an Agent with no folder. A non-empty `mcpServers` or `additionalDirectories`
 also returns invalid params. The runtime never receives the client's `cwd`.
 Every list row carries its Agent's folder. A list
 with a `cwd` filter that matches no Agent's folder returns no rows. A list across
@@ -517,8 +517,9 @@ Sessions, and OpenClaw over the first 1000 Sessions the list serves.
 `visibility`, `avatar` (`null` clears it) and `muted` (`AgentUpdateFields`,
 `protocol/index.ts`); any field alone is a valid update. `muted: true` mutes
 the Agent's Web Push notifications and `muted: false` unmutes them. A runtime
-that cannot store a field it is sent refuses the whole update as
-`unsupported` rather than writing the rest.
+that cannot store a field it is sent refuses the whole update with `-32602`
+invalid params rather than writing the rest; the SDK client reads that as an
+`AgentUpdateError` with the code `unsupported`.
 
 Every `_hgw/agents/list` entry carries `muteEditable`, whether the runtime can
 store a mute for that Agent, beside `editable` and `avatarEditable`. Its
@@ -798,7 +799,6 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | `-31012` | `revisionConflict`       | Observed Agent revision or source message no longer current |
 | `-31013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
 | `-31014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
-| `-31015` | `unsupported`            | Runtime cannot store a requested Agent field                |
 | `-31016` | `requestTooLarge`        | Params too large for one frame (`HGW_MAX_FRAME_BYTES`)      |
 
 `requestTooLarge` is raised by the client before a prompt or steer is sent,
@@ -823,7 +823,6 @@ The machine name an error travels as — the `message` of a public reply, and th
 | `-31012` | `revision_conflict`       |
 | `-31013` | `temporarily_unavailable` |
 | `-31014` | `uncertain_mutation`      |
-| `-31015` | `unsupported`             |
 | (other)  | `internal_error`          |
 
 ## HTTP API
