@@ -182,6 +182,24 @@ describe("OpenClaw client", () => {
       policy: negotiated,
     },
     {
+      name: "reads the unread acknowledgement contract the HelloOk advertises",
+      hello: {
+        protocol: 4,
+        policy: negotiated,
+        features: { capabilities: ["session-unread-ack-contract"] },
+      },
+      policy: { ...negotiated, sessionUnreadAck: true },
+    },
+    {
+      name: "does not read an unread contract the HelloOk does not advertise",
+      hello: {
+        protocol: 4,
+        policy: negotiated,
+        features: { capabilities: ["chat-send-routing-contract"] },
+      },
+      policy: negotiated,
+    },
+    {
       name: "does not manufacture attachment policy from a missing HelloOk policy",
       hello: { protocol: 4 },
       policy: undefined,

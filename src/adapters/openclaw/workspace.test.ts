@@ -474,7 +474,7 @@ describe("OpenClaw workspace reads", () => {
     )
   })
 
-  it("[CL1-WORKSPACE-011] projects native pin state only when a Session row proves it", async () => {
+  it("[CL1-WORKSPACE-011] projects native pin and read state only when a Session row proves it, read state only under its contract", async () => {
     const native = gateway({
       "agents.list": agentCatalog([
         { id: "analyst", name: "Analyst", kind: "agent" },
@@ -486,6 +486,7 @@ describe("OpenClaw workspace reads", () => {
             agentId: "analyst",
             label: "Pinned",
             pinned: true,
+            unread: true,
             updatedAt: 2,
           },
           {
@@ -497,15 +498,25 @@ describe("OpenClaw workspace reads", () => {
         ],
       },
     })
-    const workspace = createOpenClawWorkspace({ client: native })
+    const workspace = createOpenClawWorkspace({
+      client: native,
+      readState: () => true,
+    })
 
     const page = await workspace.listSessions("analyst", 50, 0)
 
     expect(page.sessions[0]).toMatchObject({
       id: "agent:analyst:pinned",
       pinned: true,
+      unread: true,
     })
     expect(page.sessions[1]).not.toHaveProperty("pinned")
+    expect(page.sessions[1]).not.toHaveProperty("unread")
+    // A Gateway outside the acknowledgement contract reports no read state.
+    const uncontracted = createOpenClawWorkspace({ client: native })
+    const listed = await uncontracted.listSessions("analyst", 50, 0)
+    expect(listed.sessions[0]).toMatchObject({ pinned: true })
+    expect(listed.sessions[0]).not.toHaveProperty("unread")
   })
 
   it("[CL1-WORKSPACE-011b] projects native channel as platform and omits platform when channel is absent or unrecognised", async () => {
