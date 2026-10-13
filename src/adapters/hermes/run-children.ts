@@ -301,11 +301,11 @@ function announce(
     return undefined
   // Hermes counts a child the turn spawned as depth 0; a deeper one belongs to
   // the child named by `parent_id`, announced in that child's stream.
-  const parent =
-    (count(payload.depth) ?? 0) > 0
-      ? active.children.get(stableNativeId(payload.parent_id) ?? "")
-      : undefined
-  if ((count(payload.depth) ?? 0) > 0 && !parent) return undefined
+  const nested = (count(payload.depth) ?? 0) > 0
+  const parent = nested
+    ? active.children.get(stableNativeId(payload.parent_id) ?? "")
+    : undefined
+  if (nested && !parent) return undefined
   const child: ChildRun = {
     childSessionId,
     subagentId,
