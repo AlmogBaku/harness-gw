@@ -35,6 +35,7 @@ import {
   hermesHistoryToolNames,
   hermesTurnStart,
   projectHermesHistory,
+  type HermesHistoryMessage,
 } from "./history"
 import { createHermesMcpApps } from "./mcp-apps"
 import {
@@ -44,6 +45,7 @@ import {
 } from "./inflight"
 import { publishedArtifact, type HermesMediaOptions } from "./media-artifacts"
 import { HermesPublishedArtifacts } from "./published-artifacts"
+import { childActivity, HermesChildSessions } from "./child-sessions"
 import {
   HermesTurnEngine,
   HermesTurnPublicError,
@@ -71,6 +73,11 @@ import {
   HermesInteractions,
 } from "./interactions"
 import { HermesDashboardClient } from "./dashboard-client"
+import {
+  branchLiveSession,
+  HermesForkRefusedError,
+  HermesForkUncertainError,
+} from "./fork"
 import { createHermesFileReader } from "./file-reader"
 import {
   HermesAttachmentRegistry,
@@ -101,7 +108,13 @@ import {
   retryTransient,
   type HermesRetrySchedule,
 } from "./transient-rejections"
-import { isRecord, nativeId, timestampMs, trimmedText } from "./native"
+import {
+  isRecord,
+  nativeId,
+  parseJson,
+  timestampMs,
+  trimmedText,
+} from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
 
@@ -472,6 +485,20 @@ function attachmentInfoKey(agentId: string, sessionId: string) {
 }
 
 /**
+ * The source Hermes stores a delegated child's Session under (`platform` of
+ * the child agent, `tools/delegate_tool.py`), which keeps it out of its own
+ * pickers and searches (`tools/session_search_tool.py`).
+ */
+const SUBAGENT_SOURCE = "subagent"
+
+/** How many raw pages, and messages, a child's whole transcript reads at most. */
+const MAX_CHILD_HISTORY_FETCHES = 16
+const MAX_CHILD_HISTORY_MESSAGES = 500
+
+/** How far up a child's delegated parents are followed to its Session. */
+const MAX_CHILD_DEPTH = 3
+
+/**
  * How recent a binding snapshot has to be for a history load to restore the
  * retained turn from it instead of resuming the Session again.
  */
@@ -485,6 +512,8 @@ export class HermesServerAdapter implements ServerRuntime {
   readonly #workspace: HermesWorkspaceOperations
   readonly #content: ReturnType<typeof createHermesContentOperations>
   readonly #publishedArtifacts = new HermesPublishedArtifacts()
+  /** The children each Session's turns announced, which history replays. */
+  readonly #childSessions = new HermesChildSessions()
   readonly #media: HermesMediaOptions
   readonly #attachments: HermesAttachmentRegistry
   readonly #attachmentInfo = new Map<string, NativeRecord>()
@@ -748,6 +777,7 @@ export class HermesServerAdapter implements ServerRuntime {
       ...(options.log ? { log: options.log } : {}),
       ...(this.#mcpToolNames ? { mcpToolNames: this.#mcpToolNames } : {}),
       publishedArtifacts: this.#publishedArtifacts,
+      childSessions: this.#childSessions,
       media: this.#media,
       // A watch stops where the adapter reports a Session gone or the token
       // refused, and redials once the gateway is up again.
@@ -923,8 +953,15 @@ export class HermesServerAdapter implements ServerRuntime {
     // A write that went out with no known result may have landed, so the
     // browser reconciles before trying it again. A read never reaches here:
     // each read path reports the same lost answer as an outage.
-    if (cause instanceof HermesRpcUncertainError)
+    if (
+      cause instanceof HermesRpcUncertainError ||
+      cause instanceof HermesForkUncertainError
+    )
       return failureOf("uncertain", cause)
+    // Hermes refuses to fork a Session with no visible message yet; the same
+    // fork meets the same refusal until one is sent.
+    if (cause instanceof HermesForkRefusedError)
+      return failureOf("invalid_request", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
     if (cause instanceof HermesTurnPublicError)
@@ -1111,6 +1148,8 @@ export class HermesServerAdapter implements ServerRuntime {
           input: "text" as const,
           fallback: "provider-queue" as const,
         },
+        // A send naming its source truncates the stored turns from it.
+        rewind: { status: "available" as const, scope: "user-turn" as const },
       },
       content: this.#content.capabilities(),
     }
@@ -1674,11 +1713,17 @@ export class HermesServerAdapter implements ServerRuntime {
       }
       if (!isRecord(payload) || !Array.isArray(payload.results))
         throw new HermesUnavailableError()
-      const matches = nativeSessions(profile, payload.results, (sessionId) =>
+      // A delegated child is no Session of the list: its content can match a
+      // search even where the list leaves it out. A fork names a parent too,
+      // and stays.
+      const results = payload.results.filter(
+        (row) => !isRecord(row) || trimmedText(row.source) !== SUBAGENT_SOURCE
+      )
+      const matches = nativeSessions(profile, results, (sessionId) =>
         this.#skippedSession(profile, sessionId)
       )
       // Results none of which can be read are this profile's outage.
-      if (payload.results.length > 0 && matches.length === 0)
+      if (results.length > 0 && matches.length === 0)
         throw new HermesUnavailableError()
       return matches
     })
@@ -1739,13 +1784,23 @@ export class HermesServerAdapter implements ServerRuntime {
   ) {
     const dashboard = this.#dashboard
     if (!dashboard) throw new HermesUnavailableError()
-    await this.getSession(profile, storedId)
+    const { branched } = await this.#storedSession(profile, storedId)
+    const scope = { agentId: profile, providerSessionId: storedId }
+    // The children its turns announced, each after the call that spawned it.
+    const announced = this.#childSessions.childrenOf(scope)
+    const projection = {
+      branched,
+      children: (toolCallId: string) =>
+        announced.flatMap((report) =>
+          report.toolCallId === toolCallId ? [childActivity(report)] : []
+        ),
+    }
     // This contract pages in conversation messages while Hermes pages in durable
     // rows, and an unbounded number of those rows are display chrome the
     // projection drops. A page that projects to nothing therefore means "keep
     // reading older rows", not "the conversation is empty".
     let rows: unknown[] = []
-    let messages: Array<SessionMessage | SessionPlanActivityMessage> = []
+    let messages: Array<HermesHistoryMessage | SessionPlanActivityMessage> = []
     let pagination: { total: number; nextOffset: number } | undefined
     let resolve: McpToolNameResolver | undefined
     let scanOffset = offset
@@ -1809,7 +1864,7 @@ export class HermesServerAdapter implements ServerRuntime {
         profile,
         hermesHistoryToolNames(page)
       )
-      messages = projectHermesHistory(rows, resolve, this.#media)
+      messages = projectHermesHistory(rows, resolve, this.#media, projection)
       // A short page means Hermes has no older rows left; an empty page says the
       // same even if a caller passed a degenerate limit.
       if (messages.length > 0 || page.length === 0 || page.length < limit) break
@@ -1828,17 +1883,32 @@ export class HermesServerAdapter implements ServerRuntime {
         ...pagination,
         nextOffset: pagination.nextOffset - turnStart,
       }
-      messages = projectHermesHistory(rows, resolve, this.#media)
+      messages = projectHermesHistory(rows, resolve, this.#media, projection)
     }
     // Hermes keeps a turn that failed out of its transcript, so the newest page
     // ending with an unanswered prompt, or with a tool call nothing answered,
     // is the one history load that asks Hermes for the retained turn. Every
     // other load leaves the Session alone.
-    const prompt = offset === 0 ? unansweredPrompt(messages) : undefined
+    // Activity is no answer, so the newest page is judged by its messages.
+    const prompt =
+      offset === 0
+        ? unansweredPrompt(
+            messages.filter(
+              (message): message is SessionMessage =>
+                message.role !== "activity"
+            )
+          )
+        : undefined
     const restored = prompt
       ? await this.#restoredFailedTurn(profile, storedId, prompt)
       : undefined
     if (restored) messages.push(restored)
+    // A child whose spawning call the turn never showed has no place among the
+    // messages: the newest page carries it last.
+    if (offset === 0)
+      for (const report of announced)
+        if (report.toolCallId === undefined)
+          messages.push(childActivity(report))
     if (todos !== undefined)
       messages.push({
         id: `aos-plan:${sessionId(profile, storedId)}`,
@@ -1856,6 +1926,115 @@ export class HermesServerAdapter implements ServerRuntime {
     })
     if (!result.success) throw new HermesUnavailableError()
     return result.data
+  }
+
+  /**
+   * The whole transcript of a child Session a turn of `storedId` spawned, as
+   * one page, read from the child's own stored rows; the children it spawned
+   * in turn follow it. A child is one this gateway saw the Session's turns
+   * announce, or one whose own row Hermes stored as delegated, by a chain of
+   * delegated parents, from the Session. Past the page bound, the newest
+   * messages are kept and the page says older ones exist.
+   */
+  async childHistory(
+    profile: string,
+    storedId: string,
+    childSessionId: string
+  ) {
+    const dashboard = this.#dashboard
+    if (!dashboard) throw new HermesUnavailableError()
+    const scope = { agentId: profile, providerSessionId: storedId }
+    if (!this.#childSessions.knows(scope, childSessionId))
+      await this.#requireDelegated(profile, storedId, childSessionId)
+    const rows: unknown[] = []
+    let whole = false
+    for (let page = 0; page < MAX_CHILD_HISTORY_FETCHES; page += 1) {
+      let payload: unknown
+      try {
+        payload = await dashboard.getSessionMessages(
+          profile,
+          childSessionId,
+          this.#rawHistoryPage,
+          rows.length
+        )
+      } catch (error) {
+        // Hermes stores a child's row only once the child has run a little.
+        if (
+          error instanceof HermesHttpError &&
+          error.status === 404 &&
+          rows.length === 0
+        ) {
+          whole = true
+          break
+        }
+        throwUnavailable(error)
+      }
+      if (
+        !isRecord(payload) ||
+        trimmedText(payload.session_id) !== childSessionId ||
+        !Array.isArray(payload.messages)
+      )
+        throw new HermesUnavailableError()
+      // `order=latest` reads backwards, so each page is older than the last.
+      rows.unshift(...payload.messages)
+      if (payload.messages.length < this.#rawHistoryPage) {
+        whole = true
+        break
+      }
+    }
+    const resolve = await this.#mcpToolNames?.load(
+      profile,
+      hermesHistoryToolNames(rows)
+    )
+    const messages = [
+      ...projectHermesHistory(rows, resolve, this.#media),
+      ...this.#childSessions
+        .childrenOf(scope, childSessionId)
+        .map(childActivity),
+    ]
+    const kept = messages.slice(-MAX_CHILD_HISTORY_MESSAGES)
+    const result = SessionHistoryResponseSchema.safeParse({
+      sessionId: childSessionId,
+      messages: kept,
+      total: kept.length,
+      limit: MAX_CHILD_HISTORY_MESSAGES,
+      offset: 0,
+      nextOffset: kept.length,
+      ...(whole && kept.length === messages.length ? {} : { truncated: true }),
+    })
+    if (!result.success) throw new HermesUnavailableError()
+    return result.data
+  }
+
+  /**
+   * Proves `childSessionId` is a child a turn of `storedId` delegated to:
+   * Hermes stores each delegated child with its parent's id and its own
+   * `subagent` source, so a fork, which also names a parent, is no child.
+   */
+  async #requireDelegated(
+    profile: string,
+    storedId: string,
+    childSessionId: string
+  ) {
+    const dashboard = this.#dashboard
+    if (!dashboard) throw new HermesUnavailableError()
+    let id = childSessionId
+    for (let depth = 0; depth < MAX_CHILD_DEPTH; depth += 1) {
+      let row: unknown
+      try {
+        row = await dashboard.getSession(profile, id)
+      } catch (error) {
+        if (error instanceof HermesHttpError && error.status === 404)
+          throw new HermesSessionNotFoundError()
+        throwUnavailable(error)
+      }
+      if (!isRecord(row) || trimmedText(row.source) !== SUBAGENT_SOURCE) break
+      const parent = trimmedText(row.parent_session_id)
+      if (parent === storedId) return
+      if (!parent) break
+      id = parent
+    }
+    throw new HermesSessionNotFoundError()
   }
 
   /**
@@ -1910,18 +2089,35 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async getSession(profile: string, storedId: string) {
+    return (await this.#storedSession(profile, storedId)).session
+  }
+
+  /**
+   * The Session as Hermes stores it, and whether `session.branch` made it:
+   * Hermes marks a fork's row with `model_config._branched_from`.
+   */
+  async #storedSession(
+    profile: string,
+    storedId: string
+  ): Promise<{ session: Session; branched: boolean }> {
     if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
       payload = await this.#dashboard.getSession(profile, storedId)
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
-        return this.#unpersistedDraft(profile, storedId)
+        return {
+          session: await this.#unpersistedDraft(profile, storedId),
+          branched: false,
+        }
       throwUnavailable(error)
     }
     if (!isRecord(payload) || trimmedText(payload.id) !== storedId)
       throw new HermesUnavailableError()
     if (trimmedText(payload.profile) !== profile)
+      throw new HermesSessionNotFoundError()
+    // A delegated child is its parent's, as no list or search shows it.
+    if (trimmedText(payload.source) === SUBAGENT_SOURCE)
       throw new HermesSessionNotFoundError()
     const pinned = nativeFlag(payload.pinned)
     const result = SessionSchema.safeParse({
@@ -1939,7 +2135,12 @@ export class HermesServerAdapter implements ServerRuntime {
       // activity timestamp, so read state is unknowable here.
     })
     if (!result.success) throw new HermesUnavailableError()
-    return result.data
+    const config = parseJson(payload.model_config)
+    return {
+      session: result.data,
+      branched:
+        isRecord(config) && trimmedText(config._branched_from) !== undefined,
+    }
   }
 
   /**
@@ -1955,6 +2156,8 @@ export class HermesServerAdapter implements ServerRuntime {
         omit_messages: true,
       })
     } catch (error) {
+      // Hermes holds no record of it, stored or live.
+      if (isSessionGone(error)) throw new HermesSessionNotFoundError()
       throwUnavailable(error)
     }
     if (
@@ -2017,6 +2220,45 @@ export class HermesServerAdapter implements ServerRuntime {
         agentId: profile,
       },
     })
+  }
+
+  /**
+   * Forks a Session through `session.branch`, which needs it live: the fork
+   * keeps the visible conversation and stays listed, and the original is left
+   * as it was. Answered as `createSession` answers.
+   */
+  async forkSession(profile: string, storedId: string) {
+    const branch = await this.#branch(profile, storedId)
+    return SessionCreateResponseSchema.parse({
+      session: {
+        id: sessionId(profile, branch.storedSessionId),
+        agentId: profile,
+      },
+    })
+  }
+
+  /**
+   * Branches the Session on its live binding. A live Session Hermes no longer
+   * holds refused the branch before writing anything, so the binding is
+   * renewed and the branch sent once more.
+   */
+  async #branch(profile: string, storedId: string) {
+    for (let attempt = 0; ; attempt += 1) {
+      const { liveSessionId } = await this.#requireResumedSession(
+        profile,
+        storedId
+      )
+      try {
+        return await branchLiveSession(this.transport, liveSessionId, {
+          retry: this.#retry,
+          ...(this.#log ? { log: this.#log } : {}),
+        })
+      } catch (error) {
+        if (!isSessionGone(error)) throw error
+        this.#attachments.invalidate(liveSessionId)
+        if (attempt > 0) throw new HermesUnavailableError({ cause: error })
+      }
+    }
   }
 
   updateSession(profile: string, storedId: string, patch: SessionPatch) {

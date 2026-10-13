@@ -7,7 +7,7 @@ travels in the gateway's own extension namespace, `hgw`:
 
 - methods and notifications named `_hgw/*`;
 - `_meta.hgw` on requests, responses and notifications;
-- the stop reasons `_hgw_error` and `_hgw_uncertain`;
+- the `replayFrom` cursors `_hgw/position` and `_hgw/before`;
 - the auth method `hgw-invite`;
 - the attachment URI scheme `hgw-attachment:`.
 
@@ -20,7 +20,7 @@ Native runtimes keep their own transports behind the gateway (`src/adapters/`);
 
 `initialize` answers ACP's `protocolVersion: 2` and, in its top-level
 `_meta.hgw.version`, the version of this extension (`HGW_EXTENSION_VERSION`,
-now `1`). A breaking change to anything in this document raises it; an
+now `2`). A breaking change to anything in this document raises it; an
 addition (a new method, notification, field or extension flag a client may
 ignore) does not. A client that speaks another version must refuse the
 connection rather than guess: the SDK client fails `initialized` with an error
@@ -70,9 +70,9 @@ any socket or route is reached:
 
 The response carries an `Acp-Connection-Id` header. A client sends
 `initialize` and receives capabilities in `_meta.hgw`. On reconnect, send
-`initialize` again and then `session/resume` with `_meta.hgw.after` set to the
-last sequence cursor observed. When the cursor is beyond bounded replay, the
-same resume rebuilds the Session from history, as described under
+`initialize` again and then `session/resume` with the `_hgw/position` cursor
+naming the first sequence not yet observed. When the cursor is beyond bounded
+replay, the same resume rebuilds the Session from history, as described under
 [Response `_meta.hgw` shapes](#response-_metahgw-shapes).
 
 The SDK client reconnects with jittered backoff starting at 250 ms, capped at
@@ -111,7 +111,7 @@ The `initialize` response's `_meta.hgw` (`HgwInitializeMetaSchema`):
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "role": "operator | guest",
   "extensions": {
     "steer": true,
@@ -137,11 +137,23 @@ A client advertises what it supports in `clientCapabilities._meta.hgw`
 
 ## Guest listener
 
-A guest connection reaches nothing but `initialize` and `auth/login` until it
-redeems an invitation (`src/guest/acp.ts`). Its `initialize` omits
-the runtime's title and advertises only the `hgw-invite` auth method. A
-connection acts as one invitation for its whole life: a second `auth/login` is
-refused with `-32000`.
+A guest connection reaches nothing but `initialize`, `auth/login` and
+`auth/logout` until it redeems an invitation (`src/guest/acp.ts`). Its
+`initialize` omits the runtime's title and advertises only the `hgw-invite`
+auth method. A connection acts as one invitation at a time: a second
+`auth/login` while one is redeemed is refused with `-32000`.
+
+`auth/logout` answers `{}` and keeps the connection open. The guest leaves its
+Sessions: nothing more of them reaches it, the questions it was asked are
+withdrawn, and an answer that arrives after is dropped. Every later gated
+request answers `-32000` until an `auth/login`, which may redeem another
+invitation; that connection then acts for it alone. A command still held when
+the logout came, a login still verifying among them, acts for nobody. A logout
+that ended a login puts the socket back in its handshake: the 15 s deadline
+starts again, and the socket counts toward the listener's budget of 32. A
+logout that ended nothing extends neither. Logout ends the connection's use of
+the invitation; it does not revoke it. The operator listener authenticates its
+upgrade instead, so it answers `auth/logout` with `-32601`.
 
 From the invitation's expiry no frame passes in either direction
 (`src/acp/socket.ts`): a request received after it is answered
@@ -166,7 +178,7 @@ The guest listener advertises (`GUEST_EXTENSIONS`, `src/guest/acp.ts`):
 | `historyPages`    | `true`  |
 
 The invited Session's capabilities report slash commands, models, and context
-usage unavailable, and steering as the runtime reports it.
+usage unavailable, and steering and rewind as the runtime reports them.
 
 Every method runs as a member command through the guest middleware stack in
 `src/guest/middleware/` (commands, scope, history, turns,
@@ -177,12 +189,13 @@ invited conversation by its reference alone; any other Session id is
 | Method                                                                                                                                       | Guest behavior                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session/resume`                                                                                                                             | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
-| `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown. |
+| `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
 | `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
 | `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
-| `session/new`, `session/list`, `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
+| `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
+| `session/new`, `session/list`, `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded: ACP's code for a method that "does not exist or is not available", which these are to a guest, though the session capability promises `session/new` and `session/list`. |
 
 `session/prompt` and `_hgw/session/steer` refuse, with `-32602`, text that
 starts with `/` (after any leading whitespace or zero-width characters) and
@@ -194,14 +207,15 @@ What a guest is shown:
   inline size or count caps beyond the frame and queue limits every
   connection has; the REST byte caps still apply.
 - Reasoning, tool input and output, terminals, compaction, the model, and
-  subagent prose are dropped. A tool call that declares an MCP App reaches
+  child Sessions are dropped. A tool call that declares an MCP App reaches
   the guest as its card; when its server is in `guest.appServers` (default
   `aos-ui`), its result passes whole too, as the guest's own view route would
   hand it. Arguments never pass, since they may name host paths.
 - A published Artifact the provider holds reaches the guest by its id alone,
   live and in a replay alike; inline Artifact data never does.
-- Questions (`elicitation/create`) reach the guest unchanged, and the guest may
-  answer them.
+- Questions (`elicitation/create`) reach the guest whole, and the guest may
+  answer them. A question names its tool call only when the guest was shown
+  that call.
 - Permission requests are never shown to a guest. One raised in a turn the
   guest started is declined for it: with `deny`, or `cancelled` when `deny` is
   not offered. One raised in another member's turn is hidden and left for the
@@ -240,8 +254,8 @@ first create opened rather than creating a second one.
 rule: `cwd` must equal the Agent's folder exactly (folded on the string; `..`
 and trailing separators are allowed, but a relative path is refused), or be
 empty, which names the Agent's folder; the SDK client always sends it empty.
-Any other `cwd` returns invalid params naming the folder; an Agent with no
-folder returns unsupported. A non-empty `mcpServers` or `additionalDirectories`
+Any other `cwd` returns invalid params naming the folder, and so does any `cwd`
+for an Agent with no folder. A non-empty `mcpServers` or `additionalDirectories`
 also returns invalid params. The runtime never receives the client's `cwd`.
 Every list row carries its Agent's folder. A list
 with a `cwd` filter that matches no Agent's folder returns no rows. A list across
@@ -252,34 +266,72 @@ Agent's rows; a list on one Agent's address answers either as an error.
 listed or resumed returns invalid params naming the per-Agent address; on an
 Agent's address a Session that is already gone deletes successfully.
 
+**`session/fork`** (operator listener only): answers `{ sessionId }` of a new
+Session holding the conversation so far, and joins the connection to it as
+`session/new` joins its creator; the original Session is left as it is. It
+follows `session/new`'s `cwd`, `mcpServers` and `additionalDirectories` rules,
+and a Session the connection was not told about answers `-32002`. `initialize`
+advertises `capabilities.session.fork` only where the runtime forks, and a fork
+elsewhere answers `-32601`. A guest is never offered it.
+
 **`session/list`** request (`HgwSessionListMetaSchema`): `{ agentId? }`
 
 **`session/resume`** request (`HgwSessionResumeMetaSchema`):
 
 ```json
-{ "agentId?": "…", "after?": 0, "turnId?": "…" }
+{ "agentId?": "…" }
 ```
 
 `agentId` is optional and used for deep links when the client knows the owning
-Agent before listing. `after` is the last `sequence` the client observed for
-`turnId`. An `after` beyond bounded replay, or a `turnId` that is no longer the
-live turn, rebuilds the Session from history in the same resume.
+Agent before listing. A position in `_meta.hgw` (version 1's `after` and
+`turnId`) answers `-32602` invalid params.
 
-`replayFrom` is absent (resume without replay), `{ type: "start" }`, or the
-`_hgw/before` older-page variant described under
-[Older history pages](#older-history-pages). As ACP asks of a receiver that
-does not understand a cursor, the gateway rejects every other `replayFrom` type,
-and an `_hgw/before` without a string `cursor`, with `-32602` invalid params
-rather than guessing where to replay from.
+`replayFrom` is one of:
+
+- absent: nothing is replayed, as ACP asks. The view follows the live turn from
+  its next event, and is never rebuilt from history.
+- `{ type: "start" }`: the whole Session is replayed.
+- `{ type: "_hgw/position", turnId?, from? }` (`HGW_REPLAY_POSITION`,
+  `HgwReplayPositionSchema`): the reconnect cursor. `from` is the first
+  `sequence` of `turnId` the client still needs, inclusive as every ACP cursor
+  is. A `from` beyond bounded replay, or a `turnId` that is no longer the live
+  turn, rebuilds the Session from history in the same resume. With neither
+  field, the live turn replays from its first event, or the Session is rebuilt
+  from history when the journal no longer holds that.
+- the `_hgw/before` older-page variant described under
+  [Older history pages](#older-history-pages).
+
+As ACP asks of a receiver that does not understand a cursor, the gateway
+rejects every other `replayFrom` type, and an `_hgw/before` without a string
+`cursor`, with `-32602` invalid params rather than guessing where to replay
+from.
 
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
-`{ rewindSourceId?, attachmentStageId?, clientId? }`. `clientId` becomes the
+`{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
+the user message an Edit or Retry replaces; a Session offers it only where its
+capabilities report `interactions.rewind` available, since what a rewind undoes
+with the turns, such as restored files, is the runtime's. `clientId` becomes the
 turn's `turnId`; a retry with the same `clientId` returns the first answer
 unchanged. The response carries the minted user-message id as the top-level
-`messageId` field (SDK 1.5.0 `PromptResponse`); the answer is sent only after
-the runtime confirms it stored the prompt. Attachment content referenced by
+`messageId` field (SDK 1.5.0 `PromptResponse`). As ACP reads an error answer
+as a prompt never inserted, the answer waits for the runtime's storage receipt
+and names the id it stored the prompt under. A prompt the runtime may have
+stored without proving it, because its receipt outlasted the admission
+deadline, its turn ended first, or its start went unanswered, is answered
+under the id the gateway minted. An unanswered start then reports the
+`unknown` state until a recover confirms the turn or its deadline ends it.
+Only a turn its adapter knows stored nothing is answered with an error.
+A `$/cancel_request` for the prompt answers `-32800` only while the start has
+not reached the runtime. From then on the prompt may stand, so its answer
+follows the rules above, and only `session/cancel` stops its turn.
+Attachment content referenced by
 `resource_link` blocks uses the `hgw-attachment:` URI scheme
 (`HGW_ATTACHMENT_URI_SCHEME`, `protocol/acp.ts`).
+
+A prompt carries `text` and `resource_link` blocks. The gateway advertises no
+prompt capability, so an `image`, `audio` or `resource` block answers `-32602`
+invalid params. A block of a type ACP has not defined, an `_`-prefixed extension
+or a later variant, is skipped and the rest of the prompt is sent.
 
 ### Response `_meta.hgw` shapes
 
@@ -293,7 +345,7 @@ as events after the answer.
 the turn and sequence the joined Session stands at; a later resume continues
 from it. Session info (`session_info_update`), execution state (`state_update`),
 capabilities (`available_commands_update._meta.hgw.capabilities`), models, and
-usage arrive as events after the answer. When the journal cannot answer `after`
+usage arrive as events after the answer. When the journal cannot answer `from`
 (`ReplayCursorLostError`, `core/channel.ts`), the gateway rebuilds the Session
 from history as a `start` resume does: the retained messages arrive as standard
 `session/update`s before the answer, the live turn follows them, and the answer
@@ -361,6 +413,15 @@ the stored prompt answer (if it arrived before the storage deadline).
 Catch-up uses only standard ACP session updates; no `_hgw/session_invalidated`
 or `_hgw/steer_accepted` is sent.
 
+A compaction the provider stored replays as the completed `compaction_update`
+its live turn showed, under the same `compactionId`, with the summary where the
+provider keeps one (OpenCode does; Hermes does not). History carries it as an
+`{ role: "activity", activityType: "COMPACTION" }` row
+(`SessionCompactionActivityMessageSchema`, `protocol/index.ts`). A resume while
+the turn still runs shows that compaction once, from the turn's replay. A guest
+is shown no compaction, live or in history: of the Session's activity, its
+history passes the plan alone.
+
 | ACP event                   | Meaning                                                                                                           |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `agent_message_chunk`       | Streaming assistant prose                                                                                         |
@@ -368,6 +429,7 @@ or `_hgw/steer_accepted` is sent.
 | `tool_call_update`          | Tool lifecycle and argument deltas                                                                                |
 | `state_update`              | Run state transitions                                                                                             |
 | `plan_update`               | Session Todos in `_meta.hgw.todos`                                                                                |
+| `compaction_update`         | The provider compacted the conversation's context, with its summary once completed where the provider keeps one  |
 | `usage_update`              | Context window usage                                                                                              |
 | `session_info_update`       | Session metadata changes                                                                                          |
 | `available_commands_update` | Slash commands and capabilities in `_meta.hgw.capabilities` (`HgwAvailableCommandsMetaSchema`, `protocol/acp.ts`) |
@@ -394,14 +456,26 @@ Every event emitted from a turn carries a base of
 | `plan_update`                         | `sequence`, `turnId?`, `todos` ()                                 |
 | `usage_update`                        | `source`, `estimated?`, `breakdown?` (); no sequence/turnId       |
 
-Stop reasons `_hgw_error` and `_hgw_uncertain` appear in
-`state_update { state: "idle" }` (`HGW_STOP_REASONS`). A
-`state_update { state: "running" }` carrying `code` and `message` reports a
-final failure on a run that stays active until it is stopped: a client shows
-the failure and keeps Stop available, and the run's own idle update ends it.
-A prompt the gateway accepted whose turn then fails to start reaches its sender
-as a `running` update followed by an `_hgw_error` idle update for the same
-`turnId`, carrying only a public `code`, never an `_hgw/error` notification.
+A failed turn ends with ACP's `state_update { state: "idle", stopReason:
+"error" }`. Its `error` is the public error: `-32603` and, as its `message`,
+the failure's machine code (`internal_error` for a stored failure that kept
+none). The provider's own words travel only as `_meta.hgw.message`, beside the
+same `code`.
+
+A turn the gateway can no longer observe, after a lost connection or an
+uncertain send, Stop or answer, reports ACP's `state_update { state: "unknown"
+}` with its `code`. It is not an outcome: a recover that confirms the turn
+streams it on, and a turn none confirms by the uncertainty deadline ends with
+`error` and the code `HGW_OUTCOME_UNKNOWN`. A prompt sent meanwhile answers
+`-31010` turn in progress.
+
+A `state_update { state: "requires_action" }` carrying `code` and `message`
+reports a final failure on a run that stays active until it is stopped: a
+client shows the failure and keeps Stop available, and the run's own idle
+update ends it. A prompt the gateway accepted whose turn then fails to start
+reaches its sender as a `running` update followed by an `error` idle update for
+the same `turnId`, carrying only a public `code`, never an `_hgw/error`
+notification.
 
 ## Extension methods (`_hgw/*`)
 
@@ -458,8 +532,9 @@ that shows the Session still reads it.
 `visibility`, `avatar` (`null` clears it) and `muted` (`AgentUpdateFields`,
 `protocol/index.ts`); any field alone is a valid update. `muted: true` mutes
 the Agent's Web Push notifications and `muted: false` unmutes them. A runtime
-that cannot store a field it is sent refuses the whole update as
-`unsupported` rather than writing the rest.
+that cannot store a field it is sent refuses the whole update with `-32602`
+invalid params rather than writing the rest; the SDK client reads that as an
+`AgentUpdateError` with the code `unsupported`.
 
 Every `_hgw/agents/list` entry carries `muteEditable`, whether the runtime can
 store a mute for that Agent, beside `editable` and `avatarEditable`. Its
@@ -515,7 +590,8 @@ or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
 
 | Where                                                                 | Masked                                                                                                                                               |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, its terminal's command and output, and its subagent's goal and summary                      |
+| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, and its terminal's command and output                                                        |
+| A child Session, live and replayed                                    | its title, description and summary, and its own tool calls and failures as a turn's are                                                              |
 | A failed turn, live and replayed                                      | its message                                                                                                                                          |
 | A question a guest is shown                                           | its prompt, header, and choices; a guest's answer reaches the runtime as the choice it wrote, and an answer echoed back to a guest is masked        |
 | `requestText` in `_hgw/activity`, and every Web Push text             | the one line it shows                                                                                                                                |
@@ -534,8 +610,8 @@ call the same masker.
 
 Text is masked; a path or a patch that carries a credential is dropped rather
 than masked, since masked it would name no file or no longer apply: a
-location, a diff that names one, a terminal's working directory, and a
-subagent's file.
+location, a diff that names one, a terminal's working directory, and a file a
+child Session read or wrote.
 
 A name is secret when a run of up to three of its words spells a word of
 `SECRET_TERMS` (`src/redaction.ts`), or when its letters end in one. Its words
@@ -658,6 +734,69 @@ On the guest listener, Artifact reads share a per-invitation budget of 16 in
 flight and 600 per 10 minutes, on every guest path that reads an Artifact.
 Past it, the route answers 503 `turn_capacity_exceeded`.
 
+## Child Sessions
+
+A subagent a turn spawns is an ACP v2 child Session. The parent announces each
+child with `subagent_update` on its own Session before any traffic of the
+child's: the outer `sessionId` is the parent, `update.sessionId` the child.
+Later reports patch it.
+
+- `title` and `description` are the runtime's display text for the child, and
+  `state` mirrors its work: `running`, `requires_action`, or `idle` with
+  `end_turn`, `cancelled` or `error`.
+- A child still at work when its parent's turn ends is background activity,
+  as ACP's idle state allows: the parent goes idle and takes prompts, and the
+  child's reports, updates and requests keep arriving under its id between
+  turns. Each carries the `_meta.hgw` of the turn that spawned it, with
+  `background: true`, so no reader takes it as a position in that turn's
+  stream; its requests are answered, and its `cancel` honored, without any
+  turn. The parent first reports each child that outlives its turn as
+  `running`. A Session nobody watches any longer still follows its children
+  for a minute, so a reload or a reconnect comes back to them followed: a
+  connection that joins is told each one's latest report, and each open
+  request, including those of a child that ended in that minute. No turn's
+  journal keeps a child's updates between turns, so a positioned resume
+  while the Session follows one is answered as a lost cursor is: the view is
+  rebuilt from history, with each child's saved transcript, which may not yet
+  hold a message the child is still writing. A child nobody watches as its
+  turn ends, or past that minute, or one its runtime cannot follow, is
+  reported `unknown`, with `capabilities` `{}`.
+- `capabilities` is `{ cancel: {} }` only where the runtime stops the child
+  alone, and `{}` otherwise; ACP replaces it whole.
+- `_meta.hgw` (`HgwChildSessionMetaSchema`, `protocol/acp.ts`) carries what ACP
+  has no field for: `toolCallId`, the parent's call that spawned the child, and
+  the child's `model`, `filesRead`, `filesWritten`, `durationMs` and `summary`.
+
+The child's own updates arrive under its id on the same connection, numbered
+in the parent turn's sequence, and its tokens in its own idle usage. Its
+approvals and questions are asked with the child's `sessionId`, and an answer
+settles the parent turn's wait. A Hermes child asks a client nothing: it has
+no question callback, Hermes decides its approvals by its own
+`delegation.subagent_auto_approve` setting, and a sudo or secret prompt is one
+the gateway holds unrendered for every Session. `session/cancel` naming the child stops its
+work, where `cancel` is offered, through the Session that owns it; any other
+cancel naming one does nothing. Every other request naming a child answers
+`-32601`: a child permits a client nothing its capabilities do not name. A
+child id is never a top-level Session's, and nothing of a child is shown
+before its announcement.
+
+A child's events share the parent turn's journal and sequence, so a
+positioned resume replays them with the parent's, a child that finished during
+the gap included. A reconnect is a new connection that knows no child, so the
+resume first announces again, merged, each child the turn reported up to the
+cursor. History stores a child as an `{ role: "activity", activityType:
+"CHILD_SESSION" }` row (`SessionChildActivityMessageSchema`,
+`protocol/index.ts`). A from-start replay or a rebuild announces it in its
+final state, then sends the child's whole transcript under its id, where the
+runtime keeps one (`ServerRuntime.childHistory`); a child's transcript is never
+paged. A resume while the turn runs leaves its children to the turn's replay.
+
+A guest is shown nothing of a child: no announcement, event, question,
+approval, stored row or transcript. A child's approval or question in a turn
+the guest started waits for an operator, who sees it on the child. Child reports and events pass the
+credentials middleware like any turn's tool data, and a child's question tool
+call reaches the operator as written, as its parent's does.
+
 ## Interactions: permission and elicitation
 
 ACP delivers pending interactions as `session/request_permission` or
@@ -676,7 +815,10 @@ SDK client (`acp-approvals.ts`) holds each request for the connection's
 lifetime. A request still pending when a client reconnects is sent again.
 
 **Elicitation** (`HgwElicitationMetaSchema`):
-`{ requestId, expiresAt?, questions[] }`. Each question carries
+`{ requestId, expiresAt?, questions[] }`. A question is scoped to its Session,
+plus the `toolCallId` that asked it when the adapter knows the call. It never
+uses ACP's request scope, which names a JSON-RPC request outside any Session,
+so its id rides only in `_meta.hgw.requestId`. Each question carries
 `{ id?, header, prompt, options[], multiple?, custom? }`. A multi-select
 question must declare `items.enum` in the ACP property schema
 (`src/acp/translate/requests.ts`); a free-text answer
@@ -694,7 +836,7 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | -------- | -------------------- | ---------------------------------------------------- |
 | `-32000` | `authRequired()`     | Authentication required (guest: no valid invitation) |
 | `-32002` | `resourceNotFound()` | Agent or Session does not exist                      |
-| `-32601` | `methodNotFound()`   | Method not recognized                                |
+| `-32601` | `methodNotFound()`   | Method does not exist, or is not available here      |
 | `-32602` | `invalidParams()`    | Request parameters failed validation                 |
 | `-32800` | `requestCancelled()` | Request timed out or the transport closed            |
 
@@ -707,7 +849,6 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | `-31012` | `revisionConflict`       | Observed Agent revision or source message no longer current |
 | `-31013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
 | `-31014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
-| `-31015` | `unsupported`            | Runtime cannot store a requested Agent field                |
 | `-31016` | `requestTooLarge`        | Params too large for one frame (`HGW_MAX_FRAME_BYTES`)      |
 
 `requestTooLarge` is raised by the client before a prompt or steer is sent,
@@ -732,7 +873,6 @@ The machine name an error travels as — the `message` of a public reply, and th
 | `-31012` | `revision_conflict`       |
 | `-31013` | `temporarily_unavailable` |
 | `-31014` | `uncertain_mutation`      |
-| `-31015` | `unsupported`             |
 | (other)  | `internal_error`          |
 
 ## HTTP API

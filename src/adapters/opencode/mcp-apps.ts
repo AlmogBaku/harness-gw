@@ -1,7 +1,6 @@
 import { z } from "zod"
 
 import type { Logger } from "../../../lifecycle"
-import type { SessionMessage } from "../../../protocol"
 import { createMcpServerCache } from "../../core/mcp-server-cache"
 import type { ServerMcpApps } from "../../core/runtime"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -12,6 +11,7 @@ import {
 } from "../../mcp-apps/fallback"
 import { mcpServersFromNative } from "../../mcp-apps/discovery"
 import { createMcpToolNames, mcpToolCatalog } from "../../mcp-apps/tool-names"
+import type { OpenCodeHistoryRow } from "./history"
 import { OPENCODE_MCP_TOOL_NAMES } from "./tool-names"
 
 /**
@@ -63,7 +63,7 @@ export function openCodeMcpServers(
  * called again to recover more.
  */
 export function storedOpenCodeToolCall(
-  messages: readonly SessionMessage[],
+  messages: readonly OpenCodeHistoryRow[],
   toolCallId: string
 ): StoredMcpToolCall | undefined {
   for (const message of messages) {

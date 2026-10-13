@@ -15,6 +15,7 @@ import { createLink, retryBudget, type LinkOptions } from "../../core/link"
 import { RETRY_BUDGET } from "../../core/limits"
 import {
   CompactionStatus,
+  isChildTurnEvent,
   isRepliesTurn,
   PendingRequestKind,
   StopReason,
@@ -31,6 +32,7 @@ import {
   type ServerTurnHandle,
   type ServerTurnListener,
 } from "../../core/runtime"
+import { isBlankText } from "../../core/member"
 import { storageReceipt } from "../../core/storage-receipt"
 import type { AttachmentSignal } from "./attachment-registry"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
@@ -42,8 +44,18 @@ import {
   projectHermesToolCall,
   projectHermesToolOutcome,
 } from "./tool-data"
-import { hermesRowMessageId } from "./history"
+import { hermesCompactionId, hermesRowMessageId } from "./history"
 import type { HermesPublishedArtifacts } from "./published-artifacts"
+import type { HermesChildSessions } from "./child-sessions"
+import {
+  abandonChildren,
+  acceptSubagent,
+  childrenAtWork,
+  releaseChildren,
+  restateChildren,
+  spawned,
+  stopChild,
+} from "./run-children"
 import type { HermesMediaOptions } from "./media-artifacts"
 import { boundedNativeBytes, publicReason, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
@@ -69,7 +81,6 @@ import {
   persistedTurnRows,
   stableNativeId,
   statusNotice,
-  subagentPatch,
   terminalText,
   tokenUsage,
   usageCost,
@@ -178,12 +189,23 @@ export class HermesTurnEngine {
   /** Bounds the watches that redial at once when their upstream is up again. */
   readonly #watchBudget = retryBudget(RETRY_BUDGET, defaultClock)
   readonly #active = new Map<string, ActiveTurn>()
+  /** Each Session's turn listeners, which background children report to. */
+  readonly #turnListeners = new Map<string, Set<ServerTurnListener>>()
+  /** Each Session's ended turns whose children still work in the background. */
+  readonly #backgroundTurns = new Map<string, Set<ActiveTurn>>()
+  /**
+   * Each Session's children that outlived their turns and are over since, by
+   * `subagent_id`, while someone watches it: Hermes may still report one, to
+   * every observer of the Session, and no later turn may take it for its own.
+   */
+  readonly #pastChildren = new Map<string, Set<string>>()
   readonly #admissions = new Set<string>()
   readonly #settling = new Map<string, SettlingWatcher>()
   readonly #host: TurnEngineHost
   readonly #lostInteractionGraceMs: number
   readonly #mcpToolNames?: McpToolNames
   readonly #publishedArtifacts?: HermesPublishedArtifacts
+  readonly #childSessions?: HermesChildSessions
   readonly #media: HermesMediaOptions
 
   constructor(
@@ -195,6 +217,8 @@ export class HermesTurnEngine {
       mcpToolNames?: McpToolNames
       /** Grants each MEDIA-line artifact before its assistant row persists. */
       publishedArtifacts?: HermesPublishedArtifacts
+      /** Keeps each child a turn announced, for a reload to announce again. */
+      childSessions?: HermesChildSessions
       /** Whether the media a turn delivers becomes Artifacts; on by default. */
       media?: HermesMediaOptions
       /** Without it, a watch retries every failure and logs nothing. */
@@ -204,6 +228,7 @@ export class HermesTurnEngine {
     this.#native = native
     this.#mcpToolNames = options.mcpToolNames
     this.#publishedArtifacts = options.publishedArtifacts
+    this.#childSessions = options.childSessions
     this.#media = options.media ?? {}
     this.#log = options.log ?? { warn: () => undefined }
     this.#watch = {
@@ -229,6 +254,9 @@ export class HermesTurnEngine {
       fail: (active, failure) => this.#fail(active, failure),
       detach: (active, failure) => this.#detach(active, failure),
       settle: (active) => this.#settle(active),
+      emit: (active, event) => this.#emit(active, event),
+      recordChild: (active, report, parent) =>
+        this.#childSessions?.record(active.scope, report, parent),
     }
   }
 
@@ -248,8 +276,12 @@ export class HermesTurnEngine {
     const prompt = isRepliesTurn(input) ? undefined : input
     // Staged files arrive appended to the prompt as text; staged images are
     // already attached to the live Session, so a turn of images alone is empty.
-    const text = prompt?.prompt.trim()
     const rewindSourceId = prompt?.rewindSourceId
+    // A rewind with no text of its own, however padded, is a Retry.
+    const text =
+      rewindSourceId !== undefined && isBlankText(prompt?.prompt)
+        ? ""
+        : prompt?.prompt.trim()
     if (
       rewindSourceId !== undefined &&
       (rewindSourceId.length === 0 ||
@@ -446,6 +478,8 @@ export class HermesTurnEngine {
     listener: ServerTurnListener
   ): () => void {
     const key = sessionKey(scope)
+    const listeners = this.#turnListeners.get(key) ?? new Set()
+    this.#turnListeners.set(key, listeners.add(listener))
     const bindings = {
       link: "turn-subscription",
       agentId: scope.agentId,
@@ -497,8 +531,13 @@ export class HermesTurnEngine {
         if (event.type === "status.update") {
           const notice = statusNotice(payloadOf(event))
           if (notice) listener.onNotice?.(notice)
-        } else if (event.type === "message.start")
-          announce(this.#active.has(key))
+        } else if (
+          event.type === "subagent.start" ||
+          event.type === "subagent.complete"
+        )
+          // A child that outlived its turn reports on the parent's Session.
+          this.#acceptSubagent(undefined, event.type, payloadOf(event), key)
+        else if (event.type === "message.start") announce(this.#active.has(key))
         else if (
           event.type === "message.complete" ||
           (event.type === "session.info" && payloadOf(event).running === false)
@@ -523,7 +562,19 @@ export class HermesTurnEngine {
       clock: defaultClock,
       bindings,
     })
-    return () => link.dispose()
+    return () => {
+      link.dispose()
+      listeners.delete(listener)
+      if (listeners.size > 0) return
+      this.#turnListeners.delete(key)
+      // Nobody watches the Session any longer, so nothing follows its
+      // children past their turns.
+      for (const turn of this.#backgroundTurns.get(key) ?? []) {
+        abandonChildren(this.#host, turn)
+        this.#endBackground(turn)
+      }
+      this.#pastChildren.delete(key)
+    }
   }
 
   /** Whether this engine runs, or still settles, the Session's current turn. */
@@ -632,7 +683,7 @@ export class HermesTurnEngine {
       outcome = await this.#native.submit(active.liveSessionId, prompt, signal)
     } catch (error) {
       if (error instanceof HermesTurnRewindConflictError) {
-        this.#fail(active, TURN_FAILURES.rewindConflict)
+        this.#refuse(active, TURN_FAILURES.rewindConflict)
         return
       }
       // Nothing was written, so this run never began: it settles silently and
@@ -683,9 +734,9 @@ export class HermesTurnEngine {
       throw new ServerTurnConflictError()
     }
     if (outcome.reason === "command-with-attachments")
-      return this.#fail(active, TURN_FAILURES.commandWithAttachments)
+      return this.#refuse(active, TURN_FAILURES.commandWithAttachments)
     if (outcome.reason !== "session-gone")
-      return this.#fail(
+      return this.#refuse(
         active,
         withDetail(REFUSAL_FAILURES[outcome.reason], outcome.detail)
       )
@@ -714,6 +765,8 @@ export class HermesTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => stopTurn(this.#host, active),
+      stopChild: (childSessionId) =>
+        stopChild(this.#host, active, childSessionId),
       // Gap: Hermes answers `session.redirect` with `{status, text}` alone
       // (tui_gateway/methods_session.py:2171 at v2026.9.24) and no push names
       // the correction's row, so a live steer keeps its `requestId` while a
@@ -862,7 +915,6 @@ export class HermesTurnEngine {
         return this.#acceptTerminal(active, event.type, payload)
       case "status.update":
         return this.#acceptStatus(active, payload)
-      case "subagent.spawn_requested":
       case "subagent.start":
       case "subagent.complete":
         return this.#acceptSubagent(active, event.type, payload)
@@ -982,13 +1034,18 @@ export class HermesTurnEngine {
    * `compacted`; it reports no failure of its own, and only status text. Its
    * gateway also tags any lifecycle notice that mentions compaction as
    * `compacting` (a threshold notice on a Session's first turn), and Hermes'
-   * own client clears that indicator when the turn ends.
+   * own client clears that indicator when the turn ends. Hermes names no
+   * compaction, so one is named as history names the carrier it stores: by
+   * the prompt's row, where Hermes named it, and its count within the turn.
    */
   #acceptStatus(active: ActiveTurn, payload: Record<string, unknown>) {
     const { compaction } = active
     if (payload.kind === "compacting" && !compaction.open) {
       compaction.count += 1
-      compaction.open = `${active.turnId}:compaction:${compaction.count}`
+      compaction.open = hermesCompactionId(
+        active.messageBase ?? active.turnId,
+        compaction.count
+      )
       this.#emit(active, {
         kind: TurnEventKind.CompactionUpdated,
         compactionId: compaction.open,
@@ -1014,36 +1071,6 @@ export class HermesTurnEngine {
       status: CompactionStatus.Cancelled,
     })
     compaction.open = undefined
-  }
-
-  /**
-   * Hermes names no call on a subagent frame, and `delegate_task` runs its
-   * children while the call is open: a subagent belongs to the latest open
-   * delegation when first seen, and to that call from then on.
-   */
-  #acceptSubagent(
-    active: ActiveTurn,
-    type: string,
-    payload: Record<string, unknown>
-  ) {
-    const subagent = subagentPatch(type, payload)
-    if (!subagent) return
-    const toolCallId =
-      active.subagents.get(subagent.id) ?? this.#openDelegation(active)
-    if (!toolCallId) return
-    active.subagents.set(subagent.id, toolCallId)
-    this.#emit(active, {
-      kind: TurnEventKind.SubagentUpdated,
-      toolCallId,
-      subagent,
-    })
-  }
-
-  #openDelegation(active: ActiveTurn) {
-    let open: string | undefined
-    for (const [toolCallId, tool] of active.tools)
-      if (tool.name === "delegate_subagent" && !tool.ended) open = toolCallId
-    return open
   }
 
   #acceptUsage(active: ActiveTurn, value: unknown) {
@@ -1284,6 +1311,7 @@ export class HermesTurnEngine {
       tools: ending.stopped ? "stopped" : "completed",
     })
     this.#settleCompaction(active)
+    this.#endChildren(active)
     // Hermes reports only a completed or an interrupted turn; a turn that
     // settled without saying how goes unsaid.
     const stopReason =
@@ -1350,13 +1378,33 @@ export class HermesTurnEngine {
     this.#emit(active, { kind: TurnEventKind.TurnStarted })
   }
 
-  #fail(active: ActiveTurn, failure: TurnFailure) {
+  /**
+   * `written.unstored`: the run ends knowing Hermes stored nothing of its
+   * prompt, so its receipt says so.
+   */
+  #fail(
+    active: ActiveTurn,
+    failure: TurnFailure,
+    written: { unstored?: boolean } = {}
+  ) {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#settleCompaction(active)
+    this.#endChildren(active)
     const failed = this.#failed(active, failure)
     this.#emit(active, failed)
-    this.#settle(active, failed)
+    this.#settle(active, failed, written)
+  }
+
+  /**
+   * The prompt was refused before Hermes stored any of it: by Hermes, which
+   * refuses a submit before it writes its row, or by this run before sending
+   * it. The run fails, and its receipt says nothing was stored, so the prompt
+   * is answered with an error rather than as accepted.
+   */
+  #refuse(active: ActiveTurn, failure: TurnFailure) {
+    if (active.promptMessageId) active.stored ??= storageReceipt()
+    this.#fail(active, failure, { unstored: true })
   }
 
   /**
@@ -1374,6 +1422,7 @@ export class HermesTurnEngine {
     active.catchUp = undefined
     active.queue.close()
     safelyUnsubscribe(active.unsubscribe)
+    releaseChildren(active)
   }
 
   /** A public failure, on the model the Session last reported. */
@@ -1389,6 +1438,13 @@ export class HermesTurnEngine {
   }
 
   #emit(active: ActiveTurn, event: TurnEvent) {
+    // A child that outlived its turn reports to the Session's listeners.
+    if (active.background) {
+      if (isChildTurnEvent(event))
+        for (const listener of this.#listenersOf(active.scope))
+          listener.onChild?.(active.turnId, event)
+      return true
+    }
     if (active.terminal) return false
     // An uncertain run's stream is no longer authoritative: publishing fills a
     // queue nobody reads, and an overflow there would settle it unreconciled.
@@ -1416,17 +1472,98 @@ export class HermesTurnEngine {
   }
 
   /** `ending` is the event that ended the run, when one did. */
-  #settle(active: ActiveTurn, ending?: TurnEvent) {
+  #settle(
+    active: ActiveTurn,
+    ending?: TurnEvent,
+    written: { unstored?: boolean } = {}
+  ) {
     if (active.terminal) return
     active.terminal = true
-    active.stored?.end(ending)
+    active.stored?.end(ending, written)
     // A settling watcher keeps the native observation until Hermes reports the
     // Session idle; without one nothing observes this Session any more.
     if (this.#settling.get(sessionKey(active.scope))?.active !== active)
       safelyUnsubscribe(active.unsubscribe)
+    if (!active.outlives) releaseChildren(active)
     active.queue.close()
     active.resolveSettled()
     const key = sessionKey(active.scope)
     if (this.#active.get(key) === active) this.#active.delete(key)
+    if (active.outlives) this.#beginBackground(active)
+  }
+
+  #listenersOf(scope: HermesTurnScope) {
+    return this.#turnListeners.get(sessionKey(scope)) ?? new Set()
+  }
+
+  /**
+   * Ends the turn's children with it, unless they outlive it: while someone
+   * watches the Session, a child still at work goes on as its background
+   * activity, as ACP's idle state allows.
+   */
+  #endChildren(active: ActiveTurn) {
+    if (childrenAtWork(active) && this.#listenersOf(active.scope).size > 0)
+      active.outlives = true
+    else abandonChildren(this.#host, active)
+  }
+
+  #beginBackground(active: ActiveTurn) {
+    active.outlives = undefined
+    active.background = true
+    const key = sessionKey(active.scope)
+    const turns = this.#backgroundTurns.get(key) ?? new Set<ActiveTurn>()
+    this.#backgroundTurns.set(key, turns.add(active))
+    restateChildren(this.#host, active)
+  }
+
+  /** A background turn with no child at work follows none any longer. */
+  #endBackground(active: ActiveTurn) {
+    if (!active.background) return
+    active.background = undefined
+    const key = sessionKey(active.scope)
+    const turns = this.#backgroundTurns.get(key)
+    turns?.delete(active)
+    if (turns?.size === 0) this.#backgroundTurns.delete(key)
+    releaseChildren(active)
+    const past = this.#pastChildren.get(key) ?? new Set<string>()
+    for (const subagentId of active.children.keys()) past.add(subagentId)
+    this.#pastChildren.set(key, past)
+  }
+
+  /** The background turn that spawned the child a `subagent.*` frame names. */
+  #backgroundTurnFor(key: string, payload: Record<string, unknown>) {
+    for (const turn of this.#backgroundTurns.get(key) ?? [])
+      if (spawned(turn, payload)) return turn
+    return undefined
+  }
+
+  /**
+   * A `subagent.*` frame, for the turn that spawned its child: the live one,
+   * or one whose child outlived it.
+   */
+  #acceptSubagent(
+    active: ActiveTurn | undefined,
+    type: string,
+    payload: Record<string, unknown>,
+    key = active && sessionKey(active.scope)
+  ) {
+    if (key === undefined) return
+    const outlived = this.#backgroundTurnFor(key, payload)
+    if (outlived) {
+      acceptSubagent(this.#host, outlived, type, payload)
+      if (!childrenAtWork(outlived)) this.#endBackground(outlived)
+      return
+    }
+    const past = this.#pastChildren.get(key)
+    const reported = [payload.subagent_id, payload.parent_id]
+    if (reported.some((id) => past?.has(stableNativeId(id) ?? "") === true))
+      return
+    if (active) acceptSubagent(this.#host, active, type, payload)
+  }
+
+  /** Stops a child an ended turn delegated to, through `subagent.interrupt`. */
+  async stopChild(scope: HermesTurnScope, childSessionId: string) {
+    for (const turn of this.#backgroundTurns.get(sessionKey(scope)) ?? [])
+      await stopChild(this.#host, turn, childSessionId)
   }
 }

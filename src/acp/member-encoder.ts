@@ -8,16 +8,23 @@ import {
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { SessionContextResponse } from "../../protocol"
+import type {
+  SessionContextResponse,
+  SessionHistoryResponse,
+} from "../../protocol"
 import {
   HGW_METHODS,
   HGW_META_KEY,
-  HGW_STOP_REASONS,
   HgwStateMetaSchema,
   type HgwActivityNotification,
   type HgwNoticeMeta,
 } from "../../protocol/acp"
-import { PendingRequestKind, type PendingRequest } from "../core/events"
+import {
+  PendingRequestKind,
+  TurnEventKind,
+  type PendingRequest,
+  type TurnEventOf,
+} from "../core/events"
 import {
   unhandledKind,
   type MemberConnection,
@@ -61,33 +68,37 @@ function hasMode(request: Elicitation): request is ModedElicitation {
   return typeof request.mode === "string"
 }
 
-/** The vendor stop reasons that mean the turn failed rather than finished. */
-const HGW_STOP_CODES: ReadonlySet<string> = new Set(
-  Object.values(HGW_STOP_REASONS)
-)
-
 /** How much of a provider sentence one log line carries. */
 const MAX_LOGGED_FAILURE_CHARS = 200
 
 /**
- * The failure an idle `state_update` reports, when it reports one. Every other
- * update — including every streamed chunk — falls out on the first check. A
- * stop reason names the class of failure and nothing else, so the machine code
- * and the provider's sentence travel with it: they are what an operator
- * diagnoses one turn by. `errorCode` is the name `acp.error` already logs the
- * same classification under.
+ * The failure a `state_update` reports, when it reports one: the `error` stop
+ * reason, or the `unknown` state of a turn nothing observes. Every other
+ * update — including every streamed chunk — falls out on the first check. The
+ * state names the class of failure and nothing else, so the machine code and
+ * the provider's sentence travel with it: they are what an operator diagnoses
+ * one turn by. `errorCode` is the name `acp.error` already logs the same
+ * classification under.
  */
 function turnFailureOf(update: SessionUpdate) {
-  if (!SessionUpdate.isStateUpdate(update) || !StateUpdate.isIdle(update))
-    return undefined
-  const stopReason = update.stopReason
-  if (typeof stopReason !== "string" || !HGW_STOP_CODES.has(stopReason))
-    return undefined
-  const meta = HgwStateMetaSchema.safeParse(update._meta?.[HGW_META_KEY])
-  if (!meta.success) return { stopReason }
+  if (!SessionUpdate.isStateUpdate(update)) return undefined
+  if (StateUpdate.isUnknown(update))
+    return failureDetail({ state: "unknown" }, update._meta)
+  if (StateUpdate.isIdle(update) && update.stopReason === "error")
+    return failureDetail({ stopReason: "error" }, update._meta)
+  return undefined
+}
+
+/** A failure's class, with what its `_meta.hgw` says of it. */
+function failureDetail<Outcome extends object>(
+  outcome: Outcome,
+  extension: Record<string, unknown> | null | undefined
+) {
+  const meta = HgwStateMetaSchema.safeParse(extension?.[HGW_META_KEY])
+  if (!meta.success) return outcome
   const { turnId, code, message } = meta.data
   return {
-    stopReason,
+    ...outcome,
     turnId,
     ...(code === undefined ? {} : { errorCode: code }),
     ...(message === undefined
@@ -168,13 +179,10 @@ function executionUpdate({
     return { sessionUpdate: "state_update", state: "requires_action", ...meta }
   if (state === "running" || state === "stopping")
     return { sessionUpdate: "state_update", state: "running", ...meta }
+  // Nothing observes an uncertain turn until a recover confirms it or its
+  // deadline ends it.
   if (state === "uncertain")
-    return {
-      sessionUpdate: "state_update",
-      state: "idle",
-      stopReason: HGW_STOP_REASONS.uncertain,
-      ...meta,
-    }
+    return { sessionUpdate: "state_update", state: "unknown", ...meta }
   return { sessionUpdate: "state_update", state: "idle", ...meta }
 }
 
@@ -244,6 +252,20 @@ export type MemberEncoderOptions = {
   report(sessionId: string, cause: unknown): unknown
   /** Whether the connection's credential still holds. */
   live(): boolean
+  /** The child Sessions this connection's Sessions announced. */
+  children: {
+    /** Registers one; `false` means it may not be shown. */
+    announce(
+      childSessionId: string,
+      parentSessionId: string,
+      cancellable: boolean | undefined
+    ): boolean
+    /**
+     * Whether `childSessionId` was announced, at any depth, under the
+     * top-level Session `sessionId`: only that Session speaks for it.
+     */
+    owns(sessionId: string, childSessionId: string): boolean
+  }
 }
 
 export function createMemberEncoder({
@@ -255,9 +277,12 @@ export function createMemberEncoder({
   elicits,
   report,
   live,
+  children,
 }: MemberEncoderOptions): MemberConnection {
   const { translators, logger } = context
   const states = new WeakMap<TurnStream, TranslateState>()
+  /** Each child's own translation, by the parent stream it streams in. */
+  const childStates = new WeakMap<TurnStream, Map<string, TranslateState>>()
   /** The requests asked and not settled, by Session and requestId. */
   const asked = new Map<string, AbortController>()
   const askedKey = (sessionId: string, requestId: string) =>
@@ -322,6 +347,19 @@ export function createMemberEncoder({
     }
   }
 
+  /**
+   * The Session a request is asked on: the child's that asks it, once that
+   * child was announced, else the Session whose wait it is. Its answer
+   * settles that wait either way.
+   */
+  function askedOn(sessionId: string, request: PendingRequest) {
+    const { childSessionId } = request
+    return childSessionId !== undefined &&
+      children.owns(sessionId, childSessionId)
+      ? childSessionId
+      : sessionId
+  }
+
   async function askPermission(
     sessionId: string,
     request: PendingRequest,
@@ -332,7 +370,7 @@ export function createMemberEncoder({
     const response = await client
       .request(
         methods.client.session.requestPermission,
-        { ...outbound.request, sessionId },
+        { ...outbound.request, sessionId: askedOn(sessionId, request) },
         { cancellationSignal: signal }
       )
       .catch(declined(signal, { outcome: { outcome: "cancelled" as const } }))
@@ -350,12 +388,19 @@ export function createMemberEncoder({
       throw new Error("The elicitation carries no mode")
     // A client that cannot answer is not asked; its state shows the wait.
     if (!elicits(outbound.request.mode)) return undefined
-    // An elicitation is scoped to a Session or to one request; this one is
-    // both, so a client that reads either scope can still route it.
+    // A runtime's question belongs to its Session and, when one asked it, to a
+    // tool call. ACP's request scope names a JSON-RPC request outside any
+    // Session, so it is never this one's; the request id rides in `_meta.hgw`.
     const response = await client
       .request(
         methods.client.elicitation.create,
-        { ...outbound.request, sessionId, requestId: request.requestId },
+        {
+          ...outbound.request,
+          sessionId: askedOn(sessionId, request),
+          ...(request.toolCallId === undefined
+            ? {}
+            : { toolCallId: request.toolCallId }),
+        },
         { cancellationSignal: signal }
       )
       .catch(declined(signal, { action: "cancel" as const }))
@@ -420,8 +465,77 @@ export function createMemberEncoder({
     }
   }
 
-  function historyOutbounds(event: Extract<MemberEvent, { kind: "history" }>) {
-    return translators.translateHistory(event.page)
+  /**
+   * A child Session's report, on the Session that owns it, and the child's
+   * own events, under its id once it was announced. A report of a child that
+   * may not be shown, and every event of it, reach nobody. A child's requests
+   * are its parent turn's, asked on the child, so its own stream carries
+   * only updates.
+   */
+  async function child(event: Extract<MemberEvent, { kind: "child" }>) {
+    const { parentSessionId, stream, sequence } = event
+    const context = {
+      turnId: stream.turnId,
+      sequence,
+      stopping: false,
+      // Between turns: no position in the turn that spawned the child.
+      ...(event.background ? { background: true as const } : {}),
+    }
+    const reported = event.event
+    if (reported.kind === TurnEventKind.ChildSessionUpdated)
+      return reportChild(parentSessionId, reported, context)
+    const { childSessionId, event: own } = reported
+    if (!children.owns(parentSessionId, childSessionId)) return
+    // A child that a child spawned is announced on that child.
+    if (own.kind === TurnEventKind.ChildSessionUpdated)
+      return reportChild(childSessionId, own, context)
+    const owned = childStates.get(stream) ?? new Map<string, TranslateState>()
+    childStates.set(stream, owned)
+    const translated = translators.translateTurnEvent(
+      owned.get(childSessionId) ?? initialTranslateState,
+      own,
+      { ...context, steerAck }
+    )
+    owned.set(childSessionId, translated.state)
+    for (const outbound of translated.outbound) {
+      if (stream.dropped) return
+      if (outbound.kind !== "update") continue
+      if (event.replayed && outbound.update.sessionUpdate === "state_update")
+        continue
+      await send(childSessionId, outbound, sequence)
+    }
+  }
+
+  function reportChild(
+    parentSessionId: string,
+    reported: TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>,
+    context: TranslateContext
+  ) {
+    const { childSessionId, cancellable } = reported
+    if (!children.announce(childSessionId, parentSessionId, cancellable)) {
+      logger.warn({ parentSessionId }, "acp.child.refused")
+      return
+    }
+    return update(
+      parentSessionId,
+      translators.translateChildUpdate(reported, context)
+    )
+  }
+
+  /**
+   * A page of `owner`'s as its updates, each child Session it names announced
+   * under `owner`, the way a live report announces one: a row naming a child
+   * that may not be shown is left out, and nothing of that child follows it.
+   * A child's own transcript names its children so too.
+   */
+  function historyOutbounds(page: SessionHistoryResponse, owner: string) {
+    const messages = page.messages.filter(
+      (message) =>
+        message.role !== "activity" ||
+        message.activityType !== "CHILD_SESSION" ||
+        children.announce(message.content.childSessionId, owner, undefined)
+    )
+    return translators.translateHistory({ ...page, messages })
   }
 
   /**
@@ -432,11 +546,12 @@ export function createMemberEncoder({
     event: Extract<MemberEvent, { kind: "history" }>,
     older: { cursor: string; offset: number }
   ) {
-    const updates = historyOutbounds(event).flatMap((outbound) =>
-      outbound.kind === "update" &&
-      outbound.update.sessionUpdate !== "plan_update"
-        ? [pageUpdate(outbound.update, older.cursor)]
-        : []
+    const updates = historyOutbounds(event.page, event.sessionId).flatMap(
+      (outbound) =>
+        outbound.kind === "update" &&
+        outbound.update.sessionUpdate !== "plan_update"
+          ? [pageUpdate(outbound.update, older.cursor)]
+          : []
     )
     for (const value of updates) await update(event.sessionId, value)
     logger.info(
@@ -481,13 +596,30 @@ export function createMemberEncoder({
         return prompt(event)
       case "history":
         if (event.older) return olderPage(event, event.older)
-        for (const outbound of historyOutbounds(event))
+        for (const outbound of historyOutbounds(event.page, sessionId))
           await send(sessionId, outbound, event.sequence)
+        return
+      case "child-history":
+        // A child's transcript follows the announcement its row made.
+        if (!children.owns(event.parentSessionId, event.childSessionId)) return
+        for (const outbound of historyOutbounds(
+          event.page,
+          event.childSessionId
+        ))
+          if (outbound.kind === "update")
+            await update(
+              event.childSessionId,
+              event.older
+                ? pageUpdate(outbound.update, event.older.cursor)
+                : outbound.update
+            )
         return
       case "request-asked":
         return ask(sessionId, event.request)
       case "request-withdrawn":
         return withdraw(sessionId, event.requestId)
+      case "child":
+        return child(event)
       case "question-answered": {
         const record = answeredQuestionOutbound(event.request, event.answers)
         if (record) await send(sessionId, record, 0)

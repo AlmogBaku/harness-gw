@@ -6,6 +6,7 @@ export function openCodeCapabilities() {
   return {
     interactions: {
       steering: { status: "unavailable", reason: "native-steering-unproven" },
+      rewind: { status: "unavailable", reason: "native-rewind-unproven" },
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,

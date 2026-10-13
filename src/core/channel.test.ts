@@ -88,6 +88,9 @@ function member(
     notice(notice) {
       notices.push(notice)
     },
+    child: () => undefined,
+    offerChild: () => undefined,
+    withdrawChild: () => undefined,
   }
   return {
     fake,
@@ -922,6 +925,7 @@ describe("a membership's resume", () => {
       subscribeScope: () => () => undefined,
       subscribeReadings: () => () => undefined,
       recover: () => Promise.reject(gone),
+      childReports: () => [],
       endIfGone: (_scope: SessionScope, cause: unknown) => cause === gone,
     } as unknown as SessionCoordinator
     const { logger } = captureLogs()

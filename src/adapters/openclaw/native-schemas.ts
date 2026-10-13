@@ -72,7 +72,27 @@ export type OpenClawSession = Readonly<{
   /** `SessionRowSchema.estimatedCostUsd`: what the Session has cost so far. */
   estimatedCostUsd?: number
   toolOverrides?: OpenClawToolOverrides
+  /** The Session whose run spawned this one, for a spawned child Session. */
+  spawnedBy?: string
+  /** How many spawns deep the Session is; a top-level Session is at 0. */
+  spawnDepth?: number
+  /** `SessionRowSchema.status`: how the Session's last run stands. */
+  status?: string
 }>
+
+/**
+ * Whether a `sessions.list` row is a child Session some run spawned, by the
+ * spawn's own markers. A fork names its parent in `parentSessionKey` as a
+ * child does, so that link marks nothing.
+ */
+export function isSpawnedSession(
+  row: Readonly<{ spawnedBy?: unknown; spawnDepth?: unknown }>
+) {
+  return (
+    (typeof row.spawnedBy === "string" && row.spawnedBy.length > 0) ||
+    (typeof row.spawnDepth === "number" && row.spawnDepth >= 1)
+  )
+}
 
 export type OpenClawCreatedSession = Readonly<{
   key: string
@@ -190,6 +210,38 @@ export function openClawCreateSessionParams(agentId: string) {
   })
 }
 
+/** The longest title `sessions.create` takes as a `displayName`. */
+const MAX_DISPLAY_NAME = 500
+
+/**
+ * A fork of `parentSessionKey` through `sessions.create`. A running parent
+ * forks only through its last completed reply. The fork inherits no title, so
+ * it is given one, as a `displayName`: a `label` belongs to one Session alone.
+ * Overrides the call names replace the inherited ones, so it restates the
+ * parent's with the `aos-ui` server enabled. `idempotencyKey` keeps a create
+ * that is sent twice one fork.
+ */
+export function openClawForkSessionParams(
+  agentId: string,
+  parentSessionKey: string,
+  parent: Readonly<{
+    running: boolean
+    title: string
+    toolOverrides: OpenClawToolOverrides | undefined
+  }>,
+  idempotencyKey: string
+) {
+  return official(SessionsCreateParamsSchema, {
+    agentId,
+    parentSessionKey,
+    fork: true,
+    ...(parent.running ? { forkFrom: "last-completed" as const } : {}),
+    displayName: `${parent.title} (fork)`.slice(0, MAX_DISPLAY_NAME),
+    toolOverrides: aosToolOverrides(parent.toolOverrides),
+    idempotencyKey,
+  })
+}
+
 /** Whether a Session's overlay already enables the `aos-ui` MCP server. */
 export function enablesAosTools(overrides: OpenClawToolOverrides | undefined) {
   return overrides?.mcpServers?.[AOS_MCP_SERVER] === true
@@ -204,11 +256,18 @@ export function aosToolsPatch(
   current: OpenClawToolOverrides | undefined
 ): OpenClawSessionPatch {
   return {
-    toolOverrides: {
-      ...current,
-      mcpServers: { ...current?.mcpServers, [AOS_MCP_SERVER]: true },
-    },
+    toolOverrides: aosToolOverrides(current),
     expectedToolOverrides: current ?? null,
+  }
+}
+
+/** `current` with the `aos-ui` MCP server enabled and every other override kept. */
+function aosToolOverrides(
+  current: OpenClawToolOverrides | undefined
+): OpenClawToolOverrides {
+  return {
+    ...current,
+    mcpServers: { ...current?.mcpServers, [AOS_MCP_SERVER]: true },
   }
 }
 
@@ -435,6 +494,13 @@ export function parseOpenClawSession(value: unknown): OpenClawSession {
     throw new OpenClawNativePayloadError()
   if (value.toolOverrides !== undefined)
     official(SessionToolOverridesSchema, value.toolOverrides)
+  if (
+    value.spawnDepth !== undefined &&
+    (typeof value.spawnDepth !== "number" ||
+      !Number.isFinite(value.spawnDepth) ||
+      value.spawnDepth < 0)
+  )
+    throw new OpenClawNativePayloadError()
   return {
     key,
     ...(optionalString(value.agentId)
@@ -489,6 +555,13 @@ export function parseOpenClawSession(value: unknown): OpenClawSession {
     ...(value.toolOverrides === undefined
       ? {}
       : { toolOverrides: value.toolOverrides as OpenClawToolOverrides }),
+    ...(string(value.spawnedBy)
+      ? { spawnedBy: value.spawnedBy as string }
+      : {}),
+    ...(value.spawnDepth === undefined
+      ? {}
+      : { spawnDepth: value.spawnDepth as number }),
+    ...(string(value.status, 64) ? { status: value.status as string } : {}),
   }
 }
 

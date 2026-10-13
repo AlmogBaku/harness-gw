@@ -427,10 +427,11 @@ in the log); catch-up happens through a standard `session/resume` with
 
 **Client**: exponential backoff 250 ms → 5 000 ms
 (`client/connection.ts`). The client rejoins each
-resumed Session via `session/resume` with `_meta.hgw.after` (last sequence)
-and `turnId` (`protocol/acp.ts`); a cursor the gateway can no longer
-answer is rebuilt from history in that same resume. Guest re-logins before
-resuming.
+resumed Session via `session/resume` with the `_hgw/position` cursor: the
+`turnId` and the first sequence it still needs (`protocol/acp.ts`). A cursor
+the gateway can no longer answer is rebuilt from history in that same resume.
+A resume that names no cursor replays nothing, as ACP asks. Guest re-logins
+before resuming.
 
 **Gateway**: coordinator journal holds every event of a turn segment, bounded by
 the subscriber limits (`limits.subscriberEvents`/`limits.subscriberBytes`). Adjacent text
@@ -548,16 +549,20 @@ except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 `src/acp/validation.ts`.
 
 **JSON-RPC extension codes** (`protocol/acp.ts`, `HGW_JSONRPC_ERRORS`):
-ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
-(method not found), `-32602` (invalid request), `-32800` (request cancelled);
-HGW block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
-revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
-`-31015` unsupported, `-31016` requestTooLarge (raised by the client before
-sending; never sent by the gateway). Codes `-32001` through `-32009` are no
-longer used.
+ACP standard codes `-32000` (authentication required), `-32002` (resource not
+found), `-32601` (method not found), `-32602` (invalid params), `-32800`
+(request cancelled); HGW block `-31010` turnInProgress, `-31011` staleRequest,
+`-31012` revisionConflict, `-31013` temporarilyUnavailable, `-31014`
+uncertainMutation, `-31016` requestTooLarge (raised by the client before
+sending; never sent by the gateway). A method a connection may not use, a
+guest's `session/new` among them, answers ACP's `-32601`, whose meaning
+includes "not available", and a request the runtime cannot take, such as an
+Agent field it has no place for, answers `-32602`. Codes `-32001` through
+`-32009`, and `-31015`, are no longer used.
 
-**Vendor stop reasons** on `state_update { state: "idle" }`: `_hgw_error`,
-`_hgw_uncertain` (`protocol/acp.ts`).
+**Stop reasons and states** are ACP's own: a failed turn ends `idle` with the
+`error` stop reason, and a turn the gateway cannot observe reports the
+`unknown` state until a recover confirms it or its deadline ends it.
 
 All errors pass through `redactForLog`. Native bodies, credentials, paths, and
 stack traces never cross either listener.

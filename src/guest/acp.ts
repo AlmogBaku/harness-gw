@@ -117,6 +117,8 @@ function createGuestAuthentication(
     | undefined
   let close: (() => void) | undefined
   let timer: unknown
+  /** Moves at each logout, so a login that started before one commits nothing. */
+  let generation = 0
 
   const lapsed = () =>
     redeemed !== undefined && now() >= redeemed.grant.expiresAt
@@ -134,6 +136,7 @@ function createGuestAuthentication(
     extensions: GUEST_EXTENSIONS,
 
     async authenticate(token) {
+      const started = generation
       const identity = await options.invitations.verify(token)
       if (!identity || !guestAuthorizationActive(identity, now)) return false
       // The listener shows the conversation's text, App cards, artifacts, the
@@ -163,8 +166,9 @@ function createGuestAuthentication(
           ? { firstTurnInstruction: identity.firstTurn.instruction }
           : {}),
       }
-      // A connection acts as one invitation for its whole life.
-      if (redeemed) return false
+      // A connection acts as one invitation at a time, and a logout since the
+      // login began ends it before it starts.
+      if (redeemed || generation !== started) return false
       redeemed = {
         grant,
         member: {
@@ -178,6 +182,15 @@ function createGuestAuthentication(
         },
       }
       arm()
+      return true
+    },
+
+    logout() {
+      generation += 1
+      if (!redeemed) return false
+      redeemed = undefined
+      if (timer !== undefined) cancel(timer)
+      timer = undefined
       return true
     },
 

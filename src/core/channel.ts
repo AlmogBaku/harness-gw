@@ -14,6 +14,7 @@ import type {
   SessionModelUpdateRequest,
 } from "../../protocol"
 import {
+  CHILD_FOLLOW_GRACE_MS,
   JOIN_DEADLINE_MS,
   PAUSED_DEADLINE_MS,
   READING_BACKOFF,
@@ -22,13 +23,17 @@ import {
 import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
   isAwaitingStopFailure,
+  isChildTurnEvent,
   isRedialableFailure,
+  ChildSessionStatus,
   ReplyStatus,
   TurnEventKind,
+  type ChildTurnEvent,
   type ExecutionEvent,
   type PendingRequest,
   type RequestReply,
   type TurnEvent,
+  type TurnEventOf,
 } from "./events"
 import {
   CommandRefusedError,
@@ -52,7 +57,6 @@ import {
   type SessionScope,
 } from "./runtime"
 import {
-  clientTurnIds,
   ReplayCursorLostError,
   type CoordinatedTurnSubscription,
   type CoordinatorAccess,
@@ -100,6 +104,14 @@ export type MembershipDelivery = {
   report(cause: unknown): void
   /** Show the member a status the runtime announced, live only. */
   notice(notice: SessionNotice): void
+  /**
+   * Show the member one report or event of a child still at work after the
+   * turn that spawned it, `turnId`, ended; live only.
+   */
+  child(turnId: string, event: ChildTurnEvent): void
+  /** Offer the member a request such a child asks, or withdraw one. */
+  offerChild(request: PendingRequest): void
+  withdrawChild(requestId: string): void
 }
 
 export type Channels = ReturnType<typeof createChannels>
@@ -128,6 +140,18 @@ type Delivery = {
 type Channel = {
   turn?: ChannelTurn
   memberships: Map<MembershipDelivery, Delivery>
+  /**
+   * The open requests of children that outlived their turn, which no turn
+   * carries: each is offered to every member, one who joins later included.
+   */
+  childRequests: Map<string, PendingRequest>
+  /**
+   * The latest report of each child that outlived its turn, under that turn,
+   * restated to every member who joins later.
+   */
+  children: Map<string, BackgroundChild>
+  /** The close of a channel nobody watches, held for its background children. */
+  lingering?: unknown
   /** Ends the channel's turn subscription and its execution feed. */
   unsubscribe?: () => void
   /** One adoption runs at a time; a trigger meanwhile asks for one more. */
@@ -143,7 +167,24 @@ type Channel = {
   generation: number
 }
 
+type ChildReport = TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>
+
+type BackgroundChild = {
+  turnId: string
+  report: ChildReport
+  /** When its reports first left it no longer at work, on the channels' clock. */
+  endedAt?: number
+}
+
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
+
+/** Whether a child's report leaves it at work. */
+function atWork(report: ChildReport) {
+  return (
+    report.status === ChildSessionStatus.Running ||
+    report.status === ChildSessionStatus.WaitingForInput
+  )
+}
 
 /**
  * How a declined permission is answered: the one-time refusal when the
@@ -165,10 +206,16 @@ function declineReply(request: PendingRequest): RequestReply {
 export type ResumePosition = { turnId?: string; after?: number }
 
 /**
- * How a resume builds its view: rebuilt from history `fromStart`, and from
- * the newest page alone for a member that `paged` older history itself.
+ * How a resume builds its view: rebuilt from history `fromStart`, followed
+ * from its position when `positioned` and from the live turn's next event
+ * otherwise, and rebuilt from the newest page alone for a member that `paged`
+ * older history itself.
  */
-export type ResumeView = { fromStart: boolean; paged: boolean }
+export type ResumeView = {
+  fromStart: boolean
+  positioned: boolean
+  paged: boolean
+}
 
 /**
  * How history is read: the bounded `pageSize` one from-start read or one
@@ -440,6 +487,8 @@ function createChannelTable({
 
   /** Ends a memberless channel's feeds and its pending retry. */
   function close(channel: Channel) {
+    clock.clearTimeout(channel.lingering)
+    channel.lingering = undefined
     channel.generation += 1
     clock.clearTimeout(channel.retry)
     channel.retry = undefined
@@ -463,6 +512,55 @@ function createChannelTable({
     adoptLater(channel)
   }
 
+  /** A child's request ended: no member offers it any more. */
+  function endChildRequest(channel: Channel, requestId: string) {
+    if (!channel.childRequests.delete(requestId)) return
+    for (const member of channel.memberships.keys())
+      member.withdrawChild(requestId)
+  }
+
+  /** Folds a background child's report into the one restated to a joiner. */
+  function noteChild(channel: Channel, turnId: string, report: ChildReport) {
+    const known = channel.children.get(report.childSessionId)
+    const merged = known ? { ...known.report, ...report } : report
+    channel.children.set(report.childSessionId, {
+      turnId,
+      report: merged,
+      ...(atWork(merged) ? {} : { endedAt: known?.endedAt ?? clock.now() }),
+    })
+  }
+
+  /**
+   * The background children a member who joins now is told of: each still at
+   * work, and each that ended within the grace, which a reload or a reconnect
+   * may have missed. One over for longer is forgotten.
+   */
+  function currentChildren(channel: Channel) {
+    const now = clock.now()
+    for (const [childSessionId, { endedAt }] of channel.children)
+      if (endedAt !== undefined && now - endedAt >= CHILD_FOLLOW_GRACE_MS)
+        channel.children.delete(childSessionId)
+    return [...channel.children.values()]
+  }
+
+  /**
+   * The last member left. A child that outlived its turn is still followed
+   * for a while, so a reload or a reconnect comes back to it followed, and
+   * reads how it ended if it ended meanwhile.
+   */
+  function vacate(key: string, channel: Channel) {
+    const retire = () => {
+      if (channel.memberships.size > 0 || channels.get(key) !== channel) return
+      channels.delete(key)
+      close(channel)
+    }
+    if (currentChildren(channel).length === 0) return retire()
+    channel.lingering = clock.setTimeout(() => {
+      channel.lingering = undefined
+      retire()
+    }, CHILD_FOLLOW_GRACE_MS)
+  }
+
   function subscribe(scope: SessionScope, channel: Channel) {
     if (!adoption) return
     const unsubscribeExecutions = adoption.subscribeExecutions(scope, (event) =>
@@ -474,6 +572,18 @@ function createChannelTable({
       onNotice: (notice) => {
         for (const member of channel.memberships.keys()) member.notice(notice)
       },
+      onChild: (turnId, event) => {
+        if (event.kind === TurnEventKind.ChildSessionUpdated)
+          noteChild(channel, turnId, event)
+        for (const member of channel.memberships.keys())
+          member.child(turnId, event)
+      },
+      onChildRequest: (_turnId, request) => {
+        channel.childRequests.set(request.requestId, request)
+        for (const member of channel.memberships.keys())
+          member.offerChild(request)
+      },
+      onChildRequestEnded: (requestId) => endChildRequest(channel, requestId),
     })
     channel.unsubscribe = () => {
       unsubscribeTurns()
@@ -482,6 +592,26 @@ function createChannelTable({
   }
 
   return {
+    /**
+     * Whether the Session has children that outlived their turns, at work or
+     * over within the grace, whose updates no turn's journal kept.
+     */
+    followsChildren(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      return channel !== undefined && currentChildren(channel).length > 0
+    },
+
+    /** A request a child that outlived its turn asks, while it is open. */
+    childRequest(scope: ChannelScope, requestId: string) {
+      return channels.get(channelKey(scope))?.childRequests.get(requestId)
+    },
+
+    /** Ends one child's request, as its answer just did. */
+    endChildRequest(scope: ChannelScope, requestId: string) {
+      const channel = channels.get(channelKey(scope))
+      if (channel) endChildRequest(channel, requestId)
+    },
+
     add(
       scope: SessionScope,
       member: MembershipDelivery,
@@ -491,19 +621,33 @@ function createChannelTable({
       let channel = channels.get(key)
       const created = !channel
       if (!channel) {
-        channel = { memberships: new Map(), failures: 0, generation: 0 }
+        channel = {
+          memberships: new Map(),
+          childRequests: new Map(),
+          children: new Map(),
+          failures: 0,
+          generation: 0,
+        }
         channels.set(key, channel)
       }
       const joined = channel
       const remove = () => {
         joined.memberships.delete(member)
-        if (joined.memberships.size === 0 && channels.get(key) === joined) {
-          channels.delete(key)
-          close(joined)
-        }
+        if (joined.memberships.size === 0 && channels.get(key) === joined)
+          vacate(key, joined)
       }
       if (joined.memberships.has(member)) return remove
+      const lingered = joined.lingering !== undefined
+      clock.clearTimeout(joined.lingering)
+      joined.lingering = undefined
       join(joined, member, { scope, fromChannel: false }, options.hasPrompt)
+      // A turn the runtime started while nobody watched found no member to
+      // adopt it as.
+      if (lingered) adoptLater(joined)
+      for (const { turnId, report } of currentChildren(joined))
+        member.child(turnId, report)
+      for (const request of joined.childRequests.values())
+        member.offerChild(request)
       // Subscribed once the first member joins, so a turn already running
       // has someone to adopt it as.
       if (created) subscribe(scope, joined)
@@ -610,7 +754,7 @@ type CreateChannelsOptions = Omit<
 > & {
   coordinator: SessionCoordinator
   /** Where a resume and an older page read the Session's history. */
-  runtime: Pick<ServerRuntime, "history">
+  runtime: Pick<ServerRuntime, "history" | "childHistory">
   clock?: Clock
   /** Defaults to `HISTORY_REACH`; a small one stands for a long Session. */
   historyReach?: HistoryReach
@@ -637,6 +781,11 @@ type MembershipContext = MembershipOptions & {
     scope: SessionScope,
     paged: boolean
   ) => Promise<SessionHistoryResponse>
+  /** A child Session's whole transcript, where the runtime keeps one. */
+  readChildHistory: (
+    scope: SessionScope,
+    childSessionId: string
+  ) => Promise<SessionHistoryResponse> | undefined
 }
 
 /**
@@ -762,6 +911,14 @@ export function createChannels(options: CreateChannelsOptions) {
     }
   }
 
+  function readChildHistory(scope: SessionScope, childSessionId: string) {
+    return runtime.childHistory?.(
+      scope.agentId,
+      scope.providerSessionId,
+      childSessionId
+    )
+  }
+
   return {
     ...channels,
     historyReach,
@@ -779,7 +936,7 @@ export function createChannels(options: CreateChannelsOptions) {
         channels,
         member,
         scope,
-        { ...membership, coordinator, clock, readReplay },
+        { ...membership, coordinator, clock, readReplay, readChildHistory },
         owner
       )
     },
@@ -849,6 +1006,16 @@ export function createChannels(options: CreateChannelsOptions) {
      */
     createSession(agentId: string, input: CreateInput, principalId: string) {
       return coordinator.createSession(agentId, input, principalId)
+    },
+
+    /** Whether the runtime forks Sessions. */
+    get forks() {
+      return coordinator.forks
+    },
+
+    /** Forks a Session into a new one, answered as `createSession` answers. */
+    forkSession(scope: SessionScope) {
+      return coordinator.forkSession(scope)
     },
 
     /**
@@ -926,6 +1093,13 @@ class Membership {
   #rebuilding = false
   /** The notices that arrived while the view was rebuilt, shown after its page. */
   #heldNotices: SessionNotice[] = []
+  /** Background child events held, as notices are, while the view rebuilds. */
+  #heldChildren: { turnId: string; event: ChildTurnEvent }[] = []
+  /**
+   * The stream a background child event names, one per turn that spawned
+   * it, so a transport keys the child's state the same across its events.
+   */
+  readonly #backgroundStreams = new Map<string, TurnStream>()
   /** The last stream this member was shown, settling once it has shown all. */
   #streamed: { turnId: string; done: Promise<void> } | undefined
   /**
@@ -992,6 +1166,12 @@ class Membership {
         if (this.#rebuilding) this.#heldNotices.push(notice)
         else this.#showNotice(notice)
       },
+      child: (turnId, event) => {
+        if (this.#rebuilding) this.#heldChildren.push({ turnId, event })
+        else this.#showBackgroundChild(turnId, event)
+      },
+      offerChild: (request) => this.#offerChild(request),
+      withdrawChild: (requestId) => this.#withdraw(requestId),
     }
   }
 
@@ -1035,7 +1215,16 @@ class Membership {
     try {
       shown = runEvents(
         this.#member.middleware,
-        { sessionId: this.#addressed.sessionId, ...event },
+        {
+          // A child's event is the child's, under its own id.
+          sessionId:
+            event.kind === "child"
+              ? event.event.childSessionId
+              : event.kind === "child-history"
+                ? event.childSessionId
+                : this.#addressed.sessionId,
+          ...event,
+        },
         { decline: (requestId) => declines.add(requestId) }
       )
     } catch (cause) {
@@ -1075,7 +1264,11 @@ class Membership {
    */
   resume(
     position: ResumePosition,
-    view: ResumeView = { fromStart: false, paged: this.#paged }
+    view: ResumeView = {
+      fromStart: false,
+      positioned: true,
+      paged: this.#paged,
+    }
   ) {
     this.#releaseCells()
     // The resume answers before its join lands; a Session found gone between
@@ -1088,24 +1281,23 @@ class Membership {
       )
     this.#send({ type: "join" })
     this.#paged = view.paged
-    return unlessAborted(
-      this.#resume(position, view.fromStart),
-      this.#detaching
-    ).catch((cause: unknown) => {
-      // A join its deadline cut short; the membership's log names its Session.
-      if (cause instanceof MembershipDetachedError && !this.#parted)
-        this.#options.logger.warn(
-          { agentId: this.#addressed.agentId, waitingOn: this.#resuming },
-          "membership.join.expired"
-        )
-      this.endIfGone(cause)
-      throw cause
-    })
+    return unlessAborted(this.#resume(position, view), this.#detaching).catch(
+      (cause: unknown) => {
+        // A join its deadline cut short; the membership's log names its Session.
+        if (cause instanceof MembershipDetachedError && !this.#parted)
+          this.#options.logger.warn(
+            { agentId: this.#addressed.agentId, waitingOn: this.#resuming },
+            "membership.join.expired"
+          )
+        this.endIfGone(cause)
+        throw cause
+      }
+    )
   }
 
   async #resume(
     position: ResumePosition,
-    fromStart: boolean
+    { fromStart, positioned }: ResumeView
   ): Promise<{ history?: SessionHistoryResponse }> {
     // A fresh invitation has no history to replay and no turn to follow.
     if (this.pending) return {}
@@ -1113,10 +1305,11 @@ class Membership {
     this.#restating = true
     try {
       this.#resuming = "follow"
-      const history =
-        fromStart || !(await this.#followPositioned(position))
-          ? await this.#replay()
-          : undefined
+      let history: SessionHistoryResponse | undefined
+      if (fromStart) history = await this.#replay()
+      else if (!positioned) await this.#followNext()
+      else if (!(await this.#followPositioned(position)))
+        history = await this.#replay()
       this.#resuming = "report"
       await this.#reportView()
       return history === undefined ? {} : { history }
@@ -1175,7 +1368,14 @@ class Membership {
   async #rebuild() {
     if (this.detached || this.pending) return
     try {
-      await this.#resume({}, true)
+      await this.#resume(
+        {},
+        {
+          fromStart: true,
+          positioned: false,
+          paged: this.#paged,
+        }
+      )
     } catch (cause) {
       this.#send({ type: "fell-behind" })
       await this.report(cause)
@@ -1226,17 +1426,62 @@ class Membership {
     return this.#showHistory(live ? withoutLiveRows(page, live) : page, older)
   }
 
-  /** Shows this member a history page at the cursor it has reached. */
-  #showHistory(
+  /**
+   * Whether this member's stack shows it a child's transcript at all, asked
+   * with an empty one before the runtime is asked for the real one.
+   */
+  #showsChildHistory(childSessionId: string, page: SessionHistoryResponse) {
+    return (
+      runEvents(
+        this.#member.middleware,
+        {
+          sessionId: childSessionId,
+          kind: "child-history",
+          parentSessionId: this.#addressed.sessionId,
+          childSessionId,
+          page: { ...page, sessionId: childSessionId, messages: [] },
+        },
+        { decline: () => undefined }
+      ) !== undefined
+    )
+  }
+
+  /**
+   * Shows this member a history page at the cursor it has reached, then the
+   * whole transcript of each child Session the page names, under the child's
+   * id. One the member's stack would not show it is not read.
+   */
+  async #showHistory(
     page: SessionHistoryResponse,
     older?: { cursor: string; offset: number }
   ) {
-    return this.emit({
+    await this.emit({
       kind: "history",
       page,
       sequence: this.#sequence,
       ...(older ? { older } : {}),
     })
+    for (const message of page.messages) {
+      if (message.role !== "activity") continue
+      if (message.activityType !== "CHILD_SESSION") continue
+      const { childSessionId } = message.content
+      if (!this.#showsChildHistory(childSessionId, page)) continue
+      const transcript = await this.#options
+        .readChildHistory(this.#scope, childSessionId)
+        ?.catch((err: unknown) => {
+          // A child whose transcript cannot be read is still announced.
+          this.#options.logger.warn({ err }, "membership.child_history.failed")
+          return undefined
+        })
+      if (transcript)
+        await this.emit({
+          kind: "child-history",
+          parentSessionId: this.#addressed.sessionId,
+          childSessionId,
+          page: transcript,
+          ...(older ? { older } : {}),
+        })
+    }
   }
 
   /**
@@ -1303,6 +1548,7 @@ class Membership {
   async #recoverReplay(needsFollow: boolean) {
     // A view that was not rebuilt shows nothing it held for after its page.
     this.#heldNotices = []
+    this.#heldChildren = []
     this.#rebuilding = false
     if (needsFollow) {
       this.joinChannel(false, true)
@@ -1361,9 +1607,11 @@ class Membership {
    * Follows the live turn from `position`, returning whether the view holds
    * the Session from there: a cursor for another turn, one the journal no
    * longer holds, or none beside a turn the journal cannot replay whole
-   * leaves the view to be rebuilt from history.
+   * leaves the view to be rebuilt from history. So does a child that outlived
+   * its turn, whose updates no journal keeps.
    */
   async #followPositioned(position: ResumePosition) {
+    if (this.#channels.followsChildren(this.#scope)) return false
     this.joinChannel(showsPrompt(this.#channels.current(this.#scope), position))
     const { state, turnId } = this.#coordinator.snapshot(this.#scope)
     if (position.turnId !== undefined && position.turnId !== turnId)
@@ -1378,6 +1626,7 @@ class Membership {
     // A settled turn streams nothing more: the view holds it once its cursor
     // reached the turn's last event.
     if (state === "idle") return this.#coordinator.holds(this.#scope, after)
+    if (turnId !== undefined) await this.#reannounceChildren(turnId, after)
     return this.#follow(true, after).then(
       () => true,
       (cause: unknown) => {
@@ -1386,6 +1635,42 @@ class Membership {
         return false
       }
     )
+  }
+
+  /**
+   * Follows the live turn from the next event it streams, as a resume that
+   * names no cursor asks: the view is shown nothing that came before, not even
+   * the turn's prompt, and is never rebuilt from history.
+   */
+  async #followNext() {
+    this.joinChannel(true)
+    await this.#follow(true, "next")
+  }
+
+  /**
+   * Announces again each child Session the live turn reported up to the
+   * view's cursor: the view holds them, but its connection may be a new one,
+   * which knows none, and the events after the cursor are theirs too.
+   */
+  async #reannounceChildren(turnId: string, after: number) {
+    const stream: TurnStream = {
+      turnId,
+      replayedCorrections: 0,
+      dropped: false,
+    }
+    for (const { sequence, event } of this.#coordinator.childReports(
+      this.#scope,
+      turnId,
+      after
+    ))
+      await this.emit({
+        kind: "child",
+        parentSessionId: this.#addressed.sessionId,
+        stream,
+        sequence,
+        event,
+        replayed: true,
+      })
   }
 
   /**
@@ -1419,11 +1704,6 @@ class Membership {
   ): Promise<CommandResults["send"]> {
     // Joined before admission, so a turn that wins the race still reaches it.
     this.joinChannel()
-    const ids = clientTurnIds(
-      this.#member.principal.id,
-      this.#scope.sessionId,
-      input.clientId
-    )
     // Entered from the admission to the showing, so no follow subscribes this
     // member to the turn first. A first admission enters once its prompt is
     // prepared, so a slow one keeps no other turn from reaching this member.
@@ -1471,8 +1751,8 @@ class Membership {
       throw cause
     }
     const release = await enter()
-    // The prompt goes by the id its provider stored it under.
-    const messageId = subscription.messageId ?? ids.messageId
+    // The prompt goes by the id its provider stored it under, where it did.
+    const { messageId } = subscription
     let turn: ChannelTurn
     try {
       if (subscription.turnId === this.#followedTurn) {
@@ -1514,8 +1794,12 @@ class Membership {
     // The notices held while the view was rebuilt follow its page.
     const held = this.#heldNotices
     this.#heldNotices = []
+    const children = this.#heldChildren
+    this.#heldChildren = []
     if (this.detached) return
     for (const notice of held) this.#showNotice(notice)
+    for (const { turnId, event } of children)
+      this.#showBackgroundChild(turnId, event)
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
@@ -1549,6 +1833,11 @@ class Membership {
   /** Brings this member alone into whatever turn the channel is running. */
   catchUp() {
     return this.#channels.catchUp(this.#scope, this.#delivery)
+  }
+
+  /** Stops one child Session this Session's live turn spawned. */
+  cancelChild(childSessionId: string) {
+    return this.#coordinator.stopChild(this.#scope, childSessionId)
   }
 
   /** Requests Stop, reporting an unsettled provider as `stopping`. */
@@ -1706,7 +1995,8 @@ class Membership {
    */
   request(requestId: string) {
     const request = this.#delivered.has(requestId)
-      ? this.#openRequest(requestId)
+      ? (this.#openRequest(requestId) ??
+        this.#channels.childRequest(this.#scope, requestId))
       : undefined
     if (!request) throw new ServerRequestStaleError()
     return request
@@ -1746,6 +2036,13 @@ class Membership {
     // is not withdrawn its own request, and a second decline finds none.
     this.#offered.delete(reply.requestId)
     this.#delivered.delete(reply.requestId)
+    // A child that outlived its turn asks outside any turn: its runtime takes
+    // the answer, and no turn continues.
+    if (this.#channels.childRequest(this.#scope, reply.requestId)) {
+      await this.#coordinator.respondChild(this.#scope, reply)
+      this.#channels.endChildRequest(this.#scope, reply.requestId)
+      return
+    }
     const continued = await this.#coordinator.answer(this.#scope, reply)
     if (!continued) return
     this.#channels.continueTurn(this.#scope, continued.from, continued.turnId)
@@ -1800,7 +2097,7 @@ class Membership {
    */
   #follow(
     refollow: boolean,
-    after?: number,
+    after?: number | "next",
     replayedCorrections = 0,
     ended?: string
   ) {
@@ -1811,7 +2108,11 @@ class Membership {
         return undefined
       const carried = refollow ? this.#subscription?.turnId : this.#followedTurn
       if (carried === turnId) return turnId
-      const cursor = after ?? this.#startCursor(refollow)
+      const cursor =
+        after === "next"
+          ? this.#coordinator.nextCursor(this.#scope)
+          : (after ?? this.#startCursor(refollow))
+      if (after === "next" && cursor === undefined) return undefined
       let subscription
       try {
         subscription = await this.#coordinator.recover(
@@ -1877,6 +2178,37 @@ class Membership {
    */
   #deliver(event: SessionEvent) {
     return this.emit(event).catch((cause: unknown) => this.report(cause))
+  }
+
+  /**
+   * Shows one event of a child that outlived its turn: the child's own, under
+   * its id, at no position in the turn that spawned it.
+   */
+  #showBackgroundChild(turnId: string, event: ChildTurnEvent) {
+    let stream = this.#backgroundStreams.get(turnId)
+    if (!stream) {
+      stream = { turnId, replayedCorrections: 0, dropped: false }
+      this.#backgroundStreams.set(turnId, stream)
+    }
+    this.#deliver({
+      kind: "child",
+      parentSessionId: this.#addressed.sessionId,
+      stream,
+      sequence: 0,
+      event,
+      background: true,
+    }).catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.child.failed")
+    )
+  }
+
+  /** Asks this member a request a child that outlived its turn asks. */
+  #offerChild(request: PendingRequest) {
+    if (this.#offered.has(request.requestId)) return
+    this.#offered.add(request.requestId)
+    this.emit({ kind: "request-asked", request }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.request.offer.failed")
+    )
   }
 
   /** Shows one notice, which nothing awaits or retries. */
@@ -1977,15 +2309,27 @@ class Membership {
         this.#sequence = sequence
         interrupted = isRedialableFailure(event)
         const replayed = view.restating && buffered > 0
-        await this.emit({
-          kind: "turn",
-          stream,
-          sequence,
-          event,
-          stopping: this.#stopping,
-          ...(replayed ? { replayed: true as const } : {}),
-        })
-        if (!replayed) {
+        // A child Session's report or event is the child's, under its id.
+        await this.emit(
+          isChildTurnEvent(event)
+            ? {
+                kind: "child",
+                parentSessionId: this.#addressed.sessionId,
+                stream,
+                sequence,
+                event,
+                ...(replayed ? { replayed: true as const } : {}),
+              }
+            : {
+                kind: "turn",
+                stream,
+                sequence,
+                event,
+                stopping: this.#stopping,
+                ...(replayed ? { replayed: true as const } : {}),
+              }
+        )
+        if (!replayed && !isChildTurnEvent(event)) {
           this.#stated = statedBy(event) ?? this.#stated
           if (
             event.kind === TurnEventKind.TurnRequiresAction &&

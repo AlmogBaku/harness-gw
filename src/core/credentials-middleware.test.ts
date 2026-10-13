@@ -7,6 +7,8 @@ import {
   PendingRequestKind,
   ReplyStatus,
   TurnEventKind,
+  type ChildTurnEvent,
+  type OwnTurnEvent,
   type PendingRequest,
   type TurnEvent,
 } from "./events"
@@ -122,17 +124,11 @@ describe("credentials middleware: tool data, for every runtime and both listener
   })
 
   // A path or a patch a mask would break is dropped, not masked.
-  it("drops a location, a diff, a working directory, and a subagent's file that carry a credential, masking its prose", () => {
+  it("drops a location, a diff, and a working directory that carry a credential", () => {
     const leaked = `/srv/${assigned("token")}`
     const started = shownTurn({
       ...open,
       locations: [{ path: "/srv/app/a.ts" }, { path: leaked }],
-      subagent: {
-        id: "sub-1",
-        goal: `log in with ${assigned("password")}`,
-        summary: "Read the logs.",
-        filesRead: ["/srv/app/a.ts", leaked],
-      },
     })
     const finished = shownTurn({
       kind: TurnEventKind.ToolCallFinished,
@@ -156,12 +152,6 @@ describe("credentials middleware: tool data, for every runtime and both listener
 
     expect(started).toMatchObject({
       locations: [{ path: "/srv/app/a.ts" }],
-      subagent: {
-        id: "sub-1",
-        goal: `log in with ${assigned("password", M)}`,
-        summary: "Read the logs.",
-        filesRead: ["/srv/app/a.ts"],
-      },
     })
     expect(finished).toMatchObject({
       diffs: [
@@ -171,6 +161,99 @@ describe("credentials middleware: tool data, for every runtime and both listener
       ],
     })
     expect(JSON.stringify([started, finished, terminal])).not.toContain(SECRET)
+  })
+
+  // A child Session's report and its own events reach a member as the
+  // child's, so the masker reads them where they travel: on a child event.
+  it("masks a child Session's report and its own tool data, dropping a file that carries a credential", () => {
+    const leaked = `/srv/${assigned("token")}`
+    const shownChild = (event: ChildTurnEvent) => {
+      const shown = runEvents(
+        operator,
+        {
+          sessionId: "child-1",
+          kind: "child",
+          parentSessionId: "s1",
+          stream: { turnId: "turn-1", replayedCorrections: 0, dropped: false },
+          sequence: 1,
+          event,
+        },
+        { decline }
+      )
+      return shown?.kind === "child" ? shown.event : undefined
+    }
+
+    const reported = shownChild({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+      title: `log in with ${assigned("password")}`,
+      description: "Read the logs.",
+      summary: `found ${assigned("api_key")}`,
+      filesRead: ["/srv/app/a.ts", leaked],
+    })
+    const called = shownChild({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "child-1",
+      event: {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "c1",
+        output: `env: ${assigned("token")}`,
+        failed: false,
+      },
+    })
+
+    expect(reported).toMatchObject({
+      title: `log in with ${assigned("password", M)}`,
+      description: "Read the logs.",
+      filesRead: ["/srv/app/a.ts"],
+    })
+    expect(JSON.stringify([reported, called])).not.toContain(SECRET)
+  })
+
+  it("masks a stored child Session as its live report was", () => {
+    const leaked = `/srv/${assigned("token")}`
+    const page: MemberEvent = {
+      sessionId: "s1",
+      kind: "history",
+      sequence: 0,
+      page: {
+        sessionId: "s1",
+        messages: [
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: {
+              childSessionId: "child-1",
+              title: `log in with ${assigned("password")}`,
+              summary: "Read the logs.",
+              filesWritten: ["/srv/app/a.ts", leaked],
+            },
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      },
+    }
+
+    const masked = shown(page)
+
+    expect(masked).toMatchObject({
+      page: {
+        messages: [
+          {
+            content: {
+              title: `log in with ${assigned("password", M)}`,
+              summary: "Read the logs.",
+              filesWritten: ["/srv/app/a.ts"],
+            },
+          },
+        ],
+      },
+    })
+    expect(JSON.stringify(masked)).not.toContain(SECRET)
   })
 
   it("sends JSON arguments with nothing to mask exactly as written", () => {
@@ -309,6 +392,56 @@ describe("credentials middleware: questions", () => {
   })
 
   // The tool that asked is part of the question: its call carries the operator's answers.
+  // A child asks its questions through the same tool, so its call is part of
+  // the question too; the child's other tool data is masked as any is.
+  it("shows the operator a child Session's question tool call as written, masking its other calls", () => {
+    const stack = [createCredentialsMiddleware()]
+    const shownChild = (event: OwnTurnEvent) => {
+      const shown = runEvents(
+        stack,
+        {
+          sessionId: "child-1",
+          kind: "child",
+          parentSessionId: "s1",
+          stream: { turnId: "turn-1", replayedCorrections: 0, dropped: false },
+          sequence: 1,
+          event: {
+            kind: TurnEventKind.ChildSessionEvent,
+            childSessionId: "child-1",
+            event,
+          },
+        },
+        { decline }
+      )
+      return shown?.kind === "child" &&
+        shown.event.kind === TurnEventKind.ChildSessionEvent
+        ? shown.event.event
+        : undefined
+    }
+    const asked: OwnTurnEvent[] = [
+      {
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "q1",
+        title: "question",
+        name: "question",
+      },
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: "q1",
+        delta: JSON.stringify({ question: `Use ${assigned("token")}?` }),
+      },
+    ]
+    const other: OwnTurnEvent = {
+      kind: TurnEventKind.ToolCallFinished,
+      toolCallId: "c2",
+      output: `env: ${assigned("token")}`,
+      failed: false,
+    }
+
+    expect(asked.map(shownChild)).toEqual(asked)
+    expect(JSON.stringify(shownChild(other))).not.toContain(SECRET)
+  })
+
   it("shows the operator the question tool's call as written, live and replayed, and a guest it masked", () => {
     const args = { question: `Use ${assigned("token")}?` }
     const result = { status: "answered", answers: [assigned("token")] }

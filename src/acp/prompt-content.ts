@@ -7,12 +7,19 @@ import {
 import type { PromptPart } from "../core/member"
 
 /**
- * Text or a resource link, the content every ACP agent takes. A link to a
- * batch the browser staged over REST is appended by its stage; any other
- * link reaches the runtime in the prompt's text.
+ * An inline image, audio clip or embedded file, each of which a client may send
+ * only to an agent advertising its prompt capability, which the gateway never
+ * does. Text and resource links are what every ACP agent takes: a link to a
+ * batch the browser staged over REST is appended by its stage, and any other
+ * link reaches the runtime in the prompt's text. A type ACP has not defined is
+ * neither, and is skipped.
  */
-export function isPromptBlock(block: ContentBlock) {
-  return ContentBlock.isText(block) || ContentBlock.isResourceLink(block)
+export function isUnadvertisedBlock(block: ContentBlock) {
+  return (
+    ContentBlock.isImage(block) ||
+    ContentBlock.isAudio(block) ||
+    ContentBlock.isResource(block)
+  )
 }
 
 function isStagedLink(uri: string) {

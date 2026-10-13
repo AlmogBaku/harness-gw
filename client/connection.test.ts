@@ -11,11 +11,12 @@ import { z } from "zod"
 
 import {
   HGW_AUTH_METHOD_INVITE,
+  HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
-  HGW_STOP_REASONS,
+  HGW_REPLAY_POSITION,
   HgwReplayBeforeSchema,
   type HgwHistoryCursor,
 } from "../protocol/acp"
@@ -31,6 +32,10 @@ import { pipedSockets } from "./test-socket"
 import type { AcpPendingRequest } from "./types"
 
 const SESSION_ID = "session-1"
+/** The Session a fork of `SESSION_ID` makes. */
+const FORKED_ID = "session-forked"
+/** A child Session a turn of `SESSION_ID` spawned. */
+const CHILD_ID = "child-1"
 const AGENT_ID = "agent-1"
 const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 const CLIENT_INFO = { name: "aos-ui", version: "1.2.3" }
@@ -81,7 +86,11 @@ function createGatewayAgent(
     history?: HgwHistoryCursor
     /** What a `_hgw/before` page read streams, and the cursor it replies with. */
     page?: {
-      updates: readonly (readonly [SessionUpdate, Record<string, unknown>])[]
+      /** Each update, and the Session it names when not the one read. */
+      updates: readonly (
+        | readonly [SessionUpdate, Record<string, unknown>]
+        | readonly [SessionUpdate, Record<string, unknown>, string]
+      )[]
       history?: HgwHistoryCursor
     }
     /**
@@ -99,6 +108,8 @@ function createGatewayAgent(
     agents?: readonly unknown[]
     /** The results `_hgw/sessions/search` answers with. */
     searchResults?: readonly unknown[]
+    /** Advertises `session/fork`, which answers `FORKED_ID`. */
+    forks?: boolean
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -113,9 +124,12 @@ function createGatewayAgent(
       return {
         protocolVersion: 2,
         info: { name: "harness-gw", version: "9.9.9" },
+        capabilities: {
+          session: { delete: {}, ...(options.forks ? { fork: {} } : {}) },
+        },
         _meta: {
           [HGW_META_KEY]: {
-            version: options.version ?? 1,
+            version: options.version ?? HGW_EXTENSION_VERSION,
             role: "operator",
             extensions: {
               steer: true,
@@ -165,9 +179,9 @@ function createGatewayAgent(
       const replayFrom = params.replayFrom
       if (replayFrom?.type === HGW_REPLAY_BEFORE) {
         const { cursor } = HgwReplayBeforeSchema.parse(replayFrom)
-        for (const [update, meta] of options.page?.updates ?? [])
+        for (const [update, meta, sessionId] of options.page?.updates ?? [])
           await peer?.notify(methods.client.session.update, {
-            sessionId: params.sessionId,
+            sessionId: sessionId ?? params.sessionId,
             update: {
               ...update,
               _meta: {
@@ -253,6 +267,10 @@ function createGatewayAgent(
         throw new RequestError(options.refuseAgentUpdate, "refused")
       return { revision: "revision-2", agent: catalogEntry() }
     })
+    .onRequest(methods.agent.session.fork, ({ params }) => {
+      record(methods.agent.session.fork, params)
+      return { sessionId: FORKED_ID }
+    })
     .onRequest(HGW_METHODS.session.focus, z.unknown(), ({ params }) => {
       record(HGW_METHODS.session.focus, params)
       return options.holdFocus ? new Promise<never>(() => {}) : {}
@@ -268,9 +286,13 @@ function createGatewayAgent(
       calls.flatMap((call) => (call.method === method ? [call.params] : [])),
     paramsOf: (method: string) =>
       calls.find((call) => call.method === method)?.params,
-    pushUpdate(update: SessionUpdate, meta?: Record<string, unknown>) {
+    pushUpdate(
+      update: SessionUpdate,
+      meta?: Record<string, unknown>,
+      sessionId = SESSION_ID
+    ) {
       return peer?.notify(methods.client.session.update, {
-        sessionId: SESSION_ID,
+        sessionId,
         update: {
           ...update,
           ...(meta ? { _meta: { [HGW_META_KEY]: meta } } : {}),
@@ -281,11 +303,11 @@ function createGatewayAgent(
       return peer?.notify(method, params)
     },
     /** Aborting `withdrawal` withdraws the request with `$/cancel_request`. */
-    askPermission(withdrawal?: AbortSignal) {
+    askPermission(withdrawal?: AbortSignal, sessionId = SESSION_ID) {
       return peer?.request(
         methods.client.session.requestPermission,
         {
-          sessionId: SESSION_ID,
+          sessionId,
           title: "Run the tool?",
           options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
           _meta: {
@@ -385,12 +407,130 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  it("reads the gateway's ACP capabilities at initialize", async () => {
+    const forking = connectInProcess(createGatewayAgent({ forks: true }))
+    const plain = connectInProcess(createGatewayAgent())
+    await Promise.all([forking.initialized, plain.initialized])
+
+    expect(forking.capabilities?.session).toMatchObject({ fork: {} })
+    expect(plain.capabilities?.session).not.toHaveProperty("fork")
+    forking.close()
+    plain.close()
+  })
+
+  it("forks a Session into one the gateway joined it to", async () => {
+    const gateway = createGatewayAgent({ forks: true })
+    const connection = connectInProcess(gateway)
+    await connection.initialized
+
+    await expect(connection.forkSession(SESSION_ID)).resolves.toEqual({
+      sessionId: FORKED_ID,
+    })
+    expect(gateway.paramsOf(methods.agent.session.fork)).toEqual({
+      sessionId: SESSION_ID,
+      cwd: "",
+    })
+    // Opened in its grace, as a created Session is.
+    expect(connection.sessionState(FORKED_ID)).toBeDefined()
+    connection.close()
+  })
+
+  // ACP v2 child Sessions arrive on the same connection, under their own id,
+  // announced first on the Session that owns them.
+  it("gives a child Session's updates to the listeners of the Session that owns it, in its turn's position", async () => {
+    const clock = useFakeClock()
+    const gateway = createGatewayAgent()
+    const pipe = pipedSockets(() => gateway.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://gateway.test/api/v1/acp",
+      socketConstructor: pipe.WebSocket,
+    })
+    connection.start()
+    await connection.initialized
+    const updated = vi.fn()
+    const child = vi.fn()
+    connection.subscribe(SESSION_ID, {
+      agentId: AGENT_ID,
+      update: updated,
+      child,
+    })
+    await connection.joined(SESSION_ID)
+
+    await gateway.pushUpdate(
+      {
+        sessionUpdate: "subagent_update",
+        sessionId: CHILD_ID,
+        title: "Review",
+      },
+      { sequence: 4, turnId: "run-1" }
+    )
+    await gateway.pushUpdate(
+      {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "child-message",
+        content: { type: "text", text: "Reading" },
+      },
+      { sequence: 5, turnId: "run-1" },
+      CHILD_ID
+    )
+    await clock.advance(0)
+
+    expect(updated).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionUpdate: "subagent_update" }),
+      expect.anything()
+    )
+    expect(child).toHaveBeenCalledWith(
+      CHILD_ID,
+      expect.objectContaining({ sessionUpdate: "agent_message_chunk" }),
+      { sequence: 5, turnId: "run-1" }
+    )
+    // The child's events share its parent turn's sequence.
+    pipe.sockets[0]?.drop()
+    await clock.advance(250)
+    expect(gateway.callsOf(methods.agent.session.resume)[1]).toMatchObject({
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId: "run-1", from: 6 },
+    })
+    connection.close()
+  })
+
+  it("names the Session that owns a child Session asking for permission", async () => {
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
+    await connection.initialized
+    const pending: AcpPendingRequest[] = []
+    connection.subscribePendingRequests((request) => pending.push(request))
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
+    await connection.joined(SESSION_ID)
+    await gateway.pushUpdate(
+      { sessionUpdate: "subagent_update", sessionId: CHILD_ID },
+      { sequence: 1, turnId: "run-1" }
+    )
+
+    const answered = gateway.askPermission(undefined, CHILD_ID)
+    await vi.waitFor(() => expect(pending).toHaveLength(1))
+    const [request] = pending
+    expect(request).toMatchObject({
+      kind: "permission",
+      sessionId: CHILD_ID,
+      parentSessionId: SESSION_ID,
+    })
+    if (request?.kind !== "permission") throw new Error("expected permission")
+    request.respond({ outcome: { outcome: "selected", optionId: "allow" } })
+
+    // The answer reaches the gateway as the child's.
+    await expect(answered).resolves.toMatchObject({
+      outcome: { outcome: "selected", optionId: "allow" },
+    })
+    connection.close()
+  })
+
   it("initializes with the negotiated AOS extension metadata", async () => {
     const gateway = createGatewayAgent()
     const connection = connectInProcess(gateway)
 
     await expect(connection.initialized).resolves.toEqual({
-      version: 1,
+      version: 2,
       role: "operator",
       extensions: expect.objectContaining({ readState: true, focus: true }),
     })
@@ -406,7 +546,8 @@ describe("ACP connection", () => {
   })
 
   it("ends without reconnecting when the gateway speaks another version", async () => {
-    const gateway = createGatewayAgent({ version: 2 })
+    // A gateway from before the release this client speaks.
+    const gateway = createGatewayAgent({ version: 1 })
     const statuses: string[] = []
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -671,7 +812,8 @@ describe("ACP connection", () => {
   })
 
   it.each([
-    [HGW_JSONRPC_ERRORS.unsupported, "unsupported"],
+    // ACP's invalid params: a field this runtime cannot take.
+    [RequestError.invalidParams().code, "unsupported"],
     [HGW_JSONRPC_ERRORS.revisionConflict, "conflict"],
   ] as const)(
     "names an Agent update refused with code %i as %s",
@@ -742,7 +884,7 @@ describe("ACP connection", () => {
       {
         sessionUpdate: "state_update",
         state: "idle",
-        stopReason: HGW_STOP_REASONS.error,
+        stopReason: "error",
       },
       { sequence: 7, turnId: "run-1", code: "HGW_SEND_FAILED" }
     )
@@ -968,6 +1110,118 @@ describe("ACP connection", () => {
       connection.close()
     })
 
+    // A child's transcript is part of the page that named it, and its
+    // positions are that page's, never the live turn's.
+    it("gives the child listener a child transcript a page carries, moving no rejoin position", async () => {
+      const clock = useFakeClock()
+      const gateway = createGatewayAgent({
+        page: {
+          updates: [
+            [
+              { sessionUpdate: "subagent_update", sessionId: CHILD_ID },
+              { sequence: 1, turnId: "history" },
+            ],
+            [
+              {
+                sessionUpdate: "agent_message",
+                messageId: "child-message",
+                content: [{ type: "text", text: "Two notes were stale" }],
+              },
+              { sequence: 2, turnId: "history" },
+              CHILD_ID,
+            ],
+          ],
+          history: {},
+        },
+      })
+      const pipe = pipedSockets(() => gateway.app)
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        url: "ws://gateway.test/api/v1/acp",
+        socketConstructor: pipe.WebSocket,
+      })
+      connection.start()
+      await connection.initialized
+      const children: string[] = []
+      connection.subscribe(SESSION_ID, {
+        agentId: AGENT_ID,
+        child: (childSessionId, update) =>
+          children.push(`${childSessionId} ${update.sessionUpdate}`),
+      })
+      await connection.joined(SESSION_ID)
+      await gateway.pushUpdate(
+        { sessionUpdate: "state_update", state: "running" },
+        { sequence: 4, turnId: "run-1" }
+      )
+
+      const page = await connection.resumePage(SESSION_ID, "cursor-1")
+
+      expect(page.updates.map(({ update }) => update.sessionUpdate)).toEqual([
+        "subagent_update",
+      ])
+      expect(children).toEqual([`${CHILD_ID} agent_message`])
+      pipe.sockets[0]?.drop()
+      await clock.advance(250)
+      expect(
+        gateway.callsOf(methods.agent.session.resume).at(-1)
+      ).toHaveProperty("replayFrom", {
+        type: HGW_REPLAY_POSITION,
+        turnId: "run-1",
+        from: 5,
+      })
+      connection.close()
+    })
+
+    // A child still at work after its turn reports between turns: it is no
+    // position in that turn's stream, which a rejoin still resumes from.
+    it("gives the child listener a background child update, moving no rejoin position", async () => {
+      const clock = useFakeClock()
+      const gateway = createGatewayAgent()
+      const pipe = pipedSockets(() => gateway.app)
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        url: "ws://gateway.test/api/v1/acp",
+        socketConstructor: pipe.WebSocket,
+      })
+      connection.start()
+      await connection.initialized
+      const children: string[] = []
+      connection.subscribe(SESSION_ID, {
+        agentId: AGENT_ID,
+        child: (childSessionId, update) =>
+          children.push(`${childSessionId} ${update.sessionUpdate}`),
+      })
+      await connection.joined(SESSION_ID)
+      await gateway.pushUpdate(
+        { sessionUpdate: "subagent_update", sessionId: CHILD_ID },
+        { sequence: 4, turnId: "run-1" }
+      )
+
+      await gateway.pushUpdate(
+        {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "child-message",
+          content: { type: "text", text: "Still working." },
+        },
+        { sequence: 0, turnId: "run-1", background: true },
+        CHILD_ID
+      )
+
+      await vi.waitFor(() =>
+        expect(children).toEqual([`${CHILD_ID} agent_message_chunk`])
+      )
+      pipe.sockets[0]?.drop()
+      await clock.advance(250)
+      expect(
+        gateway.callsOf(methods.agent.session.resume).at(-1)
+      ).toHaveProperty("replayFrom", {
+        type: HGW_REPLAY_POSITION,
+        turnId: "run-1",
+        from: 5,
+      })
+      connection.close()
+    })
+
     it("fails a page whose reply carries no history", async () => {
       const gateway = createGatewayAgent({
         page: { updates: olderPage.updates },
@@ -1082,11 +1336,13 @@ describe("ACP connection", () => {
     await clock.advance(250)
 
     expect(gateway.callsOf(methods.agent.session.resume)).toHaveLength(2)
-    expect(gateway.callsOf(methods.agent.session.resume)[1]).toMatchObject({
-      _meta: {
-        [HGW_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
-      },
+    // ACP cursors are inclusive, so the rejoin names the first event it lacks.
+    const rejoin = gateway.callsOf(methods.agent.session.resume)[1]
+    expect(rejoin).toMatchObject({
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId: "run-1", from: 5 },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
     })
+    expect(rejoin).not.toHaveProperty(["_meta", HGW_META_KEY, "after"])
     // The gateway forgot this connection's presence when the transport dropped, so
     // the report goes out again ahead of the rejoin it would otherwise
     // contradict. The wire order is the browser's to keep; the order the agent
@@ -1104,6 +1360,31 @@ describe("ACP connection", () => {
     )
     expect(connection.status).toBe("ready")
     expect(pipe.sockets).toHaveLength(2)
+    connection.close()
+  })
+
+  it("rejoins a Session it saw no turn of at the position it holds", async () => {
+    const clock = useFakeClock()
+    const gateway = createGatewayAgent()
+    const pipe = pipedSockets(() => gateway.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://gateway.test/api/v1/acp",
+      socketConstructor: pipe.WebSocket,
+    })
+    connection.start()
+    await connection.initialized
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
+    await connection.joined(SESSION_ID)
+
+    pipe.sockets[0]?.drop()
+    await clock.advance(250)
+
+    // Not a resume without a cursor, which ACP answers with no replay at all.
+    expect(gateway.callsOf(methods.agent.session.resume)[1]).toHaveProperty(
+      "replayFrom",
+      { type: HGW_REPLAY_POSITION }
+    )
     connection.close()
   })
 

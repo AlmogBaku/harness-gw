@@ -1,9 +1,10 @@
-import type {
-  ContentBlock,
-  SessionUpdate,
-  ToolCallContent,
-  ToolCallUpdate,
-  Usage,
+import {
+  RequestError,
+  type ContentBlock,
+  type SessionUpdate,
+  type ToolCallContent,
+  type ToolCallUpdate,
+  type Usage,
 } from "@agentclientprotocol/sdk/experimental/v2"
 import type { z } from "zod"
 
@@ -18,7 +19,7 @@ import {
   formatArtifactUri,
 } from "../../../protocol/acp"
 import type { AcpOutbound, Built, TranslateContext } from "../types"
-import { StopReason, type ToolDiff } from "../../core/events"
+import { CompactionStatus, StopReason, type ToolDiff } from "../../core/events"
 
 /**
  * The `session/update` values the gateway emits, each carrying the `_meta.hgw`
@@ -38,7 +39,11 @@ export const TodosSchema = HgwPlanMetaSchema.shape.todos
 type SessionTodos = z.infer<typeof TodosSchema>
 
 export function turnMeta(context: TranslateContext) {
-  return { sequence: context.sequence, turnId: context.turnId }
+  return {
+    sequence: context.sequence,
+    turnId: context.turnId,
+    ...(context.background ? { background: true as const } : {}),
+  }
 }
 
 export function update(value: Built<SessionUpdate>): AcpOutbound {
@@ -48,11 +53,23 @@ export function update(value: Built<SessionUpdate>): AcpOutbound {
 /** What a builder adds to the turn meta every update carries. */
 type ExtraMeta<Schema extends z.ZodObject> = Omit<
   z.input<Schema>,
-  "sequence" | "turnId"
+  "sequence" | "turnId" | "background"
 >
 
-/** A stop reason ACP names, or a `_`-prefixed one the gateway owns. */
-type IdleStopReason = (typeof ACP_STOP_REASON)[StopReason] | `_${string}`
+/** A stop reason ACP names for a turn that did not fail. */
+type IdleStopReason = (typeof ACP_STOP_REASON)[StopReason]
+
+/**
+ * The public error an `error` stop reason carries: the failure's machine code,
+ * as `_hgw/error` reports one, and never the provider's own words, which only
+ * `_meta.hgw` carries.
+ */
+export function turnError(code: string | undefined) {
+  return {
+    code: RequestError.internalError().code,
+    message: code ?? "internal_error",
+  }
+}
 
 /**
  * `at` says when the state took effect: a live run reads the clock, and a replay
@@ -64,7 +81,13 @@ export function stateOutbound(
   state:
     | { state: "running" }
     | { state: "requires_action" }
-    | { state: "idle"; stopReason: IdleStopReason; usage?: Usage },
+    | { state: "unknown" }
+    | { state: "idle"; stopReason: IdleStopReason; usage?: Usage }
+    | {
+        state: "idle"
+        stopReason: "error"
+        error: ReturnType<typeof turnError>
+      },
   extra?: ExtraMeta<typeof HgwStateMetaSchema>
 ): AcpOutbound {
   const at = extra?.at ?? new Date(context.now?.() ?? Date.now()).toISOString()
@@ -173,6 +196,41 @@ export const ACP_STOP_REASON = {
   [StopReason.Refusal]: "refusal",
   [StopReason.Cancelled]: "cancelled",
 } as const satisfies Record<StopReason, string>
+
+const ACP_COMPACTION_STATUS = {
+  [CompactionStatus.Started]: "in_progress",
+  [CompactionStatus.Completed]: "completed",
+  [CompactionStatus.Failed]: "failed",
+  [CompactionStatus.Cancelled]: "cancelled",
+} as const satisfies Record<CompactionStatus, string>
+
+/**
+ * A compaction as ACP shows it, live and replayed alike: the summary once it
+ * completed, the error once it failed.
+ */
+export function compactionUpdate({
+  compactionId,
+  status,
+  summary,
+  error,
+}: {
+  compactionId: string
+  status: CompactionStatus
+  summary?: string
+  error?: string
+}): Built<SessionUpdate> {
+  return {
+    sessionUpdate: "compaction_update",
+    compactionId,
+    status: ACP_COMPACTION_STATUS[status],
+    ...(status === CompactionStatus.Completed && summary !== undefined
+      ? { summary: [{ type: "text", text: summary }] }
+      : {}),
+    ...(status === CompactionStatus.Failed && error !== undefined
+      ? { error }
+      : {}),
+  }
+}
 
 /** A call's text output as ACP tool content. */
 export function textContent(text: string): Built<ToolCallContent> {

@@ -164,6 +164,10 @@ export class OpenClawSessionSubscriptions {
   #transition: Promise<void> = Promise.resolve()
   /** The generation that holds delivery; only that generation resumes it. */
   #paused: number | undefined
+  /** Whether a follower asked for every Session's events. */
+  #sessionEvents = false
+  /** The generation `sessions.subscribe` was last sent on. */
+  #sessionEventsGeneration: number | undefined
 
   constructor(client: OpenClawSubscriptionRequestClient, logger: Logger) {
     this.#client = client
@@ -237,14 +241,23 @@ export class OpenClawSessionSubscriptions {
           eventMatchesScope(candidate, lease.scope)
         )
           lease.approvalDirty = true
-    const matching = [...this.#leases].filter(
+    const addressed = [...this.#leases].filter(
       (lease) =>
         !lease.released &&
         (lease.scope.sessionKey === sessionKey ||
           lease.native?.key === sessionKey ||
-          lease.approvalReplayKey === sessionKey) &&
-        eventMatchesScope(candidate, lease.scope)
+          lease.approvalReplayKey === sessionKey)
     )
+    const matching = addressed.filter((lease) =>
+      eventMatchesScope(candidate, lease.scope)
+    )
+    // A child of another Agent asks on its parent's audience; no turn of
+    // this Agent may take it, and only why it went unshown is told.
+    if (
+      candidate.event === "session.approval" &&
+      addressed.length > matching.length
+    )
+      this.#logger.warn({ code: "foreign-agent" }, "openclaw.approval.dropped")
     if (this.#paused !== undefined) {
       for (const lease of matching) lease.dirty = true
       return
@@ -285,6 +298,11 @@ export class OpenClawSessionSubscriptions {
       const leases = [...this.#leases]
       const failed = await this.#resubscribe(leases, generation)
       if (generation !== this.#generation) return
+      if (this.#sessionEvents)
+        await this.sessionEvents().catch((err: unknown) =>
+          this.#logger.warn({ err }, "openclaw.subscription.resubscribe_failed")
+        )
+      if (generation !== this.#generation) return
       for (const [lease, cause] of failed) {
         try {
           lease.lost?.(cause)
@@ -302,6 +320,20 @@ export class OpenClawSessionSubscriptions {
       deadline.clear()
       this.#resume(generation)
     })
+  }
+
+  /**
+   * Subscribes the connection to every Session's events, which is how a
+   * spawned child's tool events reach it, once per generation; each
+   * re-subscription after a reconnect sends it again. The pinned protocol
+   * defines no params for `sessions.subscribe`.
+   */
+  async sessionEvents() {
+    this.#sessionEvents = true
+    const generation = this.#generation
+    if (this.#sessionEventsGeneration === generation) return
+    await this.#client.request("sessions.subscribe", {})
+    this.#sessionEventsGeneration = generation
   }
 
   /** Refuses every generation's pending work; the client's own stop ends the native subscriptions. */

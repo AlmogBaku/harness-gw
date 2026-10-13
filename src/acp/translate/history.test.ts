@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest"
 import type { SessionHistoryResponse } from "../../../protocol"
 import {
   HGW_META_KEY,
-  HGW_STOP_REASONS,
   HgwPlanMetaSchema,
   HgwStateMetaSchema,
   HgwToolCallMetaSchema,
@@ -348,6 +347,48 @@ describe("translateHistory", () => {
     })
   })
 
+  // ACP replays a child through its parent: its announcement, with the state
+  // its work ended in, ahead of anything of its own.
+  it("replays a stored child Session as its announcement, in its final state", () => {
+    const updates = updatesOf(
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: {
+              childSessionId: "child-1",
+              toolCallId: "call-spawn",
+              title: "Review the notes",
+              status: "idle",
+              summary: "Two notes were stale.",
+            },
+          },
+        ],
+        total: 1,
+      })
+    )
+
+    expect(updates).toEqual([
+      {
+        sessionUpdate: "subagent_update",
+        sessionId: "child-1",
+        title: "Review the notes",
+        state: { state: "idle", stopReason: "end_turn" },
+        _meta: {
+          [HGW_META_KEY]: {
+            sequence: 0,
+            turnId: "history",
+            toolCallId: "call-spawn",
+            summary: "Two notes were stale.",
+          },
+        },
+      },
+    ])
+  })
+
   it("replays a failed turn that streamed nothing, carrying its failure", () => {
     const updates = updatesOf(
       translateHistory({
@@ -369,12 +410,13 @@ describe("translateHistory", () => {
     )
 
     // A failed turn replays the way a live run reports failure: the turn's
-    // idle state update carries the vendor stop reason and the stored error.
+    // idle state update carries the error stop reason and the stored error.
     const idle = updates.at(-1)
     expect(idle).toMatchObject({
       sessionUpdate: "state_update",
       state: "idle",
-      stopReason: HGW_STOP_REASONS.error,
+      stopReason: "error",
+      error: { code: -32603, message: "internal_error" },
     })
     expect(
       HgwStateMetaSchema.parse(
@@ -530,6 +572,48 @@ describe("withoutLiveRows", () => {
     expect(
       withoutLiveRows(stored, new Set(["u1", "a9", "call-read"])).messages
     ).toEqual([user("u1", "list the files"), plan, { ...agent, id: "a11" }])
+  })
+
+  // A running turn's compaction is both stored and in its journal: the replay
+  // shows it, so a reload mid-turn shows one divider.
+  it("drops a compaction the replay names by its id, keeping an earlier turn's", () => {
+    const compaction = (id: string, compactionId: string) => ({
+      id,
+      role: "activity" as const,
+      activityType: "COMPACTION" as const,
+      content: { compactionId },
+    })
+    const stored = page([
+      compaction("row-1", "k1"),
+      user("u1", "list the files"),
+      compaction("row-2", "k1"),
+      compaction("row-3", "k2"),
+    ])
+
+    expect(withoutLiveRows(stored, new Set(["k1"])).messages).toEqual([
+      compaction("row-1", "k1"),
+      user("u1", "list the files"),
+      compaction("row-3", "k2"),
+    ])
+  })
+
+  it("drops a child Session the replay announces, keeping an earlier turn's", () => {
+    const child = (id: string, childSessionId: string) => ({
+      id,
+      role: "activity" as const,
+      activityType: "CHILD_SESSION" as const,
+      content: { childSessionId },
+    })
+    const stored = page([
+      child("row-1", "child-early"),
+      user("u1", "list the files"),
+      child("row-2", "child-live"),
+    ])
+
+    expect(withoutLiveRows(stored, new Set(["child-live"])).messages).toEqual([
+      child("row-1", "child-early"),
+      user("u1", "list the files"),
+    ])
   })
 
   it("keeps an earlier turn's row whose tool call id the live turn reused", () => {

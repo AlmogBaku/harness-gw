@@ -27,6 +27,8 @@ export function createFeedsMiddleware(): Middleware {
         case "execution":
         case "commands":
         case "turn":
+        case "child":
+        case "child-history":
         case "prompt":
         case "history":
         case "request-asked":

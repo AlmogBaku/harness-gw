@@ -1,11 +1,12 @@
-import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  RequestError,
+  type SessionUpdate,
+} from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it } from "vitest"
 
 import {
   HGW_META_KEY,
   HGW_PLAN_ID,
-  HGW_STOP_REASONS,
-  HgwChunkMetaSchema,
   HgwPlanMetaSchema,
   HgwStateMetaSchema,
   HgwToolCallMetaSchema,
@@ -15,7 +16,6 @@ import {
   CompactionStatus,
   DiffOperation,
   StopReason,
-  SubagentStatus,
   ToolKind,
   TurnEventKind,
   type TurnEvent,
@@ -165,22 +165,52 @@ describe("translateTurnEvent lifecycle", () => {
     ])
   })
 
-  it.each([
-    ["HGW_TOOL_FAILED", HGW_STOP_REASONS.error],
-    ["HGW_CONNECTION_INTERRUPTED", HGW_STOP_REASONS.uncertain],
-  ])("maps the %s run error to %s", (code, stopReason) => {
+  // ACP ends a failed turn with the `error` stop reason and the public error:
+  // the failure's machine code, never the provider's own words.
+  it.each(["HGW_TOOL_FAILED", "HGW_OUTCOME_UNKNOWN"])(
+    "ends a turn the %s run error ended with the error stop reason",
+    (code) => {
+      const { state, outbound } = translate([
+        { kind: TurnEventKind.TurnFailed, message: "provider refused", code },
+      ])
+      const [update] = updatesOf(outbound)
+
+      expect(update).toMatchObject({ state: "idle", stopReason: "error" })
+      expect(update).toHaveProperty("error", {
+        code: RequestError.internalError().code,
+        message: code,
+      })
+      expect(HgwStateMetaSchema.parse(aosMeta(update!))).toEqual({
+        sequence: 7,
+        turnId: "run-1",
+        at: AT,
+        code,
+        message: "provider refused",
+      })
+      expect(state).toEqual(initialTranslateState)
+    }
+  )
+
+  // A turn the gateway lost sight of is not over: ACP's `unknown` state says
+  // only that its activity cannot be observed.
+  it("reports a turn a lost connection hid as unknown", () => {
+    const code = "HGW_CONNECTION_INTERRUPTED"
     const { state, outbound } = translate([
-      { kind: TurnEventKind.TurnFailed, message: "provider refused", code },
+      { kind: TurnEventKind.TurnFailed, message: "socket closed", code },
     ])
     const [update] = updatesOf(outbound)
 
-    expect(update).toMatchObject({ state: "idle", stopReason })
+    expect(update).toMatchObject({
+      sessionUpdate: "state_update",
+      state: "unknown",
+    })
+    expect(update).not.toHaveProperty("stopReason")
     expect(HgwStateMetaSchema.parse(aosMeta(update!))).toEqual({
       sequence: 7,
       turnId: "run-1",
       at: AT,
       code,
-      message: "provider refused",
+      message: "socket closed",
     })
     expect(state).toEqual(initialTranslateState)
   })
@@ -779,53 +809,6 @@ describe("provider facts", () => {
     })
   })
 
-  it("attributes a subagent's chunks and calls to the call that spawned it", () => {
-    const updates = updatesOf(
-      translate([
-        toolStarted({
-          name: "delegate_task",
-          subagent: { id: "sub-1", goal: "audit", depth: 1 },
-        }),
-        {
-          kind: TurnEventKind.MessageChunk,
-          messageId: "m1",
-          text: "child prose",
-          subagentId: "sub-1",
-        },
-        toolStarted({ toolCallId: "c2", subagentId: "sub-1" }),
-      ]).outbound
-    )
-    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[0]!)).subagent).toEqual({
-      id: "sub-1",
-      goal: "audit",
-      depth: 1,
-    })
-    expect(HgwChunkMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
-      ...turn,
-      subagentId: "sub-1",
-      parentToolCallId: "c1",
-    })
-    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[2]!))).toMatchObject({
-      subagentId: "sub-1",
-      parentToolCallId: "c1",
-    })
-  })
-
-  it("names a subagent without a parent it never saw spawned", () => {
-    const update = lastUpdate([
-      {
-        kind: TurnEventKind.ThoughtChunk,
-        messageId: "m1",
-        text: "child thought",
-        subagentId: "sub-9",
-      },
-    ])
-    expect(HgwChunkMetaSchema.parse(aosMeta(update))).toEqual({
-      ...turn,
-      subagentId: "sub-9",
-    })
-  })
-
   it("appends streamed tool output as call content", () => {
     const update = lastUpdate([
       toolStarted(),
@@ -983,41 +966,5 @@ describe("provider facts", () => {
       translate([{ kind: TurnEventKind.ModelChanged, modelId: "claude" }])
         .outbound
     ).toEqual([{ kind: "model-changed", modelId: "claude" }])
-  })
-
-  it("patches a subagent onto the call that spawned it", () => {
-    const update = lastUpdate([
-      toolStarted(),
-      {
-        kind: TurnEventKind.SubagentUpdated,
-        toolCallId: "c1",
-        subagent: {
-          id: "sub-1",
-          status: SubagentStatus.Completed,
-          summary: "done",
-        },
-      },
-    ])
-    expect(update).toMatchObject({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "c1",
-    })
-    expect(HgwToolCallMetaSchema.parse(aosMeta(update)).subagent).toEqual({
-      id: "sub-1",
-      status: "completed",
-      summary: "done",
-    })
-  })
-
-  it("drops a subagent patch the wire contract refuses", () => {
-    expect(
-      translate([
-        {
-          kind: TurnEventKind.SubagentUpdated,
-          toolCallId: "c1",
-          subagent: { id: "" },
-        },
-      ]).outbound
-    ).toEqual([])
   })
 })

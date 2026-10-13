@@ -11,7 +11,12 @@ import type {
   SessionWorkspaceCapabilitiesResponseSchema,
   TurnSteerResponse,
 } from "../../protocol"
-import type { PendingRequest, RequestReply, TurnEvent } from "./events"
+import type {
+  ChildTurnEvent,
+  PendingRequest,
+  RequestReply,
+  TurnEvent,
+} from "./events"
 import type { ProviderSessionId } from "./ids"
 import type { SessionPatch, SessionScope } from "./runtime"
 import type { SessionExecutionState, TurnQuota } from "./session-coordinator"
@@ -30,6 +35,18 @@ import type { SessionRow } from "./session-rows"
 export type PromptPart =
   | { kind: "text"; text: string }
   | { kind: "attachment"; uri: string; name: string; mimeType?: string }
+
+/** Whitespace, and the invisible characters `trim` keeps. */
+const PADDING = /[\s\u200B\u2060\uFEFF]/gu
+
+/**
+ * Whether a send carries no text of its own, however padded. One that names a
+ * rewound turn is a Retry, which sends that turn's own text again; every layer
+ * reads a Retry by this alone, so none takes padding for an Edit.
+ */
+export function isBlankText(text: string | undefined) {
+  return text === undefined || text.replace(PADDING, "") === ""
+}
 
 /** A prompt's text parts joined the way the normalized wire carries a turn. */
 export function promptText(prompt: readonly PromptPart[]) {
@@ -94,6 +111,38 @@ export type SessionEvent =
        * longer the turn's, which the view is told once caught up.
        */
       replayed?: true
+    }
+  /**
+   * One report or event of a child Session a turn spawned, addressed to the
+   * child's own id, so a layer that passes only its Session's events drops
+   * it. A report goes out on `parentSessionId`, which owns the child; the
+   * child's own events under its id. It shares the turn's sequence.
+   */
+  | {
+      kind: "child"
+      parentSessionId: string
+      stream: TurnStream
+      sequence: number
+      event: ChildTurnEvent
+      replayed?: true
+      /**
+       * The child outlived the turn that spawned it, which `stream` names:
+       * this event reaches the member while no turn of the parent runs, so
+       * it is no position in that turn's stream.
+       */
+      background?: true
+    }
+  /**
+   * The whole transcript of a child Session a history page named, addressed
+   * to the child's own id as its live events are. It follows the page whose
+   * row announced the child, and is part of an `older` page as that page is.
+   */
+  | {
+      kind: "child-history"
+      parentSessionId: string
+      childSessionId: string
+      page: SessionHistoryResponse
+      older?: { cursor: string; offset: number }
     }
   /** A user prompt: another member's, or this member's own echo. */
   | {
@@ -218,7 +267,12 @@ export type MemberCommands = {
     scope?: MemberScope
     /** Replay the Session's history before following it. */
     fromStart: boolean
-    /** Where the member's view already reaches in the live turn. */
+    /**
+     * Follow the live turn from where the member's view already reaches,
+     * `turnId` and `after`; a resume that names no position replays nothing
+     * and follows only what the turn streams next.
+     */
+    positioned: boolean
     turnId?: string
     after?: number
   }
@@ -257,6 +311,7 @@ export type MemberCommands = {
   search: { agentId?: string; query: string }
   /** A client id names a create its client may repeat. */
   new: { agentId: string; title?: string; clientId?: string }
+  fork: { sessionId: string }
   delete: { sessionId: string }
   /** `{ unread: false }` marks the Session read. */
   update: { sessionId: string; patch: SessionPatch }
@@ -288,6 +343,7 @@ export type CommandResults = {
   list: { rows: readonly SessionRow[]; nextOffset?: number }
   search: { rows: readonly SessionRow[] }
   new: { sessionId: string }
+  fork: { sessionId: string }
   delete: void
   update: void
   "set-config": { models: SessionModelsResponse }

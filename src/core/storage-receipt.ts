@@ -4,7 +4,8 @@ import { ServerTurnEndedError } from "./runtime"
 /**
  * A prompt's storage receipt, the `stored` of its turn's handle: `resolve`
  * names the message id the provider stored the prompt under, and `end`, called
- * with the event that ended the turn, rejects a receipt still unproven.
+ * with the event that ended the turn, rejects a receipt still unproven:
+ * `unstored` only when the adapter knows the provider stored nothing.
  */
 export function storageReceipt() {
   let resolve!: (messageId: string) => void
@@ -18,15 +19,17 @@ export function storageReceipt() {
   return {
     promise,
     resolve,
-    end(ending?: TurnEvent) {
+    end(ending?: TurnEvent, written: { unstored?: boolean } = {}) {
       reject(
         ending?.kind === TurnEventKind.TurnFailed
-          ? new ServerTurnEndedError("failed", ending.code)
+          ? new ServerTurnEndedError("failed", ending.code, written)
           : new ServerTurnEndedError(
               ending?.kind === TurnEventKind.TurnEnded &&
                 ending.stopReason === StopReason.Cancelled
                 ? "stopped"
-                : "ended"
+                : "ended",
+              undefined,
+              written
             )
       )
     },

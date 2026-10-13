@@ -7,11 +7,17 @@
  * do (accept a frame, seal a generation, end the run), so attach, catch-up and
  * settlement stay plain functions over the run instead of engine methods.
  */
-import type { Cost, PendingRequest, TokenUsage } from "../../core/events"
+import type {
+  Cost,
+  PendingRequest,
+  TokenUsage,
+  TurnEvent,
+} from "../../core/events"
 
 import type { SessionScope } from "../../core/runtime"
 import type { storageReceipt } from "../../core/storage-receipt"
 import type { Todo } from "../todos"
+import type { HermesChildReport } from "./child-sessions"
 import type { HermesLog } from "./gateway"
 import {
   HermesMediaTextFilter,
@@ -92,6 +98,13 @@ export type ActiveTurn = {
   uncertain: boolean
   /** The queue is closed and the native observer released; nothing may emit. */
   detached: boolean
+  /**
+   * The turn ends with children still at work, which go on as the Session's
+   * background activity while someone watches it.
+   */
+  outlives?: true
+  /** The turn ended, and its children at work report to the Session. */
+  background?: true
   terminal: boolean
   /** Hermes accepted this turn but has not started it yet (queue, steer). */
   awaitingStart: boolean
@@ -134,12 +147,35 @@ export type ActiveTurn = {
   plan?: Todo[]
   /** The call each background process Hermes streams output for belongs to. */
   terminals: Map<string, { toolCallId: string; terminalId: string }>
-  /** The call that spawned each subagent Hermes reports on. */
-  subagents: Map<string, string>
+  /** Each child Session the run announced, by Hermes' subagent id. */
+  children: Map<string, ChildRun>
   /** The compaction Hermes is running, and how many this run has seen. */
   compaction: { open?: string; count: number }
   settled: Promise<void>
   resolveSettled(): void
+}
+
+/** A child Session a run announced, and what it streamed of its own. */
+export type ChildRun = {
+  /** Hermes' stored id of the child, the id it is reported under. */
+  childSessionId: string
+  /** Hermes' own handle on the child, which stops it alone. */
+  subagentId: string
+  /** The child that spawned this one; absent for one the turn spawned. */
+  parent?: string
+  /** Hermes reported the child's work over. */
+  done: boolean
+  /** The child's own stream, from its watch: none for a child's child. */
+  stream: {
+    started: boolean
+    /** Its prose so far, which a completion's full text continues. */
+    text: string
+    /** Its calls still open. */
+    tools: Set<string>
+    ended: boolean
+  }
+  /** Closes the child's watch, once one opened. */
+  stopWatch?: () => void
 }
 
 /** How a cleanly finished run ended, beyond the fact that it did. */
@@ -170,6 +206,14 @@ export type TurnEngineHost = {
   fail(active: ActiveTurn, failure: TurnFailure): void
   detach(active: ActiveTurn, failure: DetachedTurnFailure): void
   settle(active: ActiveTurn): void
+  /** Publishes one event of the run; false once nothing more is published. */
+  emit(active: ActiveTurn, event: TurnEvent): boolean
+  /** Keeps a report of a child the run announced, for a reload to replay. */
+  recordChild(
+    active: ActiveTurn,
+    report: HermesChildReport,
+    parent?: string
+  ): void
 }
 
 /**
@@ -244,7 +288,7 @@ export function createActiveTurn(
     awaitingStart: false,
     resumedInteraction: false,
     terminals: new Map(),
-    subagents: new Map(),
+    children: new Map(),
     compaction: { count: 0 },
     ...turnSettlement(),
   }

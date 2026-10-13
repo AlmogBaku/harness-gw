@@ -3,6 +3,7 @@ import {
   runWireListenerContract,
   type WireRuntime,
 } from "../../acp/wire-contract"
+import { inviteSessionKey } from "../../core/invite-key"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeHermesRuntime } from "./factory"
 import {
@@ -38,6 +39,14 @@ function hermesRuntime(): WireRuntime {
     // What `config.get` answers for `project`, never the profile row's `path`.
     folder: PROJECT_FOLDER,
     turn: hermes,
+    // Hermes finds an invited Session by its title.
+    async invite(ref, said) {
+      hermes.storeSession(inviteSessionKey(ref), said)
+      return hermes.scope.sessionId
+    },
+    rewinds: () => hermes.truncations().length,
+    childReads: (childId) =>
+      hermes.httpRequests(`/api/sessions/${childId}/messages`).length,
   }
 }
 

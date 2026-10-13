@@ -361,7 +361,7 @@ describe("OpenClaw client", () => {
     )
   })
 
-  it.each(["chat.send", "config.patch"])(
+  it.each(["chat.send", "config.patch", "sessions.rewind", "sessions.create"])(
     "leaves a dispatched %s uncertain unless the Gateway refused it",
     async (method) => {
       const clock = useFakeClock()

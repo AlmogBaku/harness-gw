@@ -24,6 +24,7 @@ import {
 import { createChannels } from "../core/channel"
 import {
   connectClient,
+  EventSource,
   MODELS,
   settled,
   updates,
@@ -54,7 +55,7 @@ import type {
   ServerTurnListener,
   ServerRuntime,
 } from "../core/runtime"
-import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
+import { HANDSHAKE_BUDGET, HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
 import { createSessionRows } from "../core/session-rows"
@@ -112,6 +113,7 @@ const CAPABILITIES = {
       input: "text",
       fallback: "provider-queue",
     },
+    rewind: { status: "available", scope: "user-turn" },
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
@@ -443,7 +445,13 @@ function harness(options: HarnessOptions = {}) {
   }))
   let catalogChanged: (() => void) | undefined
   let watcher: ServerTurnListener | undefined
+  // The runtime forks, which a guest is never offered, and keeps child
+  // transcripts, which a guest is never shown.
+  const forkSession = vi.fn(unsupported)
+  const childHistory = vi.fn(unsupported)
   const runtime: ServerRuntime = {
+    forkSession,
+    childHistory,
     turns: engine,
     resolveInvitedSession,
     // A guest addresses its conversation by reference; no public id resolves.
@@ -562,6 +570,8 @@ function harness(options: HarnessOptions = {}) {
     deleteSession,
     runtimeInfo,
     resolveInvitedSession,
+    forkSession,
+    childHistory,
     listAllSessions,
     /** The runtime reports that its Session list changed. */
     changeCatalog() {
@@ -591,6 +601,7 @@ function harness(options: HarnessOptions = {}) {
         methodId: HGW_AUTH_METHOD_INVITE,
         _meta: { [HGW_META_KEY]: { token } },
       }),
+    logout: () => connection.agent.request(methods.agent.auth.logout, {}),
     resume: (sessionId: string, replay = false) =>
       connection.agent.request(methods.agent.session.resume, {
         sessionId,
@@ -629,8 +640,10 @@ type Frame = {
  * One guest browser on the raw WebSocket the listener opens, frame by frame,
  * so what the socket itself writes and closes is observable.
  */
-async function wire(listener: GuestAcpServiceOptions) {
-  const service = createGuestAcpService(listener)
+async function wire(
+  listener: GuestAcpServiceOptions,
+  service = createGuestAcpService(listener)
+) {
   const upgrade = await service.authorizeUpgrade(
     new Request(`${ORIGIN}/api/v1/acp`, { headers: { origin: ORIGIN } })
   )
@@ -664,8 +677,12 @@ async function wire(listener: GuestAcpServiceOptions) {
 }
 
 /** Opens a raw guest connection that redeemed `token`. */
-async function loggedInWire(listener: GuestAcpServiceOptions, token: string) {
-  const socket = await wire(listener)
+async function loggedInWire(
+  listener: GuestAcpServiceOptions,
+  token: string,
+  service?: ReturnType<typeof createGuestAcpService>
+) {
+  const socket = await wire(listener, service)
   await socket.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
@@ -774,6 +791,7 @@ describe("guest ACP listener", () => {
       },
     })
     expect(initialize.capabilities?.session?.delete).toBeUndefined()
+    expect(initialize.capabilities?.session?.fork).toBeUndefined()
     // The deployment itself stays unnamed, before and after a redemption.
     expect(initialize.info?.title).toBeUndefined()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
@@ -882,10 +900,15 @@ describe("guest ACP listener", () => {
     await test.resume(REF)
     await test.prompt("Start the interview")
     await settled()
+    // Nor as it logs out and in again with another invitation.
+    await test.logout()
+    const next = await invite(test.invitations)
+    await test.login(next)
+    await settled()
 
     expect(test.logs.records()).not.toEqual([])
     const logged = JSON.stringify(test.logs.records())
-    expect(logged).not.toContain(token)
+    for (const secret of [token, next]) expect(logged).not.toContain(secret)
     expect(logged).not.toContain(INSTRUCTION)
     test.close()
   })
@@ -1053,7 +1076,12 @@ describe("guest ACP listener", () => {
     test.close()
   })
 
-  it("refuses the methods an operator owns as unknown, however their params are spelled", async () => {
+  // The session capability a guest is offered promises session/new and
+  // session/list, so refusing them as unknown would contradict it: they exist,
+  // but not for a guest.
+  // ACP's method-not-found covers a method that "does not exist or is not
+  // available", which is what an operator's method is to a guest.
+  it("refuses the methods an operator owns as not available, however their params are spelled", async () => {
     const test = harness({ existing: true })
     const socket = await loggedInWire(
       test.listener,
@@ -1061,8 +1089,6 @@ describe("guest ACP listener", () => {
     )
 
     for (const [method, params] of [
-      [methods.agent.session.new, { cwd: "/" }],
-      [methods.agent.session.list, {}],
       [HGW_METHODS.session.update, { sessionId: REF, title: "Renamed" }],
       [methods.agent.session.delete, { sessionId: REF }],
       [
@@ -1072,11 +1098,18 @@ describe("guest ACP listener", () => {
       [HGW_METHODS.session.update, { sessionId: 5 }],
       [HGW_METHODS.agents.update, { sessionId: 5 }],
       [HGW_METHODS.sessions.search, { _meta: { hgw: { query: "notes" } } }],
+      [methods.agent.session.fork, { sessionId: REF, cwd: "/" }],
+      // The session capability promises both, but not to a guest.
+      [methods.agent.session.new, { cwd: "/" }],
+      [methods.agent.session.list, {}],
+      [methods.agent.session.list, { cwd: "/srv/agent" }],
     ] as const)
       expect(await socket.request(method, params), method).toMatchObject({
         error: { code: METHOD_NOT_FOUND },
       })
     expect(test.updateSession).not.toHaveBeenCalled()
+    expect(test.forkSession).not.toHaveBeenCalled()
+    expect(test.listAllSessions).not.toHaveBeenCalled()
     socket.close()
   })
 
@@ -1122,6 +1155,53 @@ describe("guest ACP listener", () => {
     expect(streamed).not.toContain("+new")
     expect(streamed).not.toContain(INSTRUCTION)
     test.close()
+  })
+
+  // Read on the raw wire, since an SDK client drops a request scope beside a
+  // Session one. ACP's request scope names a JSON-RPC request outside any
+  // Session, and a tool call the guest was never shown isn't named either.
+  it("scopes a question to the invited Session alone on the wire", async () => {
+    const test = harness({
+      existing: true,
+      handle: () =>
+        asking(
+          { ...QUESTION, toolCallId: "call-hidden" },
+          test.start.mock.calls.length
+        ),
+    })
+    const socket = await wire(test.listener)
+    await socket.request(methods.agent.initialize, {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      info: { name: "aos-guest-browser", version: "1" },
+      capabilities: { elicitation: { form: {} } },
+    })
+    await socket.request(methods.agent.auth.login, {
+      methodId: HGW_AUTH_METHOD_INVITE,
+      _meta: { [HGW_META_KEY]: { token: await invite(test.invitations) } },
+    })
+    await socket.request(methods.agent.session.resume, {
+      sessionId: REF,
+      cwd: "/",
+    })
+    void socket.request(methods.agent.session.prompt, {
+      sessionId: REF,
+      prompt: [{ type: "text", text: "Export the notes" }],
+    })
+
+    const asked = await vi.waitFor(() => {
+      const frame = socket.frames.find(
+        (candidate) => candidate.method === methods.client.elicitation.create
+      )
+      if (!frame) throw new Error("No question was asked")
+      return frame
+    })
+    expect(asked.params).toMatchObject({
+      sessionId: REF,
+      _meta: { [HGW_META_KEY]: { requestId: QUESTION.requestId } },
+    })
+    expect(asked.params).not.toHaveProperty("requestId")
+    expect(asked.params).not.toHaveProperty("toolCallId")
+    socket.close()
   })
 
   it("asks a question in the operator's own words and gives the runtime its answer as sent", async () => {
@@ -1815,6 +1895,49 @@ describe("guest scope and commands", () => {
     test.close()
   })
 
+  // A runtime reads padding alone as no text and resends a Retry's source as
+  // written, so a padded "Edit" of a slash command would run it as the operator.
+  it("refuses a Retry of a slash command it was shown, its text empty or padding alone, before the runtime starts anything", async () => {
+    const user = (id: string, text: string) => ({
+      id,
+      role: "user" as const,
+      content: [{ type: "text" as const, text }],
+      createdAt: "2026-09-15T00:00:00.000Z",
+    })
+    const test = harness({
+      existing: true,
+      history: () => ({
+        sessionId: REF,
+        messages: [user("slash-1", "/compact"), user("plain-1", "Hello")],
+        total: 2,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF, true)
+    await settled()
+    const retry = (rewindSourceId: string, text: string) =>
+      test.agent.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: text ? [{ type: "text", text }] : [],
+        _meta: { [HGW_META_KEY]: { rewindSourceId } },
+      })
+
+    for (const text of ["", " ", "\n", "\u00A0", "\u200B", "\uFEFF"])
+      await expect(
+        retry("slash-1", text),
+        JSON.stringify(text)
+      ).rejects.toMatchObject({ code: INVALID_PARAMS })
+    expect(test.start).not.toHaveBeenCalled()
+
+    await retry("plain-1", " ")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.close()
+  })
+
   it("keeps unknown parameters and metadata from the runtime", async () => {
     const test = harness({ existing: true })
     const socket = await redeemedWire(
@@ -2013,6 +2136,303 @@ describe("guest scope and commands", () => {
     expect(test.recorder.of(HGW_METHODS.notify.activity)).toEqual([])
     // Nor does it list the deployment's Sessions to seed one.
     expect(test.listAllSessions).not.toHaveBeenCalled()
+    test.close()
+  })
+})
+
+// ACP's auth/logout ends the authenticated session: the guest leaves its
+// conversation, the connection stays open, and gated requests need a login.
+describe("guest logout", () => {
+  const OTHER_REF = "guest_other"
+
+  it("refuses a logged-out guest's requests and shows it nothing, until another invitation acts for its own conversation alone", async () => {
+    const source = new EventSource()
+    const test = harness({ existing: true, handle: () => source })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Start the interview")
+    source.emit({ kind: TurnEventKind.TurnStarted })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      "the running turn"
+    )
+
+    await expect(test.logout()).resolves.toEqual({})
+    const from = test.recorder.entries.length
+    source.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-native",
+      text: "Said after logout",
+    })
+    await expect(test.resume(REF)).rejects.toMatchObject({
+      code: AUTHENTICATION_REQUIRED,
+    })
+    await expect(test.prompt("Still here?")).rejects.toMatchObject({
+      code: AUTHENTICATION_REQUIRED,
+    })
+    await settled()
+    expect(test.recorder.entries.slice(from)).toEqual([])
+
+    await test.login(await invite(test.invitations, OTHER_REF))
+    await expect(test.resume(REF)).rejects.toMatchObject({ code: NOT_FOUND })
+    await expect(test.resume(OTHER_REF)).resolves.toBeDefined()
+    // Its conversation reaches it, shaped for the invitation it now acts as.
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes(`"${OTHER_REF}"`),
+      "an update for the new conversation"
+    )
+    test.close()
+  })
+
+  it("leaves a connection logged out when its login was still in flight", async () => {
+    const test = harness({ existing: true })
+    const verify = test.invitations.verify.bind(test.invitations)
+    const verified = Promise.withResolvers<void>()
+    vi.spyOn(test.invitations, "verify").mockImplementation(async (token) => {
+      await verified.promise
+      return verify(token)
+    })
+    await test.initialize()
+    const login = test.login(await invite(test.invitations))
+    await settled()
+
+    await test.logout()
+    verified.resolve()
+
+    await expect(login).rejects.toMatchObject({ code: AUTHENTICATION_REQUIRED })
+    await expect(test.resume(REF)).rejects.toMatchObject({
+      code: AUTHENTICATION_REQUIRED,
+    })
+    test.close()
+  })
+
+  it("starts no turn for a send held across a logout and the next login", async () => {
+    const test = harness()
+    const resolve = test.resolveInvitedSession.getMockImplementation()!
+    const created = Promise.withResolvers<void>()
+    test.resolveInvitedSession.mockImplementation(async (...args) => {
+      if (args[2]) await created.promise
+      return resolve(...args)
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    const held = test.prompt("Start the interview")
+    // Held where its first Send creates the invited conversation.
+    await vi.waitFor(() =>
+      expect(
+        test.resolveInvitedSession.mock.calls.some(([, , create]) => create)
+      ).toBe(true)
+    )
+
+    await test.logout()
+    await test.login(await invite(test.invitations))
+    created.resolve()
+
+    await expect(held).rejects.toMatchObject({ code: AUTHENTICATION_REQUIRED })
+    await settled()
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("withdraws a question asked before logout and drops an answer that comes after", async () => {
+    const asked = Promise.withResolvers<AbortSignal>()
+    const answer = Promise.withResolvers<void>()
+    const test = harness({
+      existing: true,
+      handle: () => asking(QUESTION, test.start.mock.calls.length),
+      question: async (_params, signal) => {
+        asked.resolve(signal)
+        await answer.promise
+        return { action: "accept", content: { q0: "later" } }
+      },
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Export the notes")
+    const signal = await asked.promise
+
+    await test.logout()
+    expect(signal.aborted).toBe(true)
+    answer.resolve()
+    await settled()
+
+    expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("re-arms the handshake deadline only for a logout that ended a login", async () => {
+    const clock = useFakeClock()
+    const test = harness({ existing: true })
+    const never = await wire(test.listener)
+    await never.request(methods.agent.initialize, {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      info: { name: "aos-guest-browser", version: "1" },
+    })
+    const logout = (socket: Awaited<ReturnType<typeof wire>>) =>
+      socket.request(methods.agent.auth.logout, {})
+    // A logout that ended nothing gives a socket no more time to log in.
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2)
+    expect(await logout(never)).toMatchObject({ result: {} })
+    const guest = await loggedInWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2)
+    expect(never.closed).toEqual([expect.objectContaining({ code: 4408 })])
+
+    // A real logout starts the handshake again; a second one does not extend it.
+    expect(await logout(guest)).toMatchObject({ result: {} })
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2)
+    expect(await logout(guest)).toMatchObject({ result: {} })
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2 - 1)
+    expect(guest.closed).toEqual([])
+    await clock.advance(1)
+    expect(guest.closed).toEqual([expect.objectContaining({ code: 4408 })])
+    guest.close()
+    never.close()
+  })
+
+  it("lets the handshake budget evict a logged-out socket", async () => {
+    const test = harness({ existing: true })
+    const service = createGuestAcpService(test.listener)
+    const guest = await loggedInWire(
+      test.listener,
+      await invite(test.invitations),
+      service
+    )
+    expect(await guest.request(methods.agent.auth.logout, {})).toMatchObject({
+      result: {},
+    })
+
+    const waiting = await Promise.all(
+      Array.from({ length: HANDSHAKE_BUDGET }, () =>
+        wire(test.listener, service)
+      )
+    )
+
+    expect(guest.closed).toEqual([
+      expect.objectContaining({ code: 4408, reason: "Handshake budget" }),
+    ])
+    for (const socket of [guest, ...waiting]) socket.close()
+  })
+})
+
+// A child Session belongs to the turn's operator side: a guest is shown no
+// announcement, event, question or approval of one.
+describe("guest and child Sessions", () => {
+  const CHILD = "child-1"
+  const childTurn: TurnEvent[] = [
+    { kind: TurnEventKind.TurnStarted },
+    {
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: CHILD,
+      title: "Review the notes",
+      cancellable: true,
+    },
+    {
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: CHILD,
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "child-message",
+        text: "The child's own words",
+      },
+    },
+    {
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "child-approval",
+          kind: PendingRequestKind.Permission,
+          childSessionId: CHILD,
+          message: "Read the notes?",
+          responseSchema: { enum: ["once", "deny"] },
+        },
+        { ...QUESTION, requestId: "child-question", childSessionId: CHILD },
+      ],
+    },
+  ]
+
+  it("shows a guest nothing of a child its turn spawned, and leaves the child's requests for an operator", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => terminalHandle(childTurn),
+      question: async () => ({ action: "accept", content: { q0: "later" } }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    await test.prompt("Review the notes")
+    // The guest's view shows the turn running: what it waits on is not the
+    // guest's to see or answer.
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      "the running turn"
+    )
+    await settled()
+    await settled()
+
+    const shown = JSON.stringify(test.recorder.entries)
+    for (const hidden of [CHILD, "subagent_update", "The child's own words"])
+      expect(shown).not.toContain(hidden)
+    expect(test.recorder.of(methods.client.elicitation.create)).toEqual([])
+    // Nothing declined the child's approval for the guest.
+    expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("replays a guest no child its history names, and reads no child's transcript", async () => {
+    const test = harness({
+      existing: true,
+      history: () => ({
+        sessionId: REF,
+        messages: [
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: { childSessionId: CHILD, title: "Review the notes" },
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    await test.resume(REF, true)
+    await settled()
+
+    const shown = JSON.stringify(test.recorder.entries)
+    for (const hidden of [CHILD, "subagent_update", "Review the notes"])
+      expect(shown).not.toContain(hidden)
+    expect(test.childHistory).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("answers a guest naming a child as it answers any id not its own", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => terminalHandle(childTurn),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Review the notes")
+    await settled()
+
+    await expect(test.resume(CHILD)).rejects.toMatchObject({ code: NOT_FOUND })
+    await test.agent.notify(methods.agent.session.cancel, { sessionId: CHILD })
+    await settled()
+    for (const handle of test.handles)
+      expect(handle.stop).not.toHaveBeenCalled()
     test.close()
   })
 })

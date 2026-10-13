@@ -1,4 +1,5 @@
 import {
+  type ContentBlock,
   methods,
   RequestError,
   type RequestPermissionResponse,
@@ -18,7 +19,7 @@ import {
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
-  HGW_STOP_REASONS,
+  HGW_REPLAY_POSITION,
   HgwHistoryCursorSchema,
   formatArtifactUri,
   type HgwActivityNotification,
@@ -48,6 +49,7 @@ import {
   AGENT,
   CONNECTION,
   CREATED,
+  FORKED,
   EventSource,
   NOW,
   PRINCIPAL,
@@ -207,7 +209,7 @@ describe("AOS ACP agent", () => {
       authMethods: [],
       _meta: {
         hgw: {
-          version: 1,
+          version: 2,
           role: "operator",
           extensions: {
             steer: true,
@@ -231,6 +233,72 @@ describe("AOS ACP agent", () => {
         },
       },
     })
+    test.close()
+  })
+
+  // ACP's session/fork: a new Session holding the conversation so far, which
+  // the client is joined to as session/new joins its creator.
+  it("forks a Session for an operator, answering the new one's id and joining it", async () => {
+    const test = await harness({ forks: true })
+    await test.list()
+
+    const forked = await test.agent.request(methods.agent.session.fork, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+
+    expect(forked).toEqual({ sessionId: FORKED })
+    expect(test.forkSession).toHaveBeenCalledWith(AGENT, SESSION)
+    await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes(`"sessionId":"${FORKED}"`) &&
+        JSON.stringify(entry.params).includes("session_info_update"),
+      "the forked Session's row"
+    )
+    test.close()
+  })
+
+  it("advertises fork only where the runtime forks, and answers it nowhere else", async () => {
+    const forking = await harness({ forks: true })
+    const plain = await harness()
+
+    expect(forking.initialize.capabilities?.session).toMatchObject({
+      fork: {},
+    })
+    expect(plain.initialize.capabilities?.session).not.toHaveProperty("fork")
+    await plain.list()
+    await expect(
+      plain.agent.request(methods.agent.session.fork, {
+        sessionId: SESSION,
+        cwd: "/",
+      })
+    ).rejects.toMatchObject({ code: RequestError.methodNotFound("").code })
+    forking.close()
+    plain.close()
+  })
+
+  it("refuses a fork session/new would refuse, and one of a Session the connection does not know", async () => {
+    const test = await harness({ forks: true })
+    await test.list()
+    const fork = (params: Record<string, unknown>) =>
+      test.agent.request(methods.agent.session.fork, {
+        sessionId: SESSION,
+        cwd: "/",
+        ...params,
+      })
+
+    for (const params of [
+      { cwd: "/elsewhere" },
+      { mcpServers: [{ name: "x", command: "x", args: [], env: [] }] },
+      { additionalDirectories: ["/tmp"] },
+    ])
+      await expect(fork(params), JSON.stringify(params)).rejects.toMatchObject(
+        INVALID_PARAMS
+      )
+    await expect(fork({ sessionId: "unknown" })).rejects.toMatchObject({
+      code: notFound().code,
+    })
+    expect(test.forkSession).not.toHaveBeenCalled()
     test.close()
   })
 
@@ -378,7 +446,8 @@ describe("AOS ACP agent", () => {
         return agentId === AGENT ? undefined : "/srv/writer/"
       },
     })
-    const UNSUPPORTED = { code: HGW_JSONRPC_ERRORS.unsupported }
+    // The Agent has no working folder, so no `cwd` names it.
+    const UNSUPPORTED = { code: INVALID_PARAMS.code }
     const onAgent = { _meta: { [HGW_META_KEY]: { agentId: AGENT } } }
 
     const page = await test.list()
@@ -658,7 +727,44 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers a prompt its client cancelled as cancelled, aborting its admission, then reports a stop the provider has not settled and the cancelled turn", async () => {
+  // ACP answers a cancelled prompt with -32800 only before its message is
+  // inserted; after, with its id, and only session/cancel stops its work.
+  it("answers a prompt its client cancelled before its runtime had it as cancelled, starting nothing", async () => {
+    const preparing = gate()
+    const test = await harness()
+    await test.create()
+    const cleanup = vi.fn(async () => undefined)
+    const attachmentStageId = test.attachmentStages.create(AGENT, CREATED, {
+      public: [],
+      appendTo: async (text) => {
+        await preparing.held
+        return text
+      },
+      cleanup,
+    })
+    const cancelled = new AbortController()
+    const sent = test.agent.request(
+      methods.agent.session.prompt,
+      {
+        sessionId: CREATED,
+        prompt: [{ type: "text", text: "Long job" }],
+        _meta: { [HGW_META_KEY]: { attachmentStageId } },
+      },
+      { cancellationSignal: cancelled.signal }
+    )
+    await settled()
+    cancelled.abort()
+    preparing.release()
+
+    await expect(sent).rejects.toMatchObject({
+      code: RequestError.requestCancelled().code,
+    })
+    expect(test.start).not.toHaveBeenCalled()
+    await waitFor(() => expect(cleanup).toHaveBeenCalledOnce())
+    test.close()
+  })
+
+  it("answers a prompt its client cancelled once its runtime had it with its id, then reports the stop session/cancel asks and the cancelled turn", async () => {
     const admission = gate()
     const test = await harness({ onStart: () => admission.held })
     await test.create()
@@ -674,13 +780,13 @@ describe("AOS ACP agent", () => {
     )
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     cancelled.abort()
-    await expect(sent).rejects.toMatchObject({
-      code: RequestError.requestCancelled().code,
-    })
-    expect(test.start.mock.calls[0]?.[3]).toMatchObject({ aborted: true })
-    // The provider took the turn all the same, which the browser follows once
-    // the coordinator settles it.
+    // The runtime has the prompt, which may already stand: a cancelled request
+    // cannot take it back, so the start runs on to its answer.
     admission.release()
+    await expect(sent).resolves.toMatchObject({
+      messageId: expect.any(String),
+    })
+    expect(test.start.mock.calls[0]?.[3]).toMatchObject({ aborted: false })
     const source = test.sources[0]
     source?.emit(turnStarted())
     await test.recorder.wait(
@@ -1553,7 +1659,7 @@ describe("AOS ACP agent", () => {
             event: "acp.turn.failed",
             connectionId: "connection-1",
             sessionId: CREATED,
-            stopReason: HGW_STOP_REASONS.uncertain,
+            state: "unknown",
             errorCode: "HGW_CONNECTION_INTERRUPTED",
             message: "the transport dropped",
             turnId: expect.any(String),
@@ -1636,7 +1742,7 @@ describe("Agent updates", () => {
         revision: "rev-1",
         avatar: "ring/blue",
       })
-    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.unsupported })
+    ).rejects.toMatchObject(INVALID_PARAMS)
     test.close()
   })
 })
@@ -1725,15 +1831,34 @@ describe("Session rooms", () => {
       appendTo: (text) => text,
       cleanup,
     })
-    const unanswered = expect(
-      prompt(test, "Again", SESSION, { attachmentStageId })
-    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.uncertainMutation })
+    const from = test.recorder.entries.length
+    const unanswered = prompt(test, "Again", SESSION, { attachmentStageId })
     await clock.advance(ADMISSION_DEADLINE_MS)
-    await unanswered
+    // The provider may have taken it, so ACP owes it an id: the gateway's,
+    // and the Session reports what it cannot observe as unknown.
+    await expect(unanswered).resolves.toEqual(expect.any(String))
+    await clock.advance(10)
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"unknown"'),
+      "the unknown state"
+    )
     expect(cleanup).not.toHaveBeenCalled()
     // No reconcile confirmed the turn by its deadline, so it never started.
     await clock.advance(UNCERTAINTY_DEADLINE_MS)
     expect(cleanup).toHaveBeenCalledOnce()
+    await clock.advance(10)
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"stopReason":"error"'),
+      "the error stop reason"
+    )
+    expect(
+      flow(test.recorder, SESSION, from).filter((item) =>
+        item.startsWith("state")
+      )
+    ).toEqual(["state unknown", "state idle"])
+    expect(JSON.stringify(test.recorder.entries.slice(from))).toContain(
+      "HGW_OUTCOME_UNKNOWN"
+    )
     test.close()
   })
 
@@ -2382,13 +2507,108 @@ describe("Session rooms", () => {
 
     const other = await test.connect("connection-2")
     await other.list()
-    await open(other, { _meta: { [HGW_META_KEY]: { turnId, after: 1 } } })
+    await open(other, {
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: 2 },
+    })
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     expect(prompts(other.recorder)).toEqual([])
     expect(flow(other.recorder)).toContain("chunk Done")
     test.close()
     other.close()
+  })
+
+  // ACP cursors are inclusive: `from` names the first event still needed.
+  it("replays a positioned resume from the event its cursor names", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await liveTurn(test, [test])
+    const live = sequencesOf(test.recorder).at(-1)!
+    const { turnId } = test.coordinator.snapshot(test.scope)
+
+    const named = await test.connect("connection-2")
+    await named.list()
+    await open(named, {
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: live },
+    })
+    const past = await test.connect("connection-3")
+    await past.list()
+    await open(past, {
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: live + 1 },
+    })
+
+    expect(flow(named.recorder).filter(isPromptOrChunk)).toEqual(["chunk Live"])
+    expect(flow(past.recorder).filter(isPromptOrChunk)).toEqual([])
+    test.close()
+    named.close()
+    past.close()
+  })
+
+  // ACP replays nothing to a resume that names no cursor.
+  it("follows a resume naming no cursor from the turn's next event", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await liveTurn(test, [test])
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: undefined })
+    chunk(test.sources[0], "More")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn, "the turn to end")
+
+    const seen = flow(other.recorder)
+    expect(seen.filter(isPromptOrChunk)).toEqual(["chunk More"])
+    expect(seen.at(-1)).toBe("state idle")
+    test.close()
+    other.close()
+  })
+
+  it("rebuilds nothing for a resume naming no cursor past its journal's start", async () => {
+    const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
+    await test.list()
+    await liveTurn(test, [test])
+    // A third event outgrows the journal, so the turn's start is gone.
+    chunk(test.sources[0], "Aside", "assistant-2")
+    await test.recorder.wait(said("Aside"), "an update carrying Aside")
+
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other, { replayFrom: undefined })
+    chunk(test.sources[0], "More", "assistant-2")
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await other.recorder.wait(endedTurn, "the turn to end")
+
+    const seen = flow(other.recorder)
+    expect(seen.filter((item) => item.startsWith("history"))).toEqual([])
+    expect(seen.filter(isPromptOrChunk)).toEqual(["chunk More"])
+    test.close()
+    other.close()
+  })
+
+  // The operator listener authenticates its upgrade, so it has no ACP login
+  // to end.
+  it("refuses an operator's logout as a method it does not serve", async () => {
+    const test = await harness()
+
+    await expect(
+      test.agent.request(methods.agent.auth.logout, {})
+    ).rejects.toMatchObject({ code: RequestError.methodNotFound("").code })
+    test.close()
+  })
+
+  it("refuses a resume that names its position in metadata", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        _meta: { [HGW_META_KEY]: { turnId: "run-1", after: 1 } },
+      })
+    ).rejects.toMatchObject(INVALID_PARAMS)
+    test.close()
   })
 
   it("gives a reconnect without a cursor the prompt once, then the stream", async () => {
@@ -2551,6 +2771,46 @@ describe("Session rooms", () => {
     await test.list()
 
     await expect(prompt(test, [])).rejects.toMatchObject(INVALID_PARAMS)
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  // ACP reserves `_` types for extensions and the rest for later variants, so
+  // a prompt carrying one is the prompt it was without it.
+  it("sends a prompt without the items ACP has not defined", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+
+    await prompt(test, [
+      { type: "text", text: "Summarize" },
+      { type: "_vendor_note", note: "from the vendor's client" },
+      // On the wire a later variant is plain JSON; only the SDK's parser
+      // brands it as one.
+      { type: "future_block", text: "a later ACP variant" } as ContentBlock,
+    ])
+
+    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    expect(test.start.mock.calls[0]?.[1]).toMatchObject({ prompt: "Summarize" })
+    test.close()
+  })
+
+  // Each needs a prompt capability the gateway never advertises.
+  it("refuses an inline image, audio clip or embedded file", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    const text = { type: "text" as const, text: "Summarize" }
+
+    for (const block of [
+      { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" },
+      { type: "audio" as const, data: "YXVkaW8=", mimeType: "audio/wav" },
+      {
+        type: "resource" as const,
+        resource: { uri: "file:///notes.txt", text: "notes" },
+      },
+    ])
+      await expect(prompt(test, [text, block])).rejects.toMatchObject(
+        INVALID_PARAMS
+      )
     expect(test.start).not.toHaveBeenCalled()
     test.close()
   })
@@ -3456,6 +3716,58 @@ describe("History pages", () => {
 
     expect(oldest).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
     expect(pageUpdates(test.recorder, last)).toHaveLength(2)
+    test.close()
+  })
+
+  // A child's transcript is part of the page that named it: tagged as that
+  // page is, so no reader takes it for the live turn's.
+  it("tags the transcript of a child an older page names as that page", async () => {
+    const transcript: SessionHistoryResponse["messages"] = conversation(12)
+    transcript[4] = {
+      id: "child-row",
+      role: "activity",
+      activityType: "CHILD_SESSION",
+      content: { childSessionId: "child-1", title: "Review the notes" },
+    }
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      childHistory: async () => ({
+        sessionId: "child-1",
+        messages: [
+          {
+            id: "child-message",
+            role: "assistant",
+            content: [{ type: "text", text: "Two notes were stale" }],
+            createdAt: NOW,
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+    })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    await settled()
+    const from = test.recorder.entries.length
+
+    await older(test, cursorOf(5))
+    await settled()
+
+    const childUpdates = test.recorder.entries
+      .slice(from)
+      .flatMap(({ method, params }) => {
+        const sent = params as { sessionId: string; update: SentUpdate }
+        return method === methods.client.session.update &&
+          sent.sessionId === "child-1"
+          ? [sent.update]
+          : []
+      })
+    expect(childUpdates).not.toHaveLength(0)
+    for (const update of childUpdates)
+      expect(pageTag(update)).toEqual({ cursor: cursorOf(5) })
     test.close()
   })
 

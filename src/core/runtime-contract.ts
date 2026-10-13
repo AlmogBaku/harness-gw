@@ -18,6 +18,10 @@ import {
   type TurnEvent,
 } from "./events"
 import { coreFailure, type CallerError, type PublicFailure } from "./failures"
+import {
+  SessionCreateResponseSchema,
+  SessionWorkspaceCapabilitiesResponseSchema,
+} from "../../protocol"
 import type { ServerRuntime, ServerTurnHandle, SessionScope } from "./runtime"
 
 /** The contract's rows, each named for the rule it protects. */
@@ -30,6 +34,11 @@ export type RuntimeContractRow =
   | "linkLossFailsReadsAndTurns"
   | "settledTurnsFreeRecords"
   | "closeLeavesNoTimer"
+  | "forkLeavesOriginal"
+  | "childAnnouncedFirst"
+  | "childrenStayUnlisted"
+  | "compactionStoredAsRow"
+  | "rewindAsReported"
 
 /** What one adapter's fake lets the contract do to its runtime. */
 export type RuntimeContractHarness = {
@@ -59,6 +68,17 @@ export type RuntimeContractHarness = {
   seedTypedMessages?(): void
   /** The per-Session records the runtime holds; only `settledTurnsFreeRecords` asks. */
   records?(): number
+  /**
+   * Has the running turn spawn one child Session natively, and stream one
+   * event of the child's own; resolves with the id the adapter reports the
+   * child under. Only the child rows ask.
+   */
+  spawnChild?(): Promise<string>
+  /**
+   * Has the running turn compact its context natively, and complete it;
+   * resolves with the compaction's id. Only `compactionStoredAsRow` asks.
+   */
+  compact?(): Promise<string>
   /** Release the runtime as its factory's `close` does. */
   close(): Promise<void>
 }
@@ -381,6 +401,177 @@ export function runServerRuntimeContract(
           await settledTurn(harness, clock)
 
         expect(harness.records!()).toBe(0)
+      }
+    )
+
+    row(
+      "forkLeavesOriginal",
+      "forks a Session into a listed one, answered as a create is, leaving the original",
+      async (harness, clock) => {
+        const { runtime, scope } = harness
+        if (!runtime.forkSession) throw new Error("name the row a gap")
+        await settledTurn(harness, clock)
+
+        const forked = SessionCreateResponseSchema.parse(
+          await until(
+            clock,
+            runtime.forkSession(scope.agentId, scope.providerSessionId)
+          )
+        )
+
+        expect(forked.session.id).not.toBe(scope.sessionId)
+        await expect(
+          until(
+            clock,
+            runtime.getSession(scope.agentId, scope.providerSessionId)
+          )
+        ).resolves.toMatchObject({ agentId: scope.agentId })
+        const listed = await until(
+          clock,
+          runtime.listSessions(scope.agentId, 100, 0)
+        )
+        expect(listed.sessions.map(({ id }) => id)).toContain(forked.session.id)
+      }
+    )
+
+    row(
+      "childAnnouncedFirst",
+      "announces a child Session before any event or request of its own",
+      async (harness, clock) => {
+        const handle = await until(
+          clock,
+          harness.runtime.turns.start(harness.scope, prompt())
+        )
+        const stream = collect(handle)
+        await harness.progress()
+        const child = await harness.spawnChild!()
+        await harness.finish()
+        await until(clock, stream.done)
+
+        const first = stream.events.findIndex(
+          (event) =>
+            JSON.stringify(event).includes(JSON.stringify(child)) &&
+            event.kind !== TurnEventKind.ToolCallStarted &&
+            event.kind !== TurnEventKind.ToolCallFinished
+        )
+        expect(stream.events[first]).toMatchObject({
+          kind: TurnEventKind.ChildSessionUpdated,
+          childSessionId: child,
+        })
+      }
+    )
+
+    row(
+      "childrenStayUnlisted",
+      "keeps a child Session out of the Session list, its transcript read whole",
+      async (harness, clock) => {
+        const { runtime, scope } = harness
+        const handle = await until(clock, runtime.turns.start(scope, prompt()))
+        const stream = collect(handle)
+        await harness.progress()
+        const child = await harness.spawnChild!()
+        await harness.finish()
+        await until(clock, stream.done)
+
+        const listed = await until(
+          clock,
+          runtime.listSessions(scope.agentId, 100, 0)
+        )
+        expect(listed.sessions.map(({ id }) => id)).not.toContain(child)
+        if (runtime.childHistory)
+          await expect(
+            until(
+              clock,
+              runtime.childHistory(
+                scope.agentId,
+                scope.providerSessionId,
+                child
+              )
+            )
+          ).resolves.toMatchObject({ messages: expect.any(Array) })
+      }
+    )
+
+    row(
+      "compactionStoredAsRow",
+      "stores a compaction its turn streamed as a row under the same id",
+      async (harness, clock) => {
+        const { runtime, scope } = harness
+        const handle = await until(clock, runtime.turns.start(scope, prompt()))
+        const stream = collect(handle)
+        await harness.progress()
+        const compactionId = await harness.compact!()
+        await harness.finish()
+        await until(clock, stream.done)
+
+        expect(stream.events).toContainEqual(
+          expect.objectContaining({
+            kind: TurnEventKind.CompactionUpdated,
+            compactionId,
+          })
+        )
+        const page = await until(
+          clock,
+          runtime.history(scope.agentId, scope.providerSessionId, 50, 0)
+        )
+        expect(page.messages).toContainEqual(
+          expect.objectContaining({
+            role: "activity",
+            activityType: "COMPACTION",
+            content: expect.objectContaining({ compactionId }),
+          })
+        )
+      }
+    )
+
+    row(
+      "rewindAsReported",
+      "replaces the user turn an Edit names, where the Session reports rewind",
+      async (harness, clock) => {
+        const { runtime, scope } = harness
+        const capabilities = SessionWorkspaceCapabilitiesResponseSchema.parse(
+          await until(
+            clock,
+            runtime.workspaceCapabilities(scope.agentId, scope.sessionId)
+          )
+        )
+        if (capabilities.interactions.rewind.status !== "available")
+          throw new Error("name the row a gap: rewind is not reported")
+        await settledTurn(harness, clock)
+        const before = await until(
+          clock,
+          runtime.history(scope.agentId, scope.providerSessionId, 50, 0)
+        )
+        const source = before.messages.findLast(
+          (message) => message.role === "user"
+        )
+        if (!source) throw new Error("The settled turn stored no user turn")
+
+        const replacement = {
+          ...prompt(),
+          prompt: "Replacement prompt",
+          rewindSourceId: source.id,
+        }
+        const handle = await until(
+          clock,
+          runtime.turns.start(scope, replacement)
+        )
+        const stream = collect(handle)
+        await harness.progress()
+        await harness.finish()
+        await until(clock, stream.done)
+
+        const after = await until(
+          clock,
+          runtime.history(scope.agentId, scope.providerSessionId, 50, 0)
+        )
+        const users = after.messages.flatMap((message) =>
+          message.role === "user" ? [JSON.stringify(message.content)] : []
+        )
+        expect(users.some((text) => text.includes("Replacement prompt"))).toBe(
+          true
+        )
+        expect(users).not.toContain(JSON.stringify(source.content))
       }
     )
 

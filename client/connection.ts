@@ -2,7 +2,9 @@ import {
   client,
   methods,
   RequestError,
+  SessionUpdate,
   type AgentApp,
+  type AgentCapabilities,
   type AnyWireMessage,
   type ClientConnection,
   type ClientContext,
@@ -41,6 +43,7 @@ import {
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
+  HGW_REPLAY_POSITION,
   HgwActivityNotificationSchema,
   HgwAgentUpdateResponseSchema,
   HgwAgentsListResponseSchema,
@@ -222,7 +225,8 @@ const SESSION_STATES = new Map<unknown, AcpSessionState>([
 
 /** The Agent update refusals a caller can act on, as typed errors. */
 function agentUpdateError(error: unknown) {
-  if (codeOf(error) === HGW_JSONRPC_ERRORS.unsupported)
+  // ACP's invalid params: a field this runtime cannot take.
+  if (codeOf(error) === RequestError.invalidParams().code)
     return new AgentUpdateError(
       "unsupported",
       "This runtime cannot store that Agent field"
@@ -243,6 +247,20 @@ export function acpSocketUrl(path: string, base: string) {
   const url = new URL(path, base)
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   return url.toString()
+}
+
+/**
+ * The cursor a rejoin resumes from: the first event of the live turn the
+ * Session's listeners have not seen, as ACP's inclusive cursors name it, or
+ * none for a view that saw no turn event, which the gateway positions itself.
+ */
+function rejoinCursor(position: { turnId: string; after: number } | undefined) {
+  return {
+    type: HGW_REPLAY_POSITION,
+    ...(position === undefined
+      ? {}
+      : { turnId: position.turnId, from: position.after + 1 }),
+  }
 }
 
 function subscribeTo<Listener>(listeners: Set<Listener>, listener: Listener) {
@@ -699,6 +717,14 @@ export function createAcpConnection(
   // The gateway answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
+  /**
+   * The child Sessions an opened Session announced with `subagent_update`,
+   * each with the Session that announced it: ACP sends a child's own updates
+   * and requests under its id, which only this tells apart from a stranger's.
+   */
+  const children = new Map<string, string>()
+  /** ACP's capabilities from the latest handshake. */
+  let agentCapabilities: AgentCapabilities | undefined
 
   let status: AcpConnectionStatus = "connecting"
   let outage: AcpConnectionOutage | undefined
@@ -747,7 +773,23 @@ export function createAcpConnection(
     callEach(outageListeners, logger, "acp.listener.failed", next)
   }
 
+  /**
+   * The opened Session that owns `sessionId`, a child or a child's child, or
+   * undefined for a Session no opened one announced.
+   */
+  function ownerOf(sessionId: string) {
+    let owner = children.get(sessionId)
+    for (let depth = 0; owner !== undefined && depth < 8; depth += 1) {
+      if (sessions.has(owner)) return owner
+      owner = children.get(owner)
+    }
+    return undefined
+  }
+
   function emitPending(request: AcpPendingRequest) {
+    const parentSessionId =
+      request.sessionId === undefined ? undefined : ownerOf(request.sessionId)
+    if (parentSessionId !== undefined) request = { ...request, parentSessionId }
     for (const listener of pendingListeners)
       try {
         listener(request)
@@ -845,29 +887,64 @@ export function createAcpConnection(
     })
   }
 
+  /** Gives one update of a child Session to the listeners of the Session that owns it. */
+  function deliverChild(
+    open: OpenSession,
+    childSessionId: string,
+    update: SessionUpdate,
+    meta: Record<string, unknown> | undefined
+  ) {
+    for (const { listener } of open.listeners)
+      callEach(
+        listener.child ? [listener.child] : [],
+        logger,
+        "acp.listener.failed",
+        childSessionId,
+        update,
+        meta
+      )
+  }
+
   const app = client({ name: clientInfo.name })
     .onNotification(methods.client.session.update, ({ params }) => {
       // Every `_meta.hgw` the protocol defines for an update belongs to the
       // update itself, not to the notification carrying it.
       const meta = hgwMetaOf(params.update._meta)
-      const open = sessions.get(params.sessionId)
+      // A Session announces each child before any update of the child's.
+      if (SessionUpdate.isSubagentUpdate(params.update))
+        children.set(params.update.sessionId, params.sessionId)
+      const owner = sessions.has(params.sessionId)
+        ? undefined
+        : ownerOf(params.sessionId)
+      const open = sessions.get(owner ?? params.sessionId)
       if (!open) return
       // An older page's updates belong to the page read alone: its turns are
       // long over, so a live listener or the rejoin position would take its
       // state markers for the running turn's.
       if (HgwHistoryPageTagSchema.safeParse(meta).data?.historyPage) {
-        open.page?.push({ update: params.update, meta })
+        // A child's transcript on that page is the child's, so its own
+        // listener has it; its positions are the page's as well.
+        if (owner !== undefined)
+          deliverChild(open, params.sessionId, params.update, meta)
+        else open.page?.push({ update: params.update, meta })
         return
       }
       // Every turn meta extends the chunk meta, and reads drop unknown keys,
       // so the chunk schema positions any of them.
       const position = HgwChunkMetaSchema.safeParse(meta)
-      if (position.success)
+      // A child's update between turns is no position in the turn it names.
+      if (position.success && !position.data.background)
         open.position = {
           turnId: position.data.turnId,
           after: position.data.sequence,
         }
       if (open.replaying) open.replaying.delivered = true
+      // A child's own update goes to the listeners of the Session that owns
+      // it; its position is that Session's turn's too.
+      if (owner !== undefined) {
+        deliverChild(open, params.sessionId, params.update, meta)
+        return
+      }
       for (const { listener } of open.listeners)
         callEach(
           listener.update ? [listener.update] : [],
@@ -1037,6 +1114,7 @@ export function createAcpConnection(
       },
     })
     const announced = hgwMetaOf(response._meta)
+    agentCapabilities = response.capabilities ?? undefined
     // A retry cannot change the gateway's version, so a mismatch ends the
     // connection instead of reconnecting against it.
     if (announced?.version !== HGW_EXTENSION_VERSION) {
@@ -1118,12 +1196,11 @@ export function createAcpConnection(
             {
               sessionId,
               cwd: AGENT_CWD,
-              ...(fromStart ? { replayFrom: { type: "start" } } : {}),
+              replayFrom: fromStart
+                ? { type: "start" }
+                : rejoinCursor(open.position),
               _meta: {
-                [HGW_META_KEY]: {
-                  ...(agentId === undefined ? {} : { agentId }),
-                  ...(fromStart ? {} : open.position),
-                },
+                [HGW_META_KEY]: agentId === undefined ? {} : { agentId },
               },
             },
             options
@@ -1305,6 +1382,8 @@ export function createAcpConnection(
   function part(sessionId: string, open: OpenSession) {
     sessions.delete(sessionId)
     owners.delete(sessionId)
+    for (const [child, parent] of children)
+      if (parent === sessionId) children.delete(child)
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
@@ -1530,6 +1609,9 @@ export function createAcpConnection(
     get status() {
       return status
     },
+    get capabilities() {
+      return agentCapabilities
+    },
     start,
     initialized,
     subscribeStatus: (listener) => subscribeTo(statusListeners, listener),
@@ -1558,6 +1640,28 @@ export function createAcpConnection(
         )
       }
       return { sessionId }
+    },
+
+    async forkSession(sessionId) {
+      const forked = await request("short", (agent, options) =>
+        agent.request(
+          methods.agent.session.fork,
+          { sessionId, cwd: AGENT_CWD },
+          options
+        )
+      )
+      const agentId = owners.get(sessionId)
+      if (agentId !== undefined) owners.set(forked.sessionId, agentId)
+      // The gateway joined this connection to it; it parts in its grace
+      // unless a listener comes to it.
+      if (!sessions.has(forked.sessionId)) {
+        const open = openSession(forked.sessionId, [], true)
+        open.grace = clock.setTimeout(
+          () => part(forked.sessionId, open),
+          PART_GRACE_MS
+        )
+      }
+      return { sessionId: forked.sessionId }
     },
 
     async listSessions(meta, cursor) {

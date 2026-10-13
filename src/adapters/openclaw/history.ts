@@ -15,6 +15,14 @@ import {
   openClawMediaArtifact,
   type OpenClawArtifactDescriptor,
 } from "./artifacts"
+import {
+  childRowRefusal,
+  childRowStatus,
+  keyAgentId,
+  SPAWN_TOOL,
+  spawnedChild,
+  spawnFacts,
+} from "./children"
 import { safeClone } from "./json-copy"
 import { mcpAppViewId } from "./mcp-apps"
 import { mayBeMcpToolName, type OpenClawMcpToolNames } from "./mcp-tool-names"
@@ -27,7 +35,13 @@ import {
   parseOpenClawSessions,
   type OpenClawSession,
 } from "./native-schemas"
-import type { OpenClawWorkspaceClient } from "./workspace"
+import {
+  OpenClawWorkspaceOwnershipError,
+  type OpenClawWorkspaceClient,
+} from "./workspace"
+
+/** One row of a history page: a message, or a row of the Session's activity. */
+type HistoryRow = SessionHistoryResponse["messages"][number]
 
 const HISTORY_DEFAULT_PAGE = 200
 const HISTORY_MAX_PAGE = 500
@@ -225,17 +239,22 @@ function unresolvedToolNames(rows: readonly unknown[]) {
   return [...names]
 }
 
+/** A history row placed where the native row it stands for sits. */
+type PlacedRow = Readonly<{
+  message: HistoryRow
+  sequence: number
+  index: number
+}>
+
 function projectMessages(
   rows: readonly unknown[],
   resolve: McpToolNameResolver,
-  mediaArtifacts: boolean
-): SessionMessage[] {
+  /** Whether a media block of this role's message becomes an Artifact. */
+  media: (role: "user" | "assistant") => boolean,
+  activity: readonly PlacedRow[] = []
+): HistoryRow[] {
   const outcomes = toolOutcomes(rows)
-  const messages: Array<{
-    message: SessionMessage
-    sequence: number
-    index: number
-  }> = []
+  const messages: PlacedRow[] = [...activity]
   for (const [index, raw] of rows.entries()) {
     if (!record(raw)) continue
     if (raw.role !== "user" && raw.role !== "assistant") continue
@@ -244,14 +263,7 @@ function projectMessages(
     const message: SessionMessage = {
       id,
       role: raw.role,
-      // `mediaArtifacts` governs only assistant media: a user's own upload
-      // stays an Artifact even when it is off.
-      content: messageParts(
-        raw.content,
-        outcomes,
-        resolve,
-        raw.role === "user" || mediaArtifacts
-      ),
+      content: messageParts(raw.content, outcomes, resolve, media(raw.role)),
       createdAt: timestamp(raw, index),
     }
     messages.push({ message, sequence: nativeSequence(raw, index), index })
@@ -262,6 +274,51 @@ function projectMessages(
         left.sequence - right.sequence || left.index - right.index
     )
     .map(({ message }) => message)
+}
+
+/** A spawn one of these rows records: its call, and the child it named. */
+type SpawnRecord = Readonly<{
+  key: string
+  toolCallId: string
+  args: unknown
+  index: number
+  sequence: number
+}>
+
+/**
+ * Each child Session a `sessions_spawn` call among these rows spawned, by
+ * the accepted result its `toolResult` row stores, placed where that row is.
+ */
+function spawnRecords(rows: readonly unknown[]): SpawnRecord[] {
+  const calls = new Map<string, unknown>()
+  for (const row of rows) {
+    if (!record(row) || row.role !== "assistant" || !Array.isArray(row.content))
+      continue
+    for (const block of row.content) {
+      const id = record(block) ? identifier(block.id) : undefined
+      if (id && record(block) && block.type === "toolCall")
+        if (block.name === SPAWN_TOOL) calls.set(id, block.arguments)
+    }
+  }
+  const spawns: SpawnRecord[] = []
+  const seen = new Set<string>()
+  for (const [index, row] of rows.entries()) {
+    if (!record(row) || row.role !== "toolResult" || row.isError === true)
+      continue
+    const toolCallId = identifier(row.toolCallId)
+    if (!toolCallId || !calls.has(toolCallId)) continue
+    const spawned = spawnedChild({ content: row.content, details: row.details })
+    if (!spawned || seen.has(spawned.key)) continue
+    seen.add(spawned.key)
+    spawns.push({
+      key: spawned.key,
+      toolCallId,
+      args: calls.get(toolCallId),
+      index,
+      sequence: nativeSequence(row, index),
+    })
+  }
+  return spawns
 }
 
 /**
@@ -373,6 +430,16 @@ export type OpenClawHistoryOperations = Readonly<{
     sessionKey: string,
     toolCallId: string
   ): Promise<McpToolCall | undefined>
+  /**
+   * The whole transcript of the child Session `childKey` a call of
+   * `sessionKey`'s spawned, as one page under the child's id, once the
+   * child's own row names `sessionKey` as its parent.
+   */
+  childHistory(
+    agentId: string,
+    sessionKey: string,
+    childKey: string
+  ): Promise<SessionHistoryResponse>
 }>
 
 export function createOpenClawHistory(input: {
@@ -434,6 +501,75 @@ export function createOpenClawHistory(input: {
     }
     throw new OpenClawHistoryUnavailableError()
   }
+  /**
+   * The child Session `childKey`'s own row, once it confirms the child is one
+   * a call of `parentKey`'s spawned; otherwise `undefined`.
+   */
+  const confirmedChild = async (
+    agentId: string,
+    parentKey: string,
+    childKey: string,
+    depth: number
+  ) => {
+    const childAgent = keyAgentId(childKey) ?? agentId
+    const rows = parseOpenClawSessions(
+      await input.client.request(
+        "sessions.list",
+        openClawSessionSearchParams(childAgent, childKey)
+      ),
+      100
+    ).filter((row) => row.key === childKey)
+    if (rows.length !== 1) return undefined
+    return childRowRefusal(rows[0]!, parentKey, childAgent, depth) === undefined
+      ? rows[0]!
+      : undefined
+  }
+  /**
+   * A CHILD_SESSION row for each child a spawn among `rows` names, placed
+   * where its result is stored, once the child's own row confirms it as
+   * `sessionKey`'s; a child that is not confirmed, or cannot be read now,
+   * has none.
+   */
+  const childRows = async (
+    agentId: string,
+    sessionKey: string,
+    rows: readonly unknown[],
+    depth: number
+  ) => {
+    const placed: PlacedRow[] = []
+    for (const spawn of spawnRecords(rows)) {
+      const id = `openclaw-child:${spawn.key}`
+      if (!validIdentifier(id)) continue
+      const child = await confirmedChild(
+        agentId,
+        sessionKey,
+        spawn.key,
+        depth
+      ).catch(() => undefined)
+      if (!child) continue
+      const { model: asked, ...facts } = spawnFacts(spawn.args)
+      const status = childRowStatus(child.status)
+      const model =
+        child.model && child.model.length <= 256 ? child.model : asked
+      placed.push({
+        message: {
+          id,
+          role: "activity",
+          activityType: "CHILD_SESSION",
+          content: {
+            childSessionId: spawn.key,
+            toolCallId: spawn.toolCallId,
+            ...facts,
+            ...(status === undefined ? {} : { status }),
+            ...(model === undefined ? {} : { model }),
+          },
+        },
+        sequence: spawn.sequence,
+        index: spawn.index,
+      })
+    }
+    return placed
+  }
   /** The first match `find` reports, reading this Session's history a page at a time. */
   const scanHistory = async <T>(
     agentId: string,
@@ -482,10 +618,14 @@ export function createOpenClawHistory(input: {
       const unresolved = unresolvedToolNames(rows)
       if (unresolved.length > 0)
         await input.mcpToolNames?.load(agentId, sessionKey, unresolved)
+      const media = input.mediaArtifacts ?? true
       const messages = projectMessages(
         rows,
         input.mcpToolNames?.resolver(agentId, sessionKey) ?? (() => undefined),
-        input.mediaArtifacts ?? true
+        // `mediaArtifacts` governs only assistant media: a user's own upload
+        // stays an Artifact even when it is off.
+        (role) => role === "user" || media,
+        await childRows(agentId, sessionKey, rows, 1)
       )
       return {
         sessionId: sessionKey,
@@ -550,6 +690,41 @@ export function createOpenClawHistory(input: {
         call &&
         (await input.mcpToolNames?.listed(agentId, sessionKey, call.name))
       return tool && { ...tool, input: call.input }
+    },
+    async childHistory(agentId, sessionKey, childKey) {
+      await requireScope(agentId, sessionKey)
+      if (!(await confirmedChild(agentId, sessionKey, childKey, 1)))
+        throw new OpenClawWorkspaceOwnershipError()
+      const childAgent = keyAgentId(childKey) ?? agentId
+      const native = parseOpenClawHistory(
+        await input.client.request(
+          "chat.history",
+          openClawHistoryParams(childAgent, childKey, HISTORY_MAX_PAGE, 0)
+        ),
+        HISTORY_MAX_PAGE
+      )
+      const rows = native.messages
+      const messages = projectMessages(
+        rows,
+        () => undefined,
+        // A child's Artifacts have no Session to be read under: the child is
+        // no Session of the list, so its media is left out.
+        () => false,
+        // A grandchild is announced in its parent child's transcript.
+        await childRows(childAgent, childKey, rows, 2)
+      )
+      return {
+        sessionId: childKey,
+        messages,
+        total: messages.length,
+        limit: HISTORY_MAX_PAGE,
+        offset: 0,
+        nextOffset: rows.length,
+        // A child's transcript is read whole, never paged; older rows past
+        // one read are rows it cannot reach.
+        ...(rows.length >= HISTORY_MAX_PAGE ? { truncated: true } : {}),
+        execution: execution(native),
+      }
     },
     async activity(agentId, sessionKey) {
       const history = await authoritativeHistory(agentId, sessionKey, 1, 0)

@@ -27,11 +27,12 @@ import {
   ACP_PROTOCOL_VERSION,
   HGW_METHODS,
   HGW_META_KEY,
-  HGW_STOP_REASONS,
+  HGW_REPLAY_POSITION,
 } from "../../protocol/acp"
 import {
   PendingRequestKind,
   TurnEventKind,
+  isUnobservedFailure,
   type PendingRequest,
   type TurnEvent,
 } from "../core/events"
@@ -55,6 +56,7 @@ import { createSessionRows } from "../core/session-rows"
 import { createHgwAcpAgent } from "./agent"
 import { createChannels, type HistoryReach } from "../core/channel"
 import { withFaults, type Faults } from "./test-faults"
+import { turnError } from "./translate/updates"
 import type {
   AcpConnectionContext,
   AcpOutbound,
@@ -67,6 +69,8 @@ export const PRINCIPAL = "operator"
 export const CONNECTION = "connection-1"
 export const SESSION = "session-1"
 export const CREATED = "session-created"
+/** The Session a fork of the seeded one makes, where the runtime forks. */
+export const FORKED = "session-forked"
 export const NOW = "2026-01-01T00:00:00.000Z"
 
 export function sessionRow(overrides: Partial<Session> = {}): Session {
@@ -156,6 +160,7 @@ export const CAPABILITIES = {
       input: "text",
       fallback: "provider-queue",
     },
+    rewind: { status: "available", scope: "user-turn" },
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,
@@ -279,6 +284,14 @@ const requestOutbound = (request: PendingRequest): RequestOutbound =>
 
 /** Deterministic stand-ins for the translators' pure projections. */
 export const translators: Translators = {
+  translateChildUpdate: (event, context) => ({
+    sessionUpdate: "subagent_update",
+    sessionId: event.childSessionId,
+    ...(event.title === undefined ? {} : { title: event.title }),
+    _meta: {
+      [HGW_META_KEY]: { sequence: context.sequence, turnId: context.turnId },
+    },
+  }),
   translateTurnEvent(state, event, context) {
     const meta = {
       _meta: {
@@ -328,10 +341,17 @@ export const translators: Translators = {
             kind: "update",
             update: {
               sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: HGW_STOP_REASONS.uncertain,
-              // As the real translator does, the failure itself travels with
-              // the state it settled, which is what the member logs.
+              // As the real translator does: a turn nothing observes is
+              // unknown, and any other failure ends it.
+              ...(isUnobservedFailure(event)
+                ? { state: "unknown" as const }
+                : {
+                    state: "idle" as const,
+                    stopReason: "error" as const,
+                    error: turnError(event.code),
+                  }),
+              // The failure itself travels with the state it settled, which is
+              // what the member logs.
               _meta: {
                 [HGW_META_KEY]: {
                   ...meta._meta[HGW_META_KEY],
@@ -584,6 +604,9 @@ export type HarnessOptions = {
   discover?: ServerTurnEngine["discover"]
   /** Stands for a runtime that reports the turns it starts by itself. */
   subscribeTurns?: ServerTurnEngine["subscribeTurns"]
+  /** A runtime that answers and stops a child between its parent's turns. */
+  respondChild?: ServerTurnEngine["respondChild"]
+  stopChild?: ServerTurnEngine["stopChild"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
@@ -596,6 +619,10 @@ export type HarnessOptions = {
   withoutCatalogChanges?: boolean
   /** Each Agent's working folder; defaults to `/` for every Agent. */
   agentFolder?: ServerRuntime["agentFolder"]
+  /** The runtime forks Sessions, into `FORKED`; it cannot by default. */
+  forks?: boolean
+  /** A child Session's whole transcript; the runtime keeps none by default. */
+  childHistory?: ServerRuntime["childHistory"]
   /** The provider's Agent write; refuses as untested by default. */
   updateAgent?: ServerRuntime["updateAgent"]
   /**
@@ -665,6 +692,8 @@ export async function harness(options: HarnessOptions = {}) {
     ...(options.subscribeTurns
       ? { subscribeTurns: options.subscribeTurns }
       : {}),
+    ...(options.respondChild ? { respondChild: options.respondChild } : {}),
+    ...(options.stopChild ? { stopChild: options.stopChild } : {}),
   }
 
   const rows = new Map(
@@ -709,6 +738,10 @@ export async function harness(options: HarnessOptions = {}) {
       sessionRow({ id: CREATED, agentId, title: title ?? "Untitled" })
     )
     return { session: { id: CREATED, agentId } }
+  })
+  const forkSession = vi.fn(async (agentId: string) => {
+    rows.set(FORKED, sessionRow({ id: FORKED, agentId, title: "Notes (fork)" }))
+    return { session: { id: FORKED, agentId } }
   })
   const updateModel = vi.fn(
     async (_agentId: string, _sessionId: string, patch: unknown) => {
@@ -781,6 +814,8 @@ export async function harness(options: HarnessOptions = {}) {
     history,
     getSession,
     createSession,
+    ...(options.forks ? { forkSession } : {}),
+    ...(options.childHistory ? { childHistory: options.childHistory } : {}),
     updateSession,
     deleteSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,
@@ -1012,6 +1047,7 @@ export async function harness(options: HarnessOptions = {}) {
     recover,
     discover,
     createSession,
+    forkSession,
     updateSession,
     deleteSession,
     updateModel,
@@ -1114,7 +1150,10 @@ export async function prompt(
   return accepted.messageId
 }
 
-/** Opens a Session and waits for the execution report its resume owes. */
+/**
+ * Opens a Session as the SDK does, at the position its view holds, and waits
+ * for the execution report its resume owes.
+ */
 export async function open(
   browser: Browser,
   params: Partial<ResumeSessionRequest> = {}
@@ -1123,6 +1162,7 @@ export async function open(
   await browser.agent.request(methods.agent.session.resume, {
     sessionId: SESSION,
     cwd: "/",
+    replayFrom: { type: HGW_REPLAY_POSITION },
     ...params,
   })
   await browser.recorder.wait(

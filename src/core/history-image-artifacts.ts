@@ -234,59 +234,91 @@ export function withHistoryImageArtifacts<Runtime extends ServerRuntime>(
     return found
   }
 
-  const overrides: Pick<ServerRuntime, "history" | "artifact" | "publicError"> =
-    {
-      async history(agentId, providerSessionId, limit, offset) {
-        const page = await native.history(
-          agentId,
-          providerSessionId,
-          limit,
-          offset
-        )
-        const messages = page.messages.map((message) => {
-          if (message.role === "activity") return message
-          const content = message.content.map((part, index) => {
-            const image =
-              part.type === "image"
-                ? storedImage(providerSessionId, part, index)
-                : undefined
-            if (!image) return part
-            remember(
-              locations,
-              keyOf(agentId, providerSessionId, image.descriptor.id),
-              { limit, offset, messageId: message.id, index },
-              MAX_LOCATIONS
-            )
-            return {
-              type: "data" as const,
-              name: ARTIFACT_PART_NAME,
-              data: image.descriptor,
-            }
-          })
-          return { ...message, content }
+  /**
+   * A child Session's transcript without its data-URL images: no Session's
+   * artifact read reaches a child, so its bytes would ride the shared socket
+   * whole, and one large image could pass the frame cap.
+   */
+  async function childHistory(
+    ...[agentId, providerSessionId, childSessionId]: Parameters<
+      NonNullable<ServerRuntime["childHistory"]>
+    >
+  ) {
+    const page = await native.childHistory!(
+      agentId,
+      providerSessionId,
+      childSessionId
+    )
+    const messages = page.messages.map((message) =>
+      message.role === "activity"
+        ? message
+        : {
+            ...message,
+            content: message.content.filter(
+              (part) => part.type !== "image" || !part.image.startsWith("data:")
+            ),
+          }
+    )
+    return { ...page, messages }
+  }
+
+  const overrides: Pick<
+    ServerRuntime,
+    "history" | "artifact" | "publicError" | "childHistory"
+  > = {
+    async history(agentId, providerSessionId, limit, offset) {
+      const page = await native.history(
+        agentId,
+        providerSessionId,
+        limit,
+        offset
+      )
+      const messages = page.messages.map((message) => {
+        if (message.role === "activity") return message
+        const content = message.content.map((part, index) => {
+          const image =
+            part.type === "image"
+              ? storedImage(providerSessionId, part, index)
+              : undefined
+          if (!image) return part
+          remember(
+            locations,
+            keyOf(agentId, providerSessionId, image.descriptor.id),
+            { limit, offset, messageId: message.id, index },
+            MAX_LOCATIONS
+          )
+          return {
+            type: "data" as const,
+            name: ARTIFACT_PART_NAME,
+            data: image.descriptor,
+          }
         })
-        return { ...page, messages }
-      },
-      async artifact(agentId, publicSessionId, artifactId) {
-        if (!artifactId.startsWith(ID_PREFIX))
-          return native.artifact(agentId, publicSessionId, artifactId)
-        const providerSessionId = native.resolveProviderSessionId(
-          agentId,
-          publicSessionId
-        )
-        const found =
-          providerSessionId === undefined
-            ? undefined
-            : await find(agentId, providerSessionId, artifactId)
-        if (!found) throw new HistoryImageGoneError()
-        return found
-      },
-      publicError(cause) {
-        return cause instanceof HistoryImageGoneError
-          ? failureOf("gone", cause)
-          : native.publicError(cause)
-      },
-    }
+        return { ...message, content }
+      })
+      return { ...page, messages }
+    },
+    async artifact(agentId, publicSessionId, artifactId) {
+      if (!artifactId.startsWith(ID_PREFIX))
+        return native.artifact(agentId, publicSessionId, artifactId)
+      const providerSessionId = native.resolveProviderSessionId(
+        agentId,
+        publicSessionId
+      )
+      const found =
+        providerSessionId === undefined
+          ? undefined
+          : await find(agentId, providerSessionId, artifactId)
+      if (!found) throw new HistoryImageGoneError()
+      return found
+    },
+    publicError(cause) {
+      return cause instanceof HistoryImageGoneError
+        ? failureOf("gone", cause)
+        : native.publicError(cause)
+    },
+    // A runtime that keeps no child transcript keeps reporting none.
+    ...(native.childHistory ? { childHistory } : {}),
+  }
 
   return new Proxy(native, {
     get(target, property) {

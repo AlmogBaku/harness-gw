@@ -68,10 +68,8 @@ export function createTurnProjector(
           ...(composerPrefill === undefined ? {} : { composerPrefill }),
         }
       }
-      // A subagent's prose is its tool call's output, which guests never see.
       case TurnEventKind.MessageChunk:
-        return validIdentifier(candidate.messageId) &&
-          candidate.subagentId === undefined
+        return validIdentifier(candidate.messageId)
           ? {
               kind: TurnEventKind.MessageChunk,
               messageId: candidate.messageId,
@@ -99,7 +97,6 @@ export function createTurnProjector(
       // arguments, and no other tool call. Its output passes when its server
       // is allowlisted; its input reaches the guest through its view alone.
       case TurnEventKind.ToolCallStarted: {
-        if (candidate.subagentId !== undefined) return undefined
         const name = candidate.name ?? candidate.title
         if (!candidate.app) {
           hidden.set(candidate.toolCallId, name)
@@ -146,14 +143,15 @@ export function createTurnProjector(
       case TurnEventKind.SteerAccepted:
         return candidate
       // Reasoning, a call's input, any other call's output, terminals,
-      // compaction, the model and subagents are never a guest's.
+      // compaction, the model and child Sessions are never a guest's.
       case TurnEventKind.ThoughtChunk:
       case TurnEventKind.ToolCallInputChunk:
       case TurnEventKind.ToolCallInputEnded:
       case TurnEventKind.TerminalOutput:
       case TurnEventKind.CompactionUpdated:
       case TurnEventKind.ModelChanged:
-      case TurnEventKind.SubagentUpdated:
+      case TurnEventKind.ChildSessionUpdated:
+      case TurnEventKind.ChildSessionEvent:
         return undefined
     }
     return unhandledKind(candidate)
@@ -197,9 +195,20 @@ export function createTurnsMiddleware({
             shown.has(event.request.toolCallId)
             ? event
             : undefined
+        // A question reaches a guest whole, but names only a call it was shown.
+        case "request-asked": {
+          const { toolCallId, ...request } = event.request
+          return toolCallId === undefined || shown.has(toolCallId)
+            ? event
+            : { ...event, request }
+        }
+        // A child Session is never a guest's: no announcement, event or
+        // transcript of one reaches it.
+        case "child":
+        case "child-history":
+          return undefined
         // What is not a turn's passes: the feeds layer chose the readings and
         // the commands layer projects the command list.
-        case "request-asked":
         case "history":
         case "request-withdrawn":
         case "execution":

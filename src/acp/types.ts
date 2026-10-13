@@ -23,6 +23,8 @@ import type {
   PendingRequest,
   RequestReply,
   TurnEvent,
+  TurnEventKind,
+  TurnEventOf,
 } from "../core/events"
 import type { PublicFailure } from "../core/failures"
 import type {
@@ -80,6 +82,11 @@ type AcpConnectionBase = {
    * authenticates over ACP.
    */
   handshakeComplete?: () => void
+  /**
+   * Called by the agent once a logout ended a login: the socket is in its
+   * handshake again, under a fresh deadline and the listener's budget.
+   */
+  handshakeRestart?: () => void
 }
 
 /**
@@ -116,6 +123,12 @@ export type ConnectionAuthentication = {
   extensions: HgwExtensions
   /** Redeems one credential; `false` means it is not usable. */
   authenticate(token: string): Promise<boolean>
+  /**
+   * Ends the redeemed credential, and any login still verifying: the
+   * connection stays open, and a gated request needs a new login. `true` when
+   * it ended a redeemed credential.
+   */
+  logout(): boolean
   /** Who the credential acts as, and its stack; absent before it is redeemed. */
   member(): Omit<Member, "connection"> | undefined
   /** Whether a redeemed credential still holds, before its close arrives. */
@@ -136,6 +149,8 @@ export type HgwAcpAgentFactory = (context: AcpConnectionContext) => AgentApp
 export type TranslateContext = {
   turnId: string
   sequence: number
+  /** A child's update sent while no turn of its parent carries it. */
+  background?: true
   /** Stop was acknowledged for this turn and the provider has not settled. */
   stopping: boolean
   /** The clock a state update stamps itself with; the system clock by default. */
@@ -148,8 +163,8 @@ export type TranslateContext = {
  * State the turn-event reducer carries between events of one turn: the
  * assistant message the adapter last named, the message each tool call sits
  * in, the arguments text streamed so far per open tool call, the tool call
- * each announced terminal belongs to, and the tool call that spawned each
- * subagent. Every id is the adapter's; the reducer mints none. Starts as
+ * each announced terminal belongs to. Every id is the adapter's; the reducer
+ * mints none. Starts as
  * `initialTranslateState`.
  */
 export type TranslateState = {
@@ -159,8 +174,6 @@ export type TranslateState = {
   toolArgsText: Readonly<Record<string, string>>
   /** terminalId → toolCallId, for every terminal the segment announced. */
   terminals: Readonly<Record<string, string>>
-  /** subagentId → the toolCallId that spawned it. */
-  subagents: Readonly<Record<string, string>>
   /**
    * Acknowledgements a from-start replay drops because authoritative history
    * already carried those corrections.
@@ -172,7 +185,6 @@ export const initialTranslateState: TranslateState = {
   toolMessages: {},
   toolArgsText: {},
   terminals: {},
-  subagents: {},
   replayedCorrections: 0,
 }
 
@@ -252,6 +264,11 @@ export interface ActivityFeed {
 // ---------------------------------------------------------------------------
 
 /** `translate/turn-events.ts` → `translateTurnEvent` (pure reducer) */
+export type TranslateChildUpdate = (
+  event: TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>,
+  context: TranslateContext
+) => Built<SessionUpdate>
+
 export type TranslateTurnEvent = (
   state: TranslateState,
   event: TurnEvent,
@@ -301,6 +318,8 @@ export type ConfigWriteOf = (
  */
 export type Translators = {
   translateTurnEvent: TranslateTurnEvent
+  /** A child Session's report, as the `subagent_update` its parent carries. */
+  translateChildUpdate: TranslateChildUpdate
   translateHistory: TranslateHistory
   pendingRequestToOutbound: PendingRequestToOutbound
   replyFromPermission: ReplyFromPermission

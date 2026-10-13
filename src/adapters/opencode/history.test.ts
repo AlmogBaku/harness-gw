@@ -165,16 +165,42 @@ describe("OpenCode history projection", () => {
           },
         ],
       },
+      // The id is the one the live compaction carried, so it replays as it.
       {
         id: "compaction-1",
-        role: "system",
-        createdAt: "1970-01-01T00:50:00.000Z",
-        content: [{ type: "text", text: "Earlier work" }],
+        role: "activity",
+        activityType: "COMPACTION",
+        content: { compactionId: "compaction-1", summary: "Earlier work" },
       },
     ])
     expect(JSON.stringify(result)).not.toContain("/private")
     expect(JSON.stringify(result)).not.toContain("providerID")
     expect(JSON.stringify(result)).not.toContain("private recent data")
+  })
+
+  it("replays a compaction that wrote no summary without one, as it streamed", () => {
+    const result = projectOpenCodeHistory({
+      messages: [
+        {
+          id: "compaction-1",
+          type: "compaction",
+          reason: "auto",
+          summary: "",
+          recent: "private recent data",
+          time: { created: 3_000 },
+        },
+      ],
+      sessionId: "session-1",
+    })
+
+    expect(result).toEqual([
+      {
+        id: "compaction-1",
+        role: "activity",
+        activityType: "COMPACTION",
+        content: { compactionId: "compaction-1" },
+      },
+    ])
   })
 
   it("projects the native subagent tool under its canonical name and summary result", () => {
@@ -276,7 +302,8 @@ describe("OpenCode history projection", () => {
         ],
       })
       expect(JSON.stringify(message)).not.toContain("/private")
-      expect(message?.content[0]).not.toHaveProperty("locations")
+      if (message?.role !== "assistant") throw new Error("No response row")
+      expect(message.content[0]).not.toHaveProperty("locations")
     }
   )
 

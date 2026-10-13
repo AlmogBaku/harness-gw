@@ -16,6 +16,7 @@ import { loggedId } from "../../core/identifier"
 import { inviteSessionKey } from "../../core/invite-key"
 import type { SessionPatch } from "../../core/runtime"
 import {
+  isOpenCodeChildSession,
   openCodeAgentAvatar,
   parseOpenCodeAgent,
   parseOpenCodeAgentCatalog,
@@ -170,7 +171,8 @@ export function createOpenCodeWorkspaceOperations(input: {
    * Every Session an Agent owns, of every Agent, newest first, one native row
    * at a time. A row that is not one, or repeats one's id, is left out with a
    * warning and counted in `skipped`; only rows none of which can be read are
-   * an outage. A Session no Agent owns is no one's, not a bad row.
+   * an outage. A Session no Agent owns is no one's, and a child Session is its
+   * parent's work, not a top-level Session; neither is a bad row.
    */
   async function allSessions() {
     const sessions: Session[] = []
@@ -188,6 +190,7 @@ export function createOpenCodeWorkspaceOperations(input: {
       )
       if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
       for (const row of parsed.data.data) {
+        if (isOpenCodeChildSession(row)) continue
         const native = parseOpenCodeSession(row)
         if (native.success && native.data.agent === undefined) continue
         const session = native.success ? listedSession(native.data) : undefined
@@ -228,9 +231,11 @@ export function createOpenCodeWorkspaceOperations(input: {
 
   /** One authoritative read that both projects and proves exact ownership. */
   async function readSession(agentId: string, sessionId: string) {
-    const parsed = parseOpenCodeSession(
-      await input.client.sessions.get(sessionId)
-    )
+    const row = await input.client.sessions.get(sessionId)
+    // A child belongs to the Session that spawned it, so no Agent holds it
+    // as one of its own, as no list shows it.
+    if (isOpenCodeChildSession(row)) throw new OpenCodeWorkspaceScopeError()
+    const parsed = parseOpenCodeSession(row)
     if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
     return {
       native: parsed.data,

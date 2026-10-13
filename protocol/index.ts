@@ -438,13 +438,80 @@ export type SessionPlanActivityMessage = z.infer<
   typeof SessionPlanActivityMessageSchema
 >
 
+/**
+ * A compaction the provider stored: where it summarized the conversation's
+ * context, under the id its live `compaction_update` carried, and the summary
+ * where it keeps one. It replays as that compaction, completed.
+ */
+export const SessionCompactionActivityMessageSchema = z.strictObject({
+  id: IdentifierSchema,
+  role: z.literal("activity"),
+  activityType: z.literal("COMPACTION"),
+  content: z.strictObject({
+    compactionId: IdentifierSchema,
+    summary: z.string().max(1_000_000).optional(),
+  }),
+})
+export type SessionCompactionActivityMessage = z.infer<
+  typeof SessionCompactionActivityMessageSchema
+>
+
+/**
+ * A child Session a turn of this one spawned, as its runtime stored it: its
+ * id, the call that spawned it, its display text, and its final state and
+ * facts. It replays as the child's announcement, ahead of the child's own
+ * transcript.
+ */
+export const SessionChildActivityMessageSchema = z.strictObject({
+  id: IdentifierSchema,
+  role: z.literal("activity"),
+  activityType: z.literal("CHILD_SESSION"),
+  content: z.strictObject({
+    childSessionId: IdentifierSchema,
+    toolCallId: IdentifierSchema.optional(),
+    title: z.string().max(65_536).optional(),
+    description: z.string().max(65_536).optional(),
+    status: z
+      .enum([
+        "running",
+        "waiting-for-input",
+        "idle",
+        "failed",
+        "cancelled",
+        "unknown",
+      ])
+      .optional(),
+    model: z.string().min(1).max(256).optional(),
+    filesRead: z.array(z.string().max(4096)).max(1000).optional(),
+    filesWritten: z.array(z.string().max(4096)).max(1000).optional(),
+    durationMs: z.number().int().nonnegative().optional(),
+    summary: z.string().max(65_536).optional(),
+  }),
+})
+export type SessionChildActivityMessage = z.infer<
+  typeof SessionChildActivityMessageSchema
+>
+
+/** A stored row of the Session's activity, not of its conversation. */
+export const SessionActivityMessageSchema = z.discriminatedUnion(
+  "activityType",
+  [
+    SessionPlanActivityMessageSchema,
+    SessionCompactionActivityMessageSchema,
+    SessionChildActivityMessageSchema,
+  ]
+)
+export type SessionActivityMessage = z.infer<
+  typeof SessionActivityMessageSchema
+>
+
 export const SessionHistoryResponseSchema = z.strictObject({
   sessionId: IdentifierSchema,
   messages: z
     .array(
       z.discriminatedUnion("role", [
         SessionMessageSchema,
-        SessionPlanActivityMessageSchema,
+        SessionActivityMessageSchema,
       ])
     )
     .max(501),
@@ -582,6 +649,19 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
         semantics: z.literal("visible-user-message"),
         input: z.literal("text"),
         fallback: z.literal("provider-queue"),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
+    /**
+     * Edit and Retry: a prompt naming `rewindSourceId` replaces that user turn
+     * and every turn after it, with whatever else the runtime rewinds with
+     * them. Reported per Session, as steering is, so a client offers it only
+     * where it works.
+     */
+    rewind: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("user-turn"),
       }),
       CapabilityUnavailableSchema,
     ]),

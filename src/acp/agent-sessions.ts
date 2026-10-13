@@ -124,6 +124,9 @@ export function historyCursor(
  * belongs to and refuses an id it has never been told about. `connect` writes
  * the connection's member events to its client.
  */
+/** How deep children of children are followed; ACP sets no bound. */
+const MAX_CHILD_DEPTH = 8
+
 export function createSessions(
   context: AcpConnectionContext,
   connect: (client: AgentContext) => MemberConnection
@@ -133,6 +136,25 @@ export function createSessions(
   const memberships = new Map<string, Membership>()
   /** This connection as a channel's member, once it first joins one. */
   let member: Member | undefined
+  /**
+   * The child Sessions this connection's Sessions announced, each with the
+   * Session that owns it and whether the runtime stops it alone.
+   */
+  const children = new Map<
+    string,
+    { parentSessionId: string; cancellable: boolean }
+  >()
+
+  /** The top-level Session a child descends from, however deep. */
+  function rootOf(sessionId: string) {
+    let root = sessionId
+    for (let depth = 0; depth < MAX_CHILD_DEPTH; depth += 1) {
+      const up = children.get(root)
+      if (!up) return root
+      root = up.parentSessionId
+    }
+    return undefined
+  }
 
   /**
    * Who this connection acts as, and its stack: one that authenticates over
@@ -162,6 +184,47 @@ export function createSessions(
   return {
     remember,
     identity,
+
+    /**
+     * Registers a child Session `parentSessionId` announced. A child is never
+     * a top-level Session the gateway knows, and never another parent's: such
+     * a report registers nothing, and nothing of that child is shown.
+     */
+    announceChild(
+      childSessionId: string,
+      parentSessionId: string,
+      cancellable: boolean | undefined
+    ) {
+      const known = children.get(childSessionId)
+      if (known) {
+        if (known.parentSessionId !== parentSessionId) return false
+        if (cancellable !== undefined) known.cancellable = cancellable
+        return true
+      }
+      // A child a child spawned belongs to its top-level Session's Agent.
+      const root = rootOf(parentSessionId)
+      if (root === undefined || childSessionId === parentSessionId) return false
+      const agentId = owners.get(root)
+      if (
+        owners.has(childSessionId) ||
+        (agentId !== undefined &&
+          catalog.rows.get(agentId, childSessionId) !== undefined)
+      )
+        return false
+      children.set(childSessionId, {
+        parentSessionId,
+        cancellable: cancellable ?? false,
+      })
+      return true
+    },
+
+    /** A child Session this connection was announced, and who owns it. */
+    child(childSessionId: string) {
+      return children.get(childSessionId)
+    },
+
+    /** The top-level Session a child descends from. */
+    rootOf,
 
     owner(publicSessionId: string) {
       return owners.get(publicSessionId)
@@ -240,10 +303,17 @@ export function createSessions(
       )
     },
 
+    /**
+     * Ends everything this connection did as its identity: it leaves every
+     * Session, which withdraws what it was asked, and forgets their owners and
+     * the member it joined them as, so a later identity starts from nothing.
+     */
     close() {
       for (const membership of memberships.values()) membership.part()
       memberships.clear()
       owners.clear()
+      children.clear()
+      member = undefined
     },
   }
 }

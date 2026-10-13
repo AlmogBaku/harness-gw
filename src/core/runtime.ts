@@ -1,6 +1,8 @@
 import type {
+  ChildTurnEvent,
   ExecutionEvent,
   PendingRequest,
+  RequestReply,
   TurnEvent,
   TurnInput,
 } from "./events"
@@ -47,6 +49,13 @@ export type ServerTurnHandle = {
   settled: Promise<void>
   /** Idempotently requests Stop or rechecks an already-stopping native turn. */
   stop(): Promise<"stopping" | "idle">
+  /**
+   * Stops the work of one child Session this turn spawned, which the child's
+   * own stream confirms, and leaves the turn running. Present only where the
+   * runtime stops a child alone, and asked only of a child it reported
+   * `cancellable`.
+   */
+  stopChild?(childSessionId: string): Promise<void>
   steer?(
     request: Readonly<{ requestId: string; text: string }>
   ): Promise<"steered" | "queued">
@@ -60,7 +69,8 @@ export type ServerTurnHandle = {
    * The prompt's storage receipt: resolves with the message id the provider
    * stored the prompt under, at once when the start's own answer named it, and
    * stays pending while the provider has not proven it stored, and rejects with
-   * a `ServerTurnEndedError` once the turn ends unproven. Absent when the turn
+   * a `ServerTurnEndedError` once the turn ends unproven, marked `unstored`
+   * only when the adapter knows the provider stored nothing. Absent when the turn
    * stores no prompt of its own, such as an answer to a request.
    */
   stored?: Promise<string>
@@ -134,6 +144,17 @@ export type ServerTurnEngine = {
     | undefined
   >
   /**
+   * Answers a request a child asked while no turn of its parent ran
+   * (`ServerTurnListener.onChildRequest`), as a turn's own requests are
+   * answered by the turn that continues it.
+   */
+  respondChild?(scope: SessionScope, reply: RequestReply): Promise<void>
+  /**
+   * Stops one child's work while no turn of its parent runs, as
+   * `ServerTurnHandle.stopChild` does within one.
+   */
+  stopChild?(scope: SessionScope, childSessionId: string): Promise<void>
+  /**
    * Subscribes to one Session's turns that this adapter did not start: a
    * subagent result, a loop tick, a heartbeat, cron, or another native client.
    * Rules:
@@ -157,6 +178,19 @@ export type ServerTurnListener = {
   onTurn(): void
   onError(cause: unknown): void
   onNotice?(notice: SessionNotice): void
+  /**
+   * A child Session one of the Session's turns spawned, still at work after
+   * that turn ended: its reports and its own events, with `turnId` naming the
+   * turn that spawned it. As within a turn, a child is announced before
+   * anything of its own, and never under another Session's id. As the turn
+   * ends, each child that outlives it is reported first with its state, so the
+   * Session knows what it still follows.
+   */
+  onChild?(turnId: string, event: ChildTurnEvent): void
+  /** A request such a child asks, with `childSessionId` set. */
+  onChildRequest?(turnId: string, request: PendingRequest): void
+  /** A child's request ended, answered or not. */
+  onChildRequestEnded?(requestId: string): void
 }
 
 export type RuntimeInstance = {
@@ -195,12 +229,17 @@ export class ServerTurnUncertainError extends Error {
  * `code`, or it `ended` otherwise.
  */
 export class ServerTurnEndedError extends Error {
+  /** The adapter knows the provider stored nothing of the prompt. */
+  readonly unstored: boolean
+
   constructor(
     readonly ending: "stopped" | "failed" | "ended",
-    readonly code?: string
+    readonly code?: string,
+    { unstored = false }: { unstored?: boolean } = {}
   ) {
     super("The AOS turn ended before its prompt was stored")
     this.name = "ServerTurnEndedError"
+    this.unstored = unstored
   }
 }
 
@@ -361,11 +400,30 @@ export interface ServerRuntime {
     limit: number,
     offset: number
   ): Promise<SessionHistoryResponse>
+  /**
+   * The whole transcript of a child Session a turn of `providerSessionId`
+   * spawned, as one page: a child's transcript is never paged. Absent when the
+   * runtime keeps none it can read.
+   */
+  childHistory?(
+    agentId: string,
+    providerSessionId: ProviderSessionId,
+    childSessionId: string
+  ): Promise<SessionHistoryResponse>
   getSession(
     agentId: string,
     providerSessionId: ProviderSessionId
   ): Promise<Session>
   createSession(agentId: string, title?: string): Promise<unknown>
+  /**
+   * Forks a Session into a new one holding its conversation so far, and
+   * leaves the original as it is; answered as `createSession` answers. Absent
+   * when the runtime cannot fork.
+   */
+  forkSession?(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<unknown>
   updateSession(
     agentId: string,
     providerSessionId: ProviderSessionId,

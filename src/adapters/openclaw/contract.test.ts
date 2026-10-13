@@ -35,6 +35,8 @@ runServerRuntimeContract(
     gaps: {
       typedMessageFields:
         "capability: OpenClaw history carries no correction or turn error code",
+      compactionStoredAsRow:
+        "out of scope: OpenClaw compaction replay is ALM-42",
     },
   }
 )

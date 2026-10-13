@@ -868,6 +868,54 @@ describe("OpenCodeEventProjector", () => {
       ])
     })
 
+    // A compaction that fails never sends its end.
+    it.each([
+      ["ends", (projector: OpenCodeEventProjector) => projector.finish()],
+      [
+        "fails",
+        (projector: OpenCodeEventProjector) =>
+          projector.fail("HGW_PROVIDER_RUN_FAILED", "Failed."),
+      ],
+    ] as const)(
+      "close a compaction still open when the turn %s as cancelled, once",
+      (_ending, end) => {
+        const projector = new OpenCodeEventProjector(sessionId, 0)
+        accept(projector, 1, "session.next.compaction.started", {
+          messageID: "compaction-1",
+          reason: "auto",
+          timestamp: 1,
+        })
+        accept(projector, 2, "session.next.compaction.started", {
+          messageID: "compaction-2",
+          reason: "auto",
+          timestamp: 2,
+        })
+        accept(projector, 3, "session.next.compaction.ended", {
+          messageID: "compaction-2",
+          reason: "auto",
+          text: "Earlier work",
+          recent: "",
+          timestamp: 3,
+        })
+
+        const { events } = end(projector)
+
+        expect(
+          valid(events).filter(
+            ({ kind }) => kind === TurnEventKind.CompactionUpdated
+          )
+        ).toEqual([
+          {
+            kind: TurnEventKind.CompactionUpdated,
+            compactionId: "compaction-1",
+            status: CompactionStatus.Cancelled,
+          },
+        ])
+        expect(events.at(-1)?.kind).not.toBe(TurnEventKind.CompactionUpdated)
+        expect(end(projector).events).toEqual([])
+      }
+    )
+
     it("name a model switch by its Session model catalog id", () => {
       const projector = new OpenCodeEventProjector(sessionId, 0)
       expect(

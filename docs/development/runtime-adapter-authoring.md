@@ -133,8 +133,12 @@ standard ACP field or to `_meta.hgw`:
   without the runtime confirming it.
 - `ModelChanged.modelId` is the same id `session/set_config_option` uses for
   the model option.
-- Subagent work names its `subagentId`. The spawning call carries `subagent`,
-  and `SubagentUpdated` reports its progress.
+- A spawned subagent is a child Session. `ChildSessionUpdated` announces it
+  before anything bearing its id, naming the spawning call, and reports its
+  progress as a patch. Its own stream is `ChildSessionEvent`, and its asks are
+  the turn's requests with `childSessionId`. Report `cancellable` only where
+  `stopChild` stops that child alone, and never reuse a child id or give one a
+  top-level Session's id.
 - Stored history carries the same tool kind, locations, diffs, timing, and
   stop reason where the provider's stored rows have them, so a reload reads
   like the live turn.

@@ -37,11 +37,11 @@ export function persistedCorrections(history: SessionHistoryResponse) {
 /**
  * The page a view shows beside a live turn whose replay carries the rows
  * `live` names: the replay owns each of them, so the page drops them and the
- * turn shows once. The rows are joined by id, the one a message or tool call
- * carries both stored and streamed; the prompt and every row the replay does
- * not name stay. Only rows after the page's last prompt can be the live
- * turn's, as for its corrections, so an earlier turn that reused a tool
- * call's id keeps its row.
+ * turn shows once. The rows are joined by id, the one a message, tool call or
+ * compaction carries both stored and streamed; the prompt and every row the
+ * replay does not name stay. Only rows after the page's last prompt can be
+ * the live turn's, as for its corrections, so an earlier turn that reused a
+ * tool call's id keeps its row.
  */
 export function withoutLiveRows(
   history: SessionHistoryResponse,
@@ -50,16 +50,24 @@ export function withoutLiveRows(
   const prompt = lastPromptIndex(history)
   return {
     ...history,
-    messages: history.messages.filter(
-      (message, index) =>
-        index <= prompt ||
-        message.role === "activity" ||
-        !(
-          live.has(message.id) ||
-          message.content.some(
-            (part) => part.type === "tool-call" && live.has(part.toolCallId)
-          )
+    messages: history.messages.filter((message, index) => {
+      if (index <= prompt) return true
+      // A plan replaces the one before it, so restating it costs nothing.
+      if (message.role === "activity")
+        switch (message.activityType) {
+          case "PLAN":
+            return true
+          case "COMPACTION":
+            return !live.has(message.content.compactionId)
+          case "CHILD_SESSION":
+            return !live.has(message.content.childSessionId)
+        }
+      return !(
+        live.has(message.id) ||
+        message.content.some(
+          (part) => part.type === "tool-call" && live.has(part.toolCallId)
         )
-    ),
+      )
+    }),
   }
 }

@@ -33,6 +33,7 @@ import {
   openClawAgentsParams,
   openClawConfigGetParams,
   openClawCreateSessionParams,
+  openClawForkSessionParams,
   openClawDeleteSessionParams,
   openClawPatchSessionParams,
   openClawSessionRows,
@@ -43,6 +44,7 @@ import {
   parseOpenClawCreatedSession,
   parseOpenClawSession,
   parseOpenClawSessions,
+  isSpawnedSession,
   type OpenClawAgent,
   type OpenClawSession,
   type OpenClawSessionPatch,
@@ -86,6 +88,17 @@ export class OpenClawWorkspaceUnavailableError extends Error {
   constructor(options?: ErrorOptions) {
     super("OpenClaw workspace data is temporarily unavailable", options)
     this.name = "OpenClawWorkspaceUnavailableError"
+  }
+}
+
+/**
+ * A fork OpenClaw refused, such as of a parent past the size a fork copies;
+ * the same fork is refused again.
+ */
+export class OpenClawForkRefusedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("OpenClaw refused to fork this Session", options)
+    this.name = "OpenClawForkRefusedError"
   }
 }
 
@@ -256,6 +269,7 @@ export type OpenClawWorkspace = Readonly<{
   ): Promise<SessionCatalogResponse>
   getSession(agentId: string, sessionKey: string): Promise<Session>
   createSession(agentId: string): Promise<unknown>
+  forkSession(agentId: string, sessionKey: string): Promise<unknown>
   updateSession(
     agentId: string,
     sessionKey: string,
@@ -412,8 +426,16 @@ export function createOpenClawWorkspace(input: {
         ),
         pageLimit
       )
-      read += rows.length
       for (const row of rows) {
+        // A spawned child belongs to its parent's Session, never the list.
+        if (
+          isSpawnedSession({
+            spawnedBy: rawField(row, "spawnedBy"),
+            spawnDepth: rawField(row, "spawnDepth"),
+          })
+        )
+          continue
+        read += 1
         const session = listedSession(agentId, row)
         if (session) sessions.push(session)
       }
@@ -453,7 +475,8 @@ export function createOpenClawWorkspace(input: {
       offset,
     }
   }
-  const getSession = async (agentId: string, sessionKey: string) => {
+  /** The one native row of `agentId`'s Session `sessionKey`. */
+  const sessionRow = async (agentId: string, sessionKey: string) => {
     await requireVisibleAgent(agentId)
     const page = parseOpenClawSessions(
       await input.client.request(
@@ -463,9 +486,14 @@ export function createOpenClawWorkspace(input: {
       MAX_SESSION_PAGE
     )
     const matches = page.filter((row) => row.key === sessionKey)
-    if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
-    return projectSession(agentId, matches[0]!, readState())
+    // A spawned child is no top-level Session, whoever names its key.
+    if (matches.length !== 1 || isSpawnedSession(matches[0]!))
+      throw new OpenClawWorkspaceOwnershipError()
+    verifyOwnership(agentId, matches[0]!)
+    return matches[0]!
   }
+  const getSession = async (agentId: string, sessionKey: string) =>
+    projectSession(agentId, await sessionRow(agentId, sessionKey), readState())
 
   return {
     listAgents,
@@ -563,6 +591,40 @@ export function createOpenClawWorkspace(input: {
           openClawCreateSessionParams(agentId)
         )
       )
+      await getSession(agentId, created.key)
+      return SessionCreateResponseSchema.parse({
+        session: { id: created.key, agentId },
+      })
+    },
+    /**
+     * A new Session holding `sessionKey`'s conversation so far, answered as a
+     * create is; the parent is left as it is. A fork names its parent in
+     * `parentSessionKey`, which no child filter reads, so it stays listed.
+     */
+    async forkSession(agentId, sessionKey) {
+      const parent = await sessionRow(agentId, sessionKey)
+      const params = openClawForkSessionParams(
+        agentId,
+        sessionKey,
+        {
+          running: sessionStatus(parent) === "running",
+          title: title(parent).title ?? "Session",
+          toolOverrides: parent.toolOverrides,
+        },
+        crypto.randomUUID()
+      )
+      let answer: unknown
+      try {
+        answer = await input.client.request("sessions.create", params)
+      } catch (error) {
+        if (
+          error instanceof OpenClawClientRequestError &&
+          error.kind === "rejected"
+        )
+          throw new OpenClawForkRefusedError({ cause: error })
+        throw error
+      }
+      const created = parseOpenClawCreatedSession(answer)
       await getSession(agentId, created.key)
       return SessionCreateResponseSchema.parse({
         session: { id: created.key, agentId },

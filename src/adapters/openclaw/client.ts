@@ -43,6 +43,7 @@ const WRITES: ReadonlySet<string> = new Set([
   "sessions.create",
   "sessions.delete",
   "sessions.patch",
+  "sessions.rewind",
 ])
 
 export type OpenClawRequestOptions = Readonly<{

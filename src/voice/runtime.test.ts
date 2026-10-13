@@ -41,6 +41,7 @@ const CAPABILITIES = {
       input: "text",
       fallback: "provider-queue",
     },
+    rewind: { status: "available", scope: "user-turn" },
     approvals: {
       status: "available",
       protocol: INTERACTION_PROTOCOL,

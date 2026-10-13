@@ -30,6 +30,7 @@ import {
   HgwAgentUpdateRequestSchema,
   HgwClientCapabilitiesMetaSchema,
   HgwReplayBeforeSchema,
+  HgwReplayPositionSchema,
   HgwSessionListMetaSchema,
   HgwSessionNewMetaSchema,
   HgwSessionPartRequestSchema,
@@ -40,7 +41,6 @@ import {
   type HgwExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
-import { unlessAborted } from "../core/channel"
 import type { SessionRow } from "../core/session-rows"
 import type { PresenceReport } from "../push/presence"
 import { GATEWAY_VERSION } from "../version"
@@ -55,7 +55,7 @@ import {
 } from "./agent-sessions"
 import {
   echoedParts,
-  isPromptBlock,
+  isUnadvertisedBlock,
   promptParts,
   promptText,
 } from "./prompt-content"
@@ -121,15 +121,30 @@ function operatorExtensions(catalog: Catalog): HgwExtensions {
 }
 
 /**
- * The `_hgw/before` cursor a resume names, or `undefined` for no replay or
- * `start`. ACP asks a receiver to refuse a cursor it does not understand
- * rather than guess where to replay from, so every other one is refused.
+ * Where a resume replays from: nothing when it names no cursor, the whole
+ * Session from `start`, the live turn from an `_hgw/position`, or one older
+ * page `_hgw/before`. ACP asks a receiver to refuse a cursor it does not
+ * understand rather than guess where to replay from, so every other one is
+ * refused.
  */
-function olderPageCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
-  if (!replayFrom || replayFrom.type === "start") return undefined
-  const parsed = HgwReplayBeforeSchema.safeParse(replayFrom)
-  if (!parsed.success) throw invalidParams()
-  return parsed.data.cursor
+function replayCursor(replayFrom: ResumeSessionRequest["replayFrom"]) {
+  if (!replayFrom) return { from: "next" } as const
+  if (replayFrom.type === "start") return { from: "start" } as const
+  const position = HgwReplayPositionSchema.safeParse(replayFrom)
+  if (position.success) {
+    const { turnId, from } = position.data
+    return {
+      from: "position",
+      position: {
+        ...(turnId === undefined ? {} : { turnId }),
+        // The member holds the turn up to the event before the one it needs.
+        ...(from === undefined ? {} : { after: from - 1 }),
+      },
+    } as const
+  }
+  const before = HgwReplayBeforeSchema.safeParse(replayFrom)
+  if (!before.success) throw invalidParams()
+  return { from: "before", cursor: before.data.cursor } as const
 }
 
 /** True when a focus report repeats the exposure the connection last sent. */
@@ -188,6 +203,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         sessions.membership(sessionId)?.report(cause),
       // The upgrade's principal holds for the connection's whole life.
       live: () => context.authentication?.live() ?? true,
+      children: {
+        announce: (childSessionId, parentSessionId, cancellable) =>
+          sessions.announceChild(childSessionId, parentSessionId, cancellable),
+        owns: (sessionId, childSessionId) =>
+          sessions.child(childSessionId) !== undefined &&
+          sessions.rootOf(childSessionId) === sessionId,
+      },
     })
   )
   const app = agent({ name: "harness-gw" })
@@ -211,10 +233,19 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Refuses a method the stack does not admit, before its params are decoded,
-   * so a refused method is unavailable however its params are spelled.
+   * so a refused method is unavailable however its params are spelled. ACP's
+   * method-not-found means a method that does not exist or is not available,
+   * which is what a refused one is. So is any method naming a child Session,
+   * which permits a client nothing its capabilities do not name, and nothing
+   * of an ordinary Session's.
    */
-  function admit(method: string, kind: CommandKind) {
-    if (!admits(stack(), kind)) throw RequestError.methodNotFound(method)
+  function admit(method: string, kind: CommandKind, params?: unknown) {
+    const named = (params as { sessionId?: unknown } | undefined)?.sessionId
+    if (
+      !admits(stack(), kind) ||
+      (typeof named === "string" && sessions.child(named))
+    )
+      throw RequestError.methodNotFound(method)
   }
 
   /**
@@ -228,8 +259,16 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     execute: CommandNext<K>,
     requestId?: JsonRpcId
   ): Promise<CommandResults[K]> {
+    // A command acts for the identity it began as: one that a logout, or the
+    // next login, replaced while it was held reaches nothing.
+    const { authentication } = context
+    const acting = authentication?.member()
+    const current: CommandNext<K> = (next) =>
+      !authentication || authentication.member() === acting
+        ? execute(next)
+        : Promise.reject(authenticationRequired())
     try {
-      return await runCommand(stack(), kind, command, execute)
+      return await runCommand(stack(), kind, command, current)
     } catch (cause) {
       const error =
         cause instanceof CommandRefusedError
@@ -393,6 +432,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     const membership = sessions.join(client, scope)
     return context.channels.resume(membership, command, {
       fromStart: command.fromStart,
+      positioned: command.positioned,
       paged: clientPagesHistory,
     })
   }
@@ -486,7 +526,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       capabilities: {
         // Text and resource links are every agent's baseline; no runtime port
         // takes an image or embedded context, so neither is advertised.
-        session: authentication ? {} : { delete: {} },
+        // A guest is bound to its one conversation, so it is offered no fork.
+        session: authentication
+          ? {}
+          : {
+              delete: {},
+              ...(context.channels.forks ? { fork: {} } : {}),
+            },
       },
       authMethods: authentication ? [...authentication.authMethods] : [],
       _meta: {
@@ -514,6 +560,20 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (!(await authentication.authenticate(token)))
       throw authenticationRequired()
     context.handshakeComplete?.()
+    return {}
+  })
+
+  // ACP ends the authenticated session and keeps the connection: the guest
+  // leaves its Sessions, and its next gated request needs a login. Its
+  // invitation stands.
+  app.onRequest(methods.agent.auth.logout, async () => {
+    const { authentication } = context
+    if (!authentication)
+      throw RequestError.methodNotFound(methods.agent.auth.logout)
+    if (authentication.logout()) {
+      sessions.close()
+      context.handshakeRestart?.()
+    }
     return {}
   })
 
@@ -546,6 +606,37 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           )
           const sessionId = created.session.id
           sessions.remember([{ id: sessionId, agentId }])
+          // The row, capabilities and model options follow the answer as
+          // updates.
+          sessions.join(client, sessions.scope(sessionId)).joined()
+          return { sessionId }
+        },
+        requestId
+      )
+      return { sessionId }
+    }
+  )
+
+  // ACP's session/fork: a new Session holding the conversation so far, under
+  // session/new's folder rules, which the client joins as its creator would.
+  app.onRequest(
+    methods.agent.session.fork,
+    async ({ params, client, requestId }) => {
+      admit(methods.agent.session.fork, "fork", params)
+      // Only a runtime that forks is offered it.
+      if (!context.channels.forks)
+        throw RequestError.methodNotFound(methods.agent.session.fork)
+      const { sessionId } = await perform(
+        "fork",
+        { sessionId: params.sessionId },
+        async (command) => {
+          const scope = sessions.scope(command.sessionId)
+          await requireFolder(scope.agentId, params)
+          const forked = SessionCreateResponseSchema.parse(
+            await context.channels.forkSession(scope)
+          )
+          const sessionId = forked.session.id
+          sessions.remember([{ id: sessionId, agentId: scope.agentId }])
           // The row, capabilities and model options follow the answer as
           // updates.
           sessions.join(client, sessions.scope(sessionId)).joined()
@@ -637,9 +728,10 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params, client, requestId }) => {
       const method = methods.agent.session.resume
       stack()
-      const cursor = olderPageCursor(params.replayFrom)
-      if (cursor !== undefined) {
-        admit(method, "older-page")
+      const replay = replayCursor(params.replayFrom)
+      if (replay.from === "before") {
+        const { cursor } = replay
+        admit(method, "older-page", params)
         const { page } = await perform(
           "older-page",
           { sessionId: params.sessionId, cursor },
@@ -657,16 +749,17 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           },
         }
       }
-      admit(method, "resume")
+      admit(method, "resume", params)
       const meta = parseMeta(HgwSessionResumeMetaSchema, params._meta)
       const agentId = agentOf(meta.agentId)
       const resumed = await perform(
         "resume",
         {
           sessionId: params.sessionId,
-          ...meta,
+          ...(replay.from === "position" ? replay.position : {}),
           ...(agentId === undefined ? {} : { agentId }),
-          fromStart: params.replayFrom?.type === "start",
+          fromStart: replay.from === "start",
+          positioned: replay.from === "position",
         },
         (command) => resume(command, client, params),
         requestId
@@ -687,9 +780,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     methods.agent.session.prompt,
     async ({ params, client, signal, requestId }) => {
-      admit(methods.agent.session.prompt, "send")
+      admit(methods.agent.session.prompt, "send", params)
       const meta = parseMeta(HgwPromptMetaSchema, params._meta)
-      if (!params.prompt.every(isPromptBlock)) throw invalidParams()
+      if (params.prompt.some(isUnadvertisedBlock)) throw invalidParams()
       const text = promptText(params.prompt)
       // A turn of attachments alone carries no text: its stage supplies the turn,
       // or, for a rewind, the turn it replaces.
@@ -699,22 +792,20 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         meta.rewindSourceId === undefined
       )
         throw invalidParams()
-      // A prompt its client cancelled is answered as cancelled, and its
-      // admission is aborted: one the provider may have taken leaves its turn
-      // uncertain until the coordinator settles it.
-      const { messageId } = await unlessAborted(
-        perform(
-          "send",
-          {
-            sessionId: params.sessionId,
-            content: promptParts(params.prompt),
-            text,
-            ...meta,
-          },
-          (command) => send(command, client, signal),
-          requestId
-        ),
-        signal
+      // ACP answers a cancelled prompt as cancelled only before its message
+      // is inserted: the admission is aborted until the provider has it, and
+      // from then on the prompt is answered as it stands, and only
+      // session/cancel stops its turn.
+      const { messageId } = await perform(
+        "send",
+        {
+          sessionId: params.sessionId,
+          content: promptParts(params.prompt),
+          text,
+          ...meta,
+        },
+        (command) => send(command, client, signal),
+        requestId
       )
       return { messageId }
     }
@@ -725,6 +816,21 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // An unauthenticated guest reaches nothing here.
     if (!sessions.identity()) return
     admit(methods.agent.session.cancel, "stop")
+    // A child is stopped through the Session that owns it, and only where its
+    // runtime stops it alone; any other cancel naming one asks for nothing.
+    const child = sessions.child(params.sessionId)
+    if (child) {
+      const owner = sessions.rootOf(params.sessionId)
+      if (!child.cancellable || owner === undefined) return
+      await perform("stop", { sessionId: owner }, async (command) => {
+        const membership = sessions.membership(command.sessionId)
+        if (!membership) return
+        await membership
+          .cancelChild(params.sessionId)
+          .catch((cause: unknown) => membership.report(cause))
+      })
+      return
+    }
     await perform("stop", { sessionId: params.sessionId }, async (command) => {
       // Only a joined Session has a member.
       const membership = sessions.membership(command.sessionId)
@@ -738,7 +844,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   app.onRequest(
     methods.agent.session.setConfigOption,
     async ({ params, requestId }) => {
-      admit(methods.agent.session.setConfigOption, "set-config")
+      admit(methods.agent.session.setConfigOption, "set-config", params)
       const write = translators.configWriteOf(params.configId, params.value)
       const { models } = await perform(
         "set-config",
@@ -760,7 +866,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   )
 
   app.onRequest(methods.agent.session.close, async ({ params, requestId }) => {
-    admit(methods.agent.session.close, "close")
+    admit(methods.agent.session.close, "close", params)
     await perform(
       "close",
       { sessionId: params.sessionId },
@@ -781,7 +887,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
   })
 
   app.onRequest(methods.agent.session.delete, async ({ params, requestId }) => {
-    admit(methods.agent.session.delete, "delete")
+    admit(methods.agent.session.delete, "delete", params)
     await perform(
       "delete",
       { sessionId: params.sessionId },
@@ -816,6 +922,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params: raw }) => {
       stack()
       const { sessionId } = HgwSessionPartRequestSchema.parse(raw)
+      // A child is its parent's: parting one is as unavailable as joining it.
+      if (sessions.child(sessionId))
+        throw RequestError.methodNotFound(HGW_METHODS.session.part)
       sessions.part(sessionId)
       return {}
     }
@@ -825,7 +934,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     HGW_METHODS.session.update,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(HGW_METHODS.session.update, "update")
+      admit(HGW_METHODS.session.update, "update", raw)
       const params = HgwSessionUpdateRequestSchema.parse(raw)
       const patch: MemberCommands["update"]["patch"] =
         params.unread === false
@@ -871,7 +980,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     HGW_METHODS.session.steer,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(HGW_METHODS.session.steer, "steer")
+      admit(HGW_METHODS.session.steer, "steer", raw)
       const params = HgwSteerRequestSchema.parse(raw)
       return await perform(
         "steer",
@@ -903,7 +1012,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     HGW_METHODS.session.focus,
     undecoded,
     async ({ params: raw, requestId }) => {
-      admit(HGW_METHODS.session.focus, "focus")
+      admit(HGW_METHODS.session.focus, "focus", raw)
       const { sessionId, foreground, idle } = HgwFocusRequestSchema.parse(raw)
       // A report naming no Session changes nothing; its answer is what the
       // browser probes its link for.

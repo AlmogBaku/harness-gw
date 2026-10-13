@@ -37,8 +37,17 @@ The ACP layer translates that vocabulary to the browser.
   events: the single attach path, per-Session contiguity and catch-up,
   discovery by open-turn ring scan, one turn outcome, the settlement watcher,
   and the failure catalogue.
+- `run-children.ts` reports the child Sessions a turn delegates to: each is
+  announced from `subagent.start` under Hermes' stored child id, streams its
+  own events from the watch mirror a lazy `session.resume` opens, and stops
+  alone through `subagent.interrupt`. `child-sessions.ts` keeps what was
+  announced, because nothing in a parent's stored rows names its children,
+  so history and `childHistory` can replay them.
+- `fork.ts` forks a Session through `session.branch`, for the fork action and
+  for a typed `/branch` or `/fork`, which never reaches the slash worker.
 - `history.ts` converts authoritative native history and strips native context
-  envelopes and filesystem details.
+  envelopes and filesystem details. A summary carrier becomes the compaction
+  its turn showed.
 - `interactions.ts` answers Hermes' server-to-client `clarify` and `approval`
   JSON-RPC requests: it validates them, re-delivers `open_requests` on
   reattach, presents normalized pending requests, and responds on the request handle

@@ -95,10 +95,13 @@ function uncertainMutation() {
   )
 }
 
-/** `hint` says what the deployment lacks, for an operator client. */
+/**
+ * A request this runtime or deployment cannot take, such as an Agent field it
+ * has no place to store: ACP's invalid params. `hint` says what it lacks, for
+ * an operator client.
+ */
 export function unsupported(hint?: string) {
-  return new RequestError(
-    HGW_JSONRPC_ERRORS.unsupported,
+  return invalidParams(
     hint === undefined ? "unsupported" : `unsupported: ${hint}`
   )
 }
@@ -132,7 +135,6 @@ const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
       [revisionConflict(), "revision_conflict"],
       [temporarilyUnavailable(), "temporarily_unavailable"],
       [uncertainMutation(), "uncertain_mutation"],
-      [unsupported(), "unsupported"],
     ] as const
   ).map(([error, name]) => [error.code, name])
 )

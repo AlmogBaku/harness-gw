@@ -16,6 +16,7 @@ import {
   TurnEventKind,
   isAwaitingStopFailure,
   isRedialableFailure,
+  OUTCOME_UNKNOWN_CODE,
   pendingRequestsOf,
   type ExecutionEvent,
   type PendingRequest,
@@ -23,6 +24,7 @@ import {
   type RepliesTurnInput,
   type RequestReply,
   type TurnEvent,
+  type ChildTurnEvent,
   type TurnEventOf,
 } from "./events"
 
@@ -168,7 +170,11 @@ export type TurnQuota = {
 
 /** What a start carries beside its prompt. */
 export type StartOptions = {
-  /** Aborts the start: one aborted once dispatched leaves its turn uncertain. */
+  /**
+   * Aborts the start until it is dispatched. The provider may store the prompt
+   * from then on, which no cancelled request takes back, so only Stop ends
+   * its turn.
+   */
   signal?: AbortSignal
   /** Refuses the start while the turns it counts reach its limit. */
   quota?: TurnQuota
@@ -210,6 +216,7 @@ export type SessionCoordinatorOptions = {
     | "models"
     | "updateModel"
     | "createSession"
+    | "forkSession"
     | "publicError"
     | "link"
   >
@@ -712,8 +719,7 @@ function compactedEvent(
     (previous.kind === TurnEventKind.MessageChunk ||
       previous.kind === TurnEventKind.ThoughtChunk) &&
     previous.kind === next.kind &&
-    previous.messageId === next.messageId &&
-    previous.subagentId === next.subagentId
+    previous.messageId === next.messageId
   )
     return { ...previous, text: previous.text + next.text }
   return undefined
@@ -729,6 +735,8 @@ function rowIds({ event }: SequencedTurnEvent): string[] {
     ...("toolCallId" in event && event.toolCallId !== undefined
       ? [event.toolCallId]
       : []),
+    ...("compactionId" in event ? [event.compactionId] : []),
+    ...("childSessionId" in event ? [event.childSessionId] : []),
   ]
 }
 
@@ -904,6 +912,13 @@ const ENDED: AsyncIterable<SequencedTurnEvent> = {
   }),
 }
 
+/** A provider stream with nothing in it. */
+const ENDED_EVENTS: AsyncIterable<TurnEvent> = {
+  [Symbol.asyncIterator]: () => ({
+    next: async () => ({ done: true, value: undefined }),
+  }),
+}
+
 /** The requests a paused segment still waits on: those nobody has answered. */
 function openRequests(segment: Segment) {
   return segment.requests.filter(
@@ -931,10 +946,30 @@ function settledNow(settled: Promise<void>) {
   ])
 }
 
+/**
+ * What the readers of a start no answer proved are told: the gateway cannot
+ * observe whether its provider took the turn.
+ */
+const SEND_UNCERTAIN = {
+  kind: TurnEventKind.TurnFailed,
+  code: "HGW_SEND_UNCERTAIN",
+} as const
+
+/**
+ * The handle of a start no answer reached: it streams nothing, and a Stop it
+ * cannot deliver leaves the turn stopping until a reconcile settles it.
+ */
+const UNANSWERED: ServerTurnHandle = {
+  events: ENDED_EVENTS,
+  settled: new Promise(() => {}),
+  stop: async () => "stopping",
+  recoveryPosition: () => undefined,
+}
+
 /** How an uncertain turn ends once no recover confirmed it by its deadline. */
 const OUTCOME_UNKNOWN = {
   kind: TurnEventKind.TurnFailed,
-  code: "HGW_OUTCOME_UNKNOWN",
+  code: OUTCOME_UNKNOWN_CODE,
 } as const
 
 export class SessionCoordinator {
@@ -1239,6 +1274,57 @@ export class SessionCoordinator {
   }
 
   /**
+   * Each child Session the live turn `turnId` reported at or before sequence
+   * `upTo`, its reports merged into one, in the order the children were
+   * announced. A view positioned there holds them, but a new connection knows
+   * none, and is told them before the events after its cursor. A child a
+   * child spawned stays reported in that child's stream.
+   */
+  childReports(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    turnId: string,
+    upTo: number
+  ): { sequence: number; event: ChildTurnEvent }[] {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment?.journal || segment.turnId !== turnId) return []
+    type Report = TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>
+    const merged = new Map<
+      string,
+      { sequence: number; report: Report; within?: string }
+    >()
+    const merge = (sequence: number, report: Report, within?: string) => {
+      const known = merged.get(report.childSessionId)
+      merged.set(report.childSessionId, {
+        sequence: known?.sequence ?? sequence,
+        report: { ...known?.report, ...report },
+        ...(within === undefined ? {} : { within }),
+      })
+    }
+    for (const { value } of segment.journal.entries) {
+      if (value.sequence > upTo) break
+      const { event } = value
+      if (event.kind === TurnEventKind.ChildSessionUpdated)
+        merge(value.sequence, event)
+      else if (
+        event.kind === TurnEventKind.ChildSessionEvent &&
+        event.event.kind === TurnEventKind.ChildSessionUpdated
+      )
+        merge(value.sequence, event.event, event.childSessionId)
+    }
+    return [...merged.values()].map(({ sequence, report, within }) => ({
+      sequence,
+      event:
+        within === undefined
+          ? report
+          : {
+              kind: TurnEventKind.ChildSessionEvent,
+              childSessionId: within,
+              event: report,
+            },
+    }))
+  }
+
+  /**
    * How far the live turn has streamed, as the cursor of a view that holds it
    * that far; absent unless its journal still holds what streams on.
    */
@@ -1246,6 +1332,18 @@ export class SessionCoordinator {
     const segment = this.#executions.get(scopeKey(scope))?.segment
     if (!segment?.journal || segment.terminal) return undefined
     return { turnId: segment.turnId, after: segment.nextSequence }
+  }
+
+  /**
+   * The cursor a view that wants none of the live turn so far follows it from:
+   * past every event its journal holds, or from its live events when it keeps
+   * none. Absent when no turn streams on.
+   */
+  nextCursor(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment) return undefined
+    if (segment.journal) return segment.nextSequence
+    return segment.terminal ? undefined : 0
   }
 
   /**
@@ -1395,12 +1493,29 @@ export class SessionCoordinator {
     return created
   }
 
+  /** Whether the runtime forks Sessions. */
+  get forks() {
+    return this.options.readings.forkSession !== undefined
+  }
+
+  /** Forks a Session into a new one, answered as `createSession` answers. */
+  async forkSession(scope: SessionScope): Promise<unknown> {
+    if (this.#closed) throw new Error("Session coordinator is closed")
+    const { forkSession } = this.options.readings
+    if (!forkSession) throw new Error("The runtime cannot fork Sessions")
+    return forkSession.call(
+      this.options.readings,
+      scope.agentId,
+      scope.providerSessionId
+    )
+  }
+
   async start(
     scope: SessionScope,
     input: SendInput,
     access: CoordinatorAccess,
     options: StartOptions = {}
-  ): Promise<CoordinatedTurnSubscription> {
+  ): Promise<CoordinatedTurnSubscription & { messageId: string }> {
     const admitted = await this.#command(scope, async () => {
       if (this.#closed) throw new Error("Session coordinator is closed")
       if (!("clientId" in input))
@@ -1439,41 +1554,52 @@ export class SessionCoordinator {
       // the repeat's reader follows the Session from its history.
       return { turnId: ids.turnId, events: ENDED, close: () => undefined }
     })
-    return "segment" in admitted
-      ? this.#atStorage(admitted, access, options.signal)
-      : admitted
+    const subscription: CoordinatedTurnSubscription =
+      "segment" in admitted ? await this.#atStorage(admitted, access) : admitted
+    // An answer always names its prompt: as its provider stored it, or as the
+    // gateway minted it where nothing proves how.
+    return {
+      ...subscription,
+      messageId:
+        subscription.messageId ??
+        ("clientId" in input
+          ? clientTurnIds(access.principalId, scope.sessionId, input.clientId)
+              .messageId
+          : input.messageId),
+    }
   }
 
   /**
    * Subscribes to an admitted turn once its provider stored the prompt, under
    * the id it stored it as. Waited for outside the Session's commands, so a
-   * Stop or a steer meanwhile is not held. A receipt still missing at the
-   * admission deadline leaves the turn running and its start uncertain; a turn
-   * that ended first is answered by how it ended.
+   * Stop or a steer meanwhile is not held. ACP reads a refusal as a prompt
+   * never inserted, so a turn that ended first is refused only when its
+   * adapter knows the provider stored nothing; that one, and one whose receipt
+   * the admission deadline outran, may stand, and name no stored id.
    */
   async #atStorage(
     execution: Execution,
-    access: CoordinatorAccess,
-    signal: AbortSignal | undefined
+    access: CoordinatorAccess
   ): Promise<CoordinatedTurnSubscription> {
     const { stored } = execution.segment.handle
     if (!stored) return this.#repeat(execution, access)
-    const deadline = this.#deadline(signal)
+    const deadline = this.#deadline()
     let messageId: string
     try {
       messageId = await deadline.run(() => stored)
     } catch (error) {
-      // A turn over before any receipt is answered as it ended, at once: a
-      // stop or a failure is the answer, and any other end names no stored id.
-      if (error instanceof ServerTurnEndedError && error.ending === "ended")
+      // A turn over before any receipt is answered at once.
+      if (error instanceof ServerTurnEndedError) {
+        if (error.unstored) throw error
         return this.#repeat(execution, access)
+      }
       if (!deadline.signal.aborted) throw error
       const { agentId, sessionId } = execution.scope
       this.#logger.warn(
         { agentId, sessionId, turnId: execution.segment.turnId },
         "turn.receipt.deadline_passed"
       )
-      throw new ServerTurnUncertainError()
+      return this.#repeat(execution, access)
     }
     return { ...this.#repeat(execution, access), messageId }
   }
@@ -1547,12 +1673,13 @@ export class SessionCoordinator {
     // An uncertain turn holds its Session until a reconcile settles it.
     if (this.state(scope) !== "idle") throw new ServerTurnConflictError()
     this.#assertCapacity(key, quota)
+    signal?.throwIfAborted()
     const { turn, generation } = this.#admit(
       scope,
       input.turnId,
       access.principalId
     )
-    const deadline = this.#deadline(signal)
+    const deadline = this.#deadline()
     try {
       const at = Date.now()
       const handle = await this.#startNative(scope, input, stage, deadline)
@@ -1581,11 +1708,58 @@ export class SessionCoordinator {
       this.#consume(execution, execution.segment)
       return execution
     } catch (error) {
-      if (!deadline.signal.aborted) throw error
-      throw this.#unanswered(key, turn, generation, input.turnId, stage)
+      if (
+        !deadline.signal.aborted &&
+        !(error instanceof ServerTurnUncertainError)
+      )
+        throw error
+      return this.#uncertainStart(scope, turn, generation, input, access, stage)
     } finally {
       this.#endAdmission(turn, generation)
     }
+  }
+
+  /**
+   * A start its provider never answered, or answered uncertain: the prompt
+   * may stand, so its turn takes the Session uncertain until a reconcile
+   * settles it, and keeps what the start staged. Its stand-in segment tells
+   * every reader the send went unobserved, and holds the journal a recovery
+   * continues and the deadline's outcome lands in.
+   */
+  #uncertainStart(
+    scope: SessionScope,
+    turn: Turn,
+    generation: number,
+    input: PromptTurnInput,
+    access: CoordinatorAccess,
+    stage: ServerAttachmentStage | undefined
+  ): Execution {
+    const key = scopeKey(scope)
+    this.#unanswered(key, turn, generation, input.turnId, stage)
+    const segment = this.#createSegment({
+      cacheKey: key,
+      turnId: input.turnId,
+      generation: turn.owner.generation,
+      handle: UNANSWERED,
+      history: { journal: "start", at: Date.now() },
+      onTerminal: access.onTerminal,
+    })
+    segment.terminal = true
+    this.#remember(segment, {
+      sequence: ++segment.nextSequence,
+      event: SEND_UNCERTAIN,
+    })
+    segment.fanout.close()
+    const execution = this.#createExecution({
+      scope,
+      turn,
+      turnId: input.turnId,
+      request: input,
+      segment,
+    })
+    this.#executions.set(key, execution)
+    this.#trackJournal(segment)
+    return execution
   }
 
   /**
@@ -1877,6 +2051,33 @@ export class SessionCoordinator {
         throw error
       }
     })
+  }
+
+  /**
+   * Stops one child Session the live turn spawned, where its handle stops a
+   * child alone; the turn itself runs on.
+   */
+  /**
+   * Stops one child's work alone: the live turn's own through its handle,
+   * and one that outlived the turn that spawned it through the runtime, as no
+   * turn carries it. Each ignores a child it does not hold.
+   */
+  async stopChild(scope: SessionScope, childSessionId: string) {
+    const execution = this.#executions.get(scopeKey(scope))
+    if (execution && execution.state !== "idle")
+      await execution.segment.handle.stopChild?.(childSessionId)
+    await this.options.engine.stopChild?.(scope, childSessionId)
+  }
+
+  /**
+   * Answers a request a child asked while no turn of its parent ran, which
+   * continues no turn. A runtime that reports no such child has none to
+   * answer.
+   */
+  async respondChild(scope: SessionScope, reply: RequestReply) {
+    const respond = this.options.engine.respondChild
+    if (!respond) throw new ServerRequestStaleError()
+    await respond(scope, reply)
   }
 
   async steer(

@@ -344,6 +344,39 @@ describe("guest history projection", () => {
     expect(projected.messages.map((message) => message.id)).toEqual(["ask"])
   })
 
+  // A guest is not shown compaction live, so its history holds none either;
+  // only the plan, which it is shown, passes, and any activity added later is
+  // hidden until it is allowed.
+  it("passes the plan alone of the Session's activity", () => {
+    const plan = {
+      id: "plan",
+      role: "activity" as const,
+      activityType: "PLAN" as const,
+      content: { todos: [] },
+    }
+    const projected = projectGuestHistory(
+      {
+        ...page([{ id: "ask", role: "user", text: "Hello" }]),
+        messages: [
+          plan,
+          {
+            id: "compacted",
+            role: "activity",
+            activityType: "COMPACTION",
+            content: { compactionId: "k1", summary: "Private summary" },
+          },
+          ...page([{ id: "ask", role: "user", text: "Hello" }]).messages,
+        ],
+      },
+      "ref"
+    )
+
+    expect(projected.messages.map((message) => message.id)).toEqual([
+      "plan",
+      "ask",
+    ])
+  })
+
   it("keeps a long message whole", () => {
     const text = "x".repeat(20_000)
     const projected = projectGuestHistory(
@@ -490,6 +523,17 @@ function guarded() {
       }
       return middleware.commands?.send?.(command, next)
     },
+    /** A Retry sends no text of its own: the runtime resends its source's. */
+    retry: (rewindSourceId: string, text = "") =>
+      middleware.commands?.send?.(
+        {
+          sessionId: "ref",
+          content: text ? [{ kind: "text", text }] : [],
+          text,
+          rewindSourceId,
+        },
+        next
+      ),
     next,
   }
 }
@@ -512,6 +556,64 @@ describe("guest Edit and Retry", () => {
         CommandRefusedError
       )
     expect(test.next).not.toHaveBeenCalled()
+  })
+
+  // The runtime resends a Retry's source as written, so one that names a slash
+  // command would run it as the operator, as a guest's own text may not.
+  it("refuses a Retry of a slash command it was shown, however padded, and lets an Edit replace one", async () => {
+    const test = guarded()
+    test.show({
+      sessionId: "ref",
+      kind: "history",
+      sequence: 0,
+      page: page([
+        { id: "branch", role: "user", text: "/branch" },
+        { id: "padded", role: "user", text: "\u200B  /fork now" },
+        { id: "plain", role: "user", text: "Hello" },
+      ]),
+    })
+    test.show({
+      sessionId: "ref",
+      kind: "prompt",
+      messageId: "live-slash",
+      content: [{ kind: "text", text: " /compact" }],
+      own: false,
+    })
+
+    for (const id of ["branch", "padded", "live-slash"])
+      await expect(test.retry(id), id).rejects.toBeInstanceOf(
+        CommandRefusedError
+      )
+    expect(test.next).not.toHaveBeenCalled()
+    await expect(test.retry("plain")).resolves.toEqual({ messageId: "sent" })
+    await expect(test.rewind("branch")).resolves.toEqual({ messageId: "sent" })
+  })
+
+  // A runtime reads text that trims to nothing as no text, and resends the
+  // source as written, so padding alone is a Retry too.
+  it("refuses an Edit of a slash command whose text is padding alone, as the Retry a runtime reads it as", async () => {
+    const test = guarded()
+    test.show({
+      sessionId: "ref",
+      kind: "history",
+      sequence: 0,
+      page: page([
+        { id: "branch", role: "user", text: "/branch" },
+        { id: "plain", role: "user", text: "Hello" },
+      ]),
+    })
+    const padding = [" ", "\n", "\t", "\u00A0", "\u200B", "\u2060", "\uFEFF"]
+
+    for (const text of padding)
+      await expect(
+        test.retry("branch", text),
+        JSON.stringify(text)
+      ).rejects.toBeInstanceOf(CommandRefusedError)
+    expect(test.next).not.toHaveBeenCalled()
+    for (const text of padding)
+      await expect(test.retry("plain", text)).resolves.toEqual({
+        messageId: "sent",
+      })
   })
 
   it("runs on a message the guest was shown in history or as a prompt", async () => {

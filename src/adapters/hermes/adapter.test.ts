@@ -161,6 +161,12 @@ describe("Hermes server adapter", () => {
         await adapter.workspaceCapabilities("researcher", sessionId)
       )
     ).not.toContain("live-secret")
+    // Hermes truncates the stored turns from the one an Edit or Retry names.
+    await expect(
+      adapter.workspaceCapabilities("researcher", sessionId)
+    ).resolves.toMatchObject({
+      interactions: { rewind: { status: "available", scope: "user-turn" } },
+    })
   })
 
   it("refreshes the Session's reported model from its own writes and events", async () => {
@@ -748,7 +754,7 @@ describe("Hermes server adapter", () => {
       const { sessions } = await adapter.searchSessions("alpha", "plan")
 
       expect(http.mock.calls.map(([path]) => path)).toEqual([
-        "/api/sessions/search?q=plan&profile=alpha&limit=100&exclude_sources=cron%2Ctool%2Ckanban",
+        "/api/sessions/search?q=plan&profile=alpha&limit=100&exclude_sources=cron%2Ctool%2Ckanban%2Csubagent",
       ])
       expect(sessions).toHaveLength(1)
       expect(sessions[0]).toMatchObject({
@@ -757,6 +763,32 @@ describe("Hermes server adapter", () => {
       })
       expect(sessions[0]).not.toHaveProperty("unread")
       expect(sessions[0]).not.toHaveProperty("pinned")
+    })
+
+    it("leaves a delegated child out of the matches and keeps a fork", async () => {
+      const { adapter } = searching((profile) => ({
+        results: [
+          {
+            id: "20261013_101500_c0ffee",
+            profile,
+            source: "subagent",
+            parent_session_id: "s-1",
+            last_active: 30,
+          },
+          {
+            id: "s-fork",
+            profile,
+            source: "aos-ui",
+            parent_session_id: "s-1",
+            last_active: 20,
+          },
+          { id: "s-1", profile, source: "aos-ui", last_active: 10 },
+        ],
+      }))
+
+      const { sessions } = await adapter.searchSessions("alpha", "notes")
+
+      expect(sessions.map(({ id }) => id)).toEqual(["s-fork", "s-1"])
     })
 
     it("merges every profile's matches newest first", async () => {
@@ -991,6 +1023,277 @@ describe("Hermes server adapter", () => {
       HermesAgentNotFoundError
     )
     expect(request).toHaveBeenCalledTimes(1)
+  })
+
+  describe("reading a child Session's transcript", () => {
+    const CHILD = "20261013_101500_c0ffee"
+    /** Stored Sessions by id, each with its own rows, served as Hermes does. */
+    function stored(
+      sessions: Record<
+        string,
+        { row: Record<string, unknown>; rows?: unknown[] }
+      >,
+      rawHistoryPage = 2
+    ) {
+      const http = vi.fn(async (path: string) => {
+        const url = new URL(path, "http://native.test")
+        const [, id, messages] =
+          /^\/api\/sessions\/([^/]+)(\/messages)?$/u.exec(url.pathname) ?? []
+        const session = sessions[decodeURIComponent(id ?? "")]
+        if (!session) throw new HermesHttpError(404)
+        if (!messages) return { id, profile: "researcher", ...session.row }
+        if (!session.rows) throw new HermesHttpError(404)
+        const limit = Number(url.searchParams.get("limit"))
+        const end = session.rows.length - Number(url.searchParams.get("offset"))
+        return {
+          session_id: id,
+          messages: session.rows.slice(Math.max(0, end - limit), end),
+        }
+      })
+      return new HermesServerAdapter(
+        { ...rpcRouter(), http },
+        { rawHistoryPage }
+      )
+    }
+    const delegated = { source: "subagent", parent_session_id: "stored" }
+
+    it("reads a delegated child's whole transcript as one page", async () => {
+      const adapter = stored({
+        [CHILD]: {
+          row: delegated,
+          rows: [
+            { row_id: 1, role: "user", content: "Inspect the notes" },
+            { row_id: 2, role: "assistant", content: "Child at work." },
+            { row_id: 3, role: "user", content: "And the appendix" },
+            { row_id: 4, role: "assistant", content: "Done." },
+            { row_id: 5, role: "user", content: "Thanks" },
+          ],
+        },
+      })
+
+      const page = await adapter.childHistory("researcher", "stored", CHILD)
+
+      expect(page).toMatchObject({ sessionId: CHILD, total: 5, offset: 0 })
+      expect(page.messages.map(({ id }) => id)).toEqual([
+        "hermes-row-1",
+        "hermes-row-1-1",
+        "hermes-row-3",
+        "hermes-row-3-1",
+        "hermes-row-5",
+      ])
+      expect(page).not.toHaveProperty("truncated")
+    })
+
+    it("follows a child's delegated parents up to the Session", async () => {
+      const adapter = stored({
+        [CHILD]: { row: delegated, rows: [] },
+        "20261013_101530_beef01": {
+          row: { source: "subagent", parent_session_id: CHILD },
+          rows: [{ row_id: 1, role: "user", content: "Count the pages" }],
+        },
+      })
+
+      await expect(
+        adapter.childHistory("researcher", "stored", "20261013_101530_beef01")
+      ).resolves.toMatchObject({ total: 1 })
+    })
+
+    it.each([
+      [
+        "a fork of the Session",
+        { source: "aos-ui", parent_session_id: "stored" },
+      ],
+      [
+        "another Session's child",
+        { source: "subagent", parent_session_id: "elsewhere" },
+      ],
+    ])("answers %s as not found", async (_case, row) => {
+      const adapter = stored({ [CHILD]: { row, rows: [] } })
+
+      await expect(
+        adapter.childHistory("researcher", "stored", CHILD)
+      ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    })
+
+    it("answers a child Hermes stored no row of yet with an empty transcript", async () => {
+      const adapter = stored({ [CHILD]: { row: delegated } })
+
+      await expect(
+        adapter.childHistory("researcher", "stored", CHILD)
+      ).resolves.toMatchObject({ messages: [], total: 0 })
+    })
+
+    it("keeps the newest messages of a transcript past the page bound", async () => {
+      const rows = Array.from({ length: 520 }, (_, index) => ({
+        row_id: index + 1,
+        role: "user",
+        content: `Prompt ${index + 1}`,
+      }))
+      const adapter = stored({ [CHILD]: { row: delegated, rows } }, 1_000)
+
+      const page = await adapter.childHistory("researcher", "stored", CHILD)
+
+      expect(page.messages).toHaveLength(500)
+      expect(page.messages[0]?.id).toBe("hermes-row-21")
+      expect(page.truncated).toBe(true)
+    })
+  })
+
+  describe("forking a Session", () => {
+    /** The owned Session `stored`, whose `session.branch` answers `branch`. */
+    function forking(branch: () => Promise<unknown>) {
+      const router = rpcRouter({
+        "session.branch": branch,
+        "session.close": async () => ({ closed: true }),
+      })
+      const adapter = new HermesServerAdapter({
+        ...router,
+        http: ownedSessionHttp(),
+      })
+      return { router, adapter }
+    }
+    const branched = async () => ({
+      session_id: "live-branch",
+      stored_session_id: "stored-fork",
+      title: "Owned #2",
+      parent: "stored",
+      message_count: 2,
+      messages: [],
+      info: {},
+    })
+
+    it("branches the live Session and answers as a create does, closing the branch's live Session", async () => {
+      const { router, adapter } = forking(branched)
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).resolves.toEqual({
+        session: { id: "stored-fork", agentId: "researcher" },
+      })
+      // Branched on the live Session a resume attached, keeping all history.
+      expect(router.calls("session.resume")).toHaveLength(1)
+      expect(
+        router.calls("session.branch").map(({ params }) => params)
+      ).toEqual([{ session_id: "live-secret" }])
+      // Hermes exempts the branch's live Session from its reapers.
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-branch" }]
+      )
+    })
+
+    it("still answers the fork when closing its live Session fails", async () => {
+      const { router, adapter } = forking(branched)
+      router.request = (
+        (request) =>
+        async (method: string, params: Readonly<Record<string, unknown>>) => {
+          if (method === "session.close") throw new HermesRpcUncertainError()
+          return request(method, params)
+        }
+      )(router.request.bind(router))
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).resolves.toEqual({
+        session: { id: "stored-fork", agentId: "researcher" },
+      })
+    })
+
+    it.each([
+      [
+        "an agent that failed after the fork was stored",
+        () => new HermesRpcRejectedError(5000, "agent init failed on branch"),
+      ],
+      ["a lost acknowledgement", () => new HermesRpcUncertainError()],
+    ])("reports %s as an uncertain fork", async (_case, failure) => {
+      const { adapter } = forking(async () => {
+        throw failure()
+      })
+
+      const error = await adapter
+        .forkSession("researcher", "stored")
+        .catch((cause: unknown) => cause)
+
+      expect(adapter.publicError(error)?.kind).toBe("uncertain")
+    })
+
+    it("refuses to fork a Session with nothing to branch", async () => {
+      const { adapter } = forking(async () => {
+        throw new HermesRpcRejectedError(4008, "nothing to branch")
+      })
+
+      const error = await adapter
+        .forkSession("researcher", "stored")
+        .catch((cause: unknown) => cause)
+
+      expect(adapter.publicError(error)?.kind).toBe("invalid_request")
+    })
+
+    it("reports a fork Hermes could not store as unavailable", async () => {
+      const { adapter } = forking(async () => {
+        throw new HermesRpcRejectedError(5008, "database unavailable")
+      })
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+    })
+
+    it("rebinds a live Session Hermes no longer holds and branches once more", async () => {
+      let refusals = 1
+      const { router, adapter } = forking(async () => {
+        if (refusals-- > 0)
+          throw new HermesRpcRejectedError(4001, "session not found")
+        return branched()
+      })
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).resolves.toEqual({
+        session: { id: "stored-fork", agentId: "researcher" },
+      })
+      expect(router.calls("session.resume")).toHaveLength(2)
+      expect(router.calls("session.branch")).toHaveLength(2)
+    })
+
+    it("replays a fork's copied replies each as its own response", async () => {
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored-fork?"))
+          return {
+            id: "stored-fork",
+            profile: "researcher",
+            parent_session_id: "stored",
+            model_config: JSON.stringify({ _branched_from: "stored" }),
+          }
+        if (path.includes("/messages?"))
+          return {
+            session_id: "stored-fork",
+            messages: [
+              { row_id: 1, role: "user", content: "List the files" },
+              { row_id: 2, role: "assistant", content: "Reading the file." },
+              { row_id: 3, role: "assistant", content: "It lists names." },
+            ],
+          }
+        throw new Error(`unexpected ${path}`)
+      })
+      const adapter = new HermesServerAdapter({ ...rpcRouter(), http })
+
+      const page = await adapter.history("researcher", "stored-fork", 50, 0)
+
+      expect(page.messages.map(({ id }) => id)).toEqual([
+        "hermes-row-1",
+        "hermes-row-1-1",
+        "hermes-row-1-2",
+      ])
+    })
+
+    it("answers a Session another profile holds as not found", async () => {
+      const { router, adapter } = forking(branched)
+
+      await expect(adapter.forkSession("other", "stored")).rejects.toSatisfy(
+        (error) => adapter.publicError(error)?.kind === "gone"
+      )
+      expect(router.calls("session.branch")).toHaveLength(0)
+    })
   })
 
   it("leaves a new Session untitled so Hermes can auto-title its first exchange", async () => {
@@ -1300,6 +1603,19 @@ describe("Hermes server adapter", () => {
     await expect(
       missing.getSession("researcher", "missing")
     ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    // Hermes answers a resume of a Session it holds no record of with 4007
+    // (`tui_gateway/methods_session.py` `_resume_locate`).
+    const unknown = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new HermesRpcRejectedError(4007, "session not found")
+      }),
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+    await expect(
+      unknown.getSession("researcher", "missing")
+    ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
 
     const conflict = new HermesServerAdapter({
       request: vi.fn(),
@@ -1317,6 +1633,30 @@ describe("Hermes server adapter", () => {
         archived: true,
       })
     ).rejects.toBeInstanceOf(HermesSessionConflictError)
+  })
+
+  // A delegated child is its parent's, as no list shows it.
+  it("refuses a delegated child's Session named by id before any native mutation", async () => {
+    const http = vi.fn<
+      (path: string, init?: { method?: string }) => Promise<unknown>
+    >(async () => ({
+      id: "child",
+      profile: "researcher",
+      title: "Review the notes",
+      source: "subagent",
+    }))
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+
+    for (const refused of [
+      adapter.getSession("researcher", "child"),
+      adapter.updateSession("researcher", "child", { title: "Renamed" }),
+      adapter.deleteSession("researcher", "child"),
+    ])
+      await expect(refused).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    // Each call read the row alone; nothing was written.
+    expect(http.mock.calls.flatMap(([, init]) => init?.method ?? [])).toEqual(
+      []
+    )
   })
 
   it("maps malformed native Session pages to temporary unavailability", async () => {

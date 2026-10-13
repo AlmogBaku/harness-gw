@@ -64,6 +64,7 @@ describe("guest runtime projection", () => {
           maxStringBytes: 2_000,
         },
         reactions: { status: "unavailable", reason: "not-supported" },
+        rewind: { status: "available", scope: "user-turn" },
       },
       content: {
         attachments: {
@@ -86,6 +87,11 @@ describe("guest runtime projection", () => {
       },
     })
 
+    // A guest edits and retries exactly as an operator does.
+    expect(projected?.interactions.rewind).toEqual({
+      status: "available",
+      scope: "user-turn",
+    })
     expect(projected?.interactions.approvals.status).toBe("available")
     expect(projected?.interactions.steering).toEqual({
       status: "unavailable",

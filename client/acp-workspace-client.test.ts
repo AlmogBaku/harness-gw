@@ -15,7 +15,6 @@ import {
   HGW_METHODS,
   HGW_META_KEY,
   HGW_PLAN_ID,
-  HGW_STOP_REASONS,
   type HgwAvailableCommandsMetaSchema,
 } from "../protocol/acp"
 
@@ -68,6 +67,7 @@ function capabilities(): AcpCapabilities {
         input: "text",
         fallback: "provider-queue",
       },
+      rewind: { status: "available", scope: "user-turn" },
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,
@@ -273,6 +273,7 @@ function createFakeConnection() {
       return () => statusListeners.delete(listener)
     },
     outage: undefined,
+    capabilities: undefined,
     subscribeOutage: () => () => {},
     subscribe(sessionId, listener) {
       record("subscribe", sessionId, listener.agentId)
@@ -292,6 +293,10 @@ function createFakeConnection() {
     sessionState: () => "joined",
     async login(token) {
       record("login", token)
+    },
+    async forkSession(sessionId) {
+      record("forkSession", sessionId)
+      return { sessionId: `${sessionId}-fork` }
     },
     async newSession(meta) {
       record("newSession", meta)
@@ -858,10 +863,15 @@ describe("ACP workspace client", () => {
     emitUpdate({ sessionUpdate: "state_update", state: "requires_action" })
     expect(client.sessionStatus(SESSION_ID)).toBe("waiting-for-input")
 
+    // A turn nothing observes reads as failed, as it did before ACP named it.
+    emitUpdate({ sessionUpdate: "state_update", state: "unknown" })
+    expect(client.sessionStatus(SESSION_ID)).toBe("failed")
+
     emitUpdate({
       sessionUpdate: "state_update",
       state: "idle",
-      stopReason: HGW_STOP_REASONS.uncertain,
+      stopReason: "error",
+      error: { code: -32603, message: "HGW_OUTCOME_UNKNOWN" },
     })
     expect(client.sessionStatus(SESSION_ID)).toBe("failed")
 

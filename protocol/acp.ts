@@ -68,7 +68,7 @@ export function hgwAcpAgentPath(agentId: string) {
   return `${HGW_ACP_AGENTS_PATH}/${encodeURIComponent(agentId)}`
 }
 export const HGW_META_KEY = "hgw" as const
-export const HGW_EXTENSION_VERSION = 1 as const
+export const HGW_EXTENSION_VERSION = 2 as const
 export const HGW_AUTH_METHOD_INVITE = "hgw-invite" as const
 export const HGW_ATTACHMENT_URI_SCHEME = "hgw-attachment:" as const
 export const HGW_ARTIFACT_URI_SCHEME = "artifact:" as const
@@ -95,12 +95,6 @@ export const HGW_METHODS = {
   },
 } as const
 
-/** Vendor stop reasons used on `state_update { state: "idle" }`. */
-export const HGW_STOP_REASONS = {
-  error: "_hgw_error",
-  uncertain: "_hgw_uncertain",
-} as const
-
 /** Vendor permission option kind for Hermes' "allow for this session" scope. */
 export const HGW_PERMISSION_KIND_SESSION = "_allow_session" as const
 
@@ -118,7 +112,6 @@ export const HGW_JSONRPC_ERRORS = {
   revisionConflict: -31012,
   temporarilyUnavailable: -31013,
   uncertainMutation: -31014,
-  unsupported: -31015,
   /**
    * Params too large for one frame. The client raises it before sending and
    * the gateway never sends it, so it has no machine name on the wire.
@@ -262,9 +255,21 @@ export type HgwSessionInfoMeta = z.infer<typeof HgwSessionInfoMetaSchema>
 export const HgwSessionResumeMetaSchema = z.strictObject({
   /** Owning Agent, when the client knows it before listing (deep links). */
   agentId: IdentifierSchema.optional(),
-  /** Last `_meta.hgw.sequence` the client saw for `turnId`. */
-  after: SequenceSchema.optional(),
+})
+
+/**
+ * The reserved `replayFrom` variant that resumes a view from where it already
+ * reaches in the live turn: `from` is the first `_meta.hgw.sequence` of
+ * `turnId` the client still needs, inclusive as every ACP cursor is. One that
+ * names neither replays the live turn from its first event, or rebuilds the
+ * view from history once the journal no longer holds that.
+ */
+export const HGW_REPLAY_POSITION = "_hgw/position" as const
+export const HgwReplayPositionSchema = z.strictObject({
+  type: z.literal(HGW_REPLAY_POSITION),
   turnId: IdentifierSchema.optional(),
+  from: z.number().int().min(1).optional(),
+  _meta: z.record(z.string(), z.unknown()).nullish(),
 })
 
 /**
@@ -401,6 +406,12 @@ export const HgwAgentUpdateResponseSchema = AgentUpdateResponseSchema
 const TurnMetaBase = {
   sequence: SequenceSchema,
   turnId: IdentifierSchema,
+  /**
+   * A child Session's update sent while no turn of its parent carries it, as
+   * for a child that outlived the turn that spawned it: `turnId` names that
+   * turn, and no reader takes this update as where its stream stands.
+   */
+  background: z.literal(true).optional(),
 }
 
 /**
@@ -447,45 +458,22 @@ export const HgwCostSchema = readObject({
 })
 export type HgwCost = z.infer<typeof HgwCostSchema>
 
-/** How far a delegated subagent has got. */
-export const HGW_SUBAGENT_STATUSES = [
-  "running",
-  "completed",
-  "failed",
-  "cancelled",
-] as const
-
 /**
- * One delegated subagent, as a patch keyed by `id`: a later report restates
- * only what changed, so an omitted key leaves the known value standing.
+ * `subagent_update._meta.hgw`: what ACP's child Session announcement has no
+ * field for. `toolCallId` names the parent's call that spawned the child; the
+ * rest are the facts its runtime reports. A child's tokens arrive in its own
+ * idle usage, apart from its parent's.
  */
-export const HgwSubagentSchema = readObject({
-  id: IdentifierSchema,
-  goal: z.string().max(65_536).optional(),
+export const HgwChildSessionMetaSchema = readObject({
+  ...TurnMetaBase,
+  toolCallId: IdentifierSchema.optional(),
   model: z.string().min(1).max(256).optional(),
-  /** 1 for a subagent the turn spawned, 2 for one that subagent spawned. */
-  depth: z.number().int().min(1).optional(),
-  status: z.enum(HGW_SUBAGENT_STATUSES).optional(),
-  /** Every token the subagent spent. */
-  tokens: CountSchema.optional(),
-  filesRead: z.array(z.string()).optional(),
-  filesWritten: z.array(z.string()).optional(),
+  filesRead: z.array(z.string().max(4096)).max(1000).optional(),
+  filesWritten: z.array(z.string().max(4096)).max(1000).optional(),
   durationMs: CountSchema.optional(),
-  /** The provider Session the subagent runs in, when it has its own. */
-  childSessionId: IdentifierSchema.optional(),
   summary: z.string().max(65_536).optional(),
 })
-export type HgwSubagent = z.infer<typeof HgwSubagentSchema>
-
-/**
- * Names the delegated subagent a chunk or tool call came from and, when the
- * spawning call is in the same stream, that call. Absent means the turn's own
- * agent produced it.
- */
-const SubagentAttribution = {
-  subagentId: IdentifierSchema.optional(),
-  parentToolCallId: IdentifierSchema.optional(),
-}
+export type HgwChildSessionMeta = z.infer<typeof HgwChildSessionMetaSchema>
 
 /** `state_update._meta.hgw` */
 export const HgwStateMetaSchema = readObject({
@@ -499,9 +487,9 @@ export const HgwStateMetaSchema = readObject({
   /** Stop was acknowledged but the provider has not settled yet. */
   execution: z.literal("stopping").optional(),
   /**
-   * Present with the `_hgw_error` and `_hgw_uncertain` stop reasons, and on a
-   * `running` update when the turn reports a final failure but stays active
-   * until it is stopped.
+   * Present with the `error` stop reason and the `unknown` state, and on a
+   * `requires_action` update when the turn reports a final failure but stays
+   * active until it is stopped.
    */
   code: z.string().min(1).max(128).optional(),
   message: z.string().max(4096).optional(),
@@ -516,15 +504,11 @@ export const HgwStateMetaSchema = readObject({
 })
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.hgw` */
-export const HgwChunkMetaSchema = readObject({
-  ...TurnMetaBase,
-  ...SubagentAttribution,
-})
+export const HgwChunkMetaSchema = readObject({ ...TurnMetaBase })
 
 /** `tool_call_update` / `tool_call_content_chunk` `_meta.hgw` */
 export const HgwToolCallMetaSchema = readObject({
   ...TurnMetaBase,
-  ...SubagentAttribution,
   messageId: IdentifierSchema,
   /** Streaming arguments text; ACP replaces `rawInput` wholesale. */
   argsTextDelta: z.string().optional(),
@@ -534,8 +518,6 @@ export const HgwToolCallMetaSchema = readObject({
   completedAt: z.iso.datetime().optional(),
   /** How long the call ran, when the provider reports a span, not the ends. */
   durationMs: CountSchema.optional(),
-  /** The subagent this call spawned; later updates patch it by `id`. */
-  subagent: HgwSubagentSchema.optional(),
   /** The tool declares an MCP App view; a flag only, never a resource URI. */
   app: z.strictObject({}).optional(),
 })

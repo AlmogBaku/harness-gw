@@ -174,15 +174,21 @@ export function createAcpService(options: AcpServiceOptions) {
     }
   }
 
-  function open(upgrade: AcpUpgrade, peer: AcpPeer) {
-    // Past the handshake budget the oldest socket still in its handshake is
-    // closed early, so sockets that never sign in shorten only their own life
-    // and a new socket always gets in.
+  /**
+   * Enters one socket in its handshake. Past the budget the oldest socket
+   * still in its handshake is closed early, so sockets that never sign in
+   * shorten only their own life and a new socket always gets in.
+   */
+  function admit(connectionId: string, evict: () => void) {
     if (handshaking.size >= HANDSHAKE_BUDGET) {
-      const [[oldest, evict]] = handshaking
+      const [[oldest, evictOldest]] = handshaking
       handshaking.delete(oldest)
-      evict()
+      evictOldest()
     }
+    handshaking.set(connectionId, evict)
+  }
+
+  function open(upgrade: AcpUpgrade, peer: AcpPeer) {
     const context = options.connection(
       upgrade.connectionId,
       upgrade.principalId,
@@ -217,7 +223,18 @@ export function createAcpService(options: AcpServiceOptions) {
     // within the deadline, initialize and any login its connection needs, is
     // closed with 4408.
     const deadlineMs = options.handshakeDeadlineMs ?? HANDSHAKE_DEADLINE_MS
-    const handshakeDeadline = new Deadline(deadlineMs, clock)
+    const expire = () => socket.socket.close(4408, "Handshake deadline")
+    const armDeadline = () => {
+      const deadline = new Deadline(deadlineMs, clock)
+      deadline.signal.addEventListener("abort", expire, { once: true })
+      return deadline
+    }
+    let handshakeDeadline = armDeadline()
+    const evict = () => {
+      // One line per eviction, so an operator can see a flood.
+      context.logger.warn({}, "acp.handshake.evicted")
+      socket.socket.close(4408, "Handshake budget")
+    }
     // Its sign-in or its close frees the socket's handshake slot, not the
     // deadline: a socket still closing holds its peer.
     const handshakeEnded = () => {
@@ -225,15 +242,17 @@ export function createAcpService(options: AcpServiceOptions) {
       handshakeDeadline.clear()
     }
     context.handshakeComplete = handshakeEnded
-    const expire = () => socket.socket.close(4408, "Handshake deadline")
-    handshakeDeadline.signal.addEventListener("abort", expire, { once: true })
+    // A logout that ended a login hands the socket back to its handshake, as
+    // the newest one in the budget, under a fresh deadline.
+    context.handshakeRestart = () => {
+      if (!connections.has(upgrade.connectionId)) return
+      if (handshaking.has(upgrade.connectionId)) return
+      admit(upgrade.connectionId, evict)
+      handshakeDeadline = armDeadline()
+    }
     prepared.accept(socket.socket)
     connections.add(upgrade.connectionId)
-    handshaking.set(upgrade.connectionId, () => {
-      // One line per eviction, so an operator can see a flood.
-      context.logger.warn({}, "acp.handshake.evicted")
-      socket.socket.close(4408, "Handshake budget")
-    })
+    admit(upgrade.connectionId, evict)
     return {
       receive: (raw: string | Uint8Array) => socket.receive(raw),
       close() {

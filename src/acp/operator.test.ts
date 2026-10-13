@@ -1,4 +1,4 @@
-import { methods } from "@agentclientprotocol/sdk/experimental/v2"
+import { methods, RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
@@ -6,26 +6,36 @@ import { type SessionHistoryResponse } from "../../protocol"
 import {
   HGW_METHODS,
   HGW_META_KEY,
+  HGW_REPLAY_BEFORE,
+  HGW_REPLAY_POSITION,
   HgwActivityNotificationSchema,
 } from "../../protocol/acp"
 import {
+  ChildSessionStatus,
   PendingRequestKind,
   RepliesTurnInputSchema,
   TurnEventKind,
   type TurnEvent,
 } from "../core/events"
 import { providerSessionId, sessionId } from "../core/ids"
+import { CHILD_FOLLOW_GRACE_MS } from "../core/limits"
+import type { ServerTurnListener } from "../core/runtime"
+import { useFakeClock } from "../../test/support/fake-clock"
 import { createActivityFeed } from "./activity-feed"
 import { createReadState } from "./read-state"
 import {
   AGENT,
   CAPABILITIES as HARNESS_CAPABILITIES,
   CREATED,
+  endedTurn,
   EventSource,
   NOW,
   SESSION,
   harness as acpHarness,
+  open,
+  prompt,
   sessionRow,
+  settled,
   turnStarted,
   updates,
   type HarnessOptions as AcpHarnessOptions,
@@ -122,7 +132,16 @@ function createClock(startMs: number) {
 
 type HarnessOptions = Pick<
   AcpHarnessOptions,
-  "rows" | "maxSubscriberEvents" | "permission" | "question" | "translation"
+  | "rows"
+  | "maxSubscriberEvents"
+  | "permission"
+  | "question"
+  | "translation"
+  | "childHistory"
+  | "forks"
+  | "subscribeTurns"
+  | "respondChild"
+  | "stopChild"
 > & { history?: SessionHistoryResponse }
 
 async function harness({ history, ...options }: HarnessOptions = {}) {
@@ -405,6 +424,877 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
+  // ACP scopes a question to its Session and, optionally, to the tool call
+  // that asked it, so a client can show it on that call.
+  it("names the tool call that asked a question", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Clarify it")
+
+    source.emit(turnStarted())
+    source.emit(turnQuestioned("call-clarify"))
+
+    const asked = await askedElicitation(test)
+    expect(asked.params).toMatchObject({
+      sessionId: CREATED,
+      toolCallId: "call-clarify",
+      _meta: { [HGW_META_KEY]: { requestId: CLARIFY } },
+    })
+    source.finish()
+    test.close()
+  })
+
+  // ACP v2 child Sessions: the parent announces each child it owns before any
+  // traffic of the child's, which reaches the client under the child's id.
+  it("announces a child before its events, which reach the client as the child's own", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+      toolCallId: "call-spawn",
+      title: "Review the notes",
+      status: ChildSessionStatus.Running,
+    })
+    source.emit({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "child-1",
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "child-message",
+        text: "Reading",
+      },
+    })
+
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Reading"),
+      "the child's message"
+    )
+    const childish = updates(test.recorder).filter((params) =>
+      JSON.stringify(params).includes("child-1")
+    )
+    expect(childish).toMatchObject([
+      {
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "subagent_update",
+          sessionId: "child-1",
+          title: "Review the notes",
+          state: { state: "running" },
+          _meta: { [HGW_META_KEY]: { toolCallId: "call-spawn" } },
+        },
+      },
+      {
+        sessionId: "child-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "child-message",
+          content: { type: "text", text: "Reading" },
+        },
+      },
+    ])
+    source.finish()
+    test.close()
+  })
+
+  it("asks a child's approval on the child, and its answer continues the parent's turn", async () => {
+    const test = await harness({
+      permission: async () => ({
+        outcome: { outcome: "selected", optionId: "once" },
+      }),
+    })
+    const { source } = await runningTurn(test, "Review it")
+
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+      title: "Review the notes",
+    })
+    source.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "child-approval",
+          kind: PendingRequestKind.Permission,
+          childSessionId: "child-1",
+          message: "Read the notes?",
+          responseSchema: { enum: ["once", "deny"] },
+        },
+      ],
+    })
+    source.finish()
+
+    const asked = await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the child's approval"
+    )
+    expect(asked.params).toMatchObject({ sessionId: "child-1" })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(
+      RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1]).replies
+    ).toMatchObject([{ requestId: "child-approval", status: "resolved" }])
+    test.close()
+  })
+
+  // Only the Session that announced a child speaks for it: another Session
+  // naming that child is shown nothing under the child's id.
+  it("shows another Session's events and asks naming a child under that child's id never", async () => {
+    const test = await harness({
+      permission: async () => ({
+        outcome: { outcome: "selected", optionId: "once" },
+      }),
+    })
+    const { source: owner } = await runningTurn(test, "Review it")
+    owner.emit(turnStarted())
+    owner.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("subagent_update"),
+      "the child's announcement"
+    )
+    await open(test, { _meta: { [HGW_META_KEY]: { agentId: AGENT } } })
+    await prompt(test, "Other work", SESSION)
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    const other = test.sources[1]!
+
+    other.emit(turnStarted())
+    other.emit({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "child-1",
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "stray",
+        text: "Speaking for another's child",
+      },
+    })
+    other.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "stray-approval",
+          kind: PendingRequestKind.Permission,
+          childSessionId: "child-1",
+          message: "Read the notes?",
+          responseSchema: { enum: ["once", "deny"] },
+        },
+      ],
+    })
+
+    const asked = await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the stray approval"
+    )
+    expect(asked.params).toMatchObject({ sessionId: SESSION })
+    expect(JSON.stringify(test.recorder.entries)).not.toContain(
+      "Speaking for another's child"
+    )
+    owner.finish()
+    other.finish()
+    test.close()
+  })
+
+  // A client cancels a child's work with session/cancel naming the child, only
+  // where the child's capabilities offer it; a notification answers nothing.
+  it.each([
+    [true, ["child-1"]],
+    [false, []],
+  ])(
+    "cancels a child through the Session that owns it only where the runtime stops it alone (%s)",
+    async (cancellable, stopped) => {
+      const test = await harness()
+      const { source } = await runningTurn(test, "Review it")
+      const stopChild = vi.fn<(childSessionId: string) => Promise<void>>(
+        async () => undefined
+      )
+      Object.assign(source, { stopChild })
+      source.emit(turnStarted())
+      source.emit({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        cancellable,
+      })
+      await test.recorder.wait(
+        (entry) => JSON.stringify(entry.params).includes("subagent_update"),
+        "the child's announcement"
+      )
+
+      await test.agent.notify(methods.agent.session.cancel, {
+        sessionId: "child-1",
+      })
+
+      await vi.waitFor(() =>
+        expect(stopChild.mock.calls.map(([id]) => id)).toEqual(stopped)
+      )
+      // The parent's own work runs on.
+      expect(source.stop).not.toHaveBeenCalled()
+      source.finish()
+      test.close()
+    }
+  )
+
+  // ACP permits a client nothing on a child its capabilities do not name, and
+  // no ordinary Session's method: each is a method not available.
+  it("refuses every request naming a child as a method not available", async () => {
+    const test = await harness({ forks: true })
+    const { source } = await runningTurn(test, "Review it")
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("subagent_update"),
+      "the child's announcement"
+    )
+    const child = { sessionId: "child-1" }
+    // Every request that names a Session, from the method tables, so one
+    // added later fails here until it is refused for a child too. A cancel
+    // is a notification, which answers nothing, and is tested on its own.
+    const named: Record<string, Record<string, unknown>> = {
+      [methods.agent.session.resume]: { ...child, cwd: "/" },
+      [methods.agent.session.fork]: { ...child, cwd: "/" },
+      [methods.agent.session.prompt]: {
+        ...child,
+        prompt: [{ type: "text", text: "Hi" }],
+      },
+      [methods.agent.session.close]: child,
+      [methods.agent.session.delete]: child,
+      [methods.agent.session.setConfigOption]: {
+        ...child,
+        configId: "model",
+        type: "id",
+        value: "opus",
+      },
+      [HGW_METHODS.session.update]: { ...child, title: "Renamed" },
+      [HGW_METHODS.session.focus]: child,
+      [HGW_METHODS.session.part]: child,
+      [HGW_METHODS.session.steer]: { ...child, requestId: "s", text: "Hi" },
+    }
+    const unnamed = new Set<string>([
+      methods.agent.session.new,
+      methods.agent.session.list,
+      methods.agent.session.cancel,
+    ])
+    expect(Object.keys(named).sort()).toEqual(
+      [
+        ...Object.values(methods.agent.session),
+        ...Object.values(HGW_METHODS.session),
+      ]
+        .filter((method) => !unnamed.has(method))
+        .sort()
+    )
+
+    for (const [method, params] of [
+      ...Object.entries(named),
+      // An older page names its Session as a resume does.
+      [
+        methods.agent.session.resume,
+        {
+          ...child,
+          cwd: "/",
+          replayFrom: { type: HGW_REPLAY_BEFORE, cursor: "MA" },
+        },
+      ],
+    ] as [string, Record<string, unknown>][])
+      await expect(
+        test.agent.request(method, params),
+        method
+      ).rejects.toMatchObject({
+        code: RequestError.methodNotFound("").code,
+        data: { method },
+      })
+    source.finish()
+    test.close()
+  })
+
+  // ACP: a child is announced before any traffic of its own, and a child id
+  // is never a top-level Session's.
+  it("shows nothing of a child unannounced, or of one that names a top-level Session", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+    const said = (text: string) => ({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "child-message",
+      text,
+    })
+
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "early-child",
+      event: said("Too early"),
+    })
+    // CREATED is the parent itself; SESSION is a row the catalog lists.
+    for (const childSessionId of [CREATED, SESSION]) {
+      source.emit({ kind: TurnEventKind.ChildSessionUpdated, childSessionId })
+      source.emit({
+        kind: TurnEventKind.ChildSessionEvent,
+        childSessionId,
+        event: said("Posing as a top-level Session"),
+      })
+    }
+    source.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "parent-message",
+      text: "Parent goes on",
+    })
+
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Parent goes on"),
+      "the parent's own message"
+    )
+    const shown = JSON.stringify(test.recorder.entries)
+    expect(shown).not.toContain("Too early")
+    expect(shown).not.toContain("Posing as a top-level Session")
+    expect(shown).not.toContain("subagent_update")
+    source.finish()
+    test.close()
+  })
+
+  // ACP's parent goes idle while background work goes on: a child still at
+  // work after its turn ended reports under its own id, between turns, and
+  // its requests and its cancel reach the runtime without any turn.
+  describe("a child that outlives its parent's turn", () => {
+    async function outlived(
+      saved: Pick<HarnessOptions, "history" | "childHistory"> = {}
+    ) {
+      let listener: ServerTurnListener | undefined
+      const unsubscribed = vi.fn()
+      const respondChild = vi.fn<
+        NonNullable<AcpHarnessOptions["respondChild"]>
+      >(async () => undefined)
+      const stopChild = vi.fn<NonNullable<AcpHarnessOptions["stopChild"]>>(
+        async () => undefined
+      )
+      const test = await harness({
+        ...saved,
+        subscribeTurns: (_scope, subscribed) => {
+          listener = subscribed
+          return unsubscribed
+        },
+        respondChild,
+        stopChild,
+        permission: async () => ({
+          outcome: { outcome: "selected", optionId: "once" },
+        }),
+      })
+      const { source } = await runningTurn(test, "Review it")
+      source.emit(turnStarted())
+      source.emit({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        title: "Review the notes",
+        status: ChildSessionStatus.Running,
+        cancellable: true,
+      })
+      source.emit({ kind: TurnEventKind.TurnEnded })
+      source.finish()
+      await test.recorder.wait(endedTurn, "the parent turn's end")
+      await vi.waitFor(() => expect(listener).toBeDefined())
+      const turnId = z
+        .object({ turnId: z.string() })
+        .parse(test.start.mock.calls[0]?.[1]).turnId
+      // The runtime reports the child that outlives the turn with its state.
+      listener!.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Running,
+      })
+      return {
+        test,
+        listener: listener!,
+        turnId,
+        respondChild,
+        stopChild,
+        unsubscribed,
+      }
+    }
+
+    it("streams its updates under its id while its parent is idle, at no position in the parent's turn", async () => {
+      const { test, listener, turnId } = await outlived()
+
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionEvent,
+        childSessionId: "child-1",
+        event: {
+          kind: TurnEventKind.MessageChunk,
+          messageId: "child-message",
+          text: "Still working.",
+        },
+      })
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Idle,
+      })
+      await test.recorder.wait(
+        (entry) =>
+          JSON.stringify(entry.params).includes('"state":"idle"') &&
+          JSON.stringify(entry.params).includes("subagent_update"),
+        "the child's final report"
+      )
+
+      const shown = updates(test.recorder)
+      const chunk = shown.find(
+        ({ sessionId, update }) =>
+          sessionId === "child-1" &&
+          update.sessionUpdate === "agent_message_chunk"
+      )
+      expect(chunk?.update._meta).toMatchObject({
+        [HGW_META_KEY]: { turnId, background: true },
+      })
+      expect(
+        shown
+          .filter(
+            ({ sessionId, update }) =>
+              sessionId === CREATED &&
+              update.sessionUpdate === "subagent_update"
+          )
+          .at(-1)?.update
+      ).toMatchObject({
+        sessionId: "child-1",
+        state: { state: "idle", stopReason: "end_turn" },
+      })
+      test.close()
+    })
+
+    it("asks its request on it between turns, and answers it through the runtime", async () => {
+      const { test, listener, turnId, respondChild } = await outlived()
+
+      listener.onChildRequest!(turnId, {
+        requestId: "late-approval",
+        kind: PendingRequestKind.Permission,
+        childSessionId: "child-1",
+        message: "Read the notes?",
+        responseSchema: { enum: ["once", "deny"] },
+      })
+
+      const asked = await test.recorder.wait(
+        (entry) => entry.method === methods.client.session.requestPermission,
+        "the child's late approval"
+      )
+      expect(asked.params).toMatchObject({ sessionId: "child-1" })
+      await vi.waitFor(() =>
+        expect(respondChild).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: sessionId(CREATED) }),
+          expect.objectContaining({
+            requestId: "late-approval",
+            status: "resolved",
+          })
+        )
+      )
+      // Its parent ran no turn for it.
+      expect(test.start).toHaveBeenCalledTimes(1)
+      test.close()
+    })
+
+    // A reload or a reconnect leaves the Session unwatched for a moment: the
+    // child is followed through it, and the browser back reads how it is now.
+    it("keeps following it while its only viewer reconnects, and restates it to the viewer back", async () => {
+      const { test, listener, turnId, unsubscribed } = await outlived()
+      test.close()
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Idle,
+        summary: "Notes reviewed.",
+      })
+
+      const asked = test.discover.mock.calls.length
+      const back = await test.connect("connection-2")
+      await back.list()
+      await back.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      // A turn the runtime started meanwhile had no member to adopt it as.
+      await vi.waitFor(() =>
+        expect(test.discover.mock.calls.length).toBeGreaterThan(asked)
+      )
+      const restated = await back.recorder.wait(
+        (entry) =>
+          JSON.stringify(entry.params).includes("subagent_update") &&
+          JSON.stringify(entry.params).includes('"state":"idle"'),
+        "the child's report restated"
+      )
+
+      expect(restated.params).toMatchObject({
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "subagent_update",
+          sessionId: "child-1",
+          state: { state: "idle", stopReason: "end_turn" },
+          _meta: {
+            [HGW_META_KEY]: {
+              turnId,
+              background: true,
+              summary: "Notes reviewed.",
+            },
+          },
+        },
+      })
+      expect(unsubscribed).not.toHaveBeenCalled()
+      back.close()
+    })
+
+    // No turn's journal keeps what a background child streams, so a view a
+    // reconnect positions in a later turn lacks what the child streamed
+    // meanwhile: the Session is replayed from history instead, as for a lost
+    // cursor, the child's saved transcript with it.
+    it("replays the Session to a viewer who reconnects into a later turn while a child works on", async () => {
+      const { test } = await outlived({
+        history: {
+          ...HISTORY,
+          messages: [
+            ...HISTORY.messages,
+            {
+              id: "child-row",
+              role: "activity",
+              activityType: "CHILD_SESSION",
+              content: {
+                childSessionId: "child-1",
+                title: "Review the notes",
+                status: "running",
+              },
+            },
+          ],
+        },
+        childHistory: async () => ({
+          sessionId: "child-1",
+          messages: [
+            {
+              id: "child-message",
+              role: "assistant",
+              content: [{ type: "text", text: "Saved while away." }],
+              createdAt: NOW,
+            },
+          ],
+          total: 1,
+          limit: 500,
+          offset: 0,
+          nextOffset: 0,
+        }),
+      })
+      await test.prompt("Next")
+      await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+      const next = test.sources[1]!
+      next.emit(turnStarted())
+      next.emit({
+        kind: TurnEventKind.MessageChunk,
+        messageId: "next-message",
+        text: "Working on the next",
+      })
+      await test.recorder.wait(
+        (entry) => JSON.stringify(entry.params).includes("Working on the next"),
+        "the later turn's reply"
+      )
+      const turnId = z
+        .object({ turnId: z.string() })
+        .parse(test.start.mock.calls[1]?.[1]).turnId
+      const cursor = Math.max(
+        ...updates(test.recorder).flatMap(({ update }) => {
+          const hgw = (
+            update as {
+              _meta?: { hgw?: { turnId?: unknown; sequence?: unknown } }
+            }
+          )._meta?.hgw
+          return hgw?.turnId === turnId && typeof hgw.sequence === "number"
+            ? [hgw.sequence]
+            : []
+        })
+      )
+      test.close()
+
+      const back = await test.connect("connection-2")
+      await back.list()
+      await back.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: cursor + 1 },
+      })
+      const saved = await back.recorder.wait(
+        (entry) => JSON.stringify(entry.params).includes("Saved while away."),
+        "the child's saved transcript"
+      )
+
+      expect(saved.params).toMatchObject({ sessionId: "child-1" })
+      // The rebuilt view joins the Session, which still follows the child.
+      await back.recorder.wait(
+        (entry) =>
+          JSON.stringify(entry.params).includes("subagent_update") &&
+          JSON.stringify(entry.params).includes('"background":true'),
+        "the child's report restated"
+      )
+      back.close()
+    })
+
+    it("stops following it once nobody comes back within the grace", async () => {
+      const { test, unsubscribed } = await outlived()
+      const clock = useFakeClock()
+      test.close()
+      await clock.advance(CHILD_FOLLOW_GRACE_MS - 1)
+      expect(unsubscribed).not.toHaveBeenCalled()
+
+      await clock.advance(1)
+      expect(unsubscribed).toHaveBeenCalledTimes(1)
+    })
+
+    it("gives a viewer who comes back and leaves again the whole grace", async () => {
+      const { test, unsubscribed } = await outlived()
+      const clock = useFakeClock()
+      test.close()
+      await clock.advance(CHILD_FOLLOW_GRACE_MS / 2)
+      const back = await test.connect("connection-2")
+      await back.list()
+      await back.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      back.close()
+
+      await clock.advance(CHILD_FOLLOW_GRACE_MS - 1)
+      expect(unsubscribed).not.toHaveBeenCalled()
+      await clock.advance(1)
+      expect(unsubscribed).toHaveBeenCalledTimes(1)
+    })
+
+    // Restating a child long over would announce it to a view that may not
+    // hold its turn, as if it had just been spawned.
+    it("tells a member who joins later of no child over for longer than the grace", async () => {
+      const { test, listener, turnId } = await outlived()
+      const clock = useFakeClock()
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Idle,
+      })
+      await clock.advance(CHILD_FOLLOW_GRACE_MS)
+
+      const later = await test.connect("connection-2")
+      await later.list()
+      await later.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      await clock.advance(0)
+
+      expect(JSON.stringify(later.recorder.entries)).not.toContain("child-1")
+      later.close()
+      test.close()
+    })
+
+    it("cancels it between turns through the runtime", async () => {
+      const { test, stopChild } = await outlived()
+
+      await test.agent.notify(methods.agent.session.cancel, {
+        sessionId: "child-1",
+      })
+
+      await vi.waitFor(() =>
+        expect(stopChild).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: sessionId(CREATED) }),
+          "child-1"
+        )
+      )
+      test.close()
+    })
+  })
+
+  // ACP replays a child through its parent's from-start resume: the child's
+  // announcement, then the child's own updates, under its id.
+  it("replays a stored child Session from the start: its announcement, then its transcript", async () => {
+    const childHistory = vi.fn(async (): Promise<SessionHistoryResponse> => ({
+      sessionId: "child-1",
+      messages: [
+        {
+          id: "child-message",
+          role: "assistant",
+          content: [{ type: "text", text: "Two notes were stale" }],
+          createdAt: NOW,
+        },
+      ],
+      total: 1,
+      limit: 500,
+      offset: 0,
+      nextOffset: 0,
+    }))
+    const test = await harness({
+      childHistory,
+      history: {
+        ...HISTORY,
+        messages: [
+          ...HISTORY.messages,
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: {
+              childSessionId: "child-1",
+              title: "Review the notes",
+              status: "idle",
+            },
+          },
+        ],
+      },
+    })
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Two notes were stale"),
+      "the child's transcript"
+    )
+
+    const childish = updates(test.recorder).filter((params) =>
+      JSON.stringify(params).includes("child-")
+    )
+    expect(
+      childish.map(({ sessionId, update }) => [sessionId, update.sessionUpdate])
+    ).toEqual([
+      [SESSION, "subagent_update"],
+      ["child-1", "agent_message"],
+      ["child-1", "agent_message_chunk"],
+    ])
+    expect(childHistory).toHaveBeenCalledWith(AGENT, SESSION, "child-1")
+    test.close()
+  })
+
+  // A child's own transcript names its children as the parent's names it:
+  // each is announced under the child that owns it, by the same checks.
+  it("replays a child's own children under it, refusing one that names a top-level Session or the child itself", async () => {
+    const row = (childSessionId: string) => ({
+      id: `row-${childSessionId}`,
+      role: "activity" as const,
+      activityType: "CHILD_SESSION" as const,
+      content: { childSessionId, title: `Posing as ${childSessionId}` },
+    })
+    const test = await harness({
+      childHistory: async () => ({
+        sessionId: "child-1",
+        messages: [row("grandchild-1"), row(SESSION), row("child-1")],
+        total: 3,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+      history: {
+        ...HISTORY,
+        messages: [...HISTORY.messages, row("child-1")],
+      },
+    })
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("grandchild-1"),
+      "the grandchild's announcement"
+    )
+    await settled()
+
+    expect(
+      updates(test.recorder).flatMap(({ sessionId, update }) =>
+        update.sessionUpdate === "subagent_update"
+          ? [[sessionId, update.sessionId]]
+          : []
+      )
+    ).toEqual([
+      [SESSION, "child-1"],
+      ["child-1", "grandchild-1"],
+    ])
+    // Announced, the grandchild is a child no request may name.
+    await expect(
+      test.agent.request(HGW_METHODS.session.focus, {
+        sessionId: "grandchild-1",
+      })
+    ).rejects.toMatchObject({ code: RequestError.methodNotFound("").code })
+    test.close()
+  })
+
+  // A reconnect is a new connection, which knows no child: one announced
+  // before its cursor is announced again ahead of the events after it.
+  it("announces a child again to a positioned reconnect, then streams the child's events after the cursor", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+    const said = (text: string) => ({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "child-1",
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "child-message",
+        text,
+      },
+    })
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+      title: "Review the notes",
+      status: ChildSessionStatus.Running,
+    })
+    source.emit(said("Before the drop"))
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Before the drop"),
+      "the child's first words"
+    )
+    const { turnId } = test.coordinator.snapshot(test.scope)
+    const cursor = Math.max(
+      ...updates(test.recorder).flatMap(({ update }) => {
+        const sequence = (
+          update as { _meta?: { hgw?: { sequence?: unknown } } }
+        )._meta?.hgw?.sequence
+        return typeof sequence === "number" ? [sequence] : []
+      })
+    )
+
+    const reconnected = await test.connect("connection-2")
+    await reconnected.list()
+    await reconnected.agent.request(methods.agent.session.resume, {
+      sessionId: CREATED,
+      cwd: "/",
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: cursor + 1 },
+    })
+    source.emit(said("After the drop"))
+    await reconnected.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("After the drop"),
+      "the child's words after the cursor"
+    )
+
+    const childish = updates(reconnected.recorder).filter((params) =>
+      JSON.stringify(params).includes("child-1")
+    )
+    expect(childish).toMatchObject([
+      {
+        sessionId: CREATED,
+        update: { sessionUpdate: "subagent_update", title: "Review the notes" },
+      },
+      {
+        sessionId: "child-1",
+        update: { sessionUpdate: "agent_message_chunk" },
+      },
+    ])
+    expect(JSON.stringify(reconnected.recorder.entries)).not.toContain(
+      "Before the drop"
+    )
+    source.finish()
+    test.close()
+    reconnected.close()
+  })
+
   it("delivers a multi-select question the SDK accepts", async () => {
     const test = await harness({
       question: async () => ({
@@ -651,9 +1541,8 @@ describe("operator ACP listener", () => {
     await test.agent.request(methods.agent.session.resume, {
       sessionId: SESSION,
       cwd: "/",
-      _meta: {
-        [HGW_META_KEY]: { agentId: AGENT, turnId: "run-live", after: 0 },
-      },
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId: "run-live", from: 1 },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
     })
     await drainedReplay(test, source)
 

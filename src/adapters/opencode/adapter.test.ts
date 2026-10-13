@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import type { ServerTurnEngine } from "../../core/runtime"
 import { OpenCodeServerAdapter, type OpenCodeAdapterClient } from "./adapter"
+import { composeOpenCodeRuntime } from "./factory"
+import { fakeOpenCode, fakeOpenCodeClient } from "./test-utils/fake-opencode"
 
 const turnEngine: ServerTurnEngine = {
   async start() {
@@ -583,7 +586,30 @@ describe("OpenCode server adapter", () => {
         adapter.workspaceCapabilities("research", "session-1")
       ).resolves.toMatchObject({
         content: { artifacts: { status: "available" } },
+        // No rewind the gateway can drive is proven on OpenCode yet.
+        interactions: { rewind: { status: "unavailable" } },
       })
     })
+  })
+
+  // No gateway turn spawns a child on OpenCode, so the runtime contract cannot
+  // ask for one; the fake's server holds one its `task` tool made instead.
+  it("lists no child Session the server holds, through the real client", async () => {
+    const opencode = fakeOpenCode()
+    const { runtime, close } = composeOpenCodeRuntime({
+      client: fakeOpenCodeClient(opencode),
+      logger: captureLogs().logger,
+    })
+    const { agentId, sessionId } = opencode.scope
+    try {
+      for (const page of [
+        await runtime.listSessions(agentId, 100, 0),
+        await runtime.listAllSessions(100, 0),
+        await runtime.searchSessions(undefined, "Contract Session"),
+      ])
+        expect(page.sessions.map(({ id }) => id)).toEqual([sessionId])
+    } finally {
+      await close()
+    }
   })
 })

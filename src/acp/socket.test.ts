@@ -123,7 +123,7 @@ describe("ACP WebSocket shim", () => {
           jsonrpc: "2.0",
           id: 2,
           error: {
-            code: HGW_JSONRPC_ERRORS.unsupported,
+            code: HGW_JSONRPC_ERRORS.turnInProgress,
             message: "internal detail 7f3a",
             data: "internal detail 7f3a",
           },
@@ -146,8 +146,8 @@ describe("ACP WebSocket shim", () => {
           jsonrpc: "2.0",
           id: 2,
           error: {
-            code: HGW_JSONRPC_ERRORS.unsupported,
-            message: "unsupported",
+            code: HGW_JSONRPC_ERRORS.turnInProgress,
+            message: "turn_in_progress",
           },
         },
         { jsonrpc: "2.0", id: 3, error: unavailable },
