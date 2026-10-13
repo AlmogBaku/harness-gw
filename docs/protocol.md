@@ -483,84 +483,99 @@ as `occurredAt`; a live item carries no `replayed`.
 
 `requestText` is one line of what the request asks: a permission's operation
 or message, or an elicitation's first question. It is stripped of
-bidirectional controls, collapsed to single spaces, masked broadly (see
+bidirectional controls, collapsed to single spaces, masked (see
 [Credential masking](#credential-masking)), and cut to 200 UTF-16 units
 ending in `…`. `requestMore` counts the questions after the first. Both are
 absent when there is nothing to show. The ask card itself, the
 `session/request_permission` or `session/elicitation` request, keeps the full
-text, line breaks included.
+text as written, line breaks included.
 
 #### Credential masking
 
-The gateway masks a credential as `[credential redacted]` at one of two
-strengths. A term is any word of `SECRET_TERMS` (`src/redaction.ts`), in any
-case, with `-` or `_` allowed between its letters (`api_key`, `apiKey`,
-`password`, `token`, …). A name that ends in a term after a `-` or `_` is
-read as that term, the way a logged field name is (`DB_PASSWORD`,
-`AWS_SECRET_ACCESS_KEY`, `x-api-key`); a word that only ends in a term's
-letters, such as `bypass`, is not.
+The gateway masks a credential as `[credential redacted]`, and only its value:
+a name, the value's quotes, a `Basic` or `Bearer` word, a URL's scheme, user
+and host, and a value that only names a secret (one that starts with `$`, `<`
+or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
+`src/redaction.ts`) does it everywhere it is done.
 
-A bearer token is at least 8 characters of `[A-Za-z0-9._~+/-]`, the RFC 6750
-token characters, whose last character may also be `=` and is never `.`, so
-a sentence's closing period stays.
+| Where                                                                 | Masked                                                                                                                                               |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, its terminal's command and output, and its subagent's goal and summary                      |
+| A failed turn, live and replayed                                      | its message                                                                                                                                          |
+| A question a guest is shown                                           | its prompt, header, and choices; a guest's answer reaches the runtime as the choice it wrote, and an answer echoed back to a guest is masked        |
+| `requestText` in `_hgw/activity`, and every Web Push text             | the one line it shows                                                                                                                                |
+| An MCP App view                                                       | its tool input and result                                                                                                                            |
 
-- **Broad** masks:
-  - a term, `=` or `:` with any spacing, and its value up to the next
-    whitespace, `,` or `;`, quotes included; the whole match goes;
-  - `Basic` or `Bearer` and the bearer token after it, when the token mixes
-    at least two of upper case, lower case, digits and symbols, counted with
-    its first letter's case ignored; so `Basic authentication` and
-    `Enable Basic Authentication?` stay, and a whole JWT or `ya29.…` token
-    after `Bearer` goes;
-  - a provider key by its prefix alone: `ghp_`, `gho_`, `ghs_`, `ghu_`,
-    `ghr_`, `sk-`, `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-` or `xoxs-` and the word
-    characters and `-` after it.
-- **Narrow** masks:
-  - a term written as one word, `term=VALUE` or `term:VALUE`, whose value
-    has no whitespace and none of ``$ ( ) | & ; < > ` ' " { } * ? [ ] \``,
-    starts with none of `/`, `.` or `~`, may sit in single or double quotes,
-    and ends where a shell word does: at whitespace, `;`, `&`, `|`, `(`, `)`,
-    `<`, `>`, a quote, a backtick, or the end of the text. The term, the
-    quotes and that boundary stay; only the value goes, so
-    `export TOKEN=…; ./deploy.sh` keeps its `;`;
-  - a bearer token after `Authorization:` and `Bearer` or `Basic`, in any
-    case and spacing; the header stays and only the token goes. A bare
-    `bearer` or `basic` word, as in `rm -rf bearer archive`, stays;
-  - a provider key of a real key's length: `ghp_`, `gho_`, `ghs_`, `ghu_` or
-    `ghr_` and 30 or more letters and digits, `sk-` and 20 or more word
-    characters or `-` including a digit, or `xoxb-`, `xoxa-`, `xoxp-`,
-    `xoxr-` or `xoxs-` and the word characters and `-` after it; so
-    `rm -rf sk-backups` stays.
-- **Both** mask:
-  - a JWT (`eyJ…` in three dot-separated parts);
-  - a URL's password: in `scheme://user:password@host`, a password with no
-    whitespace and none of ``: / @ $ ( ) { } ` ' "`` goes, and the scheme,
-    user and host stay;
-  - then, every provider key
-    [`@sanity-labs/secret-scan`](https://github.com/sanity-labs/secret-scan)
-    knows by its shape, whole: its rules come from TruffleHog's detectors
-    (Stripe, Tailscale, AWS and others), most anchored on a provider prefix,
-    and its generic ones gated by length and entropy (`Bearer` and 20 or more
-    random characters, `sk-` and 40 or more). A match that is a URL or a
-    URL's scheme stays, because the scanner's database rules take the whole
-    URL or only its scheme.
-- **Neither** masks a value that is already `[credential redacted]`, so
-  masking text twice, at either strength, leaves one placeholder per
-  credential.
+The ask card is not masked: a question and a permission reach the operator as
+the runtime wrote them, since the one asked must read exactly what they answer
+or approve, and the answers the operator gave are echoed as given. A guest
+never sees a permission. The credentials middleware
+(`src/core/credentials-middleware.ts`), the innermost layer of every member's
+stack, masks what passes a member; Activity and Web Push, which leave the
+conversation, and the MCP App view route, which no member's stack carries,
+call the same masker.
 
-| Text                                                    | Strength |
-| ------------------------------------------------------- | -------- |
-| A permission's message and title on the ask card        | narrow   |
-| A question's prompt, header and choices on the ask card | broad    |
-| An elicitation's own message on the ask card            | broad    |
-| `requestText` in `_hgw/activity` and in Web Push        | broad    |
-| `sessionTitle` and `agentName` in Web Push              | broad    |
+Text is masked; a path or a patch that carries a credential is dropped rather
+than masked, since masked it would name no file or no longer apply: a
+location, a diff that names one, a terminal's working directory, and a
+subagent's file.
 
-A masked choice is shown with ` (option N)` after it when two choices read
-the same once masked, and an answer naming the shown choice reaches the
-runtime as the choice it wrote. On Hermes, the adapter masks its own
-questions, choices and answers broadly and its approvals narrowly before the
-gateway does.
+A name is secret when a run of up to three of its words spells a word of
+`SECRET_TERMS` (`src/redaction.ts`), or when its letters end in one. Its words
+split at a change of case and at any character that is not a letter or a
+digit, so `api_key`, `apiKey` and `API-KEY` read alike: `DB_PASSWORD`,
+`DB_PASSWORD_PROD`, `x-api-key`, `password_hash`, `token_type` and
+`PGPASSWORD` are secret. A safe name covers the terms inside it, so
+`token_count`, `input_token_count`, `token_limit`, `token_usage`,
+`auth_mode`, `authorization_mode`, `oauth`, `secretary`, `bypass` and
+`access_key_rotation` are not; `npm_config_userconfig` is, though no word of
+it is a term. A flag's leading `-` are not part of its name (`--token=`). One
+rule reads every name: a name text assigns, a JSON key, and a logged field.
+
+The masker takes:
+
+- the value a secret name is given with `=` or `:` and any spacing on its
+  line (so a YAML parent's value is never its child's name): a quoted value
+  inside its quotes, any other up to whitespace, `,` or `;`, or up to a
+  closing quote before one; a `Basic` or `Bearer` word before the value stays;
+- after `Basic` or `Bearer`, a bearer token: at least 8 characters of
+  `[A-Za-z0-9._~+/-]` whose last may also be `=` and is never `.`, that mixes
+  at least two of upper case, lower case, digits and symbols, counted with its
+  first letter's case ignored; so `Basic authentication` and `Enable Basic
+  Authentication?` stay;
+- a provider key by its prefix: `ghp_`, `gho_`, `ghs_`, `ghu_`, `ghr_`, `sk-`,
+  `xoxb-`, `xoxa-`, `xoxp-`, `xoxr-` or `xoxs-` and the word characters and
+  `-` after it;
+- a PEM private key, whole, from its `BEGIN … PRIVATE KEY` line through its
+  body to its `END` line; one cut short, through its last body line. A header
+  with no body is no key and stays;
+- a JWT (`eyJ…` in three dot-separated parts);
+- a URL's password: in `scheme://user:password@host`, a password with no
+  whitespace and none of ``: / @ $ ( ) { } ` ' "``;
+- then, every provider key
+  [`@sanity-labs/secret-scan`](https://github.com/sanity-labs/secret-scan)
+  knows by its shape, whole, its rules taken from TruffleHog's detectors. A
+  match that is a URL or a URL's scheme stays, because the scanner's database
+  rules take the whole URL or only its scheme. The scanner reads text in
+  pieces of at most 2,048 characters that end at a line's end when one is in
+  reach, so its work stays in proportion to the text; a key that straddles
+  two pieces is left to the rules above.
+
+A value already `[credential redacted]` is never masked again, so masking text
+twice leaves one placeholder per credential.
+
+Tool data is JSON-aware: a JSON value, and text that parses as one, is masked
+by key and by value, a secret-named key keeping its name and losing any value
+but a boolean or `null`; JSON with nothing to mask is sent as written, and
+streamed output is masked as plain text, never re-encoded. A terminal's output
+keeps its last 262,144 UTF-16 units, the most a browser keeps of one, without
+the word the cut lands in; nothing else is cut. Each turn event is masked
+once, however many members are shown it. An MCP App view's files are served from
+the stored call, never from its masked input.
+
+Masking finds a credential by its name, URL position, or known shape. One with
+none of these is sent as written, and a credential split across two streamed
+pieces of output is masked piece by piece.
 
 ## Artifacts
 
@@ -764,7 +779,7 @@ Version 2 replaced, without compatibility, version 1's one counted message per
 category, which named no Session when it counted several.
 
 - **Text.** Every text field is one line: control and bidirectional
-  characters removed, whitespace collapsed, credentials masked broadly (see
+  characters removed, whitespace collapsed, credentials masked (see
   [Credential masking](#credential-masking)), and cut at a code-point
   boundary ending in `…`. An Agent's name travels only for a visible,
   selectable Agent that is not the creator.

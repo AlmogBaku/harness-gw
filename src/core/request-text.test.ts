@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { PendingRequest } from "./events"
-import { maskRequestText, previewText, requestPreview } from "./request-text"
+import { askText, previewText, requestPreview } from "./request-text"
 
 const ENUM = { type: "string", enum: ["once", "deny"] }
 
@@ -68,7 +68,7 @@ describe("requestPreview", () => {
       "a shell command with its credential masked",
       { requestId: "r", kind: "permission", message: curl },
       {
-        text: "curl -H '[credential redacted] https://api.example.test/repos",
+        text: "curl -H 'Authorization: Bearer [credential redacted]' https://api.example.test/repos",
       },
     ],
     [
@@ -114,12 +114,13 @@ describe("previewText", () => {
   })
 })
 
-describe("maskRequestText", () => {
-  it("keeps every line and the full length, masking only the credential and reordering", () => {
+// The one asked reads exactly what they approve or answer, credential and all.
+describe("askText", () => {
+  it("keeps every line, the full length, and a credential, dropping only reordering", () => {
     const text = `Run this:\n${curl}\n\n${"step ".repeat(100)}\u202Edone`
 
-    expect(maskRequestText(text, "broad")).toBe(
-      `Run this:\ncurl -H '[credential redacted] https://api.example.test/repos\n\n${"step ".repeat(100)}done`
+    expect(askText(text)).toBe(
+      `Run this:\n${curl}\n\n${"step ".repeat(100)}done`
     )
   })
 })

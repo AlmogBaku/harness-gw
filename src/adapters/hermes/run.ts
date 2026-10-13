@@ -41,7 +41,6 @@ import {
   hermesToolLocations,
   projectHermesToolCall,
   projectHermesToolOutcome,
-  redactedText,
 } from "./tool-data"
 import { hermesRowMessageId } from "./history"
 import type { HermesPublishedArtifacts } from "./published-artifacts"
@@ -974,7 +973,7 @@ export class HermesTurnEngine {
       this.#emit(active, {
         kind: TurnEventKind.TerminalOutput,
         ...terminal,
-        data: redactedText(data),
+        data,
       })
   }
 

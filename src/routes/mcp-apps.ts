@@ -5,6 +5,7 @@ import {
   McpAppViewSchema,
   ReadResourceResultSchema,
   viewerFileResult,
+  type McpAppView,
 } from "../../protocol/mcp-apps"
 import type { GatewayAppOptions } from "../app"
 import { coreFailure } from "../core/failures"
@@ -13,6 +14,7 @@ import type { ServerMcpApps, ServerRuntime } from "../core/runtime"
 import { appResourceOf, McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
 import { isUiResourceUri } from "../mcp-apps/policy"
+import { maskJson } from "../redaction"
 import {
   answerAppFile,
   appFiles,
@@ -41,6 +43,19 @@ const MAX_REQUEST_BYTES = 256 * 1024
 const RATE_WINDOW_MS = 1_000
 const RATE_MAX_PER_WINDOW = 10
 const RATE_MAX_TRACKED = 4_096
+
+/**
+ * A view as a browser may read it, for every runtime and both listeners: the
+ * call's input and result masked as tool data is, after the files the view
+ * may read are worked out from the call itself.
+ */
+function maskedView(view: McpAppView) {
+  return McpAppViewSchema.parse({
+    ...view,
+    toolInput: maskJson(view.toolInput),
+    toolResult: maskJson(view.toolResult),
+  })
+}
 
 export type McpAppOperation = "open" | "tools/call" | "resources/read" | "files"
 
@@ -188,12 +203,14 @@ export async function handleMcpAppRequest(
     if (operation === "open")
       return {
         ok: true,
-        body: await offerAppFiles(
-          McpAppViewSchema.parse(
-            await apps.open(scope, toolCallId, request.signal)
-          ),
-          input,
-          toolCallId
+        body: maskedView(
+          await offerAppFiles(
+            McpAppViewSchema.parse(
+              await apps.open(scope, toolCallId, request.signal)
+            ),
+            input,
+            toolCallId
+          )
         ),
       }
     if (operation === "files") {

@@ -177,26 +177,6 @@ describe("Hermes native submit outcomes", () => {
     ).resolves.toMatchObject({ reason: "busy", detail: message })
   })
 
-  it("drops refusal text that carries a credential", async () => {
-    const { native } = runtime({
-      "prompt.submit": async () => {
-        throw new HermesRpcRejectedError(
-          4009,
-          "session busy: retry with token=ghp_leaked"
-        )
-      },
-    })
-
-    const outcome = await native.submit("live-secret", {
-      scope,
-      text: "Hello",
-      turnId: "run-1",
-    })
-
-    expect(outcome).toMatchObject({ reason: "busy" })
-    expect(outcome).not.toHaveProperty("detail")
-  })
-
   it.each([
     [4009, "session disconnect interrupt settling", undefined],
     [

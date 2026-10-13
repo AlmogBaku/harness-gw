@@ -1723,46 +1723,26 @@ describe("HermesRunEngine", () => {
     })
   })
 
-  it("projects bounded inspectable tool data while redacting credentials, credential environment assignments, and provider metadata without hiding safe lookalike keys", async () => {
-    const credentials = [
-      "OPENAI_API_KEY=ordinary-value",
-      "SERVICE_API_KEY=ordinary-value",
-      "AWS_ACCESS_KEY_ID=ordinary-value",
-      "CLIENT_SECRET_KEY=ordinary-value",
-      "SESSION_TOKEN=ordinary-value",
-      "NPM_CONFIG_USERCONFIG=ordinary-value",
-      "NPM_CONFIG__AUTH=ordinary-value",
-      "MYSQL_PWD=ordinary-value",
-      "PASSWORD_HASH=ordinary-value",
-      "SSH_PRIVATE_KEY_B64=ordinary-value",
-    ]
-    const safe =
-      "type x:string; variant A:control; ratio x:y; C:drive-relative; TOKEN_COUNT=12 SECRETARY=Jo AUTHORIZATION_MODE=oidc OAUTH=enabled PATHOLOGY=stable ACCESS_KEY_ROTATION=weekly"
+  // The credentials middleware masks them for every runtime; the adapter only
+  // keeps what an operator reads and drops what a provider keeps to itself.
+  it("projects inspectable tool data with its paths and URLs, dropping provider metadata", async () => {
     const events = await streamedTurn((t) => [
       t.messageStart("message-42"),
       t.frame("tool.complete", {
         tool_id: "call-7",
         name: "search",
         args: {
-          query: "OPENAI_API_KEY=sk-query-secret",
           pattern:
             "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
           path: "/srv/private/workspace",
-          apiToken: "secret-token",
           native_metadata: { live_session_id: "live-secret" },
         },
         result: {
           status: "ok",
           sourceUrl: "https://provider.invalid/private",
           filesystem_path: "/srv/private/result.txt",
-          access_token: "bearer-secret",
-          summary:
-            "TOKEN=summary-secret; see:https://provider.invalid,(/srv/private/result.txt),./relative,~/home,C:\\private\\x,\\\\host\\share",
         },
       }),
-      ...[...credentials, safe].map((query, index) =>
-        t.toolStart(`env-call-${index}`, "search", { query })
-      ),
       t.frame("message.complete", {}),
     ])
 
@@ -1770,11 +1750,9 @@ describe("HermesRunEngine", () => {
       kind: TurnEventKind.ToolCallInputChunk,
       toolCallId: "call-7",
       delta: JSON.stringify({
-        query: "OPENAI_API_KEY=[REDACTED]",
         pattern:
           "(/srv/private/a),../relative/b,~/home/c,C:\\Users\\private\\d,\\\\server\\share\\e",
         path: "/srv/private/workspace",
-        apiToken: "[REDACTED]",
       }),
     })
     expect(events).toContainEqual({
@@ -1784,34 +1762,10 @@ describe("HermesRunEngine", () => {
         status: "ok",
         sourceUrl: "https://provider.invalid/private",
         filesystem_path: "/srv/private/result.txt",
-        access_token: "[REDACTED]",
-        summary:
-          "TOKEN=[REDACTED] see:https://provider.invalid,(/srv/private/result.txt),./relative,~/home,C:\\private\\x,\\\\host\\share",
       }),
       failed: false,
     })
     expect(JSON.stringify(events)).not.toContain("live-secret")
-    expect(JSON.stringify(events)).not.toContain("bearer-secret")
-    expect(JSON.stringify(events)).not.toContain("sk-query-secret")
-    expect(JSON.stringify(events)).not.toContain("summary-secret")
-    expect(JSON.stringify(events)).toContain("[REDACTED]")
-    const environmentDeltas = ofKind(events, TurnEventKind.ToolCallInputChunk)
-      .filter((event) =>
-        String((event as { toolCallId: string }).toolCallId).startsWith(
-          "env-call-"
-        )
-      )
-      .map((event) => (event as { delta: string }).delta)
-    expect(environmentDeltas).toEqual([
-      ...credentials.map((credential) =>
-        JSON.stringify({
-          query: credential.replace("ordinary-value", "[REDACTED]"),
-        })
-      ),
-      JSON.stringify({ query: safe }),
-    ])
-    for (const credential of credentials)
-      expect(JSON.stringify(events)).not.toContain(credential)
   })
 
   it("bounds multibyte and deeply nested tool output", async () => {
@@ -4389,19 +4343,6 @@ describe("HermesRunEngine", () => {
     )
   })
 
-  it("drops a native cause that carries a credential-shaped value", async () => {
-    const events = await failedTurn({
-      error: "provider rejected authorization=Bearer sk-live-native-secret",
-    })
-
-    expect(JSON.stringify(events)).not.toContain("sk-live-native-secret")
-    expect(events.at(-1)).toEqual({
-      kind: TurnEventKind.TurnFailed,
-      message: "Hermes could not complete this turn.",
-      code: "HGW_PROVIDER_RUN_FAILED",
-    })
-  })
-
   it("restores a retained failed turn exactly as the live turn failed", async () => {
     const errorSurface = {
       layer: "provider",
@@ -4502,7 +4443,7 @@ describe("HermesRunEngine", () => {
 
   it("logs one redacted, bounded native cause per failed run", async () => {
     const log = { warn: vi.fn() }
-    const events = await failedTurn(
+    await failedTurn(
       {
         error: "https://hermes.internal/api/prompt?token=native-secret",
         failure_reason: "provider_rejected",
@@ -4529,7 +4470,6 @@ describe("HermesRunEngine", () => {
         "hermes.turn.failed",
       ],
     ])
-    expect(JSON.stringify(events)).not.toContain("native-secret")
 
     const bounded = { warn: vi.fn() }
     await failedTurn({ error: "boom ".repeat(200) }, { log: bounded })
@@ -5135,29 +5075,6 @@ describe("live and refreshed Hermes tool projection agree", () => {
       },
     ],
     [
-      "drops a credential-shaped clarification answer identically",
-      {
-        toolCallId: "clarify-secret-parity",
-        name: "clarify",
-        args: { question: "Which token?" },
-        result: {
-          responses: [
-            {
-              question: "Which token?",
-              user_response: JSON.stringify(["api_key=sk-live-abcdef"]),
-            },
-          ],
-        },
-      },
-      {
-        result: {
-          status: "cancelled",
-          responses: [{ question: "Which token?", answers: [] }],
-        },
-      },
-      "sk-live",
-    ],
-    [
       "applies the delegate_subagent description fallback identically",
       {
         toolCallId: "delegate-parity",
@@ -5414,37 +5331,6 @@ describe("Hermes native provider facts", () => {
     ])
   })
 
-  it("keeps a credential out of locations and diffs", async () => {
-    const path = "/workspace/token=ghp_leaked/notes.md"
-    const events = await turnEvents((t) => [
-      t.messageStart("m1"),
-      t.toolStart("edit-1", "write_file", { path, content: "x" }),
-      t.toolComplete("edit-1", "write_file", {
-        bytes_written: 1,
-        files_modified: [path],
-      }),
-      t.toolStart("edit-2", "patch", { path: "/workspace/.env" }),
-      t.toolComplete("edit-2", "patch", {
-        success: true,
-        diff: "--- a/workspace/.env\n+++ b/workspace/.env\n+API_KEY=sk-leaked\n",
-        files_modified: ["/workspace/.env"],
-      }),
-      t.complete("m1", ""),
-    ])
-
-    const [first, second] = ofKind(events, TurnEventKind.ToolCallFinished)
-    expect(
-      ofKind(events, TurnEventKind.ToolCallStarted)[0]?.locations
-    ).toBeUndefined()
-    expect(first?.diffs).toBeUndefined()
-    expect(second?.diffs).toEqual([
-      {
-        changes: [{ operation: "modify", path: "/workspace/.env" }],
-      },
-    ])
-    expect(JSON.stringify(events)).not.toContain("leaked")
-  })
-
   it("streams a background process as the terminal of its call", async () => {
     const events = await turnEvents((t) => [
       t.messageStart("m1"),
@@ -5573,11 +5459,7 @@ describe("Hermes native provider facts", () => {
         input_tokens: 30,
         output_tokens: 12,
         duration_seconds: 2.5,
-        files_read: [
-          "/workspace/app/a.ts",
-          "/home/operator/b.ts",
-          "/workspace/token=ghp_leaked",
-        ],
+        files_read: ["/workspace/app/a.ts", "/home/operator/b.ts"],
       }),
       t.toolComplete("delegate-1", "delegate_task", { results: [] }),
       t.complete("m1", ""),

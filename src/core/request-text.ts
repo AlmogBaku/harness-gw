@@ -1,12 +1,13 @@
 import { PUSH_TEXT_LIMITS } from "../../protocol/push"
-import { maskCredentials, type MaskStrength } from "../redaction"
+import { maskCredentials } from "../redaction"
 import { PendingRequestKind, type PendingRequest } from "./events"
 
 /**
  * The words of a pending request, and the names around it, as they leave the
- * gateway. The ask card shows them whole and masked, a permission at the
- * narrow strength; a notification or an activity item shows one line of them,
- * masked at the broad strength and cut to fit.
+ * gateway. The ask card shows them whole and as written: the one asked must
+ * read exactly what they approve or answer. A notification or an activity
+ * item shows one line of them, masked and cut to fit, since it is read away
+ * from the conversation, on a lock screen or in a feed.
  */
 
 /** Embeddings, overrides, and isolates, which reorder the text around them. */
@@ -19,13 +20,13 @@ const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/gu
 const UNPRINTABLE = /[\u0000-\u0008\u000E-\u001F\u007F-\u009F\uD800-\uDFFF]/gu
 
 /** Text as the ask card shows it: line breaks and length kept, nothing reordered. */
-export function maskRequestText(text: string, strength: MaskStrength) {
-  return maskCredentials(text.replace(BIDI_CONTROLS, ""), strength)
+export function askText(text: string) {
+  return text.replace(BIDI_CONTROLS, "")
 }
 
 /**
- * Choices as shown, each still telling which it is: two that read the same,
- * once masked, are told apart by their place, so an answer names one choice.
+ * Choices as shown, each still telling which it is: two that read the same
+ * are told apart by their place, so an answer names one choice.
  */
 export function distinctChoices(choices: readonly string[]) {
   return choices.map((choice, index) =>
@@ -33,6 +34,15 @@ export function distinctChoices(choices: readonly string[]) {
       ? choice
       : `${choice} (option ${index + 1})`
   )
+}
+
+/** The choice a shown answer names, as the runtime wrote it; any other answer as typed. */
+export function answeredChoice(
+  choices: readonly string[],
+  shown: readonly string[],
+  value: string
+) {
+  return choices[shown.indexOf(value)] ?? value
 }
 
 /** One printable line: no controls, no reordering, single spaces. */

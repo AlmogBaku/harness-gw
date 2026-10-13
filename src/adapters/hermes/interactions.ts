@@ -13,8 +13,8 @@
  * a request the gateway can render but cannot use (no bound Session, an unusable
  * payload) is declined, which Hermes treats as "skipped" for a clarify and as
  * "unanswered" for a queue backed approval, so the agent proceeds instead of
- * waiting out its 300 s deadline. Native ids, commands, URLs and paths never
- * reach public output.
+ * waiting out its 300 s deadline. Native ids never reach public output; a
+ * request reaches the one asked in the words Hermes wrote.
  */
 import { INTERACTION_PROTOCOL } from "../../../protocol"
 import {
@@ -23,8 +23,6 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
-import { distinctChoices } from "../../core/request-text"
-import { maskCredentials } from "../../redaction"
 
 import {
   HermesRpcRejectedError,
@@ -212,12 +210,7 @@ type Question = {
   id?: string
   question: string
   choices: string[] | null
-  nativeChoices: string[] | null
   multiple: boolean
-  /** Public projection of an answer Hermes already locked. */
-  locked?: string[]
-  /** The exact native values behind `locked`; a redaction must never be answered. */
-  lockedNative?: string[]
 }
 
 type PendingInteraction = {
@@ -298,19 +291,6 @@ function nativeText(
     : undefined
 }
 
-/**
- * A credential is nobody's to read, so it goes before the text leaves the
- * adapter. Paths and URLs stay: a question reaches every member of the
- * conversation, a guest included, in the words the agent wrote. A question
- * is masked broadly; a permission narrowly, so what it runs stays readable.
- */
-const publicText = (value: string) => maskCredentials(value)
-const publicPermission = (value: string) => maskCredentials(value, "narrow")
-
-function publicChoices(nativeChoices: string[] | null) {
-  return nativeChoices && distinctChoices(nativeChoices.map(publicText))
-}
-
 function boundedJson(value: unknown) {
   const seen = new Set<object>()
   const visit = (item: unknown, depth: number): boolean => {
@@ -381,20 +361,19 @@ function parseQuestions(params: ClarifyRequestParams) {
       if (!isRecord(candidate)) invalidNative()
       const id = validString(candidate.qid, 256)
       const question = nativeText(candidate.question)
-      const nativeChoices = parseChoices(candidate.choices)
+      const choices = parseChoices(candidate.choices)
       if (
         !id ||
         !question ||
-        nativeChoices === undefined ||
+        choices === undefined ||
         (candidate.multi_select !== undefined &&
           typeof candidate.multi_select !== "boolean")
       )
         invalidNative()
       return {
         id,
-        question: publicText(question),
-        choices: publicChoices(nativeChoices),
-        nativeChoices,
+        question,
+        choices,
         multiple: candidate.multi_select === true,
       }
     })
@@ -402,30 +381,22 @@ function parseQuestions(params: ClarifyRequestParams) {
       invalidNative()
   } else {
     const question = nativeText(params.question)
-    const nativeChoices = parseChoices(params.choices)
-    if (!question || nativeChoices === undefined) invalidNative()
-    questions = [
-      {
-        question: publicText(question),
-        choices: publicChoices(nativeChoices),
-        nativeChoices,
-        multiple: params.multi_select === true,
-      },
-    ]
+    const choices = parseChoices(params.choices)
+    if (!question || choices === undefined) invalidNative()
+    questions = [{ question, choices, multiple: params.multi_select === true }]
   }
   if (params.answers !== undefined && params.answers !== null)
-    lockAnswers(params.answers, questions)
+    validateLockedAnswers(params.answers, questions)
   return questions
 }
 
 /**
  * `answers` carries the batch answers Hermes locked before this delivery (only
- * a reconnect replay has them). They become the schema defaults, and their
- * exact native values are kept so a redacted default is never answered back. A
- * locked answer is free text whenever the user typed one, so it is projected
- * like any other value rather than required to be one of the choices.
+ * a reconnect replay has them); a request whose locked answers do not fit its
+ * questions is invalid. A locked answer is free text whenever the user typed
+ * one, so it need not be one of the choices.
  */
-function lockAnswers(answers: unknown, questions: Question[]) {
+function validateLockedAnswers(answers: unknown, questions: Question[]) {
   if (!isRecord(answers) || !questions.every(({ id }) => id)) invalidNative()
   for (const [questionId, encoded] of Object.entries(answers)) {
     const question = questions.find(({ id }) => id === questionId)
@@ -460,19 +431,12 @@ function lockAnswers(answers: unknown, questions: Question[]) {
     if (
       nativeAnswers.length >
         (question.multiple
-          ? (question.nativeChoices?.length ??
+          ? (question.choices?.length ??
             HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion)
           : 1) ||
       new Set(nativeAnswers).size !== nativeAnswers.length
     )
       invalidNative()
-    question.lockedNative = nativeAnswers
-    question.locked = nativeAnswers.map((answer) => {
-      if (!question.nativeChoices || !question.choices)
-        return publicText(answer)
-      const choice = question.nativeChoices.indexOf(answer)
-      return choice < 0 ? publicText(answer) : question.choices[choice]!
-    })
   }
 }
 
@@ -547,11 +511,11 @@ function approvalInteraction(
     pendingRequest: {
       requestId: id,
       kind: PendingRequestKind.Permission,
-      message: publicPermission(message),
+      message,
       responseSchema: {
         type: "string",
         enum: choices,
-        ...(command && description ? { title: publicPermission(command) } : {}),
+        ...(command && description ? { title: command } : {}),
       },
     },
   }
@@ -640,24 +604,11 @@ function answerSets(value: unknown, questions: Question[]) {
       new Set(answers).size !== answers.length
     )
       throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
-    const publicAnswers = answers as string[]
-    // An unchanged locked answer is answered with the value Hermes locked: its
-    // public form may be a redaction of a credential or a path.
-    if (
-      question.lockedNative &&
-      question.locked &&
-      JSON.stringify(question.locked) === JSON.stringify(publicAnswers)
-    )
-      return question.lockedNative
-    return publicAnswers.map((answer) => {
-      if (!question.choices || !question.nativeChoices) return answer
-      const choice = question.choices.indexOf(answer)
-      // Hermes always offers free text beside the choices it lists (`MAX_CHOICES`
-      // in `tools/clarify_tool.py`: "the UI always appends an Other row"), so an
-      // answer that is not one of them is the user's own text and is answered
-      // verbatim; a displayed choice still round-trips to its native value.
-      return choice < 0 ? answer : question.nativeChoices[choice]!
-    })
+    // A choice reaches the browser as Hermes wrote it, so every answer is
+    // already its native value; one that is none of the choices is the user's
+    // own text, which Hermes always offers beside them (`MAX_CHOICES` in
+    // `tools/clarify_tool.py`: "the UI always appends an Other row").
+    return answers as string[]
   })
 }
 

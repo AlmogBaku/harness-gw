@@ -10,7 +10,7 @@
  */
 import type { TURN_FAILURES as SHARED_TURN_FAILURES } from "../../core/failures"
 import { redactForLog } from "../../redaction"
-import { containsCredentialValue, trimmedText } from "./native"
+import { trimmedText } from "./native"
 import { stableNativeId } from "./run-frames"
 
 const MAX_LOGGED_NATIVE_CHARS = 200
@@ -176,17 +176,14 @@ export function stopUncertain() {
 }
 
 /**
- * Hermes' own error text, bounded and only when it carries no credential. The
- * bounded text is what the check reads, because that is all that ever leaves:
- * a value that trips the rule is dropped whole rather than masked. A path or an
- * internal location stays, because the operator acts on it; the guest listener
- * replaces every failure message with its own catalogue's description.
+ * Hermes' own error text, bounded; the credentials middleware masks it. A path
+ * or an internal location stays, because the operator acts on it; the guest
+ * listener replaces every failure message with its own catalogue's description.
  */
 export function publicDetail(value: unknown) {
   const native = trimmedText(value)
   if (native === undefined) return undefined
-  const detail = native.slice(0, MAX_PUBLIC_DETAIL_CHARS).trim()
-  return containsCredentialValue(detail) ? undefined : detail
+  return native.slice(0, MAX_PUBLIC_DETAIL_CHARS).trim()
 }
 
 /**

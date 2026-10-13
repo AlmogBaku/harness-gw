@@ -268,14 +268,13 @@ describe("projectHermesToolCall", () => {
     )
   })
 
-  it("never carries provider session metadata or credentials into the public args", () => {
+  it("never carries provider session metadata into the public args", () => {
     expect(
       projectHermesToolCall("run_command", {
         command: "deploy",
-        apiKey: "sk-live-abcdef",
         liveSessionId: "live-secret",
       }).args
-    ).toEqual({ command: "deploy", apiKey: "[REDACTED]" })
+    ).toEqual({ command: "deploy" })
   })
 })
 
@@ -293,7 +292,7 @@ describe("projectHermesToolOutcome", () => {
     ).toBe(false)
   })
 
-  it("keeps a failed command's hint beside its exit code, redacting a credential", () => {
+  it("keeps a failed command's hint beside its exit code", () => {
     const hint =
       "Exit 124: the command hit its timeout. Raise timeout= (foreground max 600s)."
     expect(
@@ -308,16 +307,6 @@ describe("projectHermesToolOutcome", () => {
       exit_code: 124,
       error: null,
       hint,
-    })
-    expect(
-      projectHermesToolOutcome("call-1", "terminal", {
-        output: "",
-        exit_code: 1,
-        hint: "Retry with OPENAI_API_KEY=sk-live-0123456789abcdefghij set.",
-      }).result
-    ).toMatchObject({
-      exit_code: 1,
-      hint: "Retry with OPENAI_API_KEY=[REDACTED] set.",
     })
   })
 
@@ -381,7 +370,7 @@ describe("projectHermesToolOutcome", () => {
     })
   })
 
-  it("projects recorded question answers and redacts a credential-shaped answer", () => {
+  it("projects recorded question answers", () => {
     expect(
       projectHermesToolOutcome("call-6", "question", {
         responses: [
@@ -394,19 +383,6 @@ describe("projectHermesToolOutcome", () => {
     ).toEqual({
       status: "answered",
       responses: [{ question: "Where do you live?", answers: ["Jerusalem"] }],
-    })
-    expect(
-      projectHermesToolOutcome("call-7", "question", {
-        responses: [
-          {
-            question: "Which token?",
-            user_response: JSON.stringify(["api_key=sk-live-abcdef"]),
-          },
-        ],
-      }).result
-    ).toEqual({
-      status: "cancelled",
-      responses: [{ question: "Which token?", answers: [] }],
     })
   })
 
