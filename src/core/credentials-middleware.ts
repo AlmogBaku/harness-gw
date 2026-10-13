@@ -25,9 +25,15 @@ import { answeredChoice, askText, distinctChoices } from "./request-text"
  * listener and the guest one alike. Text is masked, and a path or a patch that
  * a mask would break is dropped instead. An adapter masks nothing. A question
  * reaches the operator as the runtime wrote it, since they must read what they
- * answer; a guest is shown it masked, and its answer reaches the runtime as the
- * choice the runtime wrote. A permission reaches the operator alone, whole.
+ * answer, and so does the call of the tool that asked it, with their answers;
+ * a guest is shown it masked, and its answer reaches the runtime as the choice
+ * the runtime wrote. A permission reaches the operator alone, whole.
  */
+
+/** The canonical name of the tool a runtime asks its operator questions with. */
+const QUESTION_TOOL = "question"
+/** The most question calls one Session keeps noted; past it the oldest goes. */
+const QUESTION_CALLS_PER_SESSION = 10
 
 /** The most of a terminal's output a browser keeps: its last 256 KiB. */
 const TERMINAL_TAIL = 262_144
@@ -153,9 +159,13 @@ type HistoryMessage = SessionHistoryResponse["messages"][number]
 
 /**
  * A history message with every tool call it holds masked as its live call was,
- * and a failed turn's error masked as its live failure was.
+ * and a failed turn's error masked as its live failure was. The operator reads
+ * a question tool's call as written.
  */
-function maskedHistoryMessage(message: HistoryMessage): HistoryMessage {
+function maskedHistoryMessage(
+  message: HistoryMessage,
+  guest: boolean
+): HistoryMessage {
   if (message.role !== "assistant") return message
   const { status } = message
   return {
@@ -164,7 +174,7 @@ function maskedHistoryMessage(message: HistoryMessage): HistoryMessage {
       ? { status: { ...status, error: maskCredentials(status.error) } }
       : {}),
     content: message.content.map((part) =>
-      part.type !== "tool-call"
+      part.type !== "tool-call" || (!guest && part.toolName === QUESTION_TOOL)
         ? part
         : {
             ...part,
@@ -260,17 +270,58 @@ function maskedOnce(event: TurnEvent) {
 export function createCredentialsMiddleware({
   guest = false,
 }: { guest?: boolean } = {}): Middleware {
+  /**
+   * Each Session's question calls this member saw start and not yet finish. A
+   * call is forgotten when it finishes, every one when its turn ends cleanly,
+   * and the oldest past `QUESTION_CALLS_PER_SESSION`; a forgotten call is
+   * masked, never shown. A failed turn forgets none, since it can resume.
+   */
+  const questionCalls = new Map<string, Set<string>>()
+
+  /** Whether `event` is part of a question tool's call, which the operator reads as written. */
+  function askedByTool(sessionId: string, event: TurnEvent) {
+    const calls = questionCalls.get(sessionId)
+    switch (event.kind) {
+      case TurnEventKind.ToolCallStarted: {
+        if (event.name !== QUESTION_TOOL) return false
+        const noted = calls ?? new Set<string>()
+        const [oldest] = noted
+        if (noted.size >= QUESTION_CALLS_PER_SESSION && oldest !== undefined)
+          noted.delete(oldest)
+        questionCalls.set(sessionId, noted.add(event.toolCallId))
+        return true
+      }
+      case TurnEventKind.ToolCallInputChunk:
+      case TurnEventKind.ToolCallOutputChunk:
+        return calls?.has(event.toolCallId) ?? false
+      case TurnEventKind.ToolCallFinished: {
+        const asked = calls?.delete(event.toolCallId) ?? false
+        if (calls?.size === 0) questionCalls.delete(sessionId)
+        return asked || event.name === QUESTION_TOOL
+      }
+      case TurnEventKind.TurnEnded:
+        questionCalls.delete(sessionId)
+        return false
+      default:
+        return false
+    }
+  }
+
   return {
     event(event: MemberEvent): MemberEvent {
       switch (event.kind) {
         case "turn":
-          return { ...event, event: maskedOnce(event.event) }
+          return !guest && askedByTool(event.sessionId, event.event)
+            ? event
+            : { ...event, event: maskedOnce(event.event) }
         case "history":
           return {
             ...event,
             page: {
               ...event.page,
-              messages: event.page.messages.map(maskedHistoryMessage),
+              messages: event.page.messages.map((message) =>
+                maskedHistoryMessage(message, guest)
+              ),
             },
           }
         case "request-asked":
