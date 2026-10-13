@@ -56,6 +56,7 @@ import {
 } from "./native-schemas"
 import {
   createOpenClawWorkspace,
+  OpenClawForkRefusedError,
   OpenClawWorkspaceOwnershipError,
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
@@ -110,8 +111,9 @@ export function openClawPublicError(cause: unknown) {
     return failureOf("revision_conflict", cause)
   if (
     cause instanceof OpenClawContentPublicError ||
-    // A rewind OpenClaw refused is refused again on a retry.
+    // A rewind or fork OpenClaw refused is refused again on a retry.
     cause instanceof OpenClawRewindRefusedError ||
+    cause instanceof OpenClawForkRefusedError ||
     (cause instanceof OpenClawInteractionPublicError &&
       cause.code === "HGW_INVALID_INTERACTION")
   )

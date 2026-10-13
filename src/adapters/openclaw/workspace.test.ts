@@ -13,6 +13,7 @@ import {
   OpenClawWorkspaceOwnershipError,
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
+  OpenClawForkRefusedError,
   createOpenClawWorkspace,
 } from "./workspace"
 import { wireRequest } from "./test-utils/wire-request"
@@ -555,6 +556,32 @@ describe("OpenClaw workspace reads", () => {
         displayName: "Session (fork)",
       }),
     })
+  })
+
+  it("[CL1-WORKSPACE-030] reports a fork OpenClaw refused as refused, not as an outage", async () => {
+    const refused = new OpenClawClientRequestError("rejected")
+    const native = {
+      request: wireRequest(async (method: string) => {
+        if (method === "agents.list")
+          return agentCatalog([
+            { id: "analyst", name: "Analyst", kind: "agent" },
+          ])
+        if (method === "sessions.list")
+          return {
+            sessions: [{ key: "agent:analyst:main", agentId: "analyst" }],
+          }
+        // A parent past the size a fork copies is refused.
+        throw refused
+      }),
+    }
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    const error = await workspace
+      .forkSession("analyst", "agent:analyst:main")
+      .catch((cause: unknown) => cause)
+
+    expect(error).toBeInstanceOf(OpenClawForkRefusedError)
+    expect((error as Error).cause).toBe(refused)
   })
 
   it("[CL1-WORKSPACE-027] forks nothing of a Session the Agent does not own", async () => {

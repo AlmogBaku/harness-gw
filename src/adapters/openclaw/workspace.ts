@@ -91,6 +91,17 @@ export class OpenClawWorkspaceUnavailableError extends Error {
   }
 }
 
+/**
+ * A fork OpenClaw refused, such as of a parent past the size a fork copies;
+ * the same fork is refused again.
+ */
+export class OpenClawForkRefusedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("OpenClaw refused to fork this Session", options)
+    this.name = "OpenClawForkRefusedError"
+  }
+}
+
 export class OpenClawWorkspaceRevisionConflictError extends Error {
   constructor() {
     super("Agent revision conflict")
@@ -575,21 +586,28 @@ export function createOpenClawWorkspace(input: {
      */
     async forkSession(agentId, sessionKey) {
       const parent = await sessionRow(agentId, sessionKey)
-      const created = parseOpenClawCreatedSession(
-        await input.client.request(
-          "sessions.create",
-          openClawForkSessionParams(
-            agentId,
-            sessionKey,
-            {
-              running: sessionStatus(parent) === "running",
-              title: title(parent).title ?? "Session",
-              toolOverrides: parent.toolOverrides,
-            },
-            crypto.randomUUID()
-          )
-        )
+      const params = openClawForkSessionParams(
+        agentId,
+        sessionKey,
+        {
+          running: sessionStatus(parent) === "running",
+          title: title(parent).title ?? "Session",
+          toolOverrides: parent.toolOverrides,
+        },
+        crypto.randomUUID()
       )
+      let answer: unknown
+      try {
+        answer = await input.client.request("sessions.create", params)
+      } catch (error) {
+        if (
+          error instanceof OpenClawClientRequestError &&
+          error.kind === "rejected"
+        )
+          throw new OpenClawForkRefusedError({ cause: error })
+        throw error
+      }
+      const created = parseOpenClawCreatedSession(answer)
       await getSession(agentId, created.key)
       return SessionCreateResponseSchema.parse({
         session: { id: created.key, agentId },
