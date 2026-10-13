@@ -290,10 +290,17 @@ export class OpenClawInteractions {
   readonly #done = new Map<string, Done>()
   readonly #bindings = new Map<string, Binding>()
   constructor(private readonly transport: OpenClawInteractionTransport) {}
+  /**
+   * The one request the run `scope` names waits on, from current Gateway
+   * authority: a question of its Session, or an approval its Session raised,
+   * or one a confirmed child Session of `children` raised, which is reported
+   * as that child's. `sessionKey` names the Session that raised it.
+   */
   async discover(
     scope: OpenClawInteractionDiscoveryScope,
-    approvalReplay?: unknown
-  ): Promise<{ requests: PendingRequest[] } | undefined> {
+    approvalReplay?: unknown,
+    children: ReadonlySet<string> = new Set()
+  ): Promise<{ requests: PendingRequest[]; sessionKey: string } | undefined> {
     if (
       !Check(SessionApprovalReplaySchema, approvalReplay) ||
       approvalReplay.sessionKey !== scope.providerSessionId ||
@@ -310,7 +317,7 @@ export class OpenClawInteractions {
     if (!Check(QuestionListResultSchema, listed)) bad()
     const candidates: Array<
       | { kind: "question"; value: unknown }
-      | { kind: "approval"; value: unknown }
+      | { kind: "approval"; value: unknown; child?: string }
     > = []
     for (const value of (listed as { questions: unknown[] }).questions) {
       if (!value || typeof value !== "object" || Array.isArray(value)) bad()
@@ -324,20 +331,37 @@ export class OpenClawInteractions {
       record(fullScope, row)
       candidates.push({ kind: "question", value })
     }
-    for (const value of approvalReplay.approvals)
-      if (
-        value.sourceSessionKey === scope.providerSessionId &&
-        value.presentation.agentId === scope.agentId
-      )
+    for (const value of approvalReplay.approvals) {
+      if (value.presentation.agentId !== scope.agentId) continue
+      if (value.sourceSessionKey === scope.providerSessionId)
         candidates.push({ kind: "approval", value })
+      else if (
+        value.sourceSessionKey !== undefined &&
+        children.has(value.sourceSessionKey)
+      )
+        candidates.push({
+          kind: "approval",
+          value,
+          child: value.sourceSessionKey,
+        })
+    }
     if (candidates.length !== 1) return undefined
     const candidate = candidates[0]!
+    if (candidate.kind === "question")
+      return {
+        requests: [this.acceptQuestion(fullScope, candidate.value)],
+        sessionKey: scope.providerSessionId,
+      }
+    const sessionKey = candidate.child ?? scope.providerSessionId
     return {
       requests: [
-        candidate.kind === "question"
-          ? this.acceptQuestion(fullScope, candidate.value)
-          : this.acceptApproval(fullScope, candidate.value),
+        this.acceptApproval(
+          { ...fullScope, providerSessionId: sessionKey },
+          candidate.value,
+          candidate.child
+        ),
       ],
+      sessionKey,
     }
   }
   /** An approval the Session raised while the run `scope` names runs. */

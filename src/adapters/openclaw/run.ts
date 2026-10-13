@@ -47,6 +47,7 @@ import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import {
   childRowRefusal,
   keyAgentId,
+  MAX_SPAWN_DEPTH,
   SPAWN_TOOL,
   spawnedChild,
   spawnFacts,
@@ -120,11 +121,16 @@ export type OpenClawBoundReplies = Readonly<{
     scope: SessionScope,
     replies: readonly RequestReply[]
   ): Promise<OpenClawBoundRepliesResult>
-  /** Reconstructs one exact native wait from current Gateway authority. */
+  /**
+   * Reconstructs one exact native wait from current Gateway authority, on the
+   * Session or on one of its confirmed `children`; `sessionKey` names the
+   * Session that raised it.
+   */
   discover?(
     scope: SessionScope & { nativeRunId: string },
-    approvalReplay: unknown
-  ): Promise<{ requests: PendingRequest[] } | undefined>
+    approvalReplay: unknown,
+    children?: ReadonlySet<string>
+  ): Promise<{ requests: PendingRequest[]; sessionKey?: string } | undefined>
   /**
    * Remembers one approval the Session raised while the bound run runs, or
    * one a child Session the run spawned raised, `childSessionId`, under the
@@ -1185,10 +1191,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   /** Every native run a segment was bound to, oldest first. */
   readonly #admitted = new Set<string>()
   /**
-   * Every child Session registered, with the Session whose turn spawned it,
-   * oldest first, so no other Session's turn takes it as its own.
+   * Every child Session registered, with the Session whose turn spawned it
+   * and the Session that spawned it, oldest first, so no other Session's turn
+   * takes it as its own and a rediscovered request can name its lineage.
    */
-  readonly #childOwners = new Map<string, string>()
+  readonly #childOwners = new Map<
+    string,
+    { scope: string; parentKey: string }
+  >()
 
   constructor(options: {
     client: OpenClawRunRequestClient
@@ -1736,13 +1746,21 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         }
         const nativeRunId = uniqueActiveRunId(history)
         if (!nativeRunId) return notDiscovered()
+        // A child's approval reaches its parent's audience, so the replay
+        // holds them too; only a confirmed child's may be the wait.
+        const children = await this.#askingChildren(
+          scope,
+          approvalReplayKey,
+          approvalReplay.replay
+        )
         const discovered = await this.#replies.discover(
           {
             ...scope,
             providerSessionId: ids.providerSessionId(approvalReplayKey),
             nativeRunId,
           },
-          approvalReplay.replay
+          approvalReplay.replay,
+          new Set(children.keys())
         )
         // A run nothing waits on is running; one the gateway bound is its own.
         const adopting = !discovered && !this.#admittedRun(scope, nativeRunId)
@@ -1777,11 +1795,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           // so `fromStart` stays unset.
           return { state: "running" as const, handle: this.#handle(active) }
         }
+        const askedBy = discovered.sessionKey ?? approvalReplayKey
         const waiting: WaitingRun = {
           scope,
           turnId,
           nativeRunId,
-          nativeInteractionSessionKey: approvalReplayKey,
+          nativeInteractionSessionKey: askedBy,
           nativeSessionId: history.sessionId,
           lease,
           stopping: false,
@@ -1791,8 +1810,31 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         this.#waiting.set(key, waiting)
         await retireExisting()
         lease = undefined
+        // A child asking is announced, with every child above it, before
+        // the request that names it.
+        const lineage = children.get(askedBy) ?? []
+        const announced = lineage.map(
+          ({ key: child, parentKey }, depth): TurnEvent => {
+            const report: OwnTurnEvent = {
+              kind: TurnEventKind.ChildSessionUpdated,
+              childSessionId: child,
+              status:
+                depth === lineage.length - 1
+                  ? ChildSessionStatus.WaitingForInput
+                  : ChildSessionStatus.Running,
+            }
+            return parentKey === approvalReplayKey
+              ? report
+              : {
+                  kind: TurnEventKind.ChildSessionEvent,
+                  childSessionId: parentKey,
+                  event: report,
+                }
+          }
+        )
         const events: TurnEvent[] = [
           { kind: TurnEventKind.TurnStarted },
+          ...announced,
           {
             kind: TurnEventKind.TurnRequiresAction,
             requests: discovered.requests,
@@ -2773,7 +2815,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     if (
       key === active.nativeSessionKey ||
       active.children.has(key) ||
-      (owner !== undefined && owner !== scopeKey(active.scope))
+      (owner !== undefined && owner.scope !== scopeKey(active.scope))
     )
       return drop("child-known")
     let row: OpenClawSession
@@ -2819,11 +2861,75 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       }),
     }
     active.children.set(key, child)
+    this.#rememberChild(active.scope, key, parent.key)
+    return child
+  }
+
+  #rememberChild(scope: SessionScope, key: string, parentKey: string) {
     this.#childOwners.delete(key)
-    this.#childOwners.set(key, scopeKey(active.scope))
+    this.#childOwners.set(key, { scope: scopeKey(scope), parentKey })
     if (this.#childOwners.size > MAX_CHILD_OWNERS)
       this.#childOwners.delete(this.#childOwners.keys().next().value!)
-    return child
+  }
+
+  /**
+   * The child Sessions an approval replay of `rootKey` holds asks from, each
+   * with its lineage from `rootKey` down: one this process registered under
+   * the Session, or one whose own row confirms it as `rootKey`'s child now,
+   * as after a restart. Any other asking Session is dropped, telling only why.
+   */
+  async #askingChildren(scope: SessionScope, rootKey: string, replay: unknown) {
+    const found = new Map<string, Array<{ key: string; parentKey: string }>>()
+    const approvals = record(replay)?.approvals
+    for (const approval of Array.isArray(approvals) ? approvals : []) {
+      const key = record(approval)?.sourceSessionKey
+      if (!validId(key) || key === rootKey || found.has(key)) continue
+      const lineage =
+        this.#registeredLineage(scope, rootKey, key) ??
+        (await this.#confirmedLineage(scope, rootKey, key))
+      if (lineage) found.set(key, lineage)
+    }
+    return found
+  }
+
+  /** `key`'s lineage from `rootKey` down, as this process registered it. */
+  #registeredLineage(scope: SessionScope, rootKey: string, key: string) {
+    const lineage: Array<{ key: string; parentKey: string }> = []
+    for (let current = key; lineage.length < MAX_SPAWN_DEPTH;) {
+      const owner = this.#childOwners.get(current)
+      if (!owner || owner.scope !== scopeKey(scope)) return undefined
+      lineage.unshift({ key: current, parentKey: owner.parentKey })
+      if (owner.parentKey === rootKey) return lineage
+      current = owner.parentKey
+    }
+    return undefined
+  }
+
+  /** `key` as `rootKey`'s own child, once its row confirms it so. */
+  async #confirmedLineage(scope: SessionScope, rootKey: string, key: string) {
+    const agentId = keyAgentId(key) ?? scope.agentId
+    let refusal: string | undefined
+    try {
+      const rows = parseOpenClawSessions(
+        await this.#client.request<unknown>(
+          "sessions.list",
+          openClawSessionSearchParams(agentId, key)
+        ),
+        MAX_SESSION_LOOKUP_ROWS
+      ).filter((candidate) => candidate.key === key)
+      refusal =
+        rows.length === 1
+          ? childRowRefusal(rows[0]!, rootKey, agentId, 1)
+          : "child-unlisted"
+    } catch {
+      refusal = "child-unread"
+    }
+    if (refusal) {
+      this.#droppedApproval(refusal)
+      return undefined
+    }
+    this.#rememberChild(scope, key, rootKey)
+    return [{ key, parentKey: rootKey }]
   }
 
   /**

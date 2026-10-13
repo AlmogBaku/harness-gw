@@ -1037,7 +1037,9 @@ describe("OpenClaw run engine", () => {
     expect(historyReads).toBe(2)
     expect(discover).toHaveBeenCalledExactlyOnceWith(
       { ...scope, nativeRunId: "native-original" },
-      { ...approvalReplay(), updatedAtMs: 3 }
+      { ...approvalReplay(), updatedAtMs: 3 },
+      // No child asks in this replay.
+      new Set()
     )
   })
 
@@ -2923,5 +2925,146 @@ describe("OpenClaw run engine child Sessions", () => {
     expect(
       native.sent("sessions.list").map(({ params }) => params.search)
     ).toContain(GRANDCHILD)
+  })
+})
+
+describe("OpenClaw run engine rediscovered child requests", () => {
+  const childApproval = {
+    ...pendingApproval,
+    id: "approval-child",
+    sourceSessionKey: CHILD,
+  }
+
+  /** Interactions over a Gateway holding `approval` as its one open ask. */
+  function interactionsFor(approval: Record<string, unknown>) {
+    const request = vi.fn(async (method: string) => {
+      if (method === "question.list") return { questions: [] }
+      if (method === "approval.get") return { approval }
+      if (method === "approval.resolve")
+        return {
+          applied: true,
+          approval: {
+            ...approval,
+            status: "allowed",
+            decision: "allow-once",
+            resolvedAtMs: 2,
+            reason: "user",
+          },
+        }
+      throw new Error(`Unexpected interaction method ${method}`)
+    })
+    return { request, interactions: new OpenClawInteractions({ request }) }
+  }
+
+  it("rediscovers a wait on a child's approval once the child's row confirms it, announcing the child first", async () => {
+    const native = spawning()
+    native.approvalReplay = approvalReplay([childApproval])
+    native.history = running("native-original", "before")
+    const { request, interactions } = interactionsFor(childApproval)
+    const { engine } = engineOver(native, { replies: interactions })
+
+    const discovered = await engine.discover(scope, "restored-child-approval")
+
+    expect(discovered).toMatchObject({
+      state: "waiting-for-input",
+      requests: [{ requestId: "approval-child", childSessionId: CHILD }],
+    })
+    expect(outline(await drain(discovered!.handle.events))).toEqual([
+      TurnEventKind.TurnStarted,
+      `${TurnEventKind.ChildSessionUpdated} ${CHILD} waiting-for-input`,
+      TurnEventKind.TurnRequiresAction,
+    ])
+    await engine.start(
+      scope,
+      repliesInput([
+        { requestId: "approval-child", status: "resolved", payload: "once" },
+      ])
+    )
+    expect(request.mock.calls).toContainEqual([
+      "approval.resolve",
+      { id: "approval-child", kind: "plugin", decision: "allow-once" },
+    ])
+  })
+
+  it("rediscovers a grandchild's approval by the lineage its turn registered, announcing each child above it first", async () => {
+    const native = spawning()
+    spawning(native, GRANDCHILD, CHILD, { spawnDepth: 2 })
+    const grandchildApproval = {
+      ...pendingApproval,
+      id: "approval-grandchild",
+      sourceSessionKey: GRANDCHILD,
+    }
+    const { interactions } = interactionsFor(grandchildApproval)
+    const { subscriptions, engine } = engineOver(native, {
+      toolEvents: true,
+      replies: interactions,
+    })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+    spawnEvents(childStream(subscriptions).agent, GRANDCHILD, "call-grand")
+    await followed(native, GRANDCHILD)
+    await settle()
+    chat(subscriptions, "run-a", { state: "final" })
+    await drain(handle.events)
+    native.approvalReplay = approvalReplay([grandchildApproval])
+    native.history = running("native-later", "later")
+    const lookups = native.sent("sessions.list").length
+
+    const discovered = await engine.discover(scope, "restored-grandchild")
+
+    expect(discovered).toMatchObject({
+      state: "waiting-for-input",
+      requests: [
+        { requestId: "approval-grandchild", childSessionId: GRANDCHILD },
+      ],
+    })
+    expect(outline(await drain(discovered!.handle.events))).toEqual([
+      TurnEventKind.TurnStarted,
+      `${TurnEventKind.ChildSessionUpdated} ${CHILD} running`,
+      `${CHILD}> ${TurnEventKind.ChildSessionUpdated} ${GRANDCHILD} waiting-for-input`,
+      TurnEventKind.TurnRequiresAction,
+    ])
+    // The lineage is the one its live turn confirmed; nothing is read again.
+    expect(native.sent("sessions.list")).toHaveLength(lookups)
+  })
+
+  it("rediscovers no approval of a Session whose row is no child of this one, telling only why", async () => {
+    const log = captureLogs()
+    const native = spawning(
+      new ControlledNative(),
+      CHILD,
+      scope.providerSessionId,
+      {
+        spawnedBy: "agent:research:other",
+      }
+    )
+    native.approvalReplay = approvalReplay([childApproval])
+    native.history = running("native-original", "before")
+    const { interactions } = interactionsFor(childApproval)
+    const subscriptions = new OpenClawSessionSubscriptions(native, logger)
+    const engine = new OpenClawTurnEngine({
+      watch: { ...watch, logger: log.logger },
+      client: native,
+      subscriptions,
+      replies: interactions,
+    })
+
+    const discovered = await engine.discover(scope, "restored-child-approval")
+
+    // The run still runs, so it is adopted, asking nothing.
+    expect(discovered).toMatchObject({ state: "running" })
+    expect(discovered).not.toHaveProperty("requests")
+    expect(
+      log
+        .records()
+        .filter(({ message }) => message === "openclaw.approval.dropped")
+    ).toEqual([
+      expect.objectContaining({ fields: { code: "child-foreign-parent" } }),
+    ])
   })
 })
