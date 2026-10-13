@@ -629,6 +629,57 @@ describe("Hermes server adapter", () => {
     )
   })
 
+  it("lists the other Agents when one profile row is malformed, and fails only when none can be read", async () => {
+    const profile = (name: string, extra: object = {}) => ({
+      name,
+      ui_meta: {},
+      ui_meta_revisions: {},
+      ...extra,
+    })
+    let profiles: unknown[] = [
+      profile("alpha"),
+      profile(""),
+      // A warning names a skipped row by its ids alone, never its content.
+      profile("beta", {
+        display_name: "b".repeat(257),
+        env: { API_KEY: "fake-key-for-test" },
+      }),
+      "not a profile",
+      profile("alpha", { display_name: "Second alpha" }),
+    ]
+    const request = vi.fn(async () => ({ profiles }))
+    const logs = captureLogs()
+    const adapter = new HermesServerAdapter(
+      { request, http: vi.fn() },
+      { log: logs.logger }
+    )
+
+    const catalog = await adapter.listAgents()
+
+    expect(catalog.agents.map(({ summary }) => summary.name)).toEqual(["alpha"])
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields])
+    ).toEqual([
+      ["hermes.profile.skipped", {}],
+      ["hermes.profile.skipped", { profile: "beta" }],
+      ["hermes.profile.skipped", {}],
+      ["hermes.profile.skipped", { profile: "alpha" }],
+    ])
+
+    profiles = [profile(""), "not a profile"]
+    await expect(adapter.listAgents()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
+    // What survives a skip holds no Agent a person can pick.
+    profiles = [
+      profile("creator", { ui_meta: { aos: { role: "creator" } } }),
+      profile(""),
+    ]
+    await expect(adapter.listAgents()).rejects.toBeInstanceOf(
+      HermesUnavailableError
+    )
+  })
+
   it("merges multiple Agent catalogs into deterministic bounded global pages", async () => {
     const rows = (profileName: string, newest: number, count: number) =>
       Array.from({ length: count }, (_, index) => ({
@@ -1459,22 +1510,52 @@ describe("Hermes server adapter", () => {
     expect(Object.keys(page.sessions[3])).not.toContain("platform")
   })
 
-  it("treats a non-boolean native read state or pin as a malformed catalog payload", async () => {
-    for (const flag of [{ unread: 1 }, { pinned: 1 }]) {
-      const adapter = new HermesServerAdapter({
-        request: vi.fn(),
-        http: vi.fn(async () => ({
-          sessions: [
-            { id: "stored/1", profile: "researcher", title: "One", ...flag },
-          ],
-          total: 1,
-        })),
-      })
+  it("lists a profile's other Sessions past a malformed row, and fails only when no row can be read", async () => {
+    const good = (id: string) => ({ id, profile: "researcher", last_active: 1 })
+    let rows: unknown[] = [
+      good("one"),
+      good("two"),
+      { ...good("bad-flag"), unread: 1 },
+      { ...good("bad-title"), title: "t".repeat(4_097) },
+      // Past what a date can hold: projecting it throws.
+      { ...good("bad-time"), last_active: 1e16 },
+      { ...good("bad-owner"), profile: "someone-else" },
+      good("three"),
+    ]
+    const http = vi.fn(async (path: string) => {
+      const query = new URL(path, "http://native.test").searchParams
+      const offset = Number(query.get("offset"))
+      const limit = Number(query.get("limit"))
+      return {
+        sessions: rows.slice(offset, offset + limit),
+        total: rows.length,
+      }
+    })
+    const logs = captureLogs()
+    const adapter = new HermesServerAdapter(
+      { request: vi.fn(), http },
+      { log: logs.logger }
+    )
 
-      await expect(
-        adapter.listSessions("researcher", 50, 0)
-      ).rejects.toBeInstanceOf(HermesUnavailableError)
-    }
+    // The second page is all bad rows: only the whole read keeping nothing is
+    // a failure, and a run of bad rows costs a page, never a call per row.
+    const page = await adapter.listSessions("researcher", 3, 0)
+
+    expect(page.sessions.map(({ id }) => id)).toEqual(["one", "two", "three"])
+    expect(http).toHaveBeenCalledTimes(3)
+    expect(
+      logs.records().map(({ message, fields }) => [message, fields])
+    ).toEqual(
+      ["bad-flag", "bad-title", "bad-time", "bad-owner"].map((sessionId) => [
+        "hermes.session.skipped",
+        { profile: "researcher", sessionId },
+      ])
+    )
+
+    rows = [{ ...good("bad-pin"), pinned: 1 }]
+    await expect(
+      adapter.listSessions("researcher", 50, 0)
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
   })
 
   it("reads the stored flags the Session detail read reports as integers", async () => {
@@ -1600,7 +1681,7 @@ describe("Hermes server adapter", () => {
     ).toBeUndefined()
   })
 
-  it("rejects duplicate stored Session IDs and projects owned compacted chronological history", async () => {
+  it("lists a repeated stored Session ID once and projects owned compacted chronological history", async () => {
     const http = vi.fn(async (path: string) => {
       if (path.startsWith("/api/sessions?profile=researcher"))
         return {
@@ -1627,9 +1708,11 @@ describe("Hermes server adapter", () => {
       }
     })
     const adapter = new HermesServerAdapter({ request: vi.fn(), http })
-    await expect(
-      adapter.listSessions("researcher", 50, 0)
-    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    expect(
+      (await adapter.listSessions("researcher", 50, 0)).sessions.map(
+        ({ id }) => id
+      )
+    ).toEqual(["same"])
     await expect(
       adapter.history("researcher", "stored", 200, 0)
     ).resolves.toEqual({
@@ -3039,7 +3122,7 @@ describe("Hermes server adapter", () => {
       status: "error",
       recoverable: true,
       error:
-        "AWS Bedrock did not answer after 3 attempts. Provider said: ValidationException at https://bedrock.internal/model/invoke?token=native-secret",
+        "AWS Bedrock did not answer after 3 attempts. Provider said: ValidationException",
       error_surface: {
         layer: "provider",
         code: "validation_exception",
@@ -3123,17 +3206,10 @@ describe("Hermes server adapter", () => {
           status: {
             type: "incomplete",
             reason: "error",
-            error:
-              "Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.",
+            error: `Hermes' model provider returned an error for this turn. Retry, switch models with /model, or continue in a new Session.\n${inflight.error}`,
           },
           turnErrorCode: "HGW_PROVIDER_RETRYABLE_FAILURE",
         })
-        // This retained cause names a credential and an internal host, so the
-        // detail is dropped whole and the headline stands alone.
-        const serialized = JSON.stringify(history)
-        expect(serialized).not.toContain("AWS Bedrock")
-        expect(serialized).not.toContain("native-secret")
-        expect(serialized).not.toContain("ValidationException")
       }
     )
 

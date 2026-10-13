@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import type { Logger } from "../../../lifecycle"
 import {
   AgentAvatarSchema,
+  AgentCatalogEntrySchema,
   AgentCatalogResponseSchema,
   AgentUpdateResponseSchema,
   RuntimeInfoSchema,
@@ -89,6 +90,7 @@ import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
 import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
+import { loggedId } from "../../core/identifier"
 import { inviteSessionKey } from "../../core/invite-key"
 import { sessionPlatform } from "../../core/session-platform"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -341,12 +343,18 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
   }
 }
 
-function nativeProfiles(payload: unknown): NativeRecord[] {
+/** The rows of a `profiles.list` answer, each still to be checked on its own. */
+function nativeProfiles(payload: unknown): unknown[] {
   if (!isRecord(payload) || !Array.isArray(payload.profiles))
     throw new HermesUnavailableError()
-  const profiles = payload.profiles
-  if (!profiles.every(isRecord)) throw new HermesUnavailableError()
-  return profiles
+  return payload.profiles
+}
+
+/** A profile row as a catalog entry, or `undefined` for a row that is not one. */
+function catalogEntry(profile: unknown) {
+  if (!isRecord(profile) || !trimmedText(profile.name)) return undefined
+  const entry = AgentCatalogEntrySchema.safeParse(projectProfile(profile))
+  return entry.success ? entry.data : undefined
 }
 
 /**
@@ -389,27 +397,49 @@ const HERMES_SEARCH_LIMIT = 100
 const PROFILE_FANOUT = 4
 
 /**
- * Native Session rows of one profile, each validated: a list page's and a
- * search's alike. Read state and the pin are copied only where the row
- * carries them; an older Hermes, or a search, omits them, and absent must
- * stay absent rather than collapse to "read" or "unpinned".
+ * Native Session rows of one profile, each validated on its own: a list
+ * page's and a search's alike. A row that is not one of this profile's
+ * Sessions costs that row alone, and `skipped` hears its id; of two rows with
+ * one id, the first stands.
  */
-function nativeSessions(profile: string, rows: unknown[]): Session[] {
+function nativeSessions(
+  profile: string,
+  rows: readonly unknown[],
+  skipped: (sessionId: string | undefined) => void
+): Session[] {
   const seen = new Set<string>()
-  return rows.map((row) => {
-    if (!isRecord(row)) throw new HermesUnavailableError()
-    const storedId = trimmedText(row.id)
-    if (
-      !storedId ||
-      trimmedText(row.profile) !== profile ||
-      seen.has(storedId) ||
-      (row.unread !== undefined && typeof row.unread !== "boolean") ||
-      (row.pinned !== undefined && typeof row.pinned !== "boolean")
-    )
-      throw new HermesUnavailableError()
-    seen.add(storedId)
-    const platform = sessionPlatform(row.source)
-    return {
+  const sessions: Session[] = []
+  for (const row of rows) {
+    const session = nativeSession(profile, row)
+    if (!session || seen.has(session.id)) {
+      skipped(loggedId(row, "id"))
+      continue
+    }
+    seen.add(session.id)
+    sessions.push(session)
+  }
+  return sessions
+}
+
+/**
+ * One native row as a Session of `profile`, or `undefined` when it is not one.
+ * Read state and the pin are copied only where the row carries them; an older
+ * Hermes, or a search, omits them, and absent must stay absent rather than
+ * collapse to "read" or "unpinned".
+ */
+function nativeSession(profile: string, row: unknown): Session | undefined {
+  if (!isRecord(row)) return undefined
+  const storedId = trimmedText(row.id)
+  if (
+    !storedId ||
+    trimmedText(row.profile) !== profile ||
+    (row.unread !== undefined && typeof row.unread !== "boolean") ||
+    (row.pinned !== undefined && typeof row.pinned !== "boolean")
+  )
+    return undefined
+  const platform = sessionPlatform(row.source)
+  try {
+    const session = SessionSchema.safeParse({
       id: sessionId(profile, storedId),
       agentId: profile,
       ...titled(row),
@@ -421,8 +451,12 @@ function nativeSessions(profile: string, rows: unknown[]): Session[] {
       ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
       // source carries the channel a Session came from; unknown/absent stays absent.
       ...(platform !== undefined ? { platform } : {}),
-    }
-  })
+    })
+    return session.success ? session.data : undefined
+  } catch {
+    // A stored time past what a date can hold throws while projecting.
+    return undefined
+  }
 }
 
 function sessionId(_profile: string, storedId: string) {
@@ -1152,27 +1186,45 @@ export class HermesServerAdapter implements ServerRuntime {
     return this.#content.speak(agentId, text, signal)
   }
 
-  /** The validated native profile rows, one per distinct Agent id. */
-  async #profiles(): Promise<NativeRecord[]> {
+  /** The native profile rows, each checked where it is read. */
+  async #profiles(): Promise<unknown[]> {
     try {
-      const payload = await this.transport.request("profiles.list", {
-        include_sessions: false,
-      })
-      const profiles = nativeProfiles(payload)
-      if (
-        new Set(profiles.map(({ name }) => trimmedText(name))).size !==
-        profiles.length
+      return nativeProfiles(
+        await this.transport.request("profiles.list", {
+          include_sessions: false,
+        })
       )
-        throw new HermesUnavailableError()
-      return profiles
     } catch (error) {
       throwUnavailable(error)
     }
   }
 
+  /**
+   * The catalog, one profile row at a time. A row that is not an Agent, or
+   * repeats an Agent's name, costs that row alone and leaves a warning; a
+   * skip that leaves no Agent a person can pick is an outage.
+   */
   async listAgents(): Promise<AgentCatalogResponse> {
     try {
-      const agents = (await this.#profiles()).map(projectProfile)
+      const profiles = await this.#profiles()
+      const agents: AgentCatalogEntry[] = []
+      const named = new Set<string>()
+      let skipped = 0
+      for (const profile of profiles) {
+        const agent = catalogEntry(profile)
+        if (!agent || named.has(agent.summary.id)) {
+          skipped += 1
+          this.#log?.warn(
+            { profile: loggedId(profile, "name") },
+            "hermes.profile.skipped"
+          )
+          continue
+        }
+        named.add(agent.summary.id)
+        agents.push(agent)
+      }
+      if (skipped > 0 && !agents.some(({ selectable }) => selectable))
+        throw new HermesUnavailableError()
       return AgentCatalogResponseSchema.parse({
         revision: catalogRevision(agents),
         agents,
@@ -1327,7 +1379,11 @@ export class HermesServerAdapter implements ServerRuntime {
     // write that races another client is rejected by Hermes rather than by a
     // second read here.
     const profile = (await this.#profiles()).find(
-      (row) => trimmedText(row.name) === agentId
+      // The copy the catalog lists: the first readable row of that name.
+      (row): row is NativeRecord =>
+        isRecord(row) &&
+        trimmedText(row.name) === agentId &&
+        catalogEntry(row) !== undefined
     )
     if (!profile) throw new HermesAgentNotFoundError()
     const current = projectProfile(profile)
@@ -1467,13 +1523,14 @@ export class HermesServerAdapter implements ServerRuntime {
    * One native page, validated row by row. Hermes back-fills every pinned
    * Session the page missed onto its tail (`include_pinned=True`, with no query
    * parameter to turn it off), so a page can exceed `limit` and a pinned
-   * Session recurs on every page. Only the first `limit` rows are the page.
+   * Session recurs on every page. Only the first `limit` rows are the page;
+   * `rows` counts every row Hermes sent, which is what proves a page short.
    */
   async #nativeSessionPage(
     profile: string,
     limit: number,
     offset: number
-  ): Promise<{ sessions: Session[]; total: number }> {
+  ): Promise<{ sessions: Session[]; rows: number; total: number }> {
     if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
@@ -1483,16 +1540,25 @@ export class HermesServerAdapter implements ServerRuntime {
     }
     if (!isRecord(payload) || !Array.isArray(payload.sessions))
       throw new HermesUnavailableError()
-    const sessions = nativeSessions(profile, payload.sessions)
+    const rows = payload.sessions.length
+    const sessions = nativeSessions(
+      profile,
+      payload.sessions.slice(0, limit),
+      (sessionId) => this.#skippedSession(profile, sessionId)
+    )
     // A malformed count stays an error even where a short page replaces it.
     if (
       payload.total !== undefined &&
       !(Number.isSafeInteger(payload.total) && (payload.total as number) >= 0)
     )
       throw new HermesUnavailableError()
-    const total =
-      typeof payload.total === "number" ? payload.total : sessions.length
-    return { sessions, total }
+    const total = typeof payload.total === "number" ? payload.total : rows
+    return { sessions, rows, total }
+  }
+
+  /** Warns that one stored row was left out, by its ids alone. */
+  #skippedSession(profile: string, sessionId: string | undefined) {
+    this.#log?.warn({ profile, sessionId }, "hermes.session.skipped")
   }
 
   /**
@@ -1503,6 +1569,13 @@ export class HermesServerAdapter implements ServerRuntime {
    *
    * Hermes counts `total` without the list's hidden-row filter, so once a short
    * page proves the list exhausted, the rows read are the total.
+   *
+   * A row that cannot be read costs that row alone, and the next page refills
+   * the gap. Only the whole read keeping nothing of the rows Hermes sent is an
+   * unreadable list: a refill page can hold nothing but skipped rows. Pages
+   * keep one size, so a run of skipped rows costs a page rather than a call
+   * per row, and no row past the catalog window is read: with rows skipped, a
+   * readable one beyond it is left unlisted, and the list ends there.
    */
   async #sessionPrefix(
     profile: string,
@@ -1514,21 +1587,34 @@ export class HermesServerAdapter implements ServerRuntime {
     const seen = new Set<string>()
     let offset = 0
     let total = 0
+    let read = 0
+    let exhausted = false
+    const limit = Math.min(100, length)
     while (sessions.length < length) {
-      const limit = Math.min(100, length - sessions.length)
+      if (offset >= SESSION_CATALOG_MAX_WINDOW) {
+        exhausted = true
+        break
+      }
       const page = await this.#nativeSessionPage(profile, limit, offset)
       total = page.total
-      for (const session of page.sessions.slice(0, limit)) {
+      read += Math.min(limit, page.rows)
+      for (const session of page.sessions) {
         if (seen.has(session.id)) continue
         seen.add(session.id)
         sessions.push(session)
       }
       offset += limit
-      if (page.sessions.length < limit)
-        return { sessions, total: sessions.length }
+      if (page.rows < limit) {
+        exhausted = true
+        break
+      }
       if (offset >= total) break
     }
-    return { sessions: sessions.slice(0, length), total }
+    if (read > 0 && sessions.length === 0) throw new HermesUnavailableError()
+    return {
+      sessions: sessions.slice(0, length),
+      total: exhausted ? sessions.length : total,
+    }
   }
 
   async listSessions(profile: string, limit: number, offset: number) {
@@ -1590,7 +1676,13 @@ export class HermesServerAdapter implements ServerRuntime {
       }
       if (!isRecord(payload) || !Array.isArray(payload.results))
         throw new HermesUnavailableError()
-      return nativeSessions(profile, payload.results)
+      const matches = nativeSessions(profile, payload.results, (sessionId) =>
+        this.#skippedSession(profile, sessionId)
+      )
+      // Results none of which can be read are this profile's outage.
+      if (payload.results.length > 0 && matches.length === 0)
+        throw new HermesUnavailableError()
+      return matches
     })
     const sessions = found
       .flat()

@@ -21,6 +21,7 @@ import {
   type MemberScope,
   type WorkspaceEvent,
 } from "../core/member"
+import { createCredentialsMiddleware } from "../core/credentials-middleware"
 import type { AcpConnectionContext } from "./types"
 import {
   authenticationRequired,
@@ -164,7 +165,7 @@ export function createSessions(
       ? context.authentication.member()
       : {
           principal: { id: context.principalId, role: context.role },
-          middleware: [],
+          middleware: [createCredentialsMiddleware()],
         }
   }
 

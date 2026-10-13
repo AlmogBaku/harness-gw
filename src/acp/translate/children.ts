@@ -9,7 +9,6 @@ import {
   type TurnEventKind,
   type TurnEventOf,
 } from "../../core/events"
-import { maskRequestText } from "../../core/request-text"
 import type { Built, TranslateContext } from "../types"
 import { turnError, turnMeta } from "./updates"
 
@@ -26,12 +25,9 @@ const CHILD_STATES = {
   },
 } as const satisfies Record<ChildSessionStatus, Built<StateUpdate>>
 
-/**
- * Text a runtime wrote about a child, as the operator is shown request text:
- * credentials masked, nothing else rewritten.
- */
+/** Display text about a child, bounded; the credentials middleware masked it. */
 function shown(text: string, maxChars: number) {
-  return maskRequestText(text, "broad").slice(0, maxChars)
+  return text.slice(0, maxChars)
 }
 
 /**

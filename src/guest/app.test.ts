@@ -3,6 +3,7 @@
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
+import { artifactIds } from "../../test/support/history-artifacts"
 import { captureLogs } from "../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
 import type { McpAppFiles, McpAppView } from "../../protocol/mcp-apps"
@@ -21,6 +22,8 @@ import type {
   SessionScope,
 } from "../core/runtime"
 import { failureOf } from "../core/failures"
+import { withHistoryImageArtifacts } from "../core/history-image-artifacts"
+import { providerSessionId } from "../core/ids"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
@@ -32,6 +35,8 @@ const ORIGIN = "https://guest.example.test"
 const AGENT = "researcher"
 const REF = "guest_ref"
 const STORED = "stored-session"
+/** The invited Session's public id, as its own row names it. */
+const PUBLIC = "public-session"
 const KEY = new Uint8Array(32).fill(7)
 
 function invitations() {
@@ -169,8 +174,10 @@ function harness(options: { existing?: boolean; files?: AppFileOptions } = {}) {
       },
     })),
     workspaceCapabilities: vi.fn(workspaceCapabilities),
+    resolveProviderSessionId: (_agentId: string, publicSessionId: string) =>
+      publicSessionId === PUBLIC ? STORED : undefined,
     getSession: vi.fn(async () => ({
-      id: STORED,
+      id: PUBLIC,
       agentId: AGENT,
       title: "Invite",
       archived: false,
@@ -209,7 +216,8 @@ function harness(options: { existing?: boolean; files?: AppFileOptions } = {}) {
   } as unknown as ServerRuntime
   const instance: RuntimeInstance = {
     id: "hermes-primary",
-    runtime,
+    // Composed as every factory composes its adapter.
+    runtime: withHistoryImageArtifacts(runtime),
     sessions: new SessionCoordinator({
       engine,
       readings: runtime,
@@ -229,6 +237,7 @@ function harness(options: { existing?: boolean; files?: AppFileOptions } = {}) {
       now: () => NOW,
     }),
     runtime,
+    served: instance.runtime,
     engine,
     resolveInvitedSession,
     artifact,
@@ -555,14 +564,99 @@ describe("guest app", () => {
       },
     })
 
-    // The unchanged read still serves the bytes under the invited scope.
+    // The unchanged read still serves the bytes, read by the invited
+    // Session's public id as the runtime contract names it.
     const served = await subject.app.request(url, { headers: headers(invite) })
     expect(served.status).toBe(200)
     expect(subject.artifact).toHaveBeenLastCalledWith(
       AGENT,
-      STORED,
+      PUBLIC,
       "artifact-1"
     )
+  })
+
+  it("serves an invited Session's stored image from its history, and one its history lacks as gone", async () => {
+    const subject = harness({ existing: true })
+    vi.spyOn(subject.runtime, "history").mockResolvedValue({
+      sessionId: STORED,
+      messages: [
+        {
+          id: "user-1",
+          role: "user",
+          content: [
+            { type: "image", image: "data:image/png;base64,iVBORw0KGgo=" },
+          ],
+          createdAt: "2026-09-15T00:00:00.000Z",
+        },
+      ],
+      total: 1,
+      limit: 200,
+      offset: 0,
+      nextOffset: 1,
+    })
+    const [image] = artifactIds(
+      await subject.served.history(AGENT, providerSessionId(STORED), 200, 0)
+    )
+    const invite = await token(subject.invitationService)
+    const read = (artifactId: string) =>
+      subject.app.request(
+        `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/artifacts/${artifactId}`,
+        { headers: headers(invite) }
+      )
+
+    const served = await read(image!)
+
+    expect(served.status).toBe(200)
+    expect(served.headers.get("content-type")).toBe("image/png")
+    expect(new Uint8Array(await served.arrayBuffer())).toEqual(
+      Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+    )
+    const gone = await read(`hgw-image-${"0".repeat(32)}`)
+    expect(gone.status).toBe(404)
+    await expect(gone.json()).resolves.toEqual({
+      error: {
+        code: "not_found",
+        description: "The requested item was not found.",
+      },
+    })
+    expect(subject.artifact).not.toHaveBeenCalled()
+  })
+
+  it("holds an invitation's artifact reads to its allowance, and frees each read's slot once it settles", async () => {
+    const subject = harness({ existing: true })
+    const invite = await token(subject.invitationService)
+    const gate =
+      Promise.withResolvers<Awaited<ReturnType<typeof subject.artifact>>>()
+    // Sixteen reads hold their slots until the gate opens; any later one is
+    // answered at once.
+    for (let slot = 0; slot < 16; slot += 1)
+      subject.artifact.mockImplementationOnce(() => gate.promise)
+    const read = () =>
+      subject.app.request(
+        `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/artifacts/artifact-1`,
+        { headers: headers(invite) }
+      )
+    const held = Array.from({ length: 16 }, read)
+    await vi.waitFor(() => expect(subject.artifact).toHaveBeenCalledTimes(16))
+
+    const refused = await read()
+
+    expect(refused.status).toBe(503)
+    await expect(refused.json()).resolves.toEqual({
+      error: {
+        code: "turn_capacity_exceeded",
+        description: "Too many requests. Please try again shortly.",
+      },
+    })
+    expect(subject.artifact).toHaveBeenCalledTimes(16)
+
+    gate.resolve({
+      bytes: Uint8Array.of(9, 8, 7),
+      mimeType: "audio/mpeg",
+      filename: "briefing.mp3",
+    })
+    for (const response of held) expect((await response).status).toBe(200)
+    expect((await read()).status).toBe(200)
   })
 
   it("opens an MCP App view only from the invited Session's own calls", async () => {
@@ -938,7 +1032,7 @@ describe("guest MCP App files", () => {
     })
     expect(subject.artifact).toHaveBeenLastCalledWith(
       AGENT,
-      STORED,
+      PUBLIC,
       "artifact-1"
     )
     const bytes = await subject.app.request(

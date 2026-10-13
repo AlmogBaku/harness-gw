@@ -307,14 +307,23 @@ carried by the normalized turn or history.
 
 Parse provider-injected attachment and context envelopes server-side. Return
 safe filenames, MIME types, sizes, and opaque content identities. Native paths,
-filesystem warnings, credentials, URLs, payloads, and error bodies never cross
-the adapter boundary, with one narrow exception: for the MCP App file route, a
+filesystem warnings, URLs, payloads, and error bodies never cross the adapter
+boundary in an attachment, with one narrow exception: for the MCP App file route, a
 native path reaches gateway core, as `agentFolder` already does, through
 `ServerMcpApps.toolCall`'s input and `readFile`'s real path. Core judges it
 against the configured folders and reads through `readFile`; the path still
 never reaches a guest, a view, an error body, or a log line. Transcription and
 speech synthesis run only after their explicit user actions and remain distinct
 from native multimodal audio input or output.
+
+An adapter masks no credential, and drops none: the gateway's credentials
+middleware masks the text every runtime's tool data and run failures carry on
+the way to a member, and drops a path or a patch that carries one (protocol,
+[Credential masking](../protocol.md#credential-masking)). An adapter reports
+questions and approvals in the runtime's own words, and drops only
+provider-private fields. The one exception is an identity a guest may read
+through: Hermes rejects a published artifact name that carries a credential or
+a private location (`containsPrivateValue`), since the name selects the file.
 
 ## Share execution, project authorization
 

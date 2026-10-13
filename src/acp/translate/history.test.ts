@@ -143,17 +143,15 @@ describe("translateHistory", () => {
     )
   })
 
-  it("upserts the user turn with its text and inline image", () => {
-    const [update] = updatesOf(translateHistory(history))
+  it("upserts the user turn with its text, and never an image's bytes", () => {
+    const outbound = translateHistory(history)
 
-    expect(update).toEqual({
+    expect(updatesOf(outbound)[0]).toEqual({
       sessionUpdate: "user_message",
       messageId: "u1",
-      content: [
-        { type: "text", text: "Check this chart" },
-        { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
-      ],
+      content: [{ type: "text", text: "Check this chart" }],
     })
+    expect(JSON.stringify(outbound)).not.toContain("iVBORw0KGgo=")
   })
 
   it("replays an attached image on the user turn that carried it", () => {

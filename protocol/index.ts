@@ -310,7 +310,7 @@ const SessionMessagePartSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     type: z.literal("image"),
-    image: z.string().min(1).max(25_000_000),
+    image: z.string().min(1).max(35_000_000),
     filename: z.string().min(1).max(4096).optional(),
   }),
   z.strictObject({

@@ -417,8 +417,12 @@ export type Member = {
  * names no Session, so it carries no request a layer could decline.
  */
 export function showWorkspace(member: Member, event: WorkspaceEvent) {
-  const shown = runEvents(member.middleware, event, {
-    decline: () => undefined,
-  })
+  let shown: ReturnType<typeof runEvents>
+  try {
+    shown = runEvents(member.middleware, event, { decline: () => undefined })
+  } catch (cause) {
+    // As for a Session event: a stack that throws costs this event alone.
+    return Promise.reject(cause)
+  }
   return shown ? member.connection.send(shown) : Promise.resolve()
 }

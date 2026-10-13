@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest"
+import { describe, expect, it, onTestFinished, vi } from "vitest"
 
+import { artifactIds } from "../test/support/history-artifacts"
 import { captureLogs } from "../test/support/log-capture"
 import type {
   McpAppFiles,
@@ -16,7 +17,12 @@ import {
   HermesSessionNotFoundError,
   type HermesRpcTransport,
 } from "./adapters/hermes/adapter"
+import { composeHermesRuntime } from "./adapters/hermes/factory"
 import { HermesTurnPublicError } from "./adapters/hermes/run-failures"
+import {
+  fakeHermes,
+  fakeHermesGateway,
+} from "./adapters/hermes/test-utils/fake-hermes"
 import { createFilePassService, type FilePassScope } from "./auth/file-pass"
 import { createAppFileCalls } from "./core/app-files"
 import { AttachmentStageRegistry } from "./core/attachment-stages"
@@ -168,6 +174,32 @@ describe("AOS V1 proxy", () => {
 
     expect((await proxy.request(path, stageRequest)).status).toBe(503)
     expect(cleanup).toHaveBeenCalledOnce()
+  })
+
+  it("serves the image a stored prompt inlines from its Session's own history", async () => {
+    const hermes = fakeHermes()
+    const { logger } = captureLogs()
+    const { runtime, close } = composeHermesRuntime({
+      transport: fakeHermesGateway(hermes, logger),
+      logger,
+      sessionIdleMs: 300_000,
+    })
+    onTestFinished(close)
+    hermes.storeImagePrompt("data:image/png;base64,iVBORw0KGgo=")
+    const { agentId, providerSessionId, sessionId } = hermes.scope
+    const [image] = artifactIds(
+      await runtime.history(agentId, providerSessionId, 500, 0)
+    )
+
+    const response = await app(runtime).request(
+      `${origin}/api/v1/agents/${agentId}/sessions/${sessionId}/artifacts/${image}`
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("content-type")).toBe("image/png")
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(
+      Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+    )
   })
 
   it("does not expose invitation signing when the guest surface is disabled", async () => {
@@ -675,6 +707,35 @@ describe("MCP App files", () => {
     expect(
       await observed(await proxy.request(`${origin}${appPath()}/files/path`))
     ).toEqual({ status, ...REFUSAL })
+  })
+
+  it("masks a view's input and result, and still serves the file its call names", async () => {
+    const secret = "abcdefgh1234"
+    const note = `use ${["token", secret].join("=")}`
+    const { proxy, open } = fileGateway({
+      call: { ...reportCall, input: { path: REPORT, note } },
+    })
+    open.mockResolvedValueOnce({
+      html: "<p>view</p>",
+      toolInput: { path: REPORT, note, apiKey: secret },
+      toolResult: { content: [{ type: "text", text: note }] },
+    })
+
+    const view = await openView(proxy)
+
+    expect(JSON.stringify(view)).not.toContain(secret)
+    expect(view).toMatchObject({
+      toolInput: {
+        note: "use token=[credential redacted]",
+        apiKey: "[credential redacted]",
+      },
+      toolResult: {
+        content: [{ type: "text", text: "use token=[credential redacted]" }],
+      },
+    })
+    expect(
+      (await proxy.request(`${origin}${view.files?.addresses.path}`)).status
+    ).toBe(200)
   })
 
   it("passes on only the runtime headers a file needs, and lets only a view that sent a pass read the answer", async () => {

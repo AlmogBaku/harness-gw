@@ -649,6 +649,7 @@ async function wire(
   const closed: Array<{ code: number; reason: string }> = []
   const replies = new Map<Frame["id"], (reply: Frame) => void>()
   const socket = service.open(upgrade, {
+    bufferedAmount: () => 0,
     send: (raw) => {
       const frame = JSON.parse(raw) as Frame
       const sent = frames.push(frame)
@@ -1087,7 +1088,7 @@ describe("guest ACP listener", () => {
       [methods.agent.session.list, { cwd: "/srv/agent" }],
     ] as const)
       expect(await socket.request(method, params), method).toMatchObject({
-        error: { code: -31016, message: "forbidden" },
+        error: { code: -31017, message: "forbidden" },
       })
     expect(test.listAllSessions).not.toHaveBeenCalled()
     socket.close()

@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto"
+import type { Logger } from "../../../lifecycle"
 import type {
+  AgentCatalogEntry,
   AgentCatalogResponse,
   AgentUpdatePatch,
   AgentUpdateResponse,
@@ -8,10 +10,14 @@ import type {
 } from "../../../protocol"
 import {
   AgentAvatarSchema,
+  AgentCatalogEntrySchema,
   AgentUpdateResponseSchema,
   newestSessionFirst,
+  SESSION_CATALOG_MAX_WINDOW,
   SessionCreateResponseSchema,
+  SessionSchema,
 } from "../../../protocol"
+import { loggedId } from "../../core/identifier"
 import { openClawInviteSessionKey } from "../../core/invite-key"
 import { sessionPlatform } from "../../core/session-platform"
 import * as ids from "../../core/ids"
@@ -20,18 +26,22 @@ import {
   type SessionPatch,
 } from "../../core/runtime"
 
+import { OpenClawClientRequestError, openClawConnectionFailure } from "./client"
 import {
   openClawAgentAvatarPatchParams,
+  openClawAgentRows,
   openClawAgentsParams,
   openClawConfigGetParams,
   openClawCreateSessionParams,
   openClawDeleteSessionParams,
   openClawPatchSessionParams,
+  openClawSessionRows,
   openClawSessionSearchParams,
   openClawSessionsParams,
-  parseOpenClawAgents,
+  parseOpenClawAgent,
   parseOpenClawConfiguredAgents,
   parseOpenClawCreatedSession,
+  parseOpenClawSession,
   parseOpenClawSessions,
   type OpenClawAgent,
   type OpenClawSession,
@@ -41,6 +51,25 @@ import {
 const INVITATION_REFERENCE = /^[A-Za-z0-9_-]{1,128}$/u
 const MAX_SESSION_PAGE = 100
 const MAX_SESSION_KEY_LENGTH = 4_096
+/** How many Agents a read across every Agent reads at once. */
+const AGENT_FANOUT = 8
+const AGENT_SKIPPED = "openclaw.agent.skipped"
+
+/** A field of a native row not yet checked, read only to pick or name it. */
+function rawField(row: unknown, key: string) {
+  return typeof row === "object" && row !== null
+    ? (row as Record<string, unknown>)[key]
+    : undefined
+}
+
+/** A failure of the link or of authentication: the runtime's, never one Agent's. */
+function isRuntimeFailure(error: unknown) {
+  return (
+    openClawConnectionFailure(error) !== undefined ||
+    (error instanceof OpenClawClientRequestError &&
+      (error.kind === "unavailable" || error.kind === "cancelled"))
+  )
+}
 
 export interface OpenClawWorkspaceClient {
   request<T>(method: string, params?: unknown): Promise<T>
@@ -54,8 +83,8 @@ export class OpenClawWorkspaceOwnershipError extends Error {
 }
 
 export class OpenClawWorkspaceUnavailableError extends Error {
-  constructor() {
-    super("OpenClaw workspace data is temporarily unavailable")
+  constructor(options?: ErrorOptions) {
+    super("OpenClaw workspace data is temporarily unavailable", options)
     this.name = "OpenClawWorkspaceUnavailableError"
   }
 }
@@ -237,16 +266,60 @@ export type OpenClawWorkspace = Readonly<{
 export function createOpenClawWorkspace(input: {
   client: OpenClawWorkspaceClient
   hiddenAgentIds?: readonly string[]
+  /** Where a row or an Agent left out of a list is told, by its ids alone. */
+  log?: Logger
 }): OpenClawWorkspace {
   const hidden = new Set(input.hiddenAgentIds ?? [])
-  const listNativeAgents = async () =>
-    parseOpenClawAgents(
+  const listAgentRows = async () =>
+    openClawAgentRows(
       await input.client.request("agents.list", openClawAgentsParams())
     )
-  const listVisibleAgents = async () =>
-    (await listNativeAgents())
-      .filter((agent) => isVisiblePrimaryAgent(agent, hidden))
-      .sort((left, right) => left.id.localeCompare(right.id))
+  /**
+   * The visible Agents, one row at a time: a malformed row costs that Agent
+   * alone, leaves a warning, and counts in `skipped`.
+   */
+  const listVisibleAgents = async () => {
+    const agents: OpenClawAgent[] = []
+    let skipped = 0
+    for (const row of await listAgentRows()) {
+      try {
+        agents.push(parseOpenClawAgent(row))
+      } catch {
+        skipped += 1
+        input.log?.warn({ agentId: loggedId(row, "id") }, AGENT_SKIPPED)
+      }
+    }
+    return {
+      agents: agents
+        .filter((agent) => isVisiblePrimaryAgent(agent, hidden))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+      skipped,
+    }
+  }
+  /**
+   * Each visible Agent's catalog entry; one the public schema refuses is left
+   * out. A skip that leaves no Agent a person can pick is an outage.
+   */
+  const catalogEntries = (
+    visible: Awaited<ReturnType<typeof listVisibleAgents>>,
+    configured: ReadonlySet<string>
+  ) => {
+    const entries: AgentCatalogEntry[] = []
+    let skipped = visible.skipped
+    for (const agent of visible.agents) {
+      const entry = AgentCatalogEntrySchema.safeParse(
+        projectAgent(agent, configured)
+      )
+      if (entry.success) entries.push(entry.data)
+      else {
+        skipped += 1
+        input.log?.warn({ agentId: loggedId(agent, "id") }, AGENT_SKIPPED)
+      }
+    }
+    if (skipped > 0 && !entries.some(({ selectable }) => selectable))
+      throw new OpenClawWorkspaceUnavailableError()
+    return entries
+  }
   // `config.get` carries credentials: it is reduced on arrival and nothing
   // else from it is kept, logged, returned, or put in an error.
   const readConfiguredAgents = async () =>
@@ -262,41 +335,103 @@ export function createOpenClawWorkspace(input: {
         () => new Set<string>()
       ),
     ])
-    const entries = agents.map((agent) => projectAgent(agent, configured))
+    const entries = catalogEntries(agents, configured)
     return { revision: revision(entries), agents: entries }
   }
+  /**
+   * The one visible Agent `agentId` names. Only its own row is read, so
+   * another Agent's malformed row never fails it, and its own malformed row
+   * is unreadable rather than gone.
+   */
   const requireVisibleAgent = async (agentId: string) => {
-    const agents = await listNativeAgents()
-    const matches = agents.filter(
-      (agent) => agent.id === agentId && isVisiblePrimaryAgent(agent, hidden)
-    )
+    const matches = (await listAgentRows())
+      .filter((row) => rawField(row, "id") === agentId)
+      .map(parseOpenClawAgent)
+      .filter((agent) => isVisiblePrimaryAgent(agent, hidden))
     if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
     return matches[0]!
   }
-  const rows = async (agentId: string, limit: number, offset: number) => {
+  /** One native row as a Session of `agentId`, or `undefined` with a warning. */
+  const listedSession = (agentId: string, row: unknown) => {
+    try {
+      const session = SessionSchema.safeParse(
+        projectSession(agentId, parseOpenClawSession(row))
+      )
+      if (session.success) return session.data
+    } catch {
+      // A row OpenClaw sent that is not one of this Agent's Sessions.
+    }
+    input.log?.warn(
+      { agentId, sessionId: loggedId(row, "key") },
+      "openclaw.session.skipped"
+    )
+    return undefined
+  }
+  /**
+   * The newest `prefix` Sessions of one Agent, read from its first native row
+   * so that offsets count the rows kept, as the gateway's cursor does. A row
+   * that is not one of the Agent's Sessions costs that row alone; the read
+   * goes on by OpenClaw's own row count, and only the whole read keeping
+   * nothing of the rows OpenClaw sent is unreadable. Pages keep one size, so
+   * a run of skipped rows costs a page rather than a call per row, and no row
+   * past the catalog window is read: with rows skipped, a readable one
+   * beyond it is left unlisted, and the list ends there.
+   */
+  const fetchPrefix = async (agentId: string, prefix: number) => {
+    const sessions: Session[] = []
+    const pageLimit = Math.min(MAX_SESSION_PAGE, prefix)
+    let pageOffset = 0
+    let read = 0
+    let hasMore = false
+    while (sessions.length < prefix) {
+      if (pageOffset >= SESSION_CATALOG_MAX_WINDOW) {
+        hasMore = false
+        break
+      }
+      const rows = openClawSessionRows(
+        await input.client.request(
+          "sessions.list",
+          openClawSessionsParams(agentId, pageLimit, pageOffset)
+        ),
+        pageLimit
+      )
+      read += rows.length
+      for (const row of rows) {
+        const session = listedSession(agentId, row)
+        if (session) sessions.push(session)
+      }
+      hasMore = rows.length === pageLimit
+      if (!hasMore) break
+      pageOffset += rows.length
+    }
+    if (read > 0 && sessions.length === 0)
+      throw new OpenClawWorkspaceUnavailableError()
+    return {
+      sessions: sessions.slice(0, prefix),
+      hasMore: hasMore || sessions.length > prefix,
+    }
+  }
+  const requirePage = (limit: number, offset: number) => {
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SESSION_PAGE)
       throw new OpenClawWorkspaceUnavailableError()
-    if (!Number.isInteger(offset) || offset < 0)
-      throw new OpenClawWorkspaceUnavailableError()
-    await requireVisibleAgent(agentId)
-    return parseOpenClawSessions(
-      await input.client.request(
-        "sessions.list",
-        openClawSessionsParams(agentId, limit, offset)
-      ),
-      limit
+    if (
+      !Number.isInteger(offset) ||
+      offset < 0 ||
+      offset + limit > SESSION_CATALOG_MAX_WINDOW
     )
+      throw new OpenClawWorkspaceUnavailableError()
   }
   const listSessions = async (
     agentId: string,
     limit: number,
     offset: number
   ) => {
-    const page = await rows(agentId, limit, offset)
-    const sessions = page.map((row) => projectSession(agentId, row))
+    requirePage(limit, offset)
+    await requireVisibleAgent(agentId)
+    const { sessions, hasMore } = await fetchPrefix(agentId, offset + limit)
     return {
-      sessions,
-      total: offset + sessions.length + (page.length === limit ? 1 : 0),
+      sessions: sessions.slice(offset),
+      total: sessions.length + (hasMore ? 1 : 0),
       limit,
       offset,
     }
@@ -358,42 +493,41 @@ export function createOpenClawWorkspace(input: {
       })
     },
     listSessions,
+    /**
+     * Every Agent's Sessions, a few Agents at a time. One Agent whose list
+     * cannot be read costs the list that Agent's rows alone and leaves a
+     * warning; only every Agent failing is an outage, and a failure of the
+     * link or of authentication is never one Agent's.
+     */
     async listAllSessions(limit, offset) {
-      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_SESSION_PAGE)
-        throw new OpenClawWorkspaceUnavailableError()
-      if (!Number.isInteger(offset) || offset < 0)
-        throw new OpenClawWorkspaceUnavailableError()
-      const agents = await listVisibleAgents()
+      requirePage(limit, offset)
+      const agentIds = catalogEntries(await listVisibleAgents(), new Set()).map(
+        ({ summary }) => summary.id
+      )
       const prefix = offset + limit
-      const fetchPrefix = async (agentId: string) => {
-        const sessions: Session[] = []
-        let pageOffset = 0
-        let hasMore = false
-        while (sessions.length < prefix) {
-          const pageLimit = Math.min(MAX_SESSION_PAGE, prefix - sessions.length)
-          const native = parseOpenClawSessions(
-            await input.client.request(
-              "sessions.list",
-              openClawSessionsParams(agentId, pageLimit, pageOffset)
-            ),
-            pageLimit
-          )
-          sessions.push(...native.map((row) => projectSession(agentId, row)))
-          if (native.length < pageLimit) break
-          pageOffset += native.length
-          hasMore = true
-        }
-        return { sessions, hasMore }
-      }
       const pages: Array<{ sessions: Session[]; hasMore: boolean }> = []
-      for (let start = 0; start < agents.length; start += 8)
-        pages.push(
-          ...(await Promise.all(
-            agents.slice(start, start + 8).map((agent) => fetchPrefix(agent.id))
-          ))
+      let unavailable: unknown
+      for (let start = 0; start < agentIds.length; start += AGENT_FANOUT) {
+        const batch = agentIds.slice(start, start + AGENT_FANOUT)
+        const settled = await Promise.allSettled(
+          batch.map((agentId) => fetchPrefix(agentId, prefix))
         )
+        settled.forEach((outcome, index) => {
+          if (outcome.status === "fulfilled") {
+            pages.push(outcome.value)
+            return
+          }
+          if (isRuntimeFailure(outcome.reason)) throw outcome.reason
+          unavailable = outcome.reason
+          input.log?.warn(
+            { err: outcome.reason, agentId: batch[index] },
+            "openclaw.agent.unavailable"
+          )
+        })
+      }
+      if (agentIds.length > 0 && pages.length === 0)
+        throw new OpenClawWorkspaceUnavailableError({ cause: unavailable })
       const sessions = pages
-        .flat()
         .flatMap((page) => page.sessions)
         .sort(newestSessionFirst)
       return {

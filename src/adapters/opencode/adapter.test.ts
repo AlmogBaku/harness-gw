@@ -582,7 +582,7 @@ describe("OpenCode server adapter", () => {
       await expect(
         adapter.workspaceCapabilities("research", "session-1")
       ).resolves.toMatchObject({
-        content: { artifacts: { status: "unavailable" } },
+        content: { artifacts: { status: "available" } },
         // No rewind the gateway can drive is proven on OpenCode yet.
         interactions: { rewind: { status: "unavailable" } },
       })

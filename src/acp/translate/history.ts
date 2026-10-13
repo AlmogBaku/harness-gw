@@ -31,8 +31,6 @@ import {
 type MessagePart = SessionMessage["content"][number]
 type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>
 
-const DATA_URL = /^data:([^;,]+);base64,(.+)$/u
-
 /** Replayed history has no live turn; `_meta.hgw` still needs a turn identity. */
 const HISTORY_TURN_ID = "history"
 
@@ -53,21 +51,15 @@ const HISTORY_CONTEXT: TranslateContext = {
   stopping: false,
 }
 
-function imageBlock(image: string): Built<ContentBlock> | undefined {
-  const match = DATA_URL.exec(image)
-  return match
-    ? { type: "image", data: match[2], mimeType: match[1] }
-    : undefined
-}
-
-/** Text and inline images only; every other part replays as its own outbound. */
+/**
+ * Text only; every other part replays as its own outbound, a stored image as
+ * the Artifact `withHistoryImageArtifacts` made it, so no image's bytes ride
+ * the socket every Session shares.
+ */
 function contentBlocks(parts: readonly MessagePart[]): Built<ContentBlock>[] {
-  return parts.flatMap((part) => {
-    if (part.type === "text") return [{ type: "text", text: part.text }]
-    if (part.type !== "image") return []
-    const image = imageBlock(part.image)
-    return image ? [image] : []
-  })
+  return parts.flatMap((part) =>
+    part.type === "text" ? [{ type: "text", text: part.text }] : []
+  )
 }
 
 /**
@@ -207,10 +199,7 @@ function partsOutbound(
       chunk("agent_thought_chunk", { type: "text", text: part.text })
     else if (part.type === "text")
       chunk("agent_message_chunk", { type: "text", text: part.text })
-    else if (part.type === "image") {
-      const image = imageBlock(part.image)
-      if (image) chunk("agent_message_chunk", image)
-    } else if (part.type === "tool-call")
+    else if (part.type === "tool-call")
       outbound.push(...toolCallOutbound(context, message.id, part))
     else outbound.push(...storedArtifactOutbound(context, message, part))
   }

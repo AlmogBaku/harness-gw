@@ -683,6 +683,31 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
+  // The operator's stack masks every runtime's tool data on its way out.
+  it("masks a credential in a tool call the operator is shown", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Deploy it")
+    const secret = ["token", "abcdefgh1234"].join("=")
+
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ToolCallStarted,
+      toolCallId: "call-3",
+      title: `deploy --${secret}`,
+    })
+    source.finish()
+
+    const shown = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("call-3"),
+      "the tool call"
+    )
+    expect(shown.params).toMatchObject({
+      update: { title: "deploy --token=[credential redacted]" },
+    })
+    expect(JSON.stringify(test.recorder.entries)).not.toContain(secret)
+    test.close()
+  })
+
   it("records the answers on the tool call that asked them", async () => {
     const test = await harness({
       question: async () => ({

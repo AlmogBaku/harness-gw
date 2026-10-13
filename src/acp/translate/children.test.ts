@@ -18,14 +18,14 @@ const context: TranslateContext = {
  * state mirrored. The call that spawned it rides in the gateway's meta.
  */
 describe("child Session announcement", () => {
-  it("announces a child with its title, purpose and spawning call, masking a credential", () => {
+  it("announces a child with its title, purpose and spawning call", () => {
     const update = translateChildUpdate(
       {
         kind: TurnEventKind.ChildSessionUpdated,
         childSessionId: "child-1",
         toolCallId: "call-spawn",
         title: "Review the notes",
-        description: "Read them with password: synthetic-pass-123",
+        description: "Find the missing tests",
         status: ChildSessionStatus.Running,
         cancellable: true,
         model: "small",
@@ -48,7 +48,7 @@ describe("child Session announcement", () => {
         },
       },
     })
-    expect(JSON.stringify(update)).not.toContain("synthetic-pass-123")
+    expect(update).toMatchObject({ description: "Find the missing tests" })
   })
 
   it.each([

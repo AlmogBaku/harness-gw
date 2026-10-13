@@ -113,9 +113,20 @@ export const HGW_JSONRPC_ERRORS = {
   temporarilyUnavailable: -31013,
   uncertainMutation: -31014,
   unsupported: -31015,
+  /**
+   * Params too large for one frame. The client raises it before sending and
+   * the gateway never sends it, so it has no machine name on the wire.
+   */
+  requestTooLarge: -31016,
   /** A method that exists, refused to this connection's principal. */
-  forbidden: -31016,
+  forbidden: -31017,
 } as const
+
+/**
+ * The largest inbound WebSocket frame the gateway takes, in bytes. A larger
+ * one closes the socket, and with it every Session on the tab.
+ */
+export const HGW_MAX_FRAME_BYTES = 1_100_000
 export type HgwJsonRpcErrorCode =
   (typeof HGW_JSONRPC_ERRORS)[keyof typeof HGW_JSONRPC_ERRORS]
 

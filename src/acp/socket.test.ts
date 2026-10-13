@@ -45,7 +45,14 @@ describe("ACP WebSocket shim", () => {
     expect(messages).toEqual(['{"jsonrpc":"2.0"}', '{"id":1}'])
   })
 
-  it("closes with 1008 when one inbound frame exceeds the frame cap", () => {
+  it("delivers a frame at the frame cap and closes with 1008 one byte past it", () => {
+    // One prompt as large as a frame may carry stays inside the default byte
+    // budget: closing here would end every Session on the tab's one socket.
+    const atCap = harness()
+    atCap.socket.receive("a".repeat(1_100_000))
+    expect(atCap.closed).toEqual([])
+    expect(atCap.messages).toHaveLength(1)
+
     const { socket, closed, messages, closes } = harness()
 
     socket.receive("a".repeat(1_100_001))
@@ -73,6 +80,25 @@ describe("ACP WebSocket shim", () => {
     socket.receive("5")
     expect(messages).toEqual(["1", "2", "3", "4"])
     expect(closed).toEqual([{ code: 1008, reason: "ACP rate exceeded" }])
+  })
+
+  it("passes the SDK's buffer and stall closes on as 4409, and its other limit closes as 1008", () => {
+    const stalled = harness()
+    stalled.socket.socket.close(
+      1008,
+      "Connection output stalled for maxOutputStallMs (60000)"
+    )
+    const exceeded = harness()
+    exceeded.socket.socket.close(
+      1008,
+      "Connection exceeds maxBufferedBytes (1)"
+    )
+    const idLength = harness()
+    idLength.socket.socket.close(1008, "Connection exceeds maxIdLength (1024)")
+
+    expect(stalled.closed.map(({ code }) => code)).toEqual([4409])
+    expect(exceeded.closed.map(({ code }) => code)).toEqual([4409])
+    expect(idLength.closed.map(({ code }) => code)).toEqual([1008])
   })
 
   it("closes with 1008 when the inbound byte window overflows", () => {
