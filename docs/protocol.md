@@ -739,9 +739,13 @@ Later reports patch it.
   `running`. A Session nobody watches any longer still follows its children
   for a minute, so a reload or a reconnect comes back to them followed: a
   connection that joins is told each one's latest report, and each open
-  request, including those of a child that ended in that minute. A child
-  nobody watches as its turn ends, or past that minute, or one its runtime
-  cannot follow, is reported `unknown`, with `capabilities` `{}`.
+  request, including those of a child that ended in that minute. No turn's
+  journal keeps a child's updates between turns, so a positioned resume
+  while the Session follows one is answered as a lost cursor is: the view is
+  rebuilt from history, with each child's saved transcript, which may not yet
+  hold a message the child is still writing. A child nobody watches as its
+  turn ends, or past that minute, or one its runtime cannot follow, is
+  reported `unknown`, with `capabilities` `{}`.
 - `capabilities` is `{ cancel: {} }` only where the runtime stops the child
   alone, and `{}` otherwise; ACP replaces it whole.
 - `_meta.hgw` (`HgwChildSessionMetaSchema`, `protocol/acp.ts`) carries what ACP

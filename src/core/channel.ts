@@ -592,6 +592,15 @@ function createChannelTable({
   }
 
   return {
+    /**
+     * Whether the Session has children that outlived their turns, at work or
+     * over within the grace, whose updates no turn's journal kept.
+     */
+    followsChildren(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      return channel !== undefined && currentChildren(channel).length > 0
+    },
+
     /** A request a child that outlived its turn asks, while it is open. */
     childRequest(scope: ChannelScope, requestId: string) {
       return channels.get(channelKey(scope))?.childRequests.get(requestId)
@@ -1598,9 +1607,11 @@ class Membership {
    * Follows the live turn from `position`, returning whether the view holds
    * the Session from there: a cursor for another turn, one the journal no
    * longer holds, or none beside a turn the journal cannot replay whole
-   * leaves the view to be rebuilt from history.
+   * leaves the view to be rebuilt from history. So does a child that outlived
+   * its turn, whose updates no journal keeps.
    */
   async #followPositioned(position: ResumePosition) {
+    if (this.#channels.followsChildren(this.#scope)) return false
     this.joinChannel(showsPrompt(this.#channels.current(this.#scope), position))
     const { state, turnId } = this.#coordinator.snapshot(this.#scope)
     if (position.turnId !== undefined && position.turnId !== turnId)

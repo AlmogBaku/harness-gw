@@ -759,7 +759,9 @@ describe("operator ACP listener", () => {
   // work after its turn ended reports under its own id, between turns, and
   // its requests and its cancel reach the runtime without any turn.
   describe("a child that outlives its parent's turn", () => {
-    async function outlived() {
+    async function outlived(
+      saved: Pick<HarnessOptions, "history" | "childHistory"> = {}
+    ) {
       let listener: ServerTurnListener | undefined
       const unsubscribed = vi.fn()
       const respondChild = vi.fn<
@@ -769,6 +771,7 @@ describe("operator ACP listener", () => {
         async () => undefined
       )
       const test = await harness({
+        ...saved,
         subscribeTurns: (_scope, subscribed) => {
           listener = subscribed
           return unsubscribed
@@ -936,6 +939,97 @@ describe("operator ACP listener", () => {
         },
       })
       expect(unsubscribed).not.toHaveBeenCalled()
+      back.close()
+    })
+
+    // No turn's journal keeps what a background child streams, so a view a
+    // reconnect positions in a later turn lacks what the child streamed
+    // meanwhile: the Session is replayed from history instead, as for a lost
+    // cursor, the child's saved transcript with it.
+    it("replays the Session to a viewer who reconnects into a later turn while a child works on", async () => {
+      const { test } = await outlived({
+        history: {
+          ...HISTORY,
+          messages: [
+            ...HISTORY.messages,
+            {
+              id: "child-row",
+              role: "activity",
+              activityType: "CHILD_SESSION",
+              content: {
+                childSessionId: "child-1",
+                title: "Review the notes",
+                status: "running",
+              },
+            },
+          ],
+        },
+        childHistory: async () => ({
+          sessionId: "child-1",
+          messages: [
+            {
+              id: "child-message",
+              role: "assistant",
+              content: [{ type: "text", text: "Saved while away." }],
+              createdAt: NOW,
+            },
+          ],
+          total: 1,
+          limit: 500,
+          offset: 0,
+          nextOffset: 0,
+        }),
+      })
+      await test.prompt("Next")
+      await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+      const next = test.sources[1]!
+      next.emit(turnStarted())
+      next.emit({
+        kind: TurnEventKind.MessageChunk,
+        messageId: "next-message",
+        text: "Working on the next",
+      })
+      await test.recorder.wait(
+        (entry) => JSON.stringify(entry.params).includes("Working on the next"),
+        "the later turn's reply"
+      )
+      const turnId = z
+        .object({ turnId: z.string() })
+        .parse(test.start.mock.calls[1]?.[1]).turnId
+      const cursor = Math.max(
+        ...updates(test.recorder).flatMap(({ update }) => {
+          const hgw = (
+            update as {
+              _meta?: { hgw?: { turnId?: unknown; sequence?: unknown } }
+            }
+          )._meta?.hgw
+          return hgw?.turnId === turnId && typeof hgw.sequence === "number"
+            ? [hgw.sequence]
+            : []
+        })
+      )
+      test.close()
+
+      const back = await test.connect("connection-2")
+      await back.list()
+      await back.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: cursor + 1 },
+      })
+      const saved = await back.recorder.wait(
+        (entry) => JSON.stringify(entry.params).includes("Saved while away."),
+        "the child's saved transcript"
+      )
+
+      expect(saved.params).toMatchObject({ sessionId: "child-1" })
+      // The rebuilt view joins the Session, which still follows the child.
+      await back.recorder.wait(
+        (entry) =>
+          JSON.stringify(entry.params).includes("subagent_update") &&
+          JSON.stringify(entry.params).includes('"background":true'),
+        "the child's report restated"
+      )
       back.close()
     })
 
