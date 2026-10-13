@@ -41,7 +41,6 @@ import {
   type HgwExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
-import { unlessAborted } from "../core/channel"
 import type { SessionRow } from "../core/session-rows"
 import type { PresenceReport } from "../push/presence"
 import { GATEWAY_VERSION } from "../version"
@@ -735,22 +734,20 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         meta.rewindSourceId === undefined
       )
         throw invalidParams()
-      // A prompt its client cancelled is answered as cancelled, and its
-      // admission is aborted: one the provider may have taken leaves its turn
-      // uncertain until the coordinator settles it.
-      const { messageId } = await unlessAborted(
-        perform(
-          "send",
-          {
-            sessionId: params.sessionId,
-            content: promptParts(params.prompt),
-            text,
-            ...meta,
-          },
-          (command) => send(command, client, signal),
-          requestId
-        ),
-        signal
+      // ACP answers a cancelled prompt as cancelled only before its message
+      // is inserted: the admission is aborted until the provider has it, and
+      // from then on the prompt is answered as it stands, and only
+      // session/cancel stops its turn.
+      const { messageId } = await perform(
+        "send",
+        {
+          sessionId: params.sessionId,
+          content: promptParts(params.prompt),
+          text,
+          ...meta,
+        },
+        (command) => send(command, client, signal),
+        requestId
       )
       return { messageId }
     }

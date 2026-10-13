@@ -659,7 +659,44 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers a prompt its client cancelled as cancelled, aborting its admission, then reports a stop the provider has not settled and the cancelled turn", async () => {
+  // ACP answers a cancelled prompt with -32800 only before its message is
+  // inserted; after, with its id, and only session/cancel stops its work.
+  it("answers a prompt its client cancelled before its runtime had it as cancelled, starting nothing", async () => {
+    const preparing = gate()
+    const test = await harness()
+    await test.create()
+    const cleanup = vi.fn(async () => undefined)
+    const attachmentStageId = test.attachmentStages.create(AGENT, CREATED, {
+      public: [],
+      appendTo: async (text) => {
+        await preparing.held
+        return text
+      },
+      cleanup,
+    })
+    const cancelled = new AbortController()
+    const sent = test.agent.request(
+      methods.agent.session.prompt,
+      {
+        sessionId: CREATED,
+        prompt: [{ type: "text", text: "Long job" }],
+        _meta: { [HGW_META_KEY]: { attachmentStageId } },
+      },
+      { cancellationSignal: cancelled.signal }
+    )
+    await settled()
+    cancelled.abort()
+    preparing.release()
+
+    await expect(sent).rejects.toMatchObject({
+      code: RequestError.requestCancelled().code,
+    })
+    expect(test.start).not.toHaveBeenCalled()
+    await waitFor(() => expect(cleanup).toHaveBeenCalledOnce())
+    test.close()
+  })
+
+  it("answers a prompt its client cancelled once its runtime had it with its id, then reports the stop session/cancel asks and the cancelled turn", async () => {
     const admission = gate()
     const test = await harness({ onStart: () => admission.held })
     await test.create()
@@ -675,13 +712,13 @@ describe("AOS ACP agent", () => {
     )
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     cancelled.abort()
-    await expect(sent).rejects.toMatchObject({
-      code: RequestError.requestCancelled().code,
-    })
-    expect(test.start.mock.calls[0]?.[3]).toMatchObject({ aborted: true })
-    // The provider took the turn all the same, which the browser follows once
-    // the coordinator settles it.
+    // The runtime has the prompt, which may already stand: a cancelled request
+    // cannot take it back, so the start runs on to its answer.
     admission.release()
+    await expect(sent).resolves.toMatchObject({
+      messageId: expect.any(String),
+    })
+    expect(test.start.mock.calls[0]?.[3]).toMatchObject({ aborted: false })
     const source = test.sources[0]
     source?.emit(turnStarted())
     await test.recorder.wait(

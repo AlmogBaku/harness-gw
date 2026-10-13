@@ -284,6 +284,9 @@ and names the id it stored the prompt under. A prompt the runtime may have
 stored without proving it, because its receipt outlasted the admission
 deadline or its turn ended first, is answered under the id the gateway minted.
 Only a turn its adapter knows stored nothing is answered with an error.
+A `$/cancel_request` for the prompt answers `-32800` only while the start has
+not reached the runtime. From then on the prompt may stand, so its answer
+follows the rules above, and only `session/cancel` stops its turn.
 Attachment content referenced by
 `resource_link` blocks uses the `hgw-attachment:` URI scheme
 (`HGW_ATTACHMENT_URI_SCHEME`, `protocol/acp.ts`).

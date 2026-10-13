@@ -169,7 +169,11 @@ export type TurnQuota = {
 
 /** What a start carries beside its prompt. */
 export type StartOptions = {
-  /** Aborts the start: one aborted once dispatched leaves its turn uncertain. */
+  /**
+   * Aborts the start until it is dispatched. The provider may store the prompt
+   * from then on, which no cancelled request takes back, so only Stop ends
+   * its turn.
+   */
   signal?: AbortSignal
   /** Refuses the start while the turns it counts reach its limit. */
   quota?: TurnQuota
@@ -1453,9 +1457,7 @@ export class SessionCoordinator {
       return { turnId: ids.turnId, events: ENDED, close: () => undefined }
     })
     const subscription: CoordinatedTurnSubscription =
-      "segment" in admitted
-        ? await this.#atStorage(admitted, access, options.signal)
-        : admitted
+      "segment" in admitted ? await this.#atStorage(admitted, access) : admitted
     // An answer always names its prompt: as its provider stored it, or as the
     // gateway minted it where nothing proves how.
     return {
@@ -1479,12 +1481,11 @@ export class SessionCoordinator {
    */
   async #atStorage(
     execution: Execution,
-    access: CoordinatorAccess,
-    signal: AbortSignal | undefined
+    access: CoordinatorAccess
   ): Promise<CoordinatedTurnSubscription> {
     const { stored } = execution.segment.handle
     if (!stored) return this.#repeat(execution, access)
-    const deadline = this.#deadline(signal)
+    const deadline = this.#deadline()
     let messageId: string
     try {
       messageId = await deadline.run(() => stored)
@@ -1574,12 +1575,13 @@ export class SessionCoordinator {
     // An uncertain turn holds its Session until a reconcile settles it.
     if (this.state(scope) !== "idle") throw new ServerTurnConflictError()
     this.#assertCapacity(key, quota)
+    signal?.throwIfAborted()
     const { turn, generation } = this.#admit(
       scope,
       input.turnId,
       access.principalId
     )
-    const deadline = this.#deadline(signal)
+    const deadline = this.#deadline()
     try {
       const at = Date.now()
       const handle = await this.#startNative(scope, input, stage, deadline)
