@@ -370,7 +370,7 @@ describe("projectHermesToolOutcome", () => {
     })
   })
 
-  it("projects recorded question answers and redacts a credential-shaped answer", () => {
+  it("projects recorded question answers", () => {
     expect(
       projectHermesToolOutcome("call-6", "question", {
         responses: [
@@ -383,19 +383,6 @@ describe("projectHermesToolOutcome", () => {
     ).toEqual({
       status: "answered",
       responses: [{ question: "Where do you live?", answers: ["Jerusalem"] }],
-    })
-    expect(
-      projectHermesToolOutcome("call-7", "question", {
-        responses: [
-          {
-            question: "Which token?",
-            user_response: JSON.stringify(["api_key=sk-live-abcdef"]),
-          },
-        ],
-      }).result
-    ).toEqual({
-      status: "cancelled",
-      responses: [{ question: "Which token?", answers: [] }],
     })
   })
 

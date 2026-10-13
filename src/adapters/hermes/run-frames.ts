@@ -20,7 +20,6 @@ import {
   utf8BytesWithin,
 } from "./native"
 import { parseJsonOrValue } from "../todos"
-import { containsCredential } from "../../redaction"
 import { publicPath } from "./tool-data"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
@@ -230,9 +229,9 @@ function count(value: unknown) {
     : undefined
 }
 
+/** A subagent's goal or summary, bounded; the credentials middleware reads it. */
 function publicProse(value: unknown) {
-  const text = boundedText(value)
-  return text && !containsCredential(text) ? text : undefined
+  return boundedText(value)
 }
 
 function publicPaths(value: unknown) {

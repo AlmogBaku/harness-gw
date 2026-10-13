@@ -17,7 +17,6 @@ import {
   type ToolDiff,
   type ToolLocation,
 } from "../../core/events"
-import { containsCredential } from "../../redaction"
 
 import {
   boundedGraphBytes,
@@ -81,17 +80,13 @@ export function hermesToolKind(canonicalName: string) {
 const FILE_TOOLS = new Set(["read_file", "write_file", "patch"])
 
 /**
- * An absolute path that may leave the adapter: any one carrying no credential,
- * since masked it would no longer name the file. Tool data reaches only the
+ * An absolute path that may leave the adapter. Tool data reaches only the
  * operator listener, which sees the Agent's real paths; the guest projection
- * drops tool calls before a path could reach it.
+ * drops tool calls before a path could reach it, and the credentials
+ * middleware drops one that carries a credential.
  */
 export function publicPath(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.startsWith("/") &&
-    !containsCredential(value)
-  )
+  return typeof value === "string" && value.startsWith("/")
 }
 
 /** The file a projected file-tool call touches, when its path is public. */
@@ -117,7 +112,7 @@ function pathList(value: unknown): string[] | undefined {
  * then reports every file it touched as modified (`tools/file_tools.py:1002`),
  * so a file only modified is one named in neither. The changes travel only
  * when every file they name is public, and the diff with them only when it is
- * a git patch carrying no credential.
+ * a git patch.
  */
 export function hermesToolDiffs(
   canonicalName: string,
@@ -153,8 +148,7 @@ export function hermesToolDiffs(
 function gitPatch(diff: unknown) {
   return typeof diff === "string" &&
     diff.startsWith("--- a/") &&
-    !/^# /mu.test(diff) &&
-    !containsCredential(diff)
+    !/^# /mu.test(diff)
     ? diff
     : undefined
 }
@@ -511,17 +505,11 @@ const MAX_PUBLIC_ANSWER_LENGTH = 4_000
 function publicAnswer(value: unknown) {
   return typeof value === "string" &&
     value.length > 0 &&
-    value.length <= MAX_PUBLIC_ANSWER_LENGTH &&
-    !containsCredential(value)
+    value.length <= MAX_PUBLIC_ANSWER_LENGTH
     ? value
     : undefined
 }
 
-/**
- * Projects the answers Hermes recorded for a settled clarification. An answer
- * that carries a credential is dropped rather than rewritten, so a cancelled
- * and a redacted clarification read alike.
- */
 /**
  * Hermes records a multi-select answer as a list and a single one as text; an
  * older gateway encoded the list as JSON text. Anything else recorded nothing.

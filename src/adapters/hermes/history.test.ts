@@ -1037,25 +1037,18 @@ describe("server-side Hermes history projection", () => {
   it("keeps a stored edit's kind, location, and diff", () => {
     const path = "/home/operator/project/notes.md"
     const diff = `--- a${path}\n+++ b${path}\n@@ -1 +1 @@\n-old\n+new\n`
-    const secret = "/workspace/token=ghp_leaked.md"
     const messages = projectHermesHistory([
       assistantToolCall("a1", [
         { toolCallId: "c1", name: "patch", args: { path, old_string: "old" } },
-        { toolCallId: "c2", name: "write_file", args: { path: secret } },
       ]),
       toolRow("c1", "patch", { success: true, diff, files_modified: [path] }),
-      toolRow("c2", "write_file", { files_modified: [secret] }),
     ])
 
-    const [edit, write] = messages[0]?.content ?? []
-    expect(edit).toMatchObject({
+    expect(messages[0]?.content[0]).toMatchObject({
       kind: ToolKind.Edit,
       locations: [{ path }],
       diffs: [{ changes: [{ operation: "modify", path }], patch: diff }],
     })
-    expect(write).toMatchObject({ kind: ToolKind.Edit })
-    expect(write).not.toHaveProperty("locations")
-    expect(write).not.toHaveProperty("diffs")
   })
 
   it("stops a stored turn the way its newest row finished", () => {

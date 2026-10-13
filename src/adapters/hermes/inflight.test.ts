@@ -87,22 +87,6 @@ describe("Hermes retained turn", () => {
     })
   })
 
-  it("drops a retained cause that carries a credential-shaped value", () => {
-    const restored = restore({
-      assistant: "",
-      status: "error",
-      streaming: false,
-      error: "provider rejected authorization=Bearer sk-live-native-secret",
-    })
-
-    expect(JSON.stringify(restored)).not.toContain("sk-live-native-secret")
-    expect(restored?.status).toEqual({
-      type: "incomplete",
-      reason: "error",
-      error: "Hermes could not complete this turn.",
-    })
-  })
-
   it("truncates retained text to the protocol's character bound", () => {
     // Inside the native byte bound, past the protocol's 1,000,000 characters.
     const assistant = "a".repeat(1_048_000)

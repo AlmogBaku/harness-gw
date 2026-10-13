@@ -19,7 +19,6 @@ import {
 } from "../../../protocol/acp"
 import type { AcpOutbound, Built, TranslateContext } from "../types"
 import { StopReason, type ToolDiff } from "../../core/events"
-import { maskCredentials, maskJson } from "../../redaction"
 
 /**
  * The `session/update` values the gateway emits, each carrying the `_meta.hgw`
@@ -118,88 +117,6 @@ export function artifactOutbound(
 
 type ToolMeta = Omit<ExtraMeta<typeof HgwToolCallMetaSchema>, "messageId">
 
-/**
- * The most text one tool field carries, which is also the most a browser keeps
- * of a terminal: a longer one is cut before it is masked, so one huge output
- * costs the masker no more than this.
- */
-const MAX_TOOL_TEXT = 262_144
-
-/** The first, or for a terminal the last, `MAX_TOOL_TEXT` units of `text`. */
-function bounded(text: string, keep: "head" | "tail") {
-  if (text.length <= MAX_TOOL_TEXT) return text
-  if (keep === "head") return text.slice(0, MAX_TOOL_TEXT)
-  // A tail cut inside a word would leave a name's or a key's end unread.
-  const tail = text.slice(-MAX_TOOL_TEXT)
-  return tail.slice(tail.search(/\s/u) + 1)
-}
-
-/** Text that reads as a JSON object, array, or string, parsed; anything else `undefined`. */
-function parsedJson(text: string): unknown {
-  if (!/^\s*[[{"]/u.test(text)) return undefined
-  try {
-    return JSON.parse(text) as unknown
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * A tool's text as it may leave the gateway, for every runtime alike. JSON is
- * masked by key and value and sent as written when nothing in it was a
- * credential; any other text is masked broadly. Either is then bounded.
- */
-export function maskedToolText(text: string, keep: "head" | "tail" = "head") {
-  const json = parsedJson(text)
-  if (json === undefined) return maskCredentials(bounded(text, keep))
-  const masked = maskJson(json)
-  return bounded(masked === json ? text : JSON.stringify(masked), keep)
-}
-
-/** A tool call update's every field a reader sees, masked as tool data. */
-function maskedCall(call: Omit<Built<ToolCallUpdate>, "_meta">) {
-  const { title, rawInput, rawOutput, content } = call
-  return {
-    ...call,
-    ...(typeof title === "string" ? { title: maskedToolText(title) } : {}),
-    ...(rawInput === undefined ? {} : { rawInput: maskJson(rawInput) }),
-    ...(rawOutput === undefined
-      ? {}
-      : {
-          rawOutput:
-            typeof rawOutput === "string"
-              ? maskedToolText(rawOutput)
-              : maskJson(rawOutput),
-        }),
-    ...(content
-      ? {
-          content: content.map((item) =>
-            item.type === "content" ? maskedStreamed(item) : item
-          ),
-        }
-      : {}),
-  }
-}
-
-/** A tool call's meta with its arguments text masked. */
-function maskedMeta(extra: ToolMeta | undefined) {
-  if (!extra) return {}
-  const { argsText, argsTextDelta } = extra
-  return {
-    ...extra,
-    ...(argsText === undefined ? {} : { argsText: maskedToolText(argsText) }),
-    ...(argsTextDelta === undefined
-      ? {}
-      : { argsTextDelta: maskedToolText(argsTextDelta) }),
-  }
-}
-
-/**
- * One tool call update, live or replayed, for any runtime: every text a reader
- * sees is masked here, the one place each runtime's tool data passes on its
- * way to a browser. A path or a patch a mask would break is the adapter's to
- * drop, since only it knows which of its fields name a file.
- */
 export function toolOutbound(
   context: TranslateContext,
   messageId: string,
@@ -208,31 +125,9 @@ export function toolOutbound(
 ): AcpOutbound {
   return update({
     sessionUpdate: "tool_call_update",
-    ...maskedCall(call),
-    _meta: {
-      [HGW_META_KEY]: { ...turnMeta(context), messageId, ...maskedMeta(extra) },
-    },
+    ...call,
+    _meta: { [HGW_META_KEY]: { ...turnMeta(context), messageId, ...extra } },
   })
-}
-
-/** What a call streams into its content: text, or the terminal it runs. */
-type StreamedContent = Built<
-  Extract<ToolCallContent, { type: "content" } | { type: "terminal" }>
->
-
-/** A streamed item with its text masked; a terminal carries none. */
-function maskedStreamed<Content extends StreamedContent>(
-  content: Content
-): Content {
-  return content.type === "content" && content.content.type === "text"
-    ? {
-        ...content,
-        content: {
-          ...content.content,
-          text: maskedToolText(content.content.text),
-        },
-      }
-    : content
 }
 
 /** Appends one item to a call's content; `tool_call_update` replaces it all. */
@@ -240,12 +135,12 @@ export function toolContentOutbound(
   context: TranslateContext,
   messageId: string,
   toolCallId: string,
-  content: StreamedContent
+  content: Built<ToolCallContent>
 ): AcpOutbound {
   return update({
     sessionUpdate: "tool_call_content_chunk",
     toolCallId,
-    content: maskedStreamed(content),
+    content,
     _meta: { [HGW_META_KEY]: { ...turnMeta(context), messageId } },
   })
 }
@@ -280,7 +175,7 @@ export const ACP_STOP_REASON = {
 } as const satisfies Record<StopReason, string>
 
 /** A call's text output as ACP tool content. */
-export function textContent(text: string): StreamedContent {
+export function textContent(text: string): Built<ToolCallContent> {
   return { type: "content", content: { type: "text", text } }
 }
 

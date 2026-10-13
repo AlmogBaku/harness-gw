@@ -17,8 +17,7 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
-import { distinctChoices, maskRequestText } from "../../core/request-text"
-import { maskJson, type MaskStrength } from "../../redaction"
+import { askText, distinctChoices } from "../../core/request-text"
 import type {
   AcpOutbound,
   PendingRequestToOutbound,
@@ -76,25 +75,20 @@ function permissionOptions(request: PendingRequest): PermissionOption[] {
   })
 }
 
-/** A request's own message as the card shows it: whole, masked, in order. */
-function shownMessage(request: PendingRequest, strength: MaskStrength) {
-  return request.message === undefined
-    ? undefined
-    : maskRequestText(request.message, strength)
+/** A request's own message as the card shows it: whole and in order. */
+function shownMessage(request: PendingRequest) {
+  return request.message === undefined ? undefined : askText(request.message)
 }
 
-/**
- * A permission is masked narrowly: the operator approves what it would run,
- * so its shell syntax stays readable.
- */
+/** A permission as the operator approves it: exactly what it would run. */
 function permissionOutbound(request: PendingRequest): RequestOutbound {
   // The schema's `title` names the operation and the message explains it; a
   // request with only one of the two titles itself with it.
   const label = record(request.responseSchema)?.title
-  const words = shownMessage(request, "narrow")
+  const words = shownMessage(request)
   const title =
     typeof label === "string" && label
-      ? maskRequestText(label, "narrow")
+      ? askText(label)
       : (words ?? "Permission required")
   return {
     kind: "request-permission",
@@ -133,25 +127,22 @@ function pendingQuestionsOf(request: PendingRequest): PendingQuestion[] {
 
 /** A question's choices as the card shows them, in the runtime's order. */
 function shownChoices(question: PendingQuestion) {
-  return distinctChoices(
-    question.choices.map((choice) => maskRequestText(choice, "broad"))
-  )
+  return distinctChoices(question.choices.map(askText))
 }
 
 /**
- * A question is masked broadly, its header, prompt, and choices alike. A
- * header is the provider's short label and only that: a provider without one
+ * A question as the one asked reads it, its header, prompt, and choices as
+ * written. A header is the provider's short label and only that: a provider without one
  * leaves it unset rather than have the gateway invent English copy the browser
  * would show a Hebrew reader, and the browser labels that question by its place.
  */
 function questionsOf(request: PendingRequest): HgwQuestion[] {
   return pendingQuestionsOf(request).map((question) => ({
     ...(question.label
-      ? { header: maskRequestText(question.label, "broad").slice(0, 256) }
+      ? { header: askText(question.label).slice(0, 256) }
       : {}),
-    prompt: maskRequestText(
-      question.text ?? question.label ?? request.message ?? "Question",
-      "broad"
+    prompt: askText(
+      question.text ?? question.label ?? request.message ?? "Question"
     ),
     options: shownChoices(question).map((label) => ({ label })),
     multiple: question.multiple,
@@ -191,7 +182,7 @@ function elicitationOutbound(request: PendingRequest): RequestOutbound {
   const questions = questionsOf(request)
   const form: ElicitationForm = {
     mode: "form",
-    message: shownMessage(request, "broad") ?? "Input required",
+    message: shownMessage(request) ?? "Input required",
     requestedSchema: {
       type: "object",
       properties: Object.fromEntries(
@@ -301,12 +292,11 @@ export function answeredQuestionOutbound(
     sessionUpdate: "tool_call_update",
     toolCallId,
     status: "completed",
-    // The runtime got the answers as typed; every member reads them masked.
-    rawOutput: maskJson({
+    rawOutput: {
       status: responses.some(({ answers }) => answers.length)
         ? "answered"
         : "cancelled",
       responses,
-    }),
+    },
   })
 }

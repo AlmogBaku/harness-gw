@@ -1,3 +1,4 @@
+import { createCredentialsMiddleware } from "../../core/credentials-middleware"
 import type { Middleware } from "../../core/member"
 import { createCommandsMiddleware } from "./commands"
 import { createFeedsMiddleware } from "./feeds"
@@ -32,7 +33,9 @@ export type GuestMiddlewareOptions = GuestScopeOptions & {
 /**
  * A guest member's stack, outermost first. A refused command never reaches
  * scope, so a refused first Send never creates the conversation, and the
- * commands layer projects the commands event last on the way out.
+ * commands layer projects the commands event last on the way out. Credentials
+ * sit innermost: every event is masked before another layer reads it, and an
+ * answer reaches the runtime as its own choice.
  */
 export function createGuestMiddleware(
   options: GuestMiddlewareOptions
@@ -45,5 +48,6 @@ export function createGuestMiddleware(
     createPermissionsMiddleware({ principalId: options.grant.principalId }),
     createFeedsMiddleware(),
     createQuotaMiddleware({ limit: options.guestActiveExecutions }),
+    createCredentialsMiddleware({ guest: true }),
   ]
 }
