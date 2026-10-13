@@ -35,8 +35,6 @@ runServerRuntimeContract(
     gaps: {
       typedMessageFields:
         "capability: OpenClaw history carries no correction or turn error code",
-      childrenStayUnlisted:
-        "pending: the OpenClaw lane filters children on spawnDepth and spawnedBy",
       compactionStoredAsRow:
         "out of scope: OpenClaw compaction replay is ALM-42",
     },

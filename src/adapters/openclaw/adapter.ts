@@ -283,6 +283,20 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#history.history(agentId, providerSessionId, limit, offset)
   }
 
+  /** A child Session's whole transcript, once its row names the Session. */
+  async childHistory(
+    agentId: string,
+    providerSessionId: string,
+    childSessionId: string
+  ) {
+    await this.#start()
+    return this.#history.childHistory(
+      agentId,
+      providerSessionId,
+      childSessionId
+    )
+  }
+
   async getSession(agentId: string, providerSessionId: string) {
     await this.#start()
     return this.#workspace.getSession(agentId, providerSessionId)

@@ -81,6 +81,26 @@ export function keyAgentId(key: string) {
 }
 
 /**
+ * Why a child's own `sessions.list` row does not confirm it as a child
+ * `parentKey`'s call spawned, under `agentId`, or `undefined` when it does:
+ * its `spawnedBy` names that parent, its Agent is that one, and it is no
+ * deeper than OpenClaw nests. Such a row is a spawn's, so no top-level
+ * Session has its key. `depth` is how deep it is when its row does not say.
+ */
+export function childRowRefusal(
+  row: Readonly<{ spawnedBy?: string; agentId?: string; spawnDepth?: number }>,
+  parentKey: string,
+  agentId: string,
+  depth: number
+) {
+  if (row.spawnedBy !== parentKey) return "child-foreign-parent"
+  if (row.agentId !== undefined && row.agentId !== agentId)
+    return "child-foreign-agent"
+  if ((row.spawnDepth ?? depth) > MAX_SPAWN_DEPTH) return "child-too-deep"
+  return undefined
+}
+
+/**
  * What a child's announcement tells of it, from the arguments of the call
  * that spawned it: its label or task as its title, its task as its goal, and
  * the model it was asked to run on. The credentials middleware masks them.

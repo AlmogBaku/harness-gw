@@ -45,8 +45,8 @@ import { createLink, type LinkOptions } from "../../core/link"
 import { defaultClock } from "../../../lifecycle"
 import type { OpenClawMcpToolNames } from "./mcp-tool-names"
 import {
+  childRowRefusal,
   keyAgentId,
-  MAX_SPAWN_DEPTH,
   SPAWN_TOOL,
   spawnedChild,
   spawnFacts,
@@ -2790,11 +2790,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     } catch {
       return drop("child-unread")
     }
-    if (row.spawnedBy !== parent.key) return drop("child-foreign-parent")
-    if (row.agentId !== undefined && row.agentId !== agentId)
-      return drop("child-foreign-agent")
     const depth = row.spawnDepth ?? parent.depth + 1
-    if (depth > MAX_SPAWN_DEPTH) return drop("child-too-deep")
+    const refusal = childRowRefusal(row, parent.key, agentId, depth)
+    if (refusal) return drop(refusal)
     if (active.terminal || active.children.has(key)) return undefined
     const child: ChildRun = {
       key,

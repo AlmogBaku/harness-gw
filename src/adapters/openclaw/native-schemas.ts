@@ -75,6 +75,8 @@ export type OpenClawSession = Readonly<{
   spawnedBy?: string
   /** How many spawns deep the Session is; a top-level Session is at 0. */
   spawnDepth?: number
+  /** `SessionRowSchema.status`: how the Session's last run stands. */
+  status?: string
 }>
 
 /**
@@ -554,6 +556,7 @@ export function parseOpenClawSession(value: unknown): OpenClawSession {
     ...(value.spawnDepth === undefined
       ? {}
       : { spawnDepth: value.spawnDepth as number }),
+    ...(string(value.status, 64) ? { status: value.status as string } : {}),
   }
 }
 
