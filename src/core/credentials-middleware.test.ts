@@ -8,6 +8,7 @@ import {
   ReplyStatus,
   TurnEventKind,
   type ChildTurnEvent,
+  type OwnTurnEvent,
   type PendingRequest,
   type TurnEvent,
 } from "./events"
@@ -23,11 +24,11 @@ const guest = [createCredentialsMiddleware({ guest: true })]
 const decline = () => undefined
 
 /** One turn event as a member is shown it through `stack`. */
-function shownTurn(event: TurnEvent, stack = operator) {
+function shownTurn(event: TurnEvent, stack = operator, sessionId = "s1") {
   const shown = runEvents(
     stack,
     {
-      sessionId: "s1",
+      sessionId,
       kind: "turn",
       stream: { turnId: "turn-1", replayedCorrections: 0, dropped: false },
       sequence: 1,
@@ -354,6 +355,160 @@ describe("credentials middleware: questions", () => {
 
     expect(shown(asked)).toEqual(asked)
     expect(shown(answered)).toEqual(answered)
+  })
+
+  // The tool that asked is part of the question: its call carries the operator's answers.
+  // A child asks its questions through the same tool, so its call is part of
+  // the question too; the child's other tool data is masked as any is.
+  it("shows the operator a child Session's question tool call as written, masking its other calls", () => {
+    const stack = [createCredentialsMiddleware()]
+    const shownChild = (event: OwnTurnEvent) => {
+      const shown = runEvents(
+        stack,
+        {
+          sessionId: "child-1",
+          kind: "child",
+          parentSessionId: "s1",
+          stream: { turnId: "turn-1", replayedCorrections: 0, dropped: false },
+          sequence: 1,
+          event: {
+            kind: TurnEventKind.ChildSessionEvent,
+            childSessionId: "child-1",
+            event,
+          },
+        },
+        { decline }
+      )
+      return shown?.kind === "child" &&
+        shown.event.kind === TurnEventKind.ChildSessionEvent
+        ? shown.event.event
+        : undefined
+    }
+    const asked: OwnTurnEvent[] = [
+      {
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "q1",
+        title: "question",
+        name: "question",
+      },
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: "q1",
+        delta: JSON.stringify({ question: `Use ${assigned("token")}?` }),
+      },
+    ]
+    const other: OwnTurnEvent = {
+      kind: TurnEventKind.ToolCallFinished,
+      toolCallId: "c2",
+      output: `env: ${assigned("token")}`,
+      failed: false,
+    }
+
+    expect(asked.map(shownChild)).toEqual(asked)
+    expect(JSON.stringify(shownChild(other))).not.toContain(SECRET)
+  })
+
+  it("shows the operator the question tool's call as written, live and replayed, and a guest it masked", () => {
+    const args = { question: `Use ${assigned("token")}?` }
+    const result = { status: "answered", answers: [assigned("token")] }
+    const live: TurnEvent[] = [
+      {
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "q1",
+        title: "question",
+        name: "question",
+      },
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: "q1",
+        delta: JSON.stringify(args),
+      },
+      {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "q1",
+        output: JSON.stringify(result),
+        failed: false,
+      },
+    ]
+    const history: MemberEvent = {
+      sessionId: "s1",
+      kind: "history",
+      sequence: 0,
+      page: {
+        sessionId: "s1",
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            createdAt: "2026-09-19T09:00:01.000Z",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "q1",
+                toolName: "question",
+                args,
+                argsText: JSON.stringify(args),
+                result,
+              },
+            ],
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      },
+    }
+
+    expect(live.map((event) => shownTurn(event))).toEqual(live)
+    expect(shown(history)).toEqual(history)
+    expect(
+      JSON.stringify([
+        live.map((event) => shownTurn(event, guest)),
+        shown(history, guest),
+      ])
+    ).not.toContain(SECRET)
+  })
+
+  // Each eviction masks: a call forgotten too early shows its answers masked, never a credential.
+  it("forgets a Session's question calls when its turn ends and the oldest past ten, never another Session's", () => {
+    const stack = [createCredentialsMiddleware()]
+    const ask = (sessionId: string, toolCallId: string) =>
+      shownTurn(
+        {
+          kind: TurnEventKind.ToolCallStarted,
+          toolCallId,
+          title: "question",
+          name: "question",
+        },
+        stack,
+        sessionId
+      )
+    const answered = (sessionId: string, toolCallId: string) =>
+      JSON.stringify(
+        shownTurn(
+          {
+            kind: TurnEventKind.ToolCallFinished,
+            toolCallId,
+            output: assigned("token"),
+            failed: false,
+          },
+          stack,
+          sessionId
+        )
+      ).includes(SECRET)
+
+    ask("s2", "kept")
+    for (let index = 0; index <= 10; index += 1) ask("s1", `q${index}`)
+    ask("s3", "ended")
+    shownTurn({ kind: TurnEventKind.TurnEnded }, stack, "s3")
+
+    expect([
+      answered("s1", "q0"),
+      answered("s1", "q1"),
+      answered("s2", "kept"),
+      answered("s3", "ended"),
+    ]).toEqual([false, true, true, false])
   })
 
   it("shows a guest a question masked, its choices still telling which", () => {

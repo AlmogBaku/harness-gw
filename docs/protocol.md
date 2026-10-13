@@ -583,8 +583,10 @@ or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
 
 The ask card is not masked: a question and a permission reach the operator as
 the runtime wrote them, since the one asked must read exactly what they answer
-or approve, and the answers the operator gave are echoed as given. A guest
-never sees a permission. The credentials middleware
+or approve, and the answers the operator gave are echoed as given. The call of
+the tool that asked (canonical name `question`, Hermes's `clarify`) is part of
+the question, so it reaches the operator as written too, live and replayed. A
+guest never sees a permission. The credentials middleware
 (`src/core/credentials-middleware.ts`), the innermost layer of every member's
 stack, masks what passes a member; Activity and Web Push, which leave the
 conversation, and the MCP App view route, which no member's stack carries,
@@ -745,7 +747,8 @@ before its announcement.
 A guest is shown nothing of a child: no announcement, event, question or
 approval. A child's approval or question in a turn the guest started waits
 for an operator, who sees it on the child. Child reports and events pass the
-credentials middleware like any turn's tool data.
+credentials middleware like any turn's tool data, and a child's question tool
+call reaches the operator as written, as its parent's does.
 
 ## Interactions: permission and elicitation
 
