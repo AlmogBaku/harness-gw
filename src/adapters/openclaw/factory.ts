@@ -13,6 +13,7 @@ import { coordinatedRuntime } from "../create-coordinator"
 import type { RuntimeServices } from "../create-runtime"
 import type { ServerLink } from "../../core/link"
 import type { RuntimeInstance } from "../../core/runtime"
+import { withHistoryImageArtifacts } from "../../core/history-image-artifacts"
 import { withMcpApps } from "../../mcp-apps/annotate"
 import type { CredentialValues } from "../../redaction"
 import { readSecretFile } from "../../secrets"
@@ -224,31 +225,35 @@ export function composeOpenClawRuntime({
     mcpToolNames,
     watch: { publicError: openClawPublicError, upstream: client.link, logger },
   })
-  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
+  // Wrapped before the coordinator, which runs turns through `runtime.turns`,
+  // and stored images innermost, so reading one back skips the view lookups.
   const runtime = withMcpApps(
-    new OpenClawServerAdapter({
-      client,
-      turns,
-      gatewayOrigin: gatewayHttpOrigin(baseUrl),
-      // Read for each file through `credentials`, which registers what it
-      // reads with the log masker.
-      deviceToken: async () => (await credentials()).deviceToken,
-      mcpToolNames,
-      ...(mediaArtifacts === undefined ? {} : { mediaArtifacts }),
-      subscribeSession: async (agentId, sessionKey, onInvalidate) => {
-        const lease = await subscriptions!.acquire(
-          { agentId, sessionKey },
-          onInvalidate
-        )
-        return () => {
-          lease
-            .release()
-            .catch((err: unknown) =>
-              logger.warn({ err }, "openclaw.history.release_failed")
-            )
-        }
-      },
-    })
+    withHistoryImageArtifacts(
+      new OpenClawServerAdapter({
+        client,
+        turns,
+        logger,
+        gatewayOrigin: gatewayHttpOrigin(baseUrl),
+        // Read for each file through `credentials`, which registers what it
+        // reads with the log masker.
+        deviceToken: async () => (await credentials()).deviceToken,
+        mcpToolNames,
+        ...(mediaArtifacts === undefined ? {} : { mediaArtifacts }),
+        subscribeSession: async (agentId, sessionKey, onInvalidate) => {
+          const lease = await subscriptions!.acquire(
+            { agentId, sessionKey },
+            onInvalidate
+          )
+          return () => {
+            lease
+              .release()
+              .catch((err: unknown) =>
+                logger.warn({ err }, "openclaw.history.release_failed")
+              )
+          }
+        },
+      })
+    )
   )
   return {
     runtime,

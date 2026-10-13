@@ -1,3 +1,4 @@
+import type { Logger } from "../../../lifecycle"
 import type {
   AgentUpdatePatch,
   AgentUpdateResponse,
@@ -145,6 +146,8 @@ type OpenClawServerAdapterOptions = Readonly<{
   mcpToolNames?: OpenClawMcpToolNames
   /** `runtime.mediaArtifacts`; on unless the deployment turns it off. */
   mediaArtifacts?: boolean
+  /** Where a row or an Agent left out of a list is told. */
+  logger?: Logger
 }>
 
 /**
@@ -173,6 +176,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
     this.#workspace = createOpenClawWorkspace({
       client: options.client,
       hiddenAgentIds: options.hiddenAgentIds,
+      ...(options.logger ? { log: options.logger } : {}),
     })
     this.#history = createOpenClawHistory({
       client: options.client,

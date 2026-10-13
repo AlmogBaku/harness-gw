@@ -587,6 +587,17 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       })
     },
 
+    /** A prompt that inlines the image it attached, as a vision turn stores it. */
+    storeImagePrompt(dataUrl: string) {
+      store({
+        role: "user",
+        content: JSON.stringify([
+          { type: "text", text: "What is in this image?" },
+          { type: "image_url", image_url: { url: dataUrl } },
+        ]),
+      })
+    },
+
     async progress() {
       startStreaming()
       emit(turn.delta("Contract reply"))

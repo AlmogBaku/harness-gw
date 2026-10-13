@@ -37,6 +37,7 @@ import {
   HGW_AUTH_METHOD_INVITE,
   HGW_EXTENSION_VERSION,
   HGW_JSONRPC_ERRORS,
+  HGW_MAX_FRAME_BYTES,
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_BEFORE,
@@ -68,7 +69,7 @@ import {
   STABLE_AFTER_MS,
   type RequestTier,
 } from "./limits"
-import { loggedStream } from "./log"
+import { callEach, loggedId, loggedStream } from "./log"
 import type {
   AcpConnection,
   AcpConnectionOutage,
@@ -576,6 +577,57 @@ export function sessionMachine(
     })
 }
 
+/**
+ * The entries of a list answer, each read on its own: one this client cannot
+ * read is left out, and `skipped` hears it. Entries none of which can be read
+ * reject as a whole, since that is a gateway this client does not understand
+ * rather than one bad entry.
+ */
+function readEach<T>(
+  entries: readonly unknown[],
+  schema: z.ZodType<T>,
+  skipped: (entry: unknown) => void
+): T[] {
+  const kept: T[] = []
+  let unreadable: unknown
+  for (const entry of entries) {
+    const read = schema.safeParse(entry)
+    if (read.success) kept.push(read.data)
+    else {
+      unreadable = read.error
+      skipped(entry)
+    }
+  }
+  if (entries.length > 0 && kept.length === 0) throw unreadable
+  return kept
+}
+
+const AgentsListEntriesSchema = HgwAgentsListResponseSchema.extend({
+  agents: z.array(z.unknown()).max(1_000),
+})
+const SessionSearchEntriesSchema = HgwSessionSearchResponseSchema.extend({
+  sessions: z.array(z.unknown()),
+})
+
+/** Room a request's JSON-RPC envelope takes in its frame beside the params. */
+const FRAME_ENVELOPE_BYTES = 1_024
+const frameEncoder = new TextEncoder()
+
+/**
+ * Refuses params whose frame the gateway's socket would not take. An
+ * oversized frame closes the tab's one socket, and the transport would send
+ * the same frame again on every reconnect, so one large prompt would take
+ * every Session down with it; refused here, it costs only its own call.
+ */
+function assertFrameFits(params: unknown) {
+  const bytes = frameEncoder.encode(JSON.stringify(params)).byteLength
+  if (bytes > HGW_MAX_FRAME_BYTES - FRAME_ENVELOPE_BYTES)
+    throw new RequestError(
+      HGW_JSONRPC_ERRORS.requestTooLarge,
+      "Request too large to send"
+    )
+}
+
 export function createAcpConnection(
   options: AcpConnectionOptions
 ): AcpConnection {
@@ -669,20 +721,13 @@ export function createAcpConnection(
   function setStatus(next: AcpConnectionStatus) {
     if (status === next) return
     status = next
-    for (const listener of statusListeners) listener(next)
+    callEach(statusListeners, logger, "acp.listener.failed", next)
   }
 
   function setOutage(next: AcpConnectionOutage | undefined) {
     if (outage === next) return
     outage = next
-    for (const listener of outageListeners) listener(next)
-  }
-
-  /** Ends the outage once the transport is ready and no Session is joining. */
-  function settleOutage() {
-    if (status !== "ready") return
-    for (const open of sessions.values()) if (open.state === "joining") return
-    setOutage(undefined)
+    callEach(outageListeners, logger, "acp.listener.failed", next)
   }
 
   function emitPending(request: AcpPendingRequest) {
@@ -711,8 +756,12 @@ export function createAcpConnection(
     }, LIVENESS_SILENCE_MS)
   }
 
+  /** When the gateway was last heard from, on any transport. */
+  let lastInboundAt = Number.NEGATIVE_INFINITY
+
   /** Called on every inbound frame; resets the silence window. */
   function onInbound() {
+    lastInboundAt = clock.now()
     armSilenceTimer()
   }
 
@@ -803,7 +852,13 @@ export function createAcpConnection(
         }
       if (open.replaying) open.replaying.delivered = true
       for (const { listener } of open.listeners)
-        listener.update?.(params.update, meta)
+        callEach(
+          listener.update ? [listener.update] : [],
+          logger,
+          "acp.listener.failed",
+          params.update,
+          meta
+        )
     })
     .onRequest(methods.client.session.requestPermission, ({ params, signal }) =>
       permissionRequest(params, signal)
@@ -814,8 +869,12 @@ export function createAcpConnection(
   for (const [method, parser] of Object.entries(NOTIFICATION_PARSERS))
     app.onNotification(method, parser, ({ params }) => {
       if (method === HGW_METHODS.notify.error) noticeGone(params)
-      for (const listener of notificationListeners.get(method) ?? [])
-        listener(params)
+      callEach(
+        notificationListeners.get(method) ?? [],
+        logger,
+        "acp.listener.failed",
+        params
+      )
     })
 
   /** An opened Session the proxy reports as not found is gone for good. */
@@ -861,14 +920,18 @@ export function createAcpConnection(
     parent?: AbortSignal
   ) {
     const deadline = new Deadline(REQUEST_DEADLINE_MS[tier], clock, parent)
+    const sentAt = clock.now()
     try {
       return await deadline.run((cancellationSignal) =>
         send(connection.agent, { cancellationSignal })
       )
     } catch (error) {
       if (deadline.signal.aborted && !parent?.aborted) {
-        if (tier === "probe") connection.close(error)
-        else sendLivenessProbeAsync()
+        // An unanswered probe proves a dead transport only if nothing else
+        // arrived either: frames still coming mean its reply is queued
+        // behind them, say one Session's long replay.
+        if (tier !== "probe") sendLivenessProbeAsync()
+        else if (lastInboundAt <= sentAt) connection.close(error)
       }
       throw error
     }
@@ -1049,12 +1112,25 @@ export function createAcpConnection(
     }
   }
 
+  /** The Agent catalog, an entry at a time: one bad entry costs that Agent. */
   async function listAgents() {
-    return HgwAgentsListResponseSchema.parse(
+    const response = AgentsListEntriesSchema.parse(
       await request("short", (agent, options) =>
         agent.request(HGW_METHODS.agents.list, undefined, options)
       )
     )
+    return {
+      ...response,
+      agents: readEach(
+        response.agents,
+        HgwAgentsListResponseSchema.shape.agents.element,
+        (entry) =>
+          logger.warn(
+            { id: loggedId(entry, "summary", "id") },
+            "agents.entry_skipped"
+          )
+      ),
+    }
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */
@@ -1112,8 +1188,13 @@ export function createAcpConnection(
     if (next === "joined") open.waiters?.resolve()
     if (failure !== undefined) open.waiters?.reject(failure)
     if (next === "joined" || failure !== undefined) open.waiters = undefined
-    for (const { listener } of open.listeners) listener.state?.(next)
-    settleOutage()
+    for (const { listener } of open.listeners)
+      callEach(
+        listener.state ? [listener.state] : [],
+        logger,
+        "acp.listener.failed",
+        next
+      )
   }
 
   function subscribe(sessionId: string, listener: AcpSessionListener) {
@@ -1185,7 +1266,6 @@ export function createAcpConnection(
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
-    settleOutage()
     if (open.state === "gone") return
     request("short", (agent, options) =>
       agent.request(HGW_METHODS.session.part, { sessionId }, options)
@@ -1244,6 +1324,9 @@ export function createAcpConnection(
       sendLivenessProbeAsync()
     }
     joinable = true
+    // The connection is back. Each Session's rejoin is its own state, so one
+    // slow resume holds up no other Session's view of the connection.
+    setOutage(undefined)
     const opened = [...sessions.keys()]
     for (const open of sessions.values())
       open.owner?.actor.send({ type: "ready" })
@@ -1304,7 +1387,6 @@ export function createAcpConnection(
     closeTransport: () => live?.connection.close(),
     markReady() {
       setStatus("ready")
-      settleOutage()
     },
     lose(next) {
       recovering = true
@@ -1444,8 +1526,9 @@ export function createAcpConnection(
       }
     },
 
+    /** Search results, one at a time: one bad result costs that result. */
     async searchSessions(meta) {
-      return HgwSessionSearchResponseSchema.parse(
+      const response = SessionSearchEntriesSchema.parse(
         await request("short", (agent, options) =>
           agent.request(
             HGW_METHODS.sessions.search,
@@ -1456,6 +1539,18 @@ export function createAcpConnection(
           )
         )
       )
+      return {
+        ...response,
+        sessions: readEach(
+          response.sessions,
+          HgwSessionSearchResponseSchema.shape.sessions.element,
+          (entry) =>
+            logger.warn(
+              { id: loggedId(entry, "sessionId") },
+              "sessions.result_skipped"
+            )
+        ),
+      }
     },
 
     subscribe,
@@ -1466,12 +1561,14 @@ export function createAcpConnection(
     history: (sessionId) => sessions.get(sessionId)?.history,
 
     async prompt(sessionId, blocks: ContentBlock[], meta) {
+      const params = {
+        sessionId,
+        prompt: blocks,
+        _meta: { [HGW_META_KEY]: meta },
+      }
+      assertFrameFits(params)
       const response = await write(sessionId, "long", (agent, options) =>
-        agent.request(
-          methods.agent.session.prompt,
-          { sessionId, prompt: blocks, _meta: { [HGW_META_KEY]: meta } },
-          options
-        )
+        agent.request(methods.agent.session.prompt, params, options)
       )
       return { messageId: response.messageId }
     },
@@ -1507,6 +1604,7 @@ export function createAcpConnection(
     },
 
     async steer(steer) {
+      assertFrameFits(steer)
       return HgwSteerResponseSchema.parse(
         await write(steer.sessionId, "medium", (agent, options) =>
           agent.request(HGW_METHODS.session.steer, steer, options)
@@ -1521,8 +1619,9 @@ export function createAcpConnection(
         idle: presence.idle,
       }
       lastFocus = report
-      // The focus request is also the liveness probe: no reply in 10 s closes
-      // the transport, and the reconnect re-reports it via sendLivenessProbeAsync.
+      // The focus request is also the liveness probe: no reply in 20 s, and
+      // nothing else heard meanwhile, closes the transport; the reconnect
+      // re-reports it via sendLivenessProbeAsync.
       request("probe", (agent, options) =>
         agent.request(HGW_METHODS.session.focus, report, options)
       ).catch((err: unknown) => {

@@ -1,4 +1,5 @@
 import {
+  AgentSummarySchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
   ArtifactsDownloadParamsSchema,
@@ -353,111 +354,137 @@ export function parseOpenClawArtifactDownload(
   return value as OpenClawArtifactDownload
 }
 
-export function parseOpenClawAgents(value: unknown): readonly OpenClawAgent[] {
+/**
+ * The rows of an `agents.list` answer, its envelope checked. Each row is
+ * checked where it is read, so one malformed Agent costs that Agent alone.
+ */
+export function openClawAgentRows(value: unknown): readonly unknown[] {
   boundedNativeValue(value, MAX_NATIVE_COLLECTION)
-  official(AgentsListResultSchema, value)
-  const agents = (value as { agents: readonly OpenClawAgent[] }).agents
-  if (agents.length > MAX_NATIVE_COLLECTION)
+  if (!isRecord(value) || !Array.isArray(value.agents))
     throw new OpenClawNativePayloadError()
-  return agents
+  official(AgentsListResultSchema, { ...value, agents: [] })
+  if (value.agents.length > MAX_NATIVE_COLLECTION)
+    throw new OpenClawNativePayloadError()
+  return value.agents
 }
 
-export function parseOpenClawSessions(
+/** One `agents.list` row, exactly as the official schema defines it. */
+export function parseOpenClawAgent(value: unknown): OpenClawAgent {
+  official(AgentSummarySchema, value)
+  return value as OpenClawAgent
+}
+
+/**
+ * The rows of a `sessions.list` answer, at most `maxRows`. Each row is checked
+ * where it is read: a list drops a malformed row, a lookup refuses it.
+ */
+export function openClawSessionRows(
   value: unknown,
   maxRows: number
-): readonly OpenClawSession[] {
+): readonly unknown[] {
   boundedNativeValue(value, maxRows)
   if (!isRecord(value) || !Array.isArray(value.sessions))
     throw new OpenClawNativePayloadError()
   if (value.sessions.length > maxRows) throw new OpenClawNativePayloadError()
-  return value.sessions.map((value) => {
-    if (!isRecord(value)) throw new OpenClawNativePayloadError()
-    const key = string(value.key)
-    if (!key) throw new OpenClawNativePayloadError()
-    const activeRunIds =
-      value.activeRunIds === null ? null : stringList(value.activeRunIds)
-    if (value.activeRunIds !== undefined && activeRunIds === undefined)
-      throw new OpenClawNativePayloadError()
-    const number = (value: unknown) => {
-      if (value === undefined) return undefined
-      const parsed = integer(value)
-      if (parsed === undefined) throw new OpenClawNativePayloadError()
-      return parsed
-    }
-    const optionalString = (value: unknown) => {
-      if (value === undefined) return undefined
-      const parsed = string(value)
-      if (!parsed) throw new OpenClawNativePayloadError()
-      return parsed
-    }
-    if (value.agentId !== undefined && !optionalString(value.agentId))
-      throw new OpenClawNativePayloadError()
-    if (value.archived !== undefined && typeof value.archived !== "boolean")
-      throw new OpenClawNativePayloadError()
-    if (value.pinned !== undefined && typeof value.pinned !== "boolean")
-      throw new OpenClawNativePayloadError()
-    if (
-      value.hasActiveRun !== undefined &&
-      typeof value.hasActiveRun !== "boolean"
-    )
-      throw new OpenClawNativePayloadError()
-    if (value.toolOverrides !== undefined)
-      official(SessionToolOverridesSchema, value.toolOverrides)
-    return {
-      key,
-      ...(optionalString(value.agentId)
-        ? { agentId: value.agentId as string }
-        : {}),
-      ...(optionalString(value.label) ? { label: value.label as string } : {}),
-      ...(optionalString(value.displayName)
-        ? { displayName: value.displayName as string }
-        : {}),
-      ...(typeof value.archived === "boolean"
-        ? { archived: value.archived }
-        : {}),
-      ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
-      // channel is an opaque string; unknown values are resolved later by sessionPlatform.
-      ...(optionalString(value.channel)
-        ? { channel: value.channel as string }
-        : {}),
-      // Newer gateways report it; a missing or unusable value stays absent.
-      ...(integer(value.createdAt) !== undefined
-        ? { createdAt: integer(value.createdAt) }
-        : {}),
-      ...(number(value.updatedAt) !== undefined
-        ? { updatedAt: number(value.updatedAt) }
-        : {}),
-      ...(number(value.lastInteractionAt) !== undefined
-        ? { lastInteractionAt: number(value.lastInteractionAt) }
-        : {}),
-      ...(typeof value.hasActiveRun === "boolean"
-        ? { hasActiveRun: value.hasActiveRun }
-        : {}),
-      ...(activeRunIds !== undefined ? { activeRunIds } : {}),
-      ...(optionalString(value.sessionId)
-        ? { sessionId: value.sessionId as string }
-        : {}),
-      ...(optionalString(value.model) ? { model: value.model as string } : {}),
-      ...(optionalString(value.modelProvider)
-        ? { modelProvider: value.modelProvider as string }
-        : {}),
-      ...(number(value.totalTokens) !== undefined
-        ? { totalTokens: number(value.totalTokens) }
-        : {}),
-      ...(number(value.contextTokens) !== undefined
-        ? { contextTokens: number(value.contextTokens) }
-        : {}),
-      // A cost is a fraction of a dollar; one out of range reads as unknown.
-      ...(typeof value.estimatedCostUsd === "number" &&
-      Number.isFinite(value.estimatedCostUsd) &&
-      value.estimatedCostUsd >= 0
-        ? { estimatedCostUsd: value.estimatedCostUsd }
-        : {}),
-      ...(value.toolOverrides === undefined
-        ? {}
-        : { toolOverrides: value.toolOverrides as OpenClawToolOverrides }),
-    }
-  })
+  return value.sessions
+}
+
+/** Every row of a `sessions.list` answer, refusing the answer on any bad one. */
+export function parseOpenClawSessions(
+  value: unknown,
+  maxRows: number
+): readonly OpenClawSession[] {
+  return openClawSessionRows(value, maxRows).map(parseOpenClawSession)
+}
+
+/** One `sessions.list` row. */
+export function parseOpenClawSession(value: unknown): OpenClawSession {
+  if (!isRecord(value)) throw new OpenClawNativePayloadError()
+  const key = string(value.key)
+  if (!key) throw new OpenClawNativePayloadError()
+  const activeRunIds =
+    value.activeRunIds === null ? null : stringList(value.activeRunIds)
+  if (value.activeRunIds !== undefined && activeRunIds === undefined)
+    throw new OpenClawNativePayloadError()
+  const number = (value: unknown) => {
+    if (value === undefined) return undefined
+    const parsed = integer(value)
+    if (parsed === undefined) throw new OpenClawNativePayloadError()
+    return parsed
+  }
+  const optionalString = (value: unknown) => {
+    if (value === undefined) return undefined
+    const parsed = string(value)
+    if (!parsed) throw new OpenClawNativePayloadError()
+    return parsed
+  }
+  if (value.agentId !== undefined && !optionalString(value.agentId))
+    throw new OpenClawNativePayloadError()
+  if (value.archived !== undefined && typeof value.archived !== "boolean")
+    throw new OpenClawNativePayloadError()
+  if (value.pinned !== undefined && typeof value.pinned !== "boolean")
+    throw new OpenClawNativePayloadError()
+  if (
+    value.hasActiveRun !== undefined &&
+    typeof value.hasActiveRun !== "boolean"
+  )
+    throw new OpenClawNativePayloadError()
+  if (value.toolOverrides !== undefined)
+    official(SessionToolOverridesSchema, value.toolOverrides)
+  return {
+    key,
+    ...(optionalString(value.agentId)
+      ? { agentId: value.agentId as string }
+      : {}),
+    ...(optionalString(value.label) ? { label: value.label as string } : {}),
+    ...(optionalString(value.displayName)
+      ? { displayName: value.displayName as string }
+      : {}),
+    ...(typeof value.archived === "boolean"
+      ? { archived: value.archived }
+      : {}),
+    ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
+    // channel is an opaque string; unknown values are resolved later by sessionPlatform.
+    ...(optionalString(value.channel)
+      ? { channel: value.channel as string }
+      : {}),
+    // Newer gateways report it; a missing or unusable value stays absent.
+    ...(integer(value.createdAt) !== undefined
+      ? { createdAt: integer(value.createdAt) }
+      : {}),
+    ...(number(value.updatedAt) !== undefined
+      ? { updatedAt: number(value.updatedAt) }
+      : {}),
+    ...(number(value.lastInteractionAt) !== undefined
+      ? { lastInteractionAt: number(value.lastInteractionAt) }
+      : {}),
+    ...(typeof value.hasActiveRun === "boolean"
+      ? { hasActiveRun: value.hasActiveRun }
+      : {}),
+    ...(activeRunIds !== undefined ? { activeRunIds } : {}),
+    ...(optionalString(value.sessionId)
+      ? { sessionId: value.sessionId as string }
+      : {}),
+    ...(optionalString(value.model) ? { model: value.model as string } : {}),
+    ...(optionalString(value.modelProvider)
+      ? { modelProvider: value.modelProvider as string }
+      : {}),
+    ...(number(value.totalTokens) !== undefined
+      ? { totalTokens: number(value.totalTokens) }
+      : {}),
+    ...(number(value.contextTokens) !== undefined
+      ? { contextTokens: number(value.contextTokens) }
+      : {}),
+    // A cost is a fraction of a dollar; one out of range reads as unknown.
+    ...(typeof value.estimatedCostUsd === "number" &&
+    Number.isFinite(value.estimatedCostUsd) &&
+    value.estimatedCostUsd >= 0
+      ? { estimatedCostUsd: value.estimatedCostUsd }
+      : {}),
+    ...(value.toolOverrides === undefined
+      ? {}
+      : { toolOverrides: value.toolOverrides as OpenClawToolOverrides }),
+  }
 }
 
 export function parseOpenClawCreatedSession(

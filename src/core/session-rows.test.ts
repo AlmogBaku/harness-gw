@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { Session } from "../../protocol"
+import { captureLogs } from "../../test/support/log-capture"
 import { createSessionRows, READ_GUARD_MS } from "./session-rows"
 
 const AGENT = "researcher"
@@ -137,6 +138,25 @@ describe("createSessionRows", () => {
     expect(rows.get(AGENT, SESSION)).toBeUndefined()
     expect(rows.rememberList([session({ unread: true })])).toEqual([
       expect.objectContaining({ unread: true }),
+    ])
+  })
+
+  it("keeps notifying the other subscribers when one throws", () => {
+    const logs = captureLogs()
+    const rows = createSessionRows({ logger: logs.logger })
+    rows.subscribe(() => {
+      throw new Error("listener failed")
+    })
+    const heard = vi.fn()
+    rows.subscribe(heard)
+
+    expect(() =>
+      rows.rememberList([session(), session({ id: "session-2" })])
+    ).not.toThrow()
+    expect(heard).toHaveBeenCalledTimes(2)
+    expect(logs.records().map(({ message }) => message)).toEqual([
+      "session_rows.listener.failed",
+      "session_rows.listener.failed",
     ])
   })
 

@@ -54,7 +54,19 @@ export type AcpPeer = {
   /** Whether the socket is open, rather than closing or closed. */
   isOpen(): boolean
   close(code: number, reason: string): void
+  /** Bytes the socket still holds unsent, which the SDK's flow control reads. */
+  bufferedAmount(): number
 }
+
+/**
+ * Unsent bytes at which the ACP SDK stops sending, and the inbound bytes it
+ * holds while it waits. Below Bun's 16 MiB backpressure limit with room for
+ * the largest frame left once stored images travel by reference, so the SDK
+ * pauses before Bun would close the socket.
+ */
+const OUTPUT_PAUSE_BYTES = 8 * 1_024 * 1_024
+/** How long a reader may read nothing of a full buffer before it is closed. */
+const OUTPUT_STALL_MS = 60_000
 
 export type AcpServiceOptions = {
   role: Role
@@ -179,7 +191,11 @@ export function createAcpService(options: AcpServiceOptions) {
     // Thread the clock into the context so the connection machine and the
     // handshake deadline share the same injected clock.
     context.clock = clock
-    const server = new AcpServer({ createAgent: () => options.agent(context) })
+    const server = new AcpServer({
+      createAgent: () => options.agent(context),
+      maxBufferedBytes: OUTPUT_PAUSE_BYTES,
+      maxOutputStallMs: OUTPUT_STALL_MS,
+    })
     const prepared = server.prepareWebSocketUpgrade()
     const socket = createAcpSocket({
       close: (code, reason) => peer.close(code, reason),
@@ -192,6 +208,7 @@ export function createAcpService(options: AcpServiceOptions) {
         else if (peer.isOpen()) context.logger.warn({}, "acp.send.dropped")
         else context.logger.debug({}, "acp.send.dropped")
       },
+      bufferedAmount: () => peer.bufferedAmount(),
       // The upgrade's principal holds for the connection's whole life.
       lapsed: () => context.authentication?.lapsed() ?? false,
       ...(options.publicErrors ? { publicErrors: options.publicErrors } : {}),

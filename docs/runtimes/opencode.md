@@ -134,6 +134,10 @@ OpenCode 1.19.0 cannot call MCP tools, so `present_artifact` is not callable
 and the App shows "Can't reach this file". `open` returns no file addresses.
 There is no file read or call lookup on this runtime yet.
 
+Images a prompt attached replay as Artifacts read back from the Session's
+history (see Stored user images in `docs/protocol.md`), so the `artifacts`
+capability reports available.
+
 ## Agent icons
 
 OpenCode has no native Agent write, so every `_hgw/agents/update` call,

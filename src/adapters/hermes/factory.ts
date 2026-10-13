@@ -3,6 +3,7 @@ import type { RuntimeServices } from "../create-runtime"
 import type { RuntimeInstance } from "../../core/runtime"
 import type { RuntimeConfig, RuntimeLimits } from "../../config"
 import { readSecretFile } from "../../secrets"
+import { withHistoryImageArtifacts } from "../../core/history-image-artifacts"
 import { withMcpApps } from "../../mcp-apps/annotate"
 import { createMcpAppClient } from "../../mcp-apps/client"
 import { HermesServerAdapter } from "./adapter"
@@ -54,14 +55,17 @@ export function composeHermesRuntime({
     servers: mcpServerOverrides,
     logger,
   })
-  // Wrapped before the coordinator, which runs turns through `runtime.turns`.
+  // Wrapped before the coordinator, which runs turns through `runtime.turns`,
+  // and stored images innermost, so reading one back skips the view lookups.
   const runtime = withMcpApps(
-    new HermesServerAdapter(transport, {
-      sessionIdleMs,
-      media: { mediaArtifacts },
-      log: logger,
-      mcp: { client: mcpAppClient, logger },
-    })
+    withHistoryImageArtifacts(
+      new HermesServerAdapter(transport, {
+        sessionIdleMs,
+        media: { mediaArtifacts },
+        log: logger,
+        mcp: { client: mcpAppClient, logger },
+      })
+    )
   )
   return {
     runtime,
