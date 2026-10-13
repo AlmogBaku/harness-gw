@@ -98,6 +98,8 @@ describe("fakeOpenClaw", () => {
     })
 
     expect(rewound).toEqual({ editorText: "Second" })
+    // Refused calls count too: a test can prove none was made.
+    expect(native.openclaw.requested("sessions.rewind")).toBe(3)
     expect(after.sessionId).not.toBe(before.sessionId)
     expect(texts(after)).toEqual(["user:First", "assistant:Done."])
     await expect(

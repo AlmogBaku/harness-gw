@@ -241,6 +241,8 @@ export function fakeOpenClaw() {
   let fault: Fault = "none"
   let failure: Error | undefined
   let calls = 0
+  /** Every method the runtime called, in order, refused calls included. */
+  const methods: string[] = []
   let seq = 0
   let nextRow = 1
   let nextSession = 1
@@ -928,6 +930,7 @@ export function fakeOpenClaw() {
           options?: OpenClawRequestOptions
         ) {
           calls += 1
+          methods.push(method)
           if (!dialed.up) throw new Error("gateway not connected")
           if (fault === "native") throw failure
           return (await answer(
@@ -1059,6 +1062,10 @@ export function fakeOpenClaw() {
     },
 
     nativeCalls: () => calls,
+
+    /** How many times the runtime called `method`, as a refused write's test asks. */
+    requested: (method: string) =>
+      methods.filter((called) => called === method).length,
 
     async dropLink() {
       fault = "down"
