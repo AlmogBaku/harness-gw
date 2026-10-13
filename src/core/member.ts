@@ -11,7 +11,12 @@ import type {
   SessionWorkspaceCapabilitiesResponseSchema,
   TurnSteerResponse,
 } from "../../protocol"
-import type { PendingRequest, RequestReply, TurnEvent } from "./events"
+import type {
+  ChildTurnEvent,
+  PendingRequest,
+  RequestReply,
+  TurnEvent,
+} from "./events"
 import type { ProviderSessionId } from "./ids"
 import type { SessionPatch, SessionScope } from "./runtime"
 import type { SessionExecutionState, TurnQuota } from "./session-coordinator"
@@ -93,6 +98,20 @@ export type SessionEvent =
        * Buffered before a view being rebuilt joined: its past state is no
        * longer the turn's, which the view is told once caught up.
        */
+      replayed?: true
+    }
+  /**
+   * One report or event of a child Session a turn spawned, addressed to the
+   * child's own id, so a layer that passes only its Session's events drops
+   * it. A report goes out on `parentSessionId`, which owns the child; the
+   * child's own events under its id. It shares the turn's sequence.
+   */
+  | {
+      kind: "child"
+      parentSessionId: string
+      stream: TurnStream
+      sequence: number
+      event: ChildTurnEvent
       replayed?: true
     }
   /** A user prompt: another member's, or this member's own echo. */

@@ -23,6 +23,8 @@ import type {
   PendingRequest,
   RequestReply,
   TurnEvent,
+  TurnEventKind,
+  TurnEventOf,
 } from "../core/events"
 import type { PublicFailure } from "../core/failures"
 import type {
@@ -252,6 +254,11 @@ export interface ActivityFeed {
 // ---------------------------------------------------------------------------
 
 /** `translate/turn-events.ts` → `translateTurnEvent` (pure reducer) */
+export type TranslateChildUpdate = (
+  event: TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>,
+  context: TranslateContext
+) => Built<SessionUpdate>
+
 export type TranslateTurnEvent = (
   state: TranslateState,
   event: TurnEvent,
@@ -301,6 +308,8 @@ export type ConfigWriteOf = (
  */
 export type Translators = {
   translateTurnEvent: TranslateTurnEvent
+  /** A child Session's report, as the `subagent_update` its parent carries. */
+  translateChildUpdate: TranslateChildUpdate
   translateHistory: TranslateHistory
   pendingRequestToOutbound: PendingRequestToOutbound
   replyFromPermission: ReplyFromPermission

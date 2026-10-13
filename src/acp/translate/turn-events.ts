@@ -558,6 +558,11 @@ export const translateTurnEvent = ((state, event: TurnEvent, context) => {
       }
     case TurnEventKind.SubagentUpdated:
       return { state, outbound: subagentOutbound(state, context, event) }
+    // A child's reports and events reach its readers as the child's own,
+    // under its id, never as the parent turn's.
+    case TurnEventKind.ChildSessionUpdated:
+    case TurnEventKind.ChildSessionEvent:
+      return { state, outbound: [] }
     case TurnEventKind.PlanUpdated:
       return { state, outbound: planOutbound(context, event) }
     case TurnEventKind.ArtifactPublished:

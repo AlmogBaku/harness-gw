@@ -154,6 +154,8 @@ export function createTurnProjector(
       case TurnEventKind.CompactionUpdated:
       case TurnEventKind.ModelChanged:
       case TurnEventKind.SubagentUpdated:
+      case TurnEventKind.ChildSessionUpdated:
+      case TurnEventKind.ChildSessionEvent:
         return undefined
     }
     return unhandledKind(candidate)
@@ -204,6 +206,10 @@ export function createTurnsMiddleware({
             ? event
             : { ...event, request }
         }
+        // A child Session is never a guest's: no announcement, event or
+        // transcript of one reaches it.
+        case "child":
+          return undefined
         // What is not a turn's passes: the feeds layer chose the readings and
         // the commands layer projects the command list.
         case "history":

@@ -22,6 +22,7 @@ import {
 import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
   isAwaitingStopFailure,
+  isChildTurnEvent,
   isRedialableFailure,
   ReplyStatus,
   TurnEventKind,
@@ -1048,7 +1049,13 @@ class Membership {
     const declines = new Set<string>()
     const shown = runEvents(
       this.#member.middleware,
-      { sessionId: this.#addressed.sessionId, ...event },
+      {
+        sessionId:
+          event.kind === "child"
+            ? event.event.childSessionId
+            : this.#addressed.sessionId,
+        ...event,
+      },
       { decline: (requestId) => declines.add(requestId) }
     )
     if (shown?.kind === "request-asked")
@@ -1575,6 +1582,11 @@ class Membership {
     return this.#channels.catchUp(this.#scope, this.#delivery)
   }
 
+  /** Stops one child Session this Session's live turn spawned. */
+  cancelChild(childSessionId: string) {
+    return this.#coordinator.stopChild(this.#scope, childSessionId)
+  }
+
   /** Requests Stop, reporting an unsettled provider as `stopping`. */
   async cancel() {
     const status = await this.#coordinator.stop(this.#scope)
@@ -2005,15 +2017,27 @@ class Membership {
         this.#sequence = sequence
         interrupted = isRedialableFailure(event)
         const replayed = view.restating && buffered > 0
-        await this.emit({
-          kind: "turn",
-          stream,
-          sequence,
-          event,
-          stopping: this.#stopping,
-          ...(replayed ? { replayed: true as const } : {}),
-        })
-        if (!replayed) {
+        // A child Session's report or event is the child's, under its id.
+        await this.emit(
+          isChildTurnEvent(event)
+            ? {
+                kind: "child",
+                parentSessionId: this.#addressed.sessionId,
+                stream,
+                sequence,
+                event,
+                ...(replayed ? { replayed: true as const } : {}),
+              }
+            : {
+                kind: "turn",
+                stream,
+                sequence,
+                event,
+                stopping: this.#stopping,
+                ...(replayed ? { replayed: true as const } : {}),
+              }
+        )
+        if (!replayed && !isChildTurnEvent(event)) {
           this.#stated = statedBy(event) ?? this.#stated
           if (
             event.kind === TurnEventKind.TurnRequiresAction &&

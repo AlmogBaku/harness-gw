@@ -47,6 +47,13 @@ export type ServerTurnHandle = {
   settled: Promise<void>
   /** Idempotently requests Stop or rechecks an already-stopping native turn. */
   stop(): Promise<"stopping" | "idle">
+  /**
+   * Stops the work of one child Session this turn spawned, which the child's
+   * own stream confirms, and leaves the turn running. Present only where the
+   * runtime stops a child alone, and asked only of a child it reported
+   * `cancellable`.
+   */
+  stopChild?(childSessionId: string): Promise<void>
   steer?(
     request: Readonly<{ requestId: string; text: string }>
   ): Promise<"steered" | "queued">

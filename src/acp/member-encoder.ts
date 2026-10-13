@@ -16,7 +16,12 @@ import {
   type HgwActivityNotification,
   type HgwNoticeMeta,
 } from "../../protocol/acp"
-import { PendingRequestKind, type PendingRequest } from "../core/events"
+import {
+  PendingRequestKind,
+  TurnEventKind,
+  type PendingRequest,
+  type TurnEventOf,
+} from "../core/events"
 import {
   unhandledKind,
   type MemberConnection,
@@ -244,6 +249,16 @@ export type MemberEncoderOptions = {
   report(sessionId: string, cause: unknown): unknown
   /** Whether the connection's credential still holds. */
   live(): boolean
+  /** The child Sessions this connection's Sessions announced. */
+  children: {
+    /** Registers one; `false` means it may not be shown. */
+    announce(
+      childSessionId: string,
+      parentSessionId: string,
+      cancellable: boolean | undefined
+    ): boolean
+    has(childSessionId: string): boolean
+  }
 }
 
 export function createMemberEncoder({
@@ -255,9 +270,12 @@ export function createMemberEncoder({
   elicits,
   report,
   live,
+  children,
 }: MemberEncoderOptions): MemberConnection {
   const { translators, logger } = context
   const states = new WeakMap<TurnStream, TranslateState>()
+  /** Each child's own translation, by the parent stream it streams in. */
+  const childStates = new WeakMap<TurnStream, Map<string, TranslateState>>()
   /** The requests asked and not settled, by Session and requestId. */
   const asked = new Map<string, AbortController>()
   const askedKey = (sessionId: string, requestId: string) =>
@@ -322,6 +340,18 @@ export function createMemberEncoder({
     }
   }
 
+  /**
+   * The Session a request is asked on: the child's that asks it, once that
+   * child was announced, else the Session whose wait it is. Its answer
+   * settles that wait either way.
+   */
+  function askedOn(sessionId: string, request: PendingRequest) {
+    const { childSessionId } = request
+    return childSessionId !== undefined && children.has(childSessionId)
+      ? childSessionId
+      : sessionId
+  }
+
   async function askPermission(
     sessionId: string,
     request: PendingRequest,
@@ -332,7 +362,7 @@ export function createMemberEncoder({
     const response = await client
       .request(
         methods.client.session.requestPermission,
-        { ...outbound.request, sessionId },
+        { ...outbound.request, sessionId: askedOn(sessionId, request) },
         { cancellationSignal: signal }
       )
       .catch(declined(signal, { outcome: { outcome: "cancelled" as const } }))
@@ -358,7 +388,7 @@ export function createMemberEncoder({
         methods.client.elicitation.create,
         {
           ...outbound.request,
-          sessionId,
+          sessionId: askedOn(sessionId, request),
           ...(request.toolCallId === undefined
             ? {}
             : { toolCallId: request.toolCallId }),
@@ -425,6 +455,57 @@ export function createMemberEncoder({
         continue
       await send(sessionId, outbound, sequence)
     }
+  }
+
+  /**
+   * A child Session's report, on the Session that owns it, and the child's
+   * own events, under its id once it was announced. A report of a child that
+   * may not be shown, and every event of it, reach nobody. A child's requests
+   * are its parent turn's, asked on the child, so its own stream carries
+   * only updates.
+   */
+  async function child(event: Extract<MemberEvent, { kind: "child" }>) {
+    const { parentSessionId, stream, sequence } = event
+    const context = { turnId: stream.turnId, sequence, stopping: false }
+    const reported = event.event
+    if (reported.kind === TurnEventKind.ChildSessionUpdated)
+      return reportChild(parentSessionId, reported, context)
+    const { childSessionId, event: own } = reported
+    if (!children.has(childSessionId)) return
+    // A child that a child spawned is announced on that child.
+    if (own.kind === TurnEventKind.ChildSessionUpdated)
+      return reportChild(childSessionId, own, context)
+    const owned = childStates.get(stream) ?? new Map<string, TranslateState>()
+    childStates.set(stream, owned)
+    const translated = translators.translateTurnEvent(
+      owned.get(childSessionId) ?? initialTranslateState,
+      own,
+      { ...context, steerAck }
+    )
+    owned.set(childSessionId, translated.state)
+    for (const outbound of translated.outbound) {
+      if (stream.dropped) return
+      if (outbound.kind !== "update") continue
+      if (event.replayed && outbound.update.sessionUpdate === "state_update")
+        continue
+      await send(childSessionId, outbound, sequence)
+    }
+  }
+
+  function reportChild(
+    parentSessionId: string,
+    reported: TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>,
+    context: TranslateContext
+  ) {
+    const { childSessionId, cancellable } = reported
+    if (!children.announce(childSessionId, parentSessionId, cancellable)) {
+      logger.warn({ parentSessionId }, "acp.child.refused")
+      return
+    }
+    return update(
+      parentSessionId,
+      translators.translateChildUpdate(reported, context)
+    )
   }
 
   function historyOutbounds(event: Extract<MemberEvent, { kind: "history" }>) {
@@ -495,6 +576,8 @@ export function createMemberEncoder({
         return ask(sessionId, event.request)
       case "request-withdrawn":
         return withdraw(sessionId, event.requestId)
+      case "child":
+        return child(event)
       case "question-answered": {
         const record = answeredQuestionOutbound(event.request, event.answers)
         if (record) await send(sessionId, record, 0)

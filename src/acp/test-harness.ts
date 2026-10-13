@@ -284,6 +284,14 @@ const requestOutbound = (request: PendingRequest): RequestOutbound =>
 
 /** Deterministic stand-ins for the translators' pure projections. */
 export const translators: Translators = {
+  translateChildUpdate: (event, context) => ({
+    sessionUpdate: "subagent_update",
+    sessionId: event.childSessionId,
+    ...(event.title === undefined ? {} : { title: event.title }),
+    _meta: {
+      [HGW_META_KEY]: { sequence: context.sequence, turnId: context.turnId },
+    },
+  }),
   translateTurnEvent(state, event, context) {
     const meta = {
       _meta: {

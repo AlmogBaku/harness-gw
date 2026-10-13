@@ -58,6 +58,13 @@ export const TurnEventKind = {
   ModelChanged: "model-changed",
   /** Progress of a subagent a tool call spawned. */
   SubagentUpdated: "subagent-updated",
+  /**
+   * A child Session the turn spawned, as a patch; the first report of an id
+   * announces it.
+   */
+  ChildSessionUpdated: "child-session-updated",
+  /** One event of a child Session's own stream, under the child's id. */
+  ChildSessionEvent: "child-session-event",
   PlanUpdated: "plan-updated",
   ArtifactPublished: "artifact-published",
   SteerAccepted: "steer-accepted",
@@ -103,6 +110,11 @@ export const PendingRequestSchema = z.strictObject({
   kind: z.enum([PendingRequestKind.Permission, PendingRequestKind.Elicitation]),
   message: z.string().optional(),
   toolCallId: z.string().optional(),
+  /**
+   * The child Session asking, when a child the turn spawned asks it: the
+   * request is the child's, and its answer still settles this turn's wait.
+   */
+  childSessionId: z.string().min(1).optional(),
   /** JSON Schema of a permission's answer: its `enum` of choices. */
   responseSchema: z.record(z.string(), z.unknown()).optional(),
   /** An elicitation's questions, in the order its reply answers them. */
@@ -219,6 +231,18 @@ export const SubagentSchema = z.strictObject({
 })
 export type Subagent = z.infer<typeof SubagentSchema>
 
+/** How far a child Session's own work has got. */
+export const ChildSessionStatus = {
+  Running: "running",
+  /** Its work waits on an answer, which its parent's wait carries. */
+  WaitingForInput: "waiting-for-input",
+  Idle: "idle",
+  Failed: "failed",
+  Cancelled: "cancelled",
+} as const
+export type ChildSessionStatus =
+  (typeof ChildSessionStatus)[keyof typeof ChildSessionStatus]
+
 /** Where a compaction has got. */
 export const CompactionStatus = {
   Started: "started",
@@ -272,7 +296,13 @@ function turnEvent<
   return z.strictObject({ kind: z.literal(kind), ...shape })
 }
 
-export const TurnEventSchema = z.discriminatedUnion("kind", [
+/**
+ * A turn's own events, which a child Session it spawned streams too. A child's
+ * questions and approvals are its parent turn's requests, named by
+ * `childSessionId`, so a requires-action event of a child reports its state
+ * alone.
+ */
+export const OwnTurnEventSchema = z.discriminatedUnion("kind", [
   turnEvent(TurnEventKind.TurnStarted, {
     /** When the turn began, stamped by the coordinator that saw it start. */
     startedAt: z.iso.datetime().optional(),
@@ -407,12 +437,55 @@ export const TurnEventSchema = z.discriminatedUnion("kind", [
     text: z.string(),
     delivery: TurnSteerResponseSchema.shape.status,
   }),
+  /**
+   * A child Session the turn spawned, as a patch: the first report of an id
+   * announces it, before any event of its own, and an id is never reused. A
+   * child spawned by a child is announced in that child's stream.
+   */
+  turnEvent(TurnEventKind.ChildSessionUpdated, {
+    childSessionId: z.string().min(1),
+    /** The tool call that spawned it. */
+    toolCallId: z.string().min(1).optional(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    status: z.enum(ChildSessionStatus).optional(),
+    /** The runtime stops this child's work alone. */
+    cancellable: z.boolean().optional(),
+    model: z.string().min(1).optional(),
+    filesRead: z.array(z.string()).optional(),
+    filesWritten: z.array(z.string()).optional(),
+    durationMs: CountSchema.optional(),
+    summary: z.string().optional(),
+  }),
+])
+export type OwnTurnEvent = z.infer<typeof OwnTurnEventSchema>
+
+export const TurnEventSchema = z.discriminatedUnion("kind", [
+  ...OwnTurnEventSchema.options,
+  /** One event of a child Session's own stream, under the child's id. */
+  turnEvent(TurnEventKind.ChildSessionEvent, {
+    childSessionId: z.string().min(1),
+    event: OwnTurnEventSchema,
+  }),
 ])
 export type TurnEvent = z.infer<typeof TurnEventSchema>
 export type TurnEventOf<Kind extends TurnEventKind> = Extract<
   TurnEvent,
   { kind: Kind }
 >
+
+/** A child Session's report or event, which its readers see as the child's. */
+export type ChildTurnEvent = TurnEventOf<
+  | typeof TurnEventKind.ChildSessionUpdated
+  | typeof TurnEventKind.ChildSessionEvent
+>
+
+export function isChildTurnEvent(event: TurnEvent): event is ChildTurnEvent {
+  return (
+    event.kind === TurnEventKind.ChildSessionUpdated ||
+    event.kind === TurnEventKind.ChildSessionEvent
+  )
+}
 
 /** Rejects anything an adapter may have emitted that is not a turn event. */
 export function isTurnEvent(candidate: unknown): candidate is TurnEvent {

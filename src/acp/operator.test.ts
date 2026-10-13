@@ -4,12 +4,14 @@ import { z } from "zod"
 
 import { type SessionHistoryResponse } from "../../protocol"
 import {
+  HGW_JSONRPC_ERRORS,
   HGW_METHODS,
   HGW_META_KEY,
   HGW_REPLAY_POSITION,
   HgwActivityNotificationSchema,
 } from "../../protocol/acp"
 import {
+  ChildSessionStatus,
   PendingRequestKind,
   RepliesTurnInputSchema,
   TurnEventKind,
@@ -421,6 +423,224 @@ describe("operator ACP listener", () => {
       toolCallId: "call-clarify",
       _meta: { [HGW_META_KEY]: { requestId: CLARIFY } },
     })
+    source.finish()
+    test.close()
+  })
+
+  // ACP v2 child Sessions: the parent announces each child it owns before any
+  // traffic of the child's, which reaches the client under the child's id.
+  it("announces a child before its events, which reach the client as the child's own", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+      toolCallId: "call-spawn",
+      title: "Review the notes",
+      status: ChildSessionStatus.Running,
+    })
+    source.emit({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "child-1",
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "child-message",
+        text: "Reading",
+      },
+    })
+
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Reading"),
+      "the child's message"
+    )
+    const childish = updates(test.recorder).filter((params) =>
+      JSON.stringify(params).includes("child-1")
+    )
+    expect(childish).toMatchObject([
+      {
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "subagent_update",
+          sessionId: "child-1",
+          title: "Review the notes",
+          state: { state: "running" },
+          _meta: { [HGW_META_KEY]: { toolCallId: "call-spawn" } },
+        },
+      },
+      {
+        sessionId: "child-1",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "child-message",
+          content: { type: "text", text: "Reading" },
+        },
+      },
+    ])
+    source.finish()
+    test.close()
+  })
+
+  it("asks a child's approval on the child, and its answer continues the parent's turn", async () => {
+    const test = await harness({
+      permission: async () => ({
+        outcome: { outcome: "selected", optionId: "once" },
+      }),
+    })
+    const { source } = await runningTurn(test, "Review it")
+
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+      title: "Review the notes",
+    })
+    source.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "child-approval",
+          kind: PendingRequestKind.Permission,
+          childSessionId: "child-1",
+          message: "Read the notes?",
+          responseSchema: { enum: ["once", "deny"] },
+        },
+      ],
+    })
+    source.finish()
+
+    const asked = await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the child's approval"
+    )
+    expect(asked.params).toMatchObject({ sessionId: "child-1" })
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    expect(
+      RepliesTurnInputSchema.parse(test.start.mock.calls[1]?.[1]).replies
+    ).toMatchObject([{ requestId: "child-approval", status: "resolved" }])
+    test.close()
+  })
+
+  // A client cancels a child's work with session/cancel naming the child, only
+  // where the child's capabilities offer it; a notification answers nothing.
+  it.each([
+    [true, ["child-1"]],
+    [false, []],
+  ])(
+    "cancels a child through the Session that owns it only where the runtime stops it alone (%s)",
+    async (cancellable, stopped) => {
+      const test = await harness()
+      const { source } = await runningTurn(test, "Review it")
+      const stopChild = vi.fn<(childSessionId: string) => Promise<void>>(
+        async () => undefined
+      )
+      Object.assign(source, { stopChild })
+      source.emit(turnStarted())
+      source.emit({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        cancellable,
+      })
+      await test.recorder.wait(
+        (entry) => JSON.stringify(entry.params).includes("subagent_update"),
+        "the child's announcement"
+      )
+
+      await test.agent.notify(methods.agent.session.cancel, {
+        sessionId: "child-1",
+      })
+
+      await vi.waitFor(() =>
+        expect(stopChild.mock.calls.map(([id]) => id)).toEqual(stopped)
+      )
+      // The parent's own work runs on.
+      expect(source.stop).not.toHaveBeenCalled()
+      source.finish()
+      test.close()
+    }
+  )
+
+  // ACP forbids loading, resuming, closing or prompting a child; the gateway
+  // refuses every other request naming one too, read-only ones among them.
+  it("refuses every request naming a child as forbidden", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("subagent_update"),
+      "the child's announcement"
+    )
+    const child = { sessionId: "child-1" }
+
+    for (const [method, params] of [
+      [methods.agent.session.resume, { ...child, cwd: "/" }],
+      [
+        methods.agent.session.prompt,
+        { ...child, prompt: [{ type: "text", text: "Hi" }] },
+      ],
+      [methods.agent.session.close, child],
+      [methods.agent.session.delete, child],
+      [
+        methods.agent.session.setConfigOption,
+        { ...child, configId: "model", type: "id", value: "opus" },
+      ],
+      [HGW_METHODS.session.update, { ...child, title: "Renamed" }],
+      [HGW_METHODS.session.focus, child],
+      [HGW_METHODS.session.steer, { ...child, requestId: "s", text: "Hi" }],
+    ] as [string, Record<string, unknown>][])
+      await expect(
+        test.agent.request(method, params),
+        method
+      ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.forbidden })
+    source.finish()
+    test.close()
+  })
+
+  // ACP: a child is announced before any traffic of its own, and a child id
+  // is never a top-level Session's.
+  it("shows nothing of a child unannounced, or of one that names a top-level Session", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+    const said = (text: string) => ({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "child-message",
+      text,
+    })
+
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "early-child",
+      event: said("Too early"),
+    })
+    // CREATED is the parent itself; SESSION is a row the catalog lists.
+    for (const childSessionId of [CREATED, SESSION]) {
+      source.emit({ kind: TurnEventKind.ChildSessionUpdated, childSessionId })
+      source.emit({
+        kind: TurnEventKind.ChildSessionEvent,
+        childSessionId,
+        event: said("Posing as a top-level Session"),
+      })
+    }
+    source.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "parent-message",
+      text: "Parent goes on",
+    })
+
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Parent goes on"),
+      "the parent's own message"
+    )
+    const shown = JSON.stringify(test.recorder.entries)
+    expect(shown).not.toContain("Too early")
+    expect(shown).not.toContain("Posing as a top-level Session")
+    expect(shown).not.toContain("subagent_update")
     source.finish()
     test.close()
   })

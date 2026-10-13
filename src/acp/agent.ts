@@ -217,6 +217,11 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         sessions.membership(sessionId)?.report(cause),
       // The upgrade's principal holds for the connection's whole life.
       live: () => context.authentication?.live() ?? true,
+      children: {
+        announce: (childSessionId, parentSessionId, cancellable) =>
+          sessions.announceChild(childSessionId, parentSessionId, cancellable),
+        has: (childSessionId) => sessions.child(childSessionId) !== undefined,
+      },
     })
   )
   const app = agent({ name: "harness-gw" })
@@ -262,6 +267,11 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     execute: CommandNext<K>,
     requestId?: JsonRpcId
   ): Promise<CommandResults[K]> {
+    // A child Session belongs to the Session that owns it: ACP forbids a
+    // client loading, resuming, closing or prompting one, and the gateway
+    // refuses every other request naming one too.
+    const named = (command as { sessionId?: unknown }).sessionId
+    if (typeof named === "string" && sessions.child(named)) throw forbidden()
     // A command acts for the identity it began as: one that a logout, or the
     // next login, replaced while it was held reaches nothing.
     const { authentication } = context
@@ -817,6 +827,21 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     // An unauthenticated guest reaches nothing here.
     if (!sessions.identity()) return
     admit(methods.agent.session.cancel, "stop")
+    // A child is stopped through the Session that owns it, and only where its
+    // runtime stops it alone; any other cancel naming one asks for nothing.
+    const child = sessions.child(params.sessionId)
+    if (child) {
+      const owner = sessions.rootOf(params.sessionId)
+      if (!child.cancellable || owner === undefined) return
+      await perform("stop", { sessionId: owner }, async (command) => {
+        const membership = sessions.membership(command.sessionId)
+        if (!membership) return
+        await membership
+          .cancelChild(params.sessionId)
+          .catch((cause: unknown) => membership.report(cause))
+      })
+      return
+    }
     await perform("stop", { sessionId: params.sessionId }, async (command) => {
       // Only a joined Session has a member.
       const membership = sessions.membership(command.sessionId)

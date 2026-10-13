@@ -2001,6 +2001,19 @@ export class SessionCoordinator {
     })
   }
 
+  /**
+   * Stops one child Session the live turn spawned, where its handle stops a
+   * child alone; the turn itself runs on.
+   */
+  async stopChild(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    childSessionId: string
+  ) {
+    const execution = this.#executions.get(scopeKey(scope))
+    if (!execution || execution.state === "idle") return
+    await execution.segment.handle.stopChild?.(childSessionId)
+  }
+
   async steer(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
     request: TurnSteerRequest

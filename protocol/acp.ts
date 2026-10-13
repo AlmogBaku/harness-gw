@@ -444,6 +444,23 @@ export const HgwCostSchema = readObject({
 })
 export type HgwCost = z.infer<typeof HgwCostSchema>
 
+/**
+ * `subagent_update._meta.hgw`: what ACP's child Session announcement has no
+ * field for. `toolCallId` names the parent's call that spawned the child; the
+ * rest are the facts its runtime reports. A child's tokens arrive in its own
+ * idle usage, apart from its parent's.
+ */
+export const HgwChildSessionMetaSchema = readObject({
+  ...TurnMetaBase,
+  toolCallId: IdentifierSchema.optional(),
+  model: z.string().min(1).max(256).optional(),
+  filesRead: z.array(z.string().max(4096)).max(1000).optional(),
+  filesWritten: z.array(z.string().max(4096)).max(1000).optional(),
+  durationMs: CountSchema.optional(),
+  summary: z.string().max(65_536).optional(),
+})
+export type HgwChildSessionMeta = z.infer<typeof HgwChildSessionMetaSchema>
+
 /** How far a delegated subagent has got. */
 export const HGW_SUBAGENT_STATUSES = [
   "running",

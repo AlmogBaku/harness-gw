@@ -2283,3 +2283,88 @@ describe("guest logout", () => {
     for (const socket of [guest, ...waiting]) socket.close()
   })
 })
+
+// A child Session belongs to the turn's operator side: a guest is shown no
+// announcement, event, question or approval of one.
+describe("guest and child Sessions", () => {
+  const CHILD = "child-1"
+  const childTurn: TurnEvent[] = [
+    { kind: TurnEventKind.TurnStarted },
+    {
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: CHILD,
+      title: "Review the notes",
+      cancellable: true,
+    },
+    {
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: CHILD,
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "child-message",
+        text: "The child's own words",
+      },
+    },
+    {
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "child-approval",
+          kind: PendingRequestKind.Permission,
+          childSessionId: CHILD,
+          message: "Read the notes?",
+          responseSchema: { enum: ["once", "deny"] },
+        },
+        { ...QUESTION, requestId: "child-question", childSessionId: CHILD },
+      ],
+    },
+  ]
+
+  it("shows a guest nothing of a child its turn spawned, and leaves the child's requests for an operator", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => terminalHandle(childTurn),
+      question: async () => ({ action: "accept", content: { q0: "later" } }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+
+    await test.prompt("Review the notes")
+    // The guest's view shows the turn running: what it waits on is not the
+    // guest's to see or answer.
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      "the running turn"
+    )
+    await settled()
+    await settled()
+
+    const shown = JSON.stringify(test.recorder.entries)
+    for (const hidden of [CHILD, "subagent_update", "The child's own words"])
+      expect(shown).not.toContain(hidden)
+    expect(test.recorder.of(methods.client.elicitation.create)).toEqual([])
+    // Nothing declined the child's approval for the guest.
+    expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("answers a guest naming a child as it answers any id not its own", async () => {
+    const test = harness({
+      existing: true,
+      handle: () => terminalHandle(childTurn),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Review the notes")
+    await settled()
+
+    await expect(test.resume(CHILD)).rejects.toMatchObject({ code: NOT_FOUND })
+    await test.agent.notify(methods.agent.session.cancel, { sessionId: CHILD })
+    await settled()
+    for (const handle of test.handles)
+      expect(handle.stop).not.toHaveBeenCalled()
+    test.close()
+  })
+})

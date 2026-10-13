@@ -13,7 +13,8 @@ import {
 /**
  * A guest answers no permission. One its own turn raises is declined for it,
  * and one another member's turn raises stays that member's to answer; either
- * way the guest is shown nothing of it. Questions are the conversation's and
+ * way the guest is shown nothing of it. A child Session's request is never a
+ * guest's, nor declined for it: it waits for an operator, who sees the child. Questions are the conversation's and
  * pass whole, and so is every turn: a guest may Stop or steer any turn in its
  * invited Session, not only one it started.
  */
@@ -37,7 +38,10 @@ export function createPermissionsMiddleware({
   return {
     commands: {
       answer: async (command, next) => {
-        if (isPermission(command.request))
+        if (
+          isPermission(command.request) ||
+          command.request.childSessionId !== undefined
+        )
           throw new CommandRefusedError("invalid")
         return next(command)
       },
@@ -49,6 +53,7 @@ export function createPermissionsMiddleware({
     event(event, act): MemberEvent | undefined {
       switch (event.kind) {
         case "request-asked":
+          if (event.request.childSessionId !== undefined) return undefined
           if (!isPermission(event.request)) return event
           if (event.startedBy === principalId)
             act.decline(event.request.requestId)
@@ -57,12 +62,14 @@ export function createPermissionsMiddleware({
           if (event.event.kind !== TurnEventKind.TurnRequiresAction)
             return event
           const requests = event.event.requests.filter(
-            (request) => !isPermission(request)
+            (request) =>
+              !isPermission(request) && request.childSessionId === undefined
           )
           return requests.length > 0
             ? { ...event, event: { ...event.event, requests } }
             : undefined
         }
+        case "child":
         case "prompt":
         case "history":
         case "request-withdrawn":

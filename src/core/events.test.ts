@@ -208,6 +208,29 @@ const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
     text: "also check the tests",
     delivery: "steered",
   },
+  [TurnEventKind.ChildSessionUpdated]: {
+    kind: TurnEventKind.ChildSessionUpdated,
+    childSessionId: "child-1",
+    toolCallId: "tool-1",
+    title: "Review the tests",
+    description: "find the missing ones",
+    status: "running",
+    cancellable: true,
+    model: "small",
+    filesRead: ["/repo/a.ts"],
+    filesWritten: ["/repo/b.ts"],
+    durationMs: 4200,
+    summary: "two tests were missing",
+  },
+  [TurnEventKind.ChildSessionEvent]: {
+    kind: TurnEventKind.ChildSessionEvent,
+    childSessionId: "child-1",
+    event: {
+      kind: TurnEventKind.MessageChunk,
+      messageId: "child-message",
+      text: "Reading the tests",
+    },
+  },
 }
 
 /** The fields each kind must carry beyond the `kind` discriminator. */
@@ -230,6 +253,8 @@ const requiredFields: Record<TurnEventKind, readonly string[]> = {
   [TurnEventKind.PlanUpdated]: ["todos"],
   [TurnEventKind.ArtifactPublished]: ["artifact"],
   [TurnEventKind.SteerAccepted]: ["requestId", "text", "delivery"],
+  [TurnEventKind.ChildSessionUpdated]: ["childSessionId"],
+  [TurnEventKind.ChildSessionEvent]: ["childSessionId", "event"],
 }
 
 const fixtures = Object.entries(eventFixtures)
