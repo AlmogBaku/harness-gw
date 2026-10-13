@@ -33,6 +33,7 @@ import {
   openClawAgentsParams,
   openClawConfigGetParams,
   openClawCreateSessionParams,
+  openClawForkSessionParams,
   openClawDeleteSessionParams,
   openClawPatchSessionParams,
   openClawSessionRows,
@@ -245,6 +246,7 @@ export type OpenClawWorkspace = Readonly<{
   ): Promise<SessionCatalogResponse>
   getSession(agentId: string, sessionKey: string): Promise<Session>
   createSession(agentId: string): Promise<unknown>
+  forkSession(agentId: string, sessionKey: string): Promise<unknown>
   updateSession(
     agentId: string,
     sessionKey: string,
@@ -436,7 +438,8 @@ export function createOpenClawWorkspace(input: {
       offset,
     }
   }
-  const getSession = async (agentId: string, sessionKey: string) => {
+  /** The one native row of `agentId`'s Session `sessionKey`. */
+  const sessionRow = async (agentId: string, sessionKey: string) => {
     await requireVisibleAgent(agentId)
     const page = parseOpenClawSessions(
       await input.client.request(
@@ -447,8 +450,11 @@ export function createOpenClawWorkspace(input: {
     )
     const matches = page.filter((row) => row.key === sessionKey)
     if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
-    return projectSession(agentId, matches[0]!)
+    verifyOwnership(agentId, matches[0]!)
+    return matches[0]!
   }
+  const getSession = async (agentId: string, sessionKey: string) =>
+    projectSession(agentId, await sessionRow(agentId, sessionKey))
 
   return {
     listAgents,
@@ -544,6 +550,33 @@ export function createOpenClawWorkspace(input: {
         await input.client.request(
           "sessions.create",
           openClawCreateSessionParams(agentId)
+        )
+      )
+      await getSession(agentId, created.key)
+      return SessionCreateResponseSchema.parse({
+        session: { id: created.key, agentId },
+      })
+    },
+    /**
+     * A new Session holding `sessionKey`'s conversation so far, answered as a
+     * create is; the parent is left as it is. A fork names its parent in
+     * `parentSessionKey`, which no child filter reads, so it stays listed.
+     */
+    async forkSession(agentId, sessionKey) {
+      const parent = await sessionRow(agentId, sessionKey)
+      const created = parseOpenClawCreatedSession(
+        await input.client.request(
+          "sessions.create",
+          openClawForkSessionParams(
+            agentId,
+            sessionKey,
+            {
+              running: sessionStatus(parent) === "running",
+              title: title(parent).title ?? "Session",
+              toolOverrides: parent.toolOverrides,
+            },
+            crypto.randomUUID()
+          )
         )
       )
       await getSession(agentId, created.key)

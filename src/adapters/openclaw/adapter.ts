@@ -294,6 +294,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return this.#workspace.createSession(agentId)
   }
 
+  /** A fork through `sessions.create`, answered as `createSession` answers. */
+  async forkSession(agentId: string, providerSessionId: string) {
+    await this.#start()
+    return this.#workspace.forkSession(agentId, providerSessionId)
+  }
+
   async updateSession(
     agentId: string,
     providerSessionId: string,

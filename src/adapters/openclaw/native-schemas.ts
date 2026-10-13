@@ -189,6 +189,38 @@ export function openClawCreateSessionParams(agentId: string) {
   })
 }
 
+/** The longest title `sessions.create` takes as a `displayName`. */
+const MAX_DISPLAY_NAME = 500
+
+/**
+ * A fork of `parentSessionKey` through `sessions.create`. A running parent
+ * forks only through its last completed reply. The fork inherits no title, so
+ * it is given one, as a `displayName`: a `label` belongs to one Session alone.
+ * Overrides the call names replace the inherited ones, so it restates the
+ * parent's with the `aos-ui` server enabled. `idempotencyKey` keeps a create
+ * that is sent twice one fork.
+ */
+export function openClawForkSessionParams(
+  agentId: string,
+  parentSessionKey: string,
+  parent: Readonly<{
+    running: boolean
+    title: string
+    toolOverrides: OpenClawToolOverrides | undefined
+  }>,
+  idempotencyKey: string
+) {
+  return official(SessionsCreateParamsSchema, {
+    agentId,
+    parentSessionKey,
+    fork: true,
+    ...(parent.running ? { forkFrom: "last-completed" as const } : {}),
+    displayName: `${parent.title} (fork)`.slice(0, MAX_DISPLAY_NAME),
+    toolOverrides: aosToolOverrides(parent.toolOverrides),
+    idempotencyKey,
+  })
+}
+
 /** Whether a Session's overlay already enables the `aos-ui` MCP server. */
 export function enablesAosTools(overrides: OpenClawToolOverrides | undefined) {
   return overrides?.mcpServers?.[AOS_MCP_SERVER] === true
@@ -203,11 +235,18 @@ export function aosToolsPatch(
   current: OpenClawToolOverrides | undefined
 ): OpenClawSessionPatch {
   return {
-    toolOverrides: {
-      ...current,
-      mcpServers: { ...current?.mcpServers, [AOS_MCP_SERVER]: true },
-    },
+    toolOverrides: aosToolOverrides(current),
     expectedToolOverrides: current ?? null,
+  }
+}
+
+/** `current` with the `aos-ui` MCP server enabled and every other override kept. */
+function aosToolOverrides(
+  current: OpenClawToolOverrides | undefined
+): OpenClawToolOverrides {
+  return {
+    ...current,
+    mcpServers: { ...current?.mcpServers, [AOS_MCP_SERVER]: true },
   }
 }
 

@@ -35,8 +35,6 @@ runServerRuntimeContract(
     gaps: {
       typedMessageFields:
         "capability: OpenClaw history carries no correction or turn error code",
-      forkLeavesOriginal:
-        "pending: the OpenClaw lane forks through sessions.create",
       childAnnouncedFirst:
         "pending: the OpenClaw lane reports spawned sessions as children",
       childrenStayUnlisted:

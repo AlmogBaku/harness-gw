@@ -474,6 +474,108 @@ describe("OpenClaw workspace reads", () => {
     )
   })
 
+  it("[CL1-WORKSPACE-025] forks a Session through sessions.create, keeping its tool overrides and the aos-ui server, and verifies the fork's owner", async () => {
+    const parent = "agent:analyst:main"
+    const forked = "agent:analyst:forked"
+    const native = gateway({
+      "agents.list": agentCatalog([
+        { id: "analyst", name: "Analyst", kind: "agent" },
+      ]),
+      "sessions.create": { ok: true, key: forked, sessionId: "forked-1" },
+      "sessions.list": {
+        sessions: [
+          {
+            key: parent,
+            agentId: "analyst",
+            label: "Quarterly figures",
+            toolOverrides: {
+              mcpServers: { files: true },
+              skills: { charts: false },
+            },
+          },
+          // A fork names its parent, and stays one of the Agent's Sessions.
+          { key: forked, agentId: "analyst", parentSessionKey: parent },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(workspace.forkSession("analyst", parent)).resolves.toEqual({
+      session: { id: forked, agentId: "analyst" },
+    })
+    expect(
+      native.requests.filter(({ method }) => method === "sessions.create")
+    ).toEqual([
+      {
+        method: "sessions.create",
+        params: {
+          agentId: "analyst",
+          parentSessionKey: parent,
+          fork: true,
+          // A label is unique to one Session; a fork's title is shown only.
+          displayName: "Quarterly figures (fork)",
+          // Overrides replace the parent's, so the fork restates them all.
+          toolOverrides: {
+            mcpServers: { files: true, "aos-ui": true },
+            skills: { charts: false },
+          },
+          idempotencyKey: expect.any(String),
+        },
+      },
+    ])
+    expect(native.requests.at(-1)).toEqual({
+      method: "sessions.list",
+      params: expect.objectContaining({ agentId: "analyst", search: forked }),
+    })
+  })
+
+  it("[CL1-WORKSPACE-026] forks a running Session through its last completed reply", async () => {
+    const parent = "agent:analyst:main"
+    const native = gateway({
+      "agents.list": agentCatalog([
+        { id: "analyst", name: "Analyst", kind: "agent" },
+      ]),
+      "sessions.create": { ok: true, key: "agent:analyst:forked" },
+      "sessions.list": {
+        sessions: [
+          { key: parent, agentId: "analyst", hasActiveRun: true },
+          { key: "agent:analyst:forked", agentId: "analyst" },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await workspace.forkSession("analyst", parent)
+
+    expect(native.requests).toContainEqual({
+      method: "sessions.create",
+      params: expect.objectContaining({
+        fork: true,
+        forkFrom: "last-completed",
+        displayName: "Session (fork)",
+      }),
+    })
+  })
+
+  it("[CL1-WORKSPACE-027] forks nothing of a Session the Agent does not own", async () => {
+    const native = gateway({
+      "agents.list": agentCatalog([
+        { id: "analyst", name: "Analyst", kind: "agent" },
+      ]),
+      "sessions.list": {
+        sessions: [{ key: "agent:other:main", agentId: "other" }],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(
+      workspace.forkSession("analyst", "agent:other:main")
+    ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())
+    expect(native.requests.map(({ method }) => method)).not.toContain(
+      "sessions.create"
+    )
+  })
+
   it("[CL1-WORKSPACE-011] projects native pin state only when a Session row proves it", async () => {
     const native = gateway({
       "agents.list": agentCatalog([
