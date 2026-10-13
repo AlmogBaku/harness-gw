@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { providerSessionId, sessionId } from "../../core/ids"
 import {
+  ServerSessionNotFoundError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
   type SessionScope,
@@ -62,6 +63,8 @@ class ControlledNative implements OpenClawRunRequestClient {
     mcpServers: { "aos-ui": true },
   }
   patchError?: unknown
+  /** More fields of the Session's own `sessions.list` row. */
+  sessionRow: Record<string, unknown> = {}
   rewindResult: unknown = { editorText: "Investigate this" }
   rewindError?: unknown
   /** The history a rewind moves the Session to, read from then on. */
@@ -98,6 +101,7 @@ class ControlledNative implements OpenClawRunRequestClient {
             ...(this.toolOverrides
               ? { toolOverrides: structuredClone(this.toolOverrides) }
               : {}),
+            ...this.sessionRow,
           },
         ],
       } as T
@@ -2192,6 +2196,17 @@ describe("OpenClaw run engine AOS tools", () => {
       events.push(event as Record<string, unknown>)
     return events
   }
+
+  it("starts no turn on a spawned child Session, which is no Session of the list", async () => {
+    const native = new ControlledNative()
+    native.sessionRow = { spawnedBy: "agent:research:main", spawnDepth: 1 }
+    const { engine } = engineOver(native)
+
+    await expect(engine.start(scope, input())).rejects.toBeInstanceOf(
+      ServerSessionNotFoundError
+    )
+    expect(native.sent("chat.send")).toHaveLength(0)
+  })
 
   it("enables the aos-ui MCP server once on an existing Session before sending", async () => {
     const native = new ControlledNative()

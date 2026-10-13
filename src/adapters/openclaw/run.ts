@@ -51,6 +51,7 @@ import {
 import {
   aosToolsPatch,
   enablesAosTools,
+  isSpawnedSession,
   openClawPatchSessionParams,
   openClawSessionSearchParams,
   parseOpenClawSessions,
@@ -1547,8 +1548,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ),
       MAX_SESSION_LOOKUP_ROWS
     ).filter((row) => row.key === sessionKey)
-    // A Session OpenClaw no longer lists was deleted natively: it is gone.
-    if (rows.length !== 1) throw new ServerSessionNotFoundError()
+    // A Session OpenClaw no longer lists was deleted natively: it is gone. A
+    // spawned child is its parent's, never a Session a turn starts on.
+    if (rows.length !== 1 || isSpawnedSession(rows[0]!))
+      throw new ServerSessionNotFoundError()
     const current = rows[0]!.toolOverrides
     if (enablesAosTools(current)) return
     await this.#client.request(

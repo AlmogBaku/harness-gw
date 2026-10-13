@@ -576,6 +576,96 @@ describe("OpenClaw workspace reads", () => {
     )
   })
 
+  it("[CL1-WORKSPACE-028] keeps spawned child Sessions out of the list and every lookup, and lists forks", async () => {
+    const log = captureLogs()
+    const native = gateway({
+      "agents.list": agentCatalog([
+        { id: "analyst", name: "Analyst", kind: "agent" },
+      ]),
+      "sessions.list": {
+        sessions: [
+          { key: "agent:analyst:main", agentId: "analyst" },
+          // A fork names its parent too, but no spawn made it.
+          {
+            key: "agent:analyst:forked",
+            agentId: "analyst",
+            parentSessionKey: "agent:analyst:main",
+            forkedFromParent: true,
+            spawnDepth: 0,
+          },
+          {
+            key: "agent:analyst:subagent:one",
+            agentId: "analyst",
+            spawnedBy: "agent:analyst:main",
+            parentSessionKey: "agent:analyst:main",
+            spawnDepth: 1,
+          },
+          {
+            key: "agent:analyst:subagent:two",
+            agentId: "analyst",
+            spawnDepth: 2,
+          },
+          {
+            key: "agent:analyst:subagent:three",
+            agentId: "analyst",
+            spawnedBy: "agent:analyst:main",
+          },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({
+      client: native,
+      log: log.logger,
+    })
+
+    const listed = await workspace.listSessions("analyst", 10, 0)
+
+    expect(listed.sessions.map(({ id }) => id)).toEqual([
+      "agent:analyst:main",
+      "agent:analyst:forked",
+    ])
+    expect(listed.total).toBe(2)
+    for (const child of [
+      "agent:analyst:subagent:one",
+      "agent:analyst:subagent:two",
+      "agent:analyst:subagent:three",
+    ])
+      await expect(workspace.getSession("analyst", child)).rejects.toEqual(
+        new OpenClawWorkspaceOwnershipError()
+      )
+    await expect(
+      workspace.forkSession("analyst", "agent:analyst:subagent:one")
+    ).rejects.toEqual(new OpenClawWorkspaceOwnershipError())
+    // A child is another Session's, not a row the list could not read.
+    expect(log.records()).toEqual([])
+  })
+
+  it("[CL1-WORKSPACE-029] reads a page holding only children as an empty list, not an outage", async () => {
+    const native = gateway({
+      "agents.list": agentCatalog([
+        { id: "analyst", name: "Analyst", kind: "agent" },
+      ]),
+      "sessions.list": {
+        sessions: [
+          {
+            key: "agent:analyst:subagent:one",
+            agentId: "analyst",
+            spawnedBy: "agent:analyst:main",
+            spawnDepth: 1,
+          },
+        ],
+      },
+    })
+    const workspace = createOpenClawWorkspace({ client: native })
+
+    await expect(workspace.listSessions("analyst", 10, 0)).resolves.toEqual({
+      sessions: [],
+      total: 0,
+      limit: 10,
+      offset: 0,
+    })
+  })
+
   it("[CL1-WORKSPACE-011] projects native pin state only when a Session row proves it", async () => {
     const native = gateway({
       "agents.list": agentCatalog([

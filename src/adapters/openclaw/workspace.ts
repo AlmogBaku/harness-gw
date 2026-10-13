@@ -44,6 +44,7 @@ import {
   parseOpenClawCreatedSession,
   parseOpenClawSession,
   parseOpenClawSessions,
+  isSpawnedSession,
   type OpenClawAgent,
   type OpenClawSession,
   type OpenClawSessionPatch,
@@ -397,8 +398,16 @@ export function createOpenClawWorkspace(input: {
         ),
         pageLimit
       )
-      read += rows.length
       for (const row of rows) {
+        // A spawned child belongs to its parent's Session, never the list.
+        if (
+          isSpawnedSession({
+            spawnedBy: rawField(row, "spawnedBy"),
+            spawnDepth: rawField(row, "spawnDepth"),
+          })
+        )
+          continue
+        read += 1
         const session = listedSession(agentId, row)
         if (session) sessions.push(session)
       }
@@ -449,7 +458,9 @@ export function createOpenClawWorkspace(input: {
       MAX_SESSION_PAGE
     )
     const matches = page.filter((row) => row.key === sessionKey)
-    if (matches.length !== 1) throw new OpenClawWorkspaceOwnershipError()
+    // A spawned child is no top-level Session, whoever names its key.
+    if (matches.length !== 1 || isSpawnedSession(matches[0]!))
+      throw new OpenClawWorkspaceOwnershipError()
     verifyOwnership(agentId, matches[0]!)
     return matches[0]!
   }

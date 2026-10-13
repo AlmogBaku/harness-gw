@@ -71,7 +71,25 @@ export type OpenClawSession = Readonly<{
   /** `SessionRowSchema.estimatedCostUsd`: what the Session has cost so far. */
   estimatedCostUsd?: number
   toolOverrides?: OpenClawToolOverrides
+  /** The Session whose run spawned this one, for a spawned child Session. */
+  spawnedBy?: string
+  /** How many spawns deep the Session is; a top-level Session is at 0. */
+  spawnDepth?: number
 }>
+
+/**
+ * Whether a `sessions.list` row is a child Session some run spawned, by the
+ * spawn's own markers. A fork names its parent in `parentSessionKey` as a
+ * child does, so that link marks nothing.
+ */
+export function isSpawnedSession(
+  row: Readonly<{ spawnedBy?: unknown; spawnDepth?: unknown }>
+) {
+  return (
+    (typeof row.spawnedBy === "string" && row.spawnedBy.length > 0) ||
+    (typeof row.spawnDepth === "number" && row.spawnDepth >= 1)
+  )
+}
 
 export type OpenClawCreatedSession = Readonly<{
   key: string
@@ -470,6 +488,13 @@ export function parseOpenClawSession(value: unknown): OpenClawSession {
     throw new OpenClawNativePayloadError()
   if (value.toolOverrides !== undefined)
     official(SessionToolOverridesSchema, value.toolOverrides)
+  if (
+    value.spawnDepth !== undefined &&
+    (typeof value.spawnDepth !== "number" ||
+      !Number.isFinite(value.spawnDepth) ||
+      value.spawnDepth < 0)
+  )
+    throw new OpenClawNativePayloadError()
   return {
     key,
     ...(optionalString(value.agentId)
@@ -523,6 +548,12 @@ export function parseOpenClawSession(value: unknown): OpenClawSession {
     ...(value.toolOverrides === undefined
       ? {}
       : { toolOverrides: value.toolOverrides as OpenClawToolOverrides }),
+    ...(string(value.spawnedBy)
+      ? { spawnedBy: value.spawnedBy as string }
+      : {}),
+    ...(value.spawnDepth === undefined
+      ? {}
+      : { spawnDepth: value.spawnDepth as number }),
   }
 }
 
