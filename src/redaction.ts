@@ -137,12 +137,13 @@ const NAME = String.raw`(?<![\w.-])-*(?<name>\w[\w.-]{0,${MAX_NAME - 1}})`
 /** Spacing that stays on its line, so a YAML parent never takes its child's name as its value. */
 const INLINE_SPACE = String.raw`[^\S\r\n]*`
 /**
- * A PEM private key, whole, as the scanner masks one; one with no footer is
- * masked to the end of the text. The scanner's own rule restarts at every
- * header, so text that repeats one took it minutes; masked here first, none is
- * left for it to read.
+ * A PEM private key, whole: its header, every line of its body, and its footer
+ * when it has one, so a key cut short is masked too. A header with no body is
+ * no key, so a command that names one (`grep -- '-----BEGIN … KEY-----'`)
+ * reads as written. Each body line is base64 or a `Name: value` line.
  */
-const PRIVATE_KEY = String.raw`-----${INLINE_SPACE}BEGIN[ A-Z0-9_-]{0,64}?PRIVATE KEY${INLINE_SPACE}-----[\s\S]*?(?:-----${INLINE_SPACE}END[ A-Z0-9_-]{0,64}?PRIVATE KEY${INLINE_SPACE}-----|$)`
+const PEM_LINE = String.raw`\r?\n(?:[A-Za-z0-9+/=]{0,128}|[A-Za-z-]{1,32}:[^\r\n]{0,256})(?=\r?\n|$)`
+const PRIVATE_KEY = String.raw`-----BEGIN[ A-Z0-9_-]{0,64}?PRIVATE KEY-----(?:${PEM_LINE})+(?:\r?\n-----END[ A-Z0-9_-]{0,64}?PRIVATE KEY-----)?`
 
 /**
  * The two strengths a credential mask comes in. Each has a pass for the
@@ -263,28 +264,28 @@ function scanned(text: string) {
 }
 
 /**
- * The longest run without whitespace the secret scanner reads whole. Inside
- * one such run its rules restart at every repeat, so 64 KiB of `eyJ-` took it
- * seconds; text that breaks lines or words, a PEM block included, it reads in
- * one pass.
+ * The most text the secret scanner reads at once. Some of its rules restart at
+ * every repeat of their opening, so 64 KiB of `eyJ-` or of private-key headers
+ * took it seconds to minutes; read a piece at a time, its work stays in
+ * proportion to the text. The keys it knows sit on one line, and a PEM private
+ * key, the one that spans lines, is masked before it reads anything.
  */
-const SCAN_RUN = 2_048
-const LONG_RUN = new RegExp(String.raw`(?<!\S)\S{${SCAN_RUN + 1},}`, "gu")
+const SCAN_PIECE = 2_048
 
 /**
- * `text` with every provider key the scanner knows masked, each run of more
- * than `SCAN_RUN` characters without whitespace read in `SCAN_RUN` pieces.
+ * `text` with every provider key the scanner knows masked, read in pieces of at
+ * most `SCAN_PIECE` characters that end at a line's end when one is in reach.
  */
 function maskScanned(text: string) {
   let output = ""
-  let copied = 0
-  for (const run of text.matchAll(LONG_RUN)) {
-    output += scanned(text.slice(copied, run.index))
-    for (let start = 0; start < run[0].length; start += SCAN_RUN)
-      output += scanned(run[0].slice(start, start + SCAN_RUN))
-    copied = run.index + run[0].length
+  for (let start = 0; start < text.length;) {
+    let end = Math.min(text.length, start + SCAN_PIECE)
+    const lineEnd = text.lastIndexOf("\n", end - 1)
+    if (end < text.length && lineEnd >= start) end = lineEnd + 1
+    output += scanned(text.slice(start, end))
+    start = end
   }
-  return output + scanned(text.slice(copied))
+  return output
 }
 
 /**

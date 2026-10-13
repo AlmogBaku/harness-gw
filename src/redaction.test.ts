@@ -351,6 +351,13 @@ describe("maskCredentials", () => {
     }
   )
 
+  // A header alone is no key: an approval that only names one shows it.
+  it("keeps a command that names a private key's header as written", () => {
+    const command =
+      "grep -rl -- '-----BEGIN OPENSSH PRIVATE KEY-----' ~/.ssh && rm -rf build"
+    expect(maskCredentials(command, "narrow")).toBe(command)
+  })
+
   it("still masks a provider key deep inside a long run without whitespace", () => {
     const run = "x".repeat(3_000)
     expect(maskCredentials(`${run},${STRIPE_KEY} done`)).toBe(

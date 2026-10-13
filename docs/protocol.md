@@ -532,8 +532,10 @@ a sentence's closing period stays.
     `xoxr-` or `xoxs-` and the word characters and `-` after it; so
     `rm -rf sk-backups` stays.
 - **Both** mask:
-  - a PEM private key, from its `BEGIN … PRIVATE KEY` line to its `END` line,
-    whole; one with no `END` line, to the end of the text;
+  - a PEM private key, whole, from its `BEGIN … PRIVATE KEY` line through
+    its body to its `END` line; one cut short, through its last body line. A
+    header with no body is no key and stays, so a command that only names one
+    reads as written;
   - a JWT (`eyJ…` in three dot-separated parts);
   - a URL's password: in `scheme://user:password@host`, a password with no
     whitespace and none of ``: / @ $ ( ) { } ` ' "`` goes, and the scheme,
@@ -545,10 +547,10 @@ a sentence's closing period stays.
     and its generic ones gated by length and entropy (`Bearer` and 20 or more
     random characters, `sk-` and 40 or more). A match that is a URL or a
     URL's scheme stays, because the scanner's database rules take the whole
-    URL or only its scheme. A run of more than 2,048 characters without
-    whitespace reaches the scanner in 2,048-character pieces, so its work
-    stays in proportion to the text; a key that straddles two pieces is
-    left to the rules above.
+    URL or only its scheme. The scanner reads text in pieces of at most
+    2,048 characters that end at a line's end when one is in reach, so its
+    work stays in proportion to the text; a key that straddles two pieces
+    is left to the rules above.
 - **Neither** masks a value that is already `[credential redacted]`, so
   masking text twice, at either strength, leaves one placeholder per
   credential.

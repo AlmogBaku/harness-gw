@@ -317,11 +317,12 @@ speech synthesis run only after their explicit user actions and remain distinct
 from native multimodal audio input or output.
 
 An adapter masks no credential in tool data: the gateway's translate step
-masks every runtime's tool data on its way to the browser (protocol,
-[Credential masking](../protocol.md#credential-masking)). An adapter drops only
-what a mask would break or misread: a path or a patch that carries a
-credential, a clarification answer that does (so it reads as cancelled, not as
-answered), and provider-private fields.
+masks the text every runtime's tool data carries on its way to the browser
+(protocol, [Credential masking](../protocol.md#credential-masking)). An adapter
+drops only what a mask would break or misread: a path or a patch that carries
+a credential, a clarification answer that does (so it reads as cancelled, not
+as answered), a subagent's goal or summary that does, and provider-private
+fields.
 
 ## Share execution, project authorization
 
