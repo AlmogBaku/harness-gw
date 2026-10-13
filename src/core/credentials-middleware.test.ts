@@ -308,6 +308,69 @@ describe("credentials middleware: questions", () => {
     expect(shown(answered)).toEqual(answered)
   })
 
+  // The tool that asked is part of the question: its call carries the operator's answers.
+  it("shows the operator the question tool's call as written, live and replayed, and a guest it masked", () => {
+    const args = { question: `Use ${assigned("token")}?` }
+    const result = { status: "answered", answers: [assigned("token")] }
+    const live: TurnEvent[] = [
+      {
+        kind: TurnEventKind.ToolCallStarted,
+        toolCallId: "q1",
+        title: "question",
+        name: "question",
+      },
+      {
+        kind: TurnEventKind.ToolCallInputChunk,
+        toolCallId: "q1",
+        delta: JSON.stringify(args),
+      },
+      {
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId: "q1",
+        output: JSON.stringify(result),
+        failed: false,
+      },
+    ]
+    const history: MemberEvent = {
+      sessionId: "s1",
+      kind: "history",
+      sequence: 0,
+      page: {
+        sessionId: "s1",
+        messages: [
+          {
+            id: "a1",
+            role: "assistant",
+            createdAt: "2026-09-19T09:00:01.000Z",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "q1",
+                toolName: "question",
+                args,
+                argsText: JSON.stringify(args),
+                result,
+              },
+            ],
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      },
+    }
+
+    expect(live.map((event) => shownTurn(event))).toEqual(live)
+    expect(shown(history)).toEqual(history)
+    expect(
+      JSON.stringify([
+        live.map((event) => shownTurn(event, guest)),
+        shown(history, guest),
+      ])
+    ).not.toContain(SECRET)
+  })
+
   it("shows a guest a question masked, its choices still telling which", () => {
     expect(shown(asked, guest)).toMatchObject({
       request: {
