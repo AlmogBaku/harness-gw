@@ -2887,119 +2887,15 @@ describe("OpenClaw run engine child Sessions", () => {
     ).toHaveLength(1)
   })
 
-  // A spawned child often outlives its parent's own run: its work, and the
-  // approvals it asks, are still the turn's, so the turn ends with the last
-  // child rather than with the parent's run.
-  it("keeps the turn open while a child works on past its parent's run, and ends it with the child", async () => {
+  // A spawned child may outlive its parent's run, and nothing follows it past
+  // the run: it is reported unobserved, and no longer stoppable from here.
+  it("reports a child still at work when its parent's run ends as unknown, with nothing left to cancel", async () => {
     const native = spawning()
-    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
-    const handle = await engine.start(scope, input())
-    let parentSeq = 0
-    spawnEvents((stream, data) =>
-      agent(subscriptions, "run-a", parentSeq++, stream, data)
-    )
-    await followed(native)
-    await settle()
-    chat(subscriptions, "run-a", { state: "final" })
-    await settle()
-    const child = childStream(subscriptions)
-    child.agent("assistant", { delta: "Still working." })
-    child.chat("final")
-    const lines = outline(await drain(handle.events))
-
-    expect(lines).toContain(
-      `${CHILD}> ${TurnEventKind.MessageChunk} Still working.`
-    )
-    expect(lines.slice(-2)).toEqual([
-      `${TurnEventKind.ChildSessionUpdated} ${CHILD} idle`,
-      TurnEventKind.TurnEnded,
-    ])
-    expect(lines.join("\n")).not.toContain(ChildSessionStatus.Unknown)
-  })
-
-  it("asks a child's approval that comes after its parent's run ended", async () => {
-    const native = spawning()
-    const request = vi.fn(async () => {
-      throw new Error("Unexpected interaction method")
-    })
-    const { subscriptions, engine } = engineOver(native, {
-      toolEvents: true,
-      replies: new OpenClawInteractions({ request }),
-    })
-    const handle = await engine.start(scope, input())
-    let parentSeq = 0
-    spawnEvents((stream, data) =>
-      agent(subscriptions, "run-a", parentSeq++, stream, data)
-    )
-    await followed(native)
-    await settle()
-    chat(subscriptions, "run-a", { state: "final" })
-    await settle()
-    push(subscriptions, 700, "session.approval", {
-      sessionKey: scope.providerSessionId,
-      sourceSessionKey: CHILD,
-      updatedAtMs: 1,
-      phase: "pending",
-      approval: {
-        ...pendingApproval,
-        id: "approval-late",
-        sourceSessionKey: CHILD,
-      },
-    })
-
-    const events: unknown[] = []
-    for await (const event of handle.events) {
-      events.push(event)
-      if ((event as { kind: string }).kind === TurnEventKind.TurnRequiresAction)
-        break
-    }
-
-    expect(events.at(-1)).toMatchObject({
-      requests: [{ requestId: "approval-late", childSessionId: CHILD }],
-    })
-  })
-
-  // Stop ends the turn now, its children's work with it, waiting on no child.
-  it("ends a turn waiting on its children at Stop, aborting each child", async () => {
-    const native = spawning()
-    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
-    const handle = await engine.start(scope, input())
-    let parentSeq = 0
-    spawnEvents((stream, data) =>
-      agent(subscriptions, "run-a", parentSeq++, stream, data)
-    )
-    await followed(native)
-    await settle()
-    chat(subscriptions, "run-a", { state: "final" })
-    await settle()
-
-    await handle.stop()
-    const events = (await drain(handle.events)) as Array<
-      Record<string, unknown>
-    >
-
-    expect(native.sent("sessions.abort")).toMatchObject([
-      { params: { key: CHILD, agentId: "research", runId: "child-run" } },
-    ])
-    expect(
-      events
-        .filter(
-          (event) =>
-            event.kind === TurnEventKind.ChildSessionUpdated &&
-            event.childSessionId === CHILD
-        )
-        .at(-1)
-    ).toMatchObject({ status: ChildSessionStatus.Unknown, cancellable: false })
-    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
-  })
-
-  // A child nothing can follow would hold the turn forever: it is reported
-  // unobserved, and the turn ends with its parent's run.
-  it("waits on no child it cannot follow, reporting it as unknown", async () => {
-    const native = spawning()
-    native.subscriptionRequest = async (params) => {
-      if (params.key === CHILD) throw new Error("subscription refused")
-      return { key: params.key }
+    native.histories[CHILD] = {
+      sessionKey: CHILD,
+      sessionId: "child-transcript",
+      messages: [],
+      sessionInfo: { hasActiveRun: true, activeRunIds: [] },
     }
     const { subscriptions, engine } = engineOver(native, { toolEvents: true })
     const handle = await engine.start(scope, input())
@@ -3007,22 +2903,26 @@ describe("OpenClaw run engine child Sessions", () => {
     spawnEvents((stream, data) =>
       agent(subscriptions, "run-a", parentSeq++, stream, data)
     )
+    await followed(native)
     await settle()
+    childStream(subscriptions).agent("assistant", { delta: "Still working." })
     chat(subscriptions, "run-a", { state: "final" })
     const events = (await drain(handle.events)) as Array<
       Record<string, unknown>
     >
 
-    expect(
-      events
-        .filter(
-          (event) =>
-            event.kind === TurnEventKind.ChildSessionUpdated &&
-            event.childSessionId === CHILD
-        )
-        .at(-1)
-    ).toMatchObject({ status: ChildSessionStatus.Unknown, cancellable: false })
-    expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
+    const reports = events.filter(
+      (event) =>
+        event.kind === TurnEventKind.ChildSessionUpdated &&
+        event.childSessionId === CHILD
+    )
+    expect(reports.at(-1)).toMatchObject({
+      status: ChildSessionStatus.Unknown,
+      cancellable: false,
+    })
+    expect(events.indexOf(reports.at(-1)!)).toBeLessThan(
+      events.findIndex((event) => event.kind === TurnEventKind.TurnEnded)
+    )
   })
 
   it("shows a child that finished before it was followed from its stored reply", async () => {
@@ -3182,8 +3082,6 @@ describe("OpenClaw run engine rediscovered child requests", () => {
     await followed(native, GRANDCHILD)
     await settle()
     chat(subscriptions, "run-a", { state: "final" })
-    // The turn would wait on its children: a Stop ends it with them at work.
-    await handle.stop()
     await drain(handle.events)
     native.approvalReplay = approvalReplay([grandchildApproval])
     native.history = running("native-later", "later")
