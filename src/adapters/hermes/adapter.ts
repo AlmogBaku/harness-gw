@@ -2116,6 +2116,9 @@ export class HermesServerAdapter implements ServerRuntime {
       throw new HermesUnavailableError()
     if (trimmedText(payload.profile) !== profile)
       throw new HermesSessionNotFoundError()
+    // A delegated child is its parent's, as no list or search shows it.
+    if (trimmedText(payload.source) === SUBAGENT_SOURCE)
+      throw new HermesSessionNotFoundError()
     const pinned = nativeFlag(payload.pinned)
     const result = SessionSchema.safeParse({
       id: sessionId(profile, storedId),

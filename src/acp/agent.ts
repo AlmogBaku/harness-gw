@@ -920,6 +920,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     async ({ params: raw }) => {
       stack()
       const { sessionId } = HgwSessionPartRequestSchema.parse(raw)
+      // A child is its parent's: parting one is as unavailable as joining it.
+      if (sessions.child(sessionId))
+        throw RequestError.methodNotFound(HGW_METHODS.session.part)
       sessions.part(sessionId)
       return {}
     }

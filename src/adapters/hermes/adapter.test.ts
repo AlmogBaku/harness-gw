@@ -1635,6 +1635,30 @@ describe("Hermes server adapter", () => {
     ).rejects.toBeInstanceOf(HermesSessionConflictError)
   })
 
+  // A delegated child is its parent's, as no list shows it.
+  it("refuses a delegated child's Session named by id before any native mutation", async () => {
+    const http = vi.fn<
+      (path: string, init?: { method?: string }) => Promise<unknown>
+    >(async () => ({
+      id: "child",
+      profile: "researcher",
+      title: "Review the notes",
+      source: "subagent",
+    }))
+    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+
+    for (const refused of [
+      adapter.getSession("researcher", "child"),
+      adapter.updateSession("researcher", "child", { title: "Renamed" }),
+      adapter.deleteSession("researcher", "child"),
+    ])
+      await expect(refused).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    // Each call read the row alone; nothing was written.
+    expect(http.mock.calls.flatMap(([, init]) => init?.method ?? [])).toEqual(
+      []
+    )
+  })
+
   it("maps malformed native Session pages to temporary unavailability", async () => {
     const malformedCatalog = new HermesServerAdapter({
       request: vi.fn(),

@@ -657,6 +657,7 @@ describe("operator ACP listener", () => {
       ],
       [HGW_METHODS.session.update, { ...child, title: "Renamed" }],
       [HGW_METHODS.session.focus, child],
+      [HGW_METHODS.session.part, child],
       [HGW_METHODS.session.steer, { ...child, requestId: "s", text: "Hi" }],
     ] as [string, Record<string, unknown>][])
       await expect(
