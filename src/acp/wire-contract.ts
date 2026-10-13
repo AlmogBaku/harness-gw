@@ -82,6 +82,7 @@ export type WireContractRow =
   | "childAnnouncedBeforeItsEvents"
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
+  | "guestRetryOfSlashRefused"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -164,6 +165,20 @@ export type WireRuntime = Readonly<{
   folder: string
   /** Absent only when every row that plays a turn is a gap. */
   turn?: WireTurn
+  /**
+   * Stores the Session the invitation `ref` names on the Agent, as the
+   * runtime finds the one an invitation reserved, and makes it the Session
+   * `turn` plays. Each of `said` is stored in it in order as a user message
+   * holding that text as written, with a reply: the runtime ran none of them,
+   * a slash command among them. Resolves with the id an operator names that
+   * Session by. Absent only when every guest row is a gap.
+   */
+  invite?(ref: string, said?: readonly string[]): Promise<string>
+  /**
+   * How many writes the runtime received so far that rewind or truncate a
+   * stored conversation. Absent only when every row that counts them is a gap.
+   */
+  rewinds?(): number
 }>
 
 export type WireContractOptions = {
@@ -191,6 +206,9 @@ type WireHarness = Readonly<{
   /** The Agent's folder, the one `cwd` its Sessions take. */
   folder: string
   turn: WireTurn
+  /** The runtime's hooks, each failing the row that calls it if absent. */
+  invite: NonNullable<WireRuntime["invite"]>
+  rewinds: NonNullable<WireRuntime["rewinds"]>
   clock: Clock
   /** Connects a client to `service`, closed with the case. */
   connect(
@@ -489,6 +507,27 @@ async function rewindReported({ clock }: WireHarness, plain: WireClient) {
   return { sessionId, rewind: capabilities.interactions.rewind }
 }
 
+/** Where a guest names the Session its invitation reserved. */
+const GUEST_REF = "wire-guest"
+
+/**
+ * A guest on its own listener, logged in with a fresh invitation to the
+ * `GUEST_REF` Session of the Agent.
+ */
+async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
+  const guest = gateway.guest!
+  const client = connect(guest.acpService, GUEST_ORIGIN, HGW_ACP_PATH)
+  const { token } = await guest.invitations.issue({ agentId, ref: GUEST_REF })
+  await until(clock, client.initialize())
+  // The login verifies the token with real crypto, so stepping the fake
+  // clock meanwhile can pass the handshake deadline under load.
+  await client.connection.agent.request(methods.agent.auth.login, {
+    methodId: HGW_AUTH_METHOD_INVITE,
+    _meta: { [HGW_META_KEY]: { token } },
+  })
+  return client
+}
+
 /**
  * The runtime asks its question; resolves once `plain` holds it, with what
  * settles once the runtime holds an answer.
@@ -749,12 +788,23 @@ function wireCase(
       clients.push(opened)
       return opened
     }
+    /** A fake without the hook fails the row that needs it, never skips it. */
+    const lacks = (hook: string) =>
+      new Error(`this fake has no ${hook}; name the row a gap`)
     try {
       await body({
         gateway,
         agentId: runtime.agentId,
         folder: runtime.folder,
         turn: runtime.turn ?? NO_TURN,
+        invite: (ref, said) =>
+          runtime.invite
+            ? runtime.invite(ref, said)
+            : Promise.reject(lacks("invited Session")),
+        rewinds: () => {
+          if (!runtime.rewinds) throw lacks("count of rewinds")
+          return runtime.rewinds()
+        },
         clock,
         connect,
         connectPlain: (options) =>
@@ -1256,6 +1306,45 @@ export function runWireContract(
               expect(rewind).toMatchObject({ status: "unavailable" })
             },
           },
+        }
+      )
+
+      row(
+        "guestRetryOfSlashRefused",
+        "refuses a guest's Retry of a slash command it was shown, its text empty or padding alone, and writes no rewind",
+        async (harness) => {
+          const { clock, invite, rewinds } = harness
+          const said = ["/compact", "  /compact", "\u200B/compact"]
+          await until(clock, invite(GUEST_REF, said))
+          const guest = await invitedGuest(harness)
+          await until(clock, resumeFromStart(guest, GUEST_REF))
+          const shown = userSide(guest.updates)
+          const answers: unknown[] = []
+          for (const { id } of shown)
+            for (const text of ["", " \u200B "])
+              answers.push(
+                await until(
+                  clock,
+                  rewindPrompt(guest, GUEST_REF, id, text)
+                ).then(
+                  () => "sent",
+                  (error: { code?: unknown }) => error.code
+                )
+              )
+
+          // A runtime may read the stored text back without its leading
+          // spaces; each is still the slash command it was stored as, and
+          // the invisible padding reaches the guest as written.
+          const bare = (text: string) => text.replace(/^[\s\u200B]+/u, "")
+          expect(shown.map(({ text }) => bare(text))).toEqual(said.map(bare))
+          expect(shown.map(({ text }) => text)).toContain(said.at(-1))
+          expect(answers).toEqual(
+            Array.from(
+              { length: said.length * 2 },
+              () => RequestError.invalidParams().code
+            )
+          )
+          expect(rewinds()).toBe(0)
         }
       )
 

@@ -979,6 +979,28 @@ export function fakeOpenClaw() {
     /** Settles once the runtime subscribed `key`, and for `tools` its tool events. */
     subscribed,
 
+    /**
+     * A Session of the Agent the Gateway stores under `key`, with the
+     * gateway's tools on as the Agent's own Session has them, holding a turn
+     * for each of `said`: a user entry with that text as written, and a
+     * reply. OpenClaw ran none of them, so a slash command among them is
+     * stored as text.
+     */
+    storeSession(key: string, said: readonly string[] = []) {
+      const stored = addSession({
+        key,
+        agentId: AGENT_ID,
+        toolOverrides: { mcpServers: { "aos-ui": true } },
+      })
+      for (const text of said) {
+        store(stored, { role: "user", content: [{ type: "text", text }] })
+        store(stored, {
+          role: "assistant",
+          content: [{ type: "text", text: "Noted." }],
+        })
+      }
+    },
+
     /** The Session `key` as the Gateway stores it, for a test to read back. */
     stored(key: string) {
       return structuredClone(session(key))

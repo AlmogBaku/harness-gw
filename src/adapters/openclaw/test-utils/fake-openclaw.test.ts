@@ -69,6 +69,31 @@ describe("fakeOpenClaw", () => {
     expect(texts(main)).toEqual([])
   })
 
+  it("stores a Session under the key it is given, with its turns as written", async () => {
+    const native = await dial()
+    const key = "agent:research:reserved"
+    native.openclaw.storeSession(key, ["/compact", "Hello"])
+
+    const listed = await native.request<{
+      sessions: Array<Record<string, unknown>>
+    }>("sessions.list", { agentId: "research", search: key })
+    const history = await native.request("chat.history", { sessionKey: key })
+
+    expect(listed.sessions).toEqual([
+      expect.objectContaining({
+        key,
+        agentId: "research",
+        toolOverrides: { mcpServers: { "aos-ui": true } },
+      }),
+    ])
+    expect(texts(history)).toEqual([
+      "user:/compact",
+      "assistant:Noted.",
+      "user:Hello",
+      "assistant:Noted.",
+    ])
+  })
+
   it("rewinds a Session before a user entry onto a new transcript, refusing a working one", async () => {
     const native = await dial()
     await turn(native, MAIN, "First")

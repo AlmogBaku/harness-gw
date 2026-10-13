@@ -1,4 +1,5 @@
 import { runWireContract } from "../../acp/wire-contract"
+import { inviteSessionKey } from "../../core/invite-key"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeOpenCodeRuntime } from "./factory"
 import {
@@ -34,6 +35,12 @@ runWireContract(
       agentId: opencode.scope.agentId,
       folder: PROJECT_DIRECTORY,
       turn: opencode.turn,
+      // OpenCode finds an invited Session by its title.
+      async invite(ref, said) {
+        opencode.storeSession(inviteSessionKey(ref), said)
+        return opencode.scope.sessionId
+      },
+      rewinds: () => opencode.reverts(),
     }
   },
   {

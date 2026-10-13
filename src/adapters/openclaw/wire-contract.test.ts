@@ -1,6 +1,7 @@
 import { vi } from "vitest"
 
 import { runWireContract } from "../../acp/wire-contract"
+import { openClawInviteSessionKey } from "../../core/invite-key"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeOpenClawRuntime } from "./factory"
 import {
@@ -53,6 +54,14 @@ runWireContract(
       agentId: openclaw.scope.agentId,
       folder: AGENT_WORKSPACE,
       turn: openclaw.turn,
+      // OpenClaw keys an invited Session under its Agent, and names it
+      // publicly by that key.
+      async invite(ref, said) {
+        const key = openClawInviteSessionKey(openclaw.scope.agentId, ref)
+        openclaw.storeSession(key, said)
+        return key
+      },
+      rewinds: () => openclaw.requested("sessions.rewind"),
     }
   },
   {

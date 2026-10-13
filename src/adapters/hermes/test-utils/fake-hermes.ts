@@ -174,6 +174,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
    * its first prompt stores one (`tui_gateway/methods_session.py:394`).
    */
   let saved = stored
+  /** The stored Session's title, which `session.list` finds it by. */
+  let title = "Contract Session"
   /**
    * `display.tool_progress` is not "off": Hermes streams an ordinary tool
    * call only then (`tui_gateway/tool_progress.py:253` and `:319`), and its
@@ -502,6 +504,21 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
           },
         }
       }
+      // The profile's stored Sessions titled exactly `title`, in the row shape
+      // the adapter's invitation lookup reads; only the one Session this fake
+      // runs has a title to find.
+      case "session.list":
+        return {
+          result: {
+            sessions:
+              saved &&
+              !deleted &&
+              params.profile === PROFILE &&
+              params.title === title
+                ? [{ id: STORED_ID, profile: PROFILE, title }]
+                : [],
+          },
+        }
       case "session.active_list":
         return {
           result: {
@@ -632,9 +649,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       // A fork stays listed by its `_branched_from` marker, and a delegated
       // child is left out (`db.session_count(exclude_children=True)`).
       const sessions = [
-        ...(listed
-          ? [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }]
-          : []),
+        ...(listed ? [{ id: STORED_ID, profile: PROFILE, title }] : []),
         ...[...others].flatMap(([id, { title, parent, source }]) =>
           source === "subagent"
             ? []
@@ -829,6 +844,21 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
           },
         ],
       })
+    },
+
+    /**
+     * The Session stored under `named`, holding a turn for each of `said`: a
+     * user row with that text as written, and a reply. Hermes ran none of
+     * them, so a slash command among them is stored as text.
+     */
+    storeSession(named: string, said: readonly string[] = []) {
+      title = named
+      saved = true
+      for (const text of said) {
+        store({ role: "user", content: text })
+        store({ role: "assistant", content: "Noted.", finish_reason: "stop" })
+      }
+      turnRows = []
     },
 
     /** A prompt that inlines the image it attached, as a vision turn stores it. */
