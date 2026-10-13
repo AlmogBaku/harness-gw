@@ -56,6 +56,7 @@ export type OpenClawSession = Readonly<{
   displayName?: string
   archived?: boolean
   pinned?: boolean
+  unread?: boolean
   /** External channel the Session came from (e.g. "whatsapp", "slack"). */
   channel?: string
   createdAt?: number
@@ -275,6 +276,7 @@ export type OpenClawSessionPatch =
   | Readonly<{ label: string }>
   | Readonly<{ archived: boolean }>
   | Readonly<{ pinned: boolean }>
+  | Readonly<{ unread: boolean }>
   | Readonly<{
       toolOverrides: OpenClawToolOverrides
       expectedToolOverrides: OpenClawToolOverrides | null
@@ -483,6 +485,8 @@ export function parseOpenClawSession(value: unknown): OpenClawSession {
     throw new OpenClawNativePayloadError()
   if (value.pinned !== undefined && typeof value.pinned !== "boolean")
     throw new OpenClawNativePayloadError()
+  if (value.unread !== undefined && typeof value.unread !== "boolean")
+    throw new OpenClawNativePayloadError()
   if (
     value.hasActiveRun !== undefined &&
     typeof value.hasActiveRun !== "boolean"
@@ -510,6 +514,7 @@ export function parseOpenClawSession(value: unknown): OpenClawSession {
       ? { archived: value.archived }
       : {}),
     ...(typeof value.pinned === "boolean" ? { pinned: value.pinned } : {}),
+    ...(typeof value.unread === "boolean" ? { unread: value.unread } : {}),
     // channel is an opaque string; unknown values are resolved later by sessionPlatform.
     ...(optionalString(value.channel)
       ? { channel: value.channel as string }

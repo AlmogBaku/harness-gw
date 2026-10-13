@@ -1222,20 +1222,60 @@ describe("AOS ACP agent", () => {
     other.close()
   })
 
-  it("marks a Session read at once, and tells the runtime", async () => {
-    const test = await harness()
-    await test.list()
-
-    await test.agent.request(HGW_METHODS.session.update, {
-      sessionId: SESSION,
+  it.each([
+    {
+      marks: "read at once, ending what this connection kept unread",
       unread: false,
-    })
+      refusal: undefined,
+      kept: [],
+      reexposed: [[AGENT, SESSION]],
+    },
+    {
+      marks: "unread, kept so for this connection first",
+      unread: true,
+      refusal: undefined,
+      kept: [[AGENT, SESSION]],
+      reexposed: [],
+    },
+    {
+      marks: "unread, keeping nothing once the runtime refuses",
+      unread: true,
+      refusal: new Error("Upstream request failed"),
+      kept: [[AGENT, SESSION]],
+      reexposed: [[AGENT, SESSION]],
+    },
+  ])(
+    "marks a Session $marks, and tells the runtime",
+    async ({ unread, refusal, kept, reexposed }) => {
+      const test = await harness()
+      await test.list()
+      if (refusal) test.updateSession.mockRejectedValueOnce(refusal)
 
-    expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
-      unread: false,
-    })
-    test.close()
-  })
+      const updating = test.agent.request(HGW_METHODS.session.update, {
+        sessionId: SESSION,
+        unread,
+      })
+      await (refusal
+        ? expect(updating).rejects.toMatchObject({
+            code: RequestError.internalError().code,
+          })
+        : expect(updating).resolves.toEqual({}))
+
+      expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
+        unread,
+      })
+      expect(test.readState.keepUnread.mock.calls).toEqual(kept)
+      expect(test.readState.reexpose.mock.calls).toEqual(reexposed)
+      // No acknowledgement already on its way may read it again, and the
+      // write is settled before a fresh exposure starts.
+      const [written] = test.updateSession.mock.invocationCallOrder
+      for (const order of test.readState.keepUnread.mock.invocationCallOrder)
+        expect(order).toBeLessThan(written!)
+      for (const order of test.readState.reexpose.mock.invocationCallOrder)
+        expect(order).toBeGreaterThan(written!)
+      test.close()
+    }
+  )
 
   it("steers only the run a browser follows, and reports the delivery", async () => {
     const opening = gate()
@@ -1246,6 +1286,8 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Start" }],
       _meta: { [HGW_META_KEY]: {} },
     })
+    // A message this connection sends reads a Session it kept unread.
+    expect(test.readState.reexpose.mock.calls).toEqual([[AGENT, CREATED]])
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     await waitFor(() =>
@@ -1282,6 +1324,11 @@ describe("AOS ACP agent", () => {
     })
 
     expect(steered).toEqual({ status: "steered" })
+    // A steer is a message too; a refused one is none.
+    expect(test.readState.reexpose.mock.calls).toEqual([
+      [AGENT, CREATED],
+      [AGENT, CREATED],
+    ])
     // The steer goes out as the user message it adds to the turn.
     const accepted = await test.recorder.wait(
       said("steer-1"),

@@ -195,7 +195,12 @@ function sessionStatus(row: OpenClawSession): Session["status"] {
     : "idle"
 }
 
-function projectSession(agentId: string, row: OpenClawSession): Session {
+/** `readState`: whether the Gateway's unread acknowledgement contract holds. */
+function projectSession(
+  agentId: string,
+  row: OpenClawSession,
+  readState: boolean
+): Session {
   verifyOwnership(agentId, row)
   const platform = sessionPlatform(row.channel)
   return {
@@ -208,8 +213,11 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
       : { createdAt: new Date(row.createdAt).toISOString() }),
     ...updatedAt(row),
     status: sessionStatus(row),
-    // Absent pin state stays absent: it never overwrites a known value.
+    // Absent pin or read state stays absent: it never overwrites a known value.
     ...(typeof row.pinned === "boolean" ? { pinned: row.pinned } : {}),
+    ...(readState && typeof row.unread === "boolean"
+      ? { unread: row.unread }
+      : {}),
     // channel carries the external source; unknown/absent stays absent.
     ...(platform !== undefined ? { platform } : {}),
   }
@@ -217,13 +225,16 @@ function projectSession(agentId: string, row: OpenClawSession): Session {
 
 /**
  * Maps one normalized Session intent to its proven native equivalent. `unread`
- * and every rejected body stay unavailable rather than emulated.
+ * outside the acknowledgement contract stays unavailable rather than emulated.
  */
-function nativeSessionPatch(patch: SessionPatch): OpenClawSessionPatch {
+function nativeSessionPatch(
+  patch: SessionPatch,
+  readState: boolean
+): OpenClawSessionPatch {
   if ("title" in patch) return { label: patch.title }
   if ("archived" in patch) return { archived: patch.archived }
   if ("pinned" in patch) return { pinned: patch.pinned }
-  // OpenClaw has no native read state to write.
+  if (readState) return { unread: patch.unread }
   throw new OpenClawWorkspaceUnavailableError()
 }
 
@@ -282,8 +293,14 @@ export function createOpenClawWorkspace(input: {
   hiddenAgentIds?: readonly string[]
   /** Where a row or an Agent left out of a list is told, by its ids alone. */
   log?: Logger
+  /**
+   * Whether the Gateway now keeps read state under its acknowledgement
+   * contract; only then is `unread` read or written. Off when absent.
+   */
+  readState?: () => boolean
 }): OpenClawWorkspace {
   const hidden = new Set(input.hiddenAgentIds ?? [])
+  const readState = () => input.readState?.() ?? false
   const listAgentRows = async () =>
     openClawAgentRows(
       await input.client.request("agents.list", openClawAgentsParams())
@@ -369,7 +386,7 @@ export function createOpenClawWorkspace(input: {
   const listedSession = (agentId: string, row: unknown) => {
     try {
       const session = SessionSchema.safeParse(
-        projectSession(agentId, parseOpenClawSession(row))
+        projectSession(agentId, parseOpenClawSession(row), readState())
       )
       if (session.success) return session.data
     } catch {
@@ -476,7 +493,7 @@ export function createOpenClawWorkspace(input: {
     return matches[0]!
   }
   const getSession = async (agentId: string, sessionKey: string) =>
-    projectSession(agentId, await sessionRow(agentId, sessionKey))
+    projectSession(agentId, await sessionRow(agentId, sessionKey), readState())
 
   return {
     listAgents,
@@ -620,7 +637,7 @@ export function createOpenClawWorkspace(input: {
         openClawPatchSessionParams(
           agentId,
           sessionKey,
-          nativeSessionPatch(patch)
+          nativeSessionPatch(patch, readState())
         )
       )
     },

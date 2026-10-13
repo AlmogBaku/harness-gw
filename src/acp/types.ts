@@ -231,6 +231,17 @@ type WithoutSession<T> = T extends unknown ? Omit<T, "sessionId"> : never
  */
 export interface ReadState {
   focus(agentId: string, sessionId: string): void
+  /**
+   * The operator marks the Session unread. Focused here, it stays unread
+   * until focus moves to another Session or to none and back, or `reexpose`.
+   */
+  keepUnread(agentId: string, sessionId: string): void
+  /**
+   * The operator engaged with the Session it kept unread — a send, a steer,
+   * or an explicit read — or the runtime refused the unread write, so a fresh
+   * exposure starts.
+   */
+  reexpose(agentId: string, sessionId: string): void
   blur(): void
   onExecution(event: ExecutionEvent): void
   close(): void

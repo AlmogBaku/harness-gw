@@ -6,6 +6,7 @@ import {
   type KeyObject,
 } from "node:crypto"
 
+import type { EventFrame } from "@openclaw/gateway-protocol"
 import { GATEWAY_CLIENT_CAPS } from "@openclaw/gateway-protocol/client-info"
 
 import type { RuntimeLimits } from "../../config"
@@ -174,6 +175,8 @@ export function composeOpenClawRuntime({
   mediaArtifacts,
 }: OpenClawRuntimeParts) {
   const state: { subscriptions?: OpenClawSessionSubscriptions } = {}
+  /** Who hears every Gateway event, beside the Session subscriptions. */
+  const events = new Set<(event: EventFrame) => void>()
   const resubscribe = (reason: "gap" | "reconnect") => {
     state.subscriptions
       ?.replaceGeneration(reason)
@@ -201,6 +204,7 @@ export function composeOpenClawRuntime({
     ],
     onEvent(event) {
       state.subscriptions?.accept(event, state.subscriptions.generation)
+      for (const listener of events) listener(event)
     },
     onGap() {
       resubscribe("gap")
@@ -239,6 +243,12 @@ export function composeOpenClawRuntime({
         deviceToken: async () => (await credentials()).deviceToken,
         mcpToolNames,
         ...(mediaArtifacts === undefined ? {} : { mediaArtifacts }),
+        subscribeEvents: (listener) => {
+          events.add(listener)
+          return () => {
+            events.delete(listener)
+          }
+        },
         subscribeSession: async (agentId, sessionKey, onInvalidate) => {
           const lease = await subscriptions!.acquire(
             { agentId, sessionKey },

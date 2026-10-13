@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../../test/support/fake-clock"
+import { captureLogs } from "../../../test/support/log-capture"
 import {
+  CATALOG_CHANGE_WINDOW_MS,
   OpenClawAdapterUnavailableError,
   OpenClawServerAdapter,
 } from "./adapter"
@@ -9,8 +12,11 @@ import {
   OpenClawClientRequestError,
   type OpenClawGatewayClient,
 } from "./client"
+import { composeOpenClawRuntime } from "./factory"
 import {
   RESEARCH_AGENTS,
+  fakeOpenClaw,
+  fakeOpenClawClient,
   idleTurns,
   stubOpenClawClient,
 } from "./test-utils/fake-openclaw"
@@ -20,6 +26,12 @@ import {
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
 } from "./workspace"
+
+vi.mock("@openclaw/gateway-client", async (importOriginal) =>
+  (await import("./test-utils/gateway-client-mock")).gatewayClientMock(
+    await importOriginal()
+  )
+)
 
 const sessionKey = "agent:research:main"
 
@@ -150,8 +162,10 @@ describe("OpenClaw ServerRuntime assembly", () => {
     })
   })
 
-  it("renames, archives, pins, and deletes through the exact native Session RPCs", async () => {
-    const gateway = client()
+  it("renames, archives, pins, marks, and deletes through the exact native Session RPCs", async () => {
+    const gateway = client({
+      negotiatedPolicy: () => ({ maxPayload: 1_024, sessionUnreadAck: true }),
+    })
     const adapter = adapterOver(gateway)
 
     await adapter.updateSession("research", sessionKey, {
@@ -178,6 +192,14 @@ describe("OpenClaw ServerRuntime assembly", () => {
         pinned,
       })
     }
+    for (const unread of [true, false]) {
+      await adapter.updateSession("research", sessionKey, { unread })
+      expect(gateway.request).toHaveBeenCalledWith("sessions.patch", {
+        agentId: "research",
+        key: sessionKey,
+        unread,
+      })
+    }
     await adapter.deleteSession("research", sessionKey)
     expect(gateway.request).toHaveBeenCalledWith("sessions.delete", {
       agentId: "research",
@@ -189,6 +211,7 @@ describe("OpenClaw ServerRuntime assembly", () => {
         sessionArchival: { status: "available" },
         sessionPin: { status: "available" },
         sessionDeletion: { status: "available" },
+        sessionReadState: { status: "available" },
       },
     })
   })
@@ -197,10 +220,11 @@ describe("OpenClaw ServerRuntime assembly", () => {
     const gateway = client()
     const adapter = adapterOver(gateway)
 
-    // The provider has no native read state to write.
-    await expect(
-      adapter.updateSession("research", sessionKey, { unread: false })
-    ).rejects.toBeInstanceOf(OpenClawWorkspaceUnavailableError)
+    // Outside the unread acknowledgement contract no read state is written.
+    for (const unread of [true, false])
+      await expect(
+        adapter.updateSession("research", sessionKey, { unread })
+      ).rejects.toBeInstanceOf(OpenClawWorkspaceUnavailableError)
     expect(gateway.request).not.toHaveBeenCalledWith(
       "sessions.patch",
       expect.anything()
@@ -398,5 +422,50 @@ describe("OpenClaw artifact reads", () => {
       adapter.artifact("research", sessionKey, "artifact_managed_image_abc")
     ).rejects.toSatisfy((error) => adapter.publicError(error)?.kind === "gone")
     expect(fetch).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("OpenClaw catalog change feed", () => {
+  it("wakes the catalog once per burst of sessions.changed, and subscribes each new connection again", async () => {
+    const clock = useFakeClock()
+    const openclaw = fakeOpenClaw()
+    const client = fakeOpenClawClient(openclaw)
+    const { runtime, close } = composeOpenClawRuntime({
+      ...client,
+      baseUrl: "ws://127.0.0.1:18789",
+      logger: captureLogs().logger,
+    })
+    await client.start()
+    const changed = vi.fn()
+
+    const leave = await runtime.subscribeCatalogChanges!(changed)
+    expect(openclaw.catalogSubscriptions()).toBe(1)
+    for (const event of ["sessions.changed", "presence", "sessions.changed"])
+      openclaw.broadcast(event)
+    await clock.advance(CATALOG_CHANGE_WINDOW_MS - 1)
+    expect(changed).not.toHaveBeenCalled()
+    await clock.advance(1)
+    expect(changed).toHaveBeenCalledOnce()
+
+    // Any other event wakes nothing.
+    openclaw.broadcast("presence")
+    await clock.advance(CATALOG_CHANGE_WINDOW_MS)
+    expect(changed).toHaveBeenCalledOnce()
+
+    // The Gateway forgets the subscription with the connection it came on.
+    await openclaw.dropLink()
+    await clock.advance(1_000)
+    await openclaw.restoreLink()
+    await clock.advance(0)
+    expect(openclaw.catalogSubscriptions()).toBe(2)
+    openclaw.broadcast("sessions.changed")
+    await clock.advance(CATALOG_CHANGE_WINDOW_MS)
+    expect(changed).toHaveBeenCalledTimes(2)
+
+    leave()
+    openclaw.broadcast("sessions.changed")
+    await clock.advance(CATALOG_CHANGE_WINDOW_MS)
+    expect(changed).toHaveBeenCalledTimes(2)
+    await close()
   })
 })

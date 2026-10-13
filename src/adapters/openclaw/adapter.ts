@@ -1,3 +1,5 @@
+import type { EventFrame } from "@openclaw/gateway-protocol"
+
 import type { Logger } from "../../../lifecycle"
 import type {
   AgentUpdatePatch,
@@ -16,6 +18,7 @@ import type {
   ServerMcpApps,
   ServerTurnEngine,
   ServerRuntime,
+  ServerRuntimeTranslation,
   SessionPatch,
 } from "../../core/runtime"
 import { failureOf, publicFailure, TURN_FAILURES } from "../../core/failures"
@@ -61,6 +64,9 @@ import {
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
 } from "./workspace"
+
+/** One wake per burst of `sessions.changed`: the first opens the window. */
+export const CATALOG_CHANGE_WINDOW_MS = 1_000
 
 /** A native operation is intentionally absent until its exact V4 semantics are proven. */
 export class OpenClawAdapterUnavailableError extends Error {
@@ -132,6 +138,9 @@ export function openClawPublicError(cause: unknown) {
   return undefined
 }
 
+/** Hears every Gateway event as it arrives, until the returned stop. */
+type OpenClawEvents = (listener: (event: EventFrame) => void) => () => void
+
 type OpenClawServerAdapterOptions = Readonly<{
   /** The Gateway's calls, and the link they ride on. */
   client: OpenClawGatewayClient & { readonly link: ServerLink }
@@ -152,6 +161,8 @@ type OpenClawServerAdapterOptions = Readonly<{
   mediaArtifacts?: boolean
   /** Where a row or an Agent left out of a list is told. */
   logger?: Logger
+  /** The Gateway's events; without them there is no catalog change feed. */
+  subscribeEvents?: OpenClawEvents
 }>
 
 /**
@@ -161,14 +172,25 @@ type OpenClawServerAdapterOptions = Readonly<{
 export class OpenClawServerAdapter implements ServerRuntime {
   readonly link: ServerLink
   readonly turns: ServerTurnEngine
+  /** OpenClaw's read position moves only on a write, and no event re-lights it. */
+  readonly translation: ServerRuntimeTranslation = { relighting: [] }
   readonly mcpApps: ServerMcpApps
   /** Absent without the gateway's origin and a device token. */
   readonly readFile?: ServerFileReader
+  /**
+   * A wake per burst of the Gateway's `sessions.changed`, which it sends to a
+   * connection that called `sessions.subscribe`; each new connection calls it
+   * again. A lost connection is no change: the next read reconciles it.
+   */
+  readonly subscribeCatalogChanges?: (
+    listener: () => void
+  ) => Promise<() => void>
   readonly #workspace
   readonly #history
   readonly #client: OpenClawGatewayClient
   readonly #gatewayOrigin?: string
   readonly #fetch: typeof fetch
+  readonly #log?: Logger
   #close?: Promise<void>
 
   constructor(options: OpenClawServerAdapterOptions) {
@@ -177,10 +199,12 @@ export class OpenClawServerAdapter implements ServerRuntime {
     this.#client = options.client
     this.#gatewayOrigin = options.gatewayOrigin
     this.#fetch = options.fetch ?? fetch
+    this.#log = options.logger
     this.#workspace = createOpenClawWorkspace({
       client: options.client,
       hiddenAgentIds: options.hiddenAgentIds,
       ...(options.logger ? { log: options.logger } : {}),
+      readState: () => this.#readState(),
     })
     this.#history = createOpenClawHistory({
       client: options.client,
@@ -212,6 +236,10 @@ export class OpenClawServerAdapter implements ServerRuntime {
         deviceToken: options.deviceToken,
         fetch: this.#fetch,
       })
+    const subscribeEvents = options.subscribeEvents
+    if (subscribeEvents)
+      this.subscribeCatalogChanges = (listener) =>
+        this.#catalogChanges(subscribeEvents, listener)
   }
 
   resolveProviderSessionId(agentId: string, publicSessionId: string) {
@@ -462,6 +490,43 @@ export class OpenClawServerAdapter implements ServerRuntime {
     return Promise.resolve(this.#client.start())
   }
 
+  /** Whether the Gateway now keeps read state under its acknowledgement contract. */
+  #readState() {
+    return this.#client.negotiatedPolicy?.()?.sessionUnreadAck === true
+  }
+
+  async #catalogChanges(subscribeEvents: OpenClawEvents, listener: () => void) {
+    await this.#start()
+    const subscribe = () => this.#client.request("sessions.subscribe", {})
+    let burst: ReturnType<typeof setTimeout> | undefined
+    const leaveEvents = subscribeEvents(({ event }) => {
+      if (event !== "sessions.changed" || burst !== undefined) return
+      burst = setTimeout(() => {
+        burst = undefined
+        listener()
+      }, CATALOG_CHANGE_WINDOW_MS)
+    })
+    // The link turns ready only after it was lost, on a new connection.
+    const leaveLink = this.link.subscribe((state) => {
+      if (state === "ready")
+        subscribe().catch((err: unknown) =>
+          this.#log?.warn({ err }, "openclaw.catalog.subscribe_failed")
+        )
+    })
+    const leave = () => {
+      leaveEvents()
+      leaveLink()
+      clearTimeout(burst)
+    }
+    try {
+      await subscribe()
+    } catch (error) {
+      leave()
+      throw error
+    }
+    return leave
+  }
+
   #runtimeInfo(status: "ready" | "unavailable"): RuntimeInfo {
     const available = status === "ready"
     const operation = available
@@ -504,7 +569,9 @@ export class OpenClawServerAdapter implements ServerRuntime {
         sessionTurn: operation,
         sessionStop: operation,
         sessionSteer: unavailable("native-active-turn-steering-unavailable"),
-        sessionReadState: unavailable("native-session-read-state-unavailable"),
+        sessionReadState: this.#readState()
+          ? operation
+          : unavailable("native-session-read-state-unavailable"),
       },
     }
   }

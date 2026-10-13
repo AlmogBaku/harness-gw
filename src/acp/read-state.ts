@@ -41,6 +41,8 @@ export function createReadState({
   const writtenAt = new Map<string, number>()
   let focused: Target | undefined
   let releaseFocus: (() => void) | undefined
+  /** The focused Session is one this connection marked unread. */
+  let kept = false
   let pending:
     | {
         handle: TimerHandle
@@ -116,35 +118,64 @@ export function createReadState({
     pending = { handle, target, forced }
   }
 
-  const unfocus = () => {
-    focused = undefined
+  const release = () => {
     releaseFocus?.()
     releaseFocus = undefined
     clearPending()
   }
 
+  const unfocus = () => {
+    focused = undefined
+    kept = false
+    release()
+  }
+
+  const keeps = (target: Target) =>
+    kept && focused !== undefined && sameTarget(focused, target)
+
+  /** Starts an exposure of the Session: held read, and acknowledged. */
+  function expose(target: Target) {
+    unfocus()
+    focused = target
+    /*
+     * A provider re-lights a Session for activity the operator is already
+     * reading, and only a list read reports it. An operator who wants it
+     * unread marks it so, which ends this hold: an `unread` on a held row is
+     * always the provider's, so the row stays read and the provider gets the
+     * acknowledgement instead of the browser a flash.
+     */
+    releaseFocus = rows.holdRead(target.agentId, target.sessionId, () =>
+      arm(target, false)
+    )
+    // A watermark that moves only on a write needs one acknowledgement per
+    // exposure, even for a row that already reads read.
+    if (relighting || rows.get(target.agentId, target.sessionId)?.unread)
+      arm(target, true)
+  }
+
   return {
     focus(agentId, sessionId) {
-      unfocus()
       const target = { agentId, sessionId }
-      focused = target
-      /*
-       * A provider re-lights a Session for activity the operator is already
-       * reading, and only a list read reports it. The browser never asks for
-       * unread, so an `unread` on the focused row is always the provider and
-       * never an operator who wants it kept unread: the row stays read and the
-       * provider gets the acknowledgement instead of the browser a flash.
-       */
-      releaseFocus = rows.holdRead(agentId, sessionId, () => arm(target, false))
-      // A watermark that moves only on a write needs one acknowledgement per
-      // exposure, even for a row that already reads read.
-      if (relighting || rows.get(agentId, sessionId)?.unread) arm(target, true)
+      // A presence change re-reports the Session this connection marked
+      // unread; only looking away and back reads it again.
+      if (!keeps(target)) expose(target)
+    },
+
+    keepUnread(agentId, sessionId) {
+      if (!focused || !sameTarget(focused, { agentId, sessionId })) return
+      release()
+      kept = true
+    },
+
+    reexpose(agentId, sessionId) {
+      const target = { agentId, sessionId }
+      if (keeps(target)) expose(target)
     },
 
     blur: unfocus,
 
     onExecution(event) {
-      if (!focused || !sameTarget(focused, event)) return
+      if (!focused || kept || !sameTarget(focused, event)) return
       if (!relighting?.includes(event.kind)) return
       arm(focused, false)
     },

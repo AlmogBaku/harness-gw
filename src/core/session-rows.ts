@@ -4,7 +4,7 @@ import type { Session } from "../../protocol"
 
 /**
  * One cached Session row. `unread` is present only when a list read reported
- * it or a mark-read write settled it; detail reads never carry it and never
+ * it or a read-state write settled it; detail reads never carry it and never
  * clear a known value. `pinned` and `createdAt` come from whichever read
  * reports them, and a read that omits one likewise never clears a known value.
  *
@@ -43,6 +43,12 @@ export interface SessionRows {
   rememberDetail(row: Session): SessionRow
   /** Optimistically settles `unread: false`, stamps `readAt`, and arms the guard. */
   markRead(agentId: string, sessionId: string): SessionRow | undefined
+  /**
+   * Settles `unread: true` once the runtime took the write, which no detail
+   * read reports. It clears `readAt` and ends the guard: nothing in the
+   * Session is read any more, so no page reporting it unread is stale.
+   */
+  markUnread(agentId: string, sessionId: string): SessionRow | undefined
   /**
    * Keeps this Session read until the returned release runs: a list row that
    * reports it unread settles read instead, and `onRelit` runs after the page
@@ -200,6 +206,17 @@ export function createSessionRows({
       if (!previous) return undefined
       guardedUntil.set(key, now() + READ_GUARD_MS)
       const merged = withReadState(previous, false, now())
+      rows.set(key, merged)
+      publish(merged)
+      return merged
+    },
+
+    markUnread(agentId, sessionId) {
+      const key = rowKey(agentId, sessionId)
+      const previous = rows.get(key)
+      if (!previous) return undefined
+      guardedUntil.delete(key)
+      const merged = withReadState(previous, true, undefined)
       rows.set(key, merged)
       publish(merged)
       return merged

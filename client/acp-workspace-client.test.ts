@@ -742,17 +742,40 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("takes the pin back when the provider refuses the write", async () => {
-    const { client, failUpdates } = createClient()
-    const published = await watchRows(client)
-    failUpdates(new Error("Upstream request failed"))
+  it.each([
+    {
+      field: "pinned",
+      // The list never reports a pin, so the row owes one back.
+      listed: listEntry(),
+      write: (client: ReturnType<typeof createAcpWorkspaceClient>) =>
+        client.setSessionPinned(SESSION_ID, true),
+      request: { sessionId: SESSION_ID, pinned: true },
+      before: undefined,
+    },
+    {
+      field: "unread",
+      listed: listEntry(false),
+      write: (client: ReturnType<typeof createAcpWorkspaceClient>) =>
+        client.markSessionUnread(SESSION_ID),
+      request: { sessionId: SESSION_ID, unread: true },
+      before: false,
+    },
+  ] as const)(
+    "takes the $field write back when the provider refuses it",
+    async ({ field, listed, write, request, before }) => {
+      const { client, setListed, failUpdates, argsOf } = createClient()
+      setListed(listed)
+      const published = await watchRows(client)
+      failUpdates(new Error("Upstream request failed"))
 
-    await expect(client.setSessionPinned(SESSION_ID, true)).rejects.toThrow(
-      "Upstream request failed"
-    )
-    // The list never reported a pin, so the row owes one back.
-    expect(published.at(-1)?.[0]?.pinned).toBeUndefined()
-  })
+      const writing = write(client)
+      expect(published.at(-1)?.[0]?.[field]).toBe(true)
+      await expect(writing).rejects.toThrow("Upstream request failed")
+
+      expect(argsOf("updateSession")).toEqual([request])
+      expect(published.at(-1)?.[0]?.[field]).toBe(before)
+    }
+  )
 
   it("publishes a row whose pin or archival the provider changed", async () => {
     const { client, join, emitUpdate } = createClient()
@@ -817,6 +840,7 @@ describe("ACP workspace client", () => {
         sessionTitle: available,
         sessionArchival: available,
         sessionDeletion: available,
+        sessionReadState: available,
       })
     )
     await expect(client.sessionActionCapabilities()).resolves.toEqual({
@@ -824,6 +848,7 @@ describe("ACP workspace client", () => {
       archive: true,
       delete: true,
       pin: false,
+      unread: true,
     })
     await client.sessionActionCapabilities()
 

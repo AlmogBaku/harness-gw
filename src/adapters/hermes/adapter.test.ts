@@ -1932,32 +1932,24 @@ describe("Hermes server adapter", () => {
     expect(Object.keys(session)).not.toContain("unread")
   })
 
-  it("marks a Session read and pins it with the exact native profile-scoped patch bodies", async () => {
-    const http = vi.fn(async (path: string) => {
-      if (path.startsWith("/api/sessions/stored%2F1?"))
-        return { id: "stored/1", profile: "researcher", title: "One" }
-      throw new Error(`unexpected ${path}`)
-    })
-    const adapter = new HermesServerAdapter({ request: vi.fn(), http })
+  it.each([{ unread: false }, { unread: true }, { pinned: true }])(
+    "writes %o to a Session with the exact native profile-scoped patch body",
+    async (patch) => {
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored%2F1?"))
+          return { id: "stored/1", profile: "researcher", title: "One" }
+        throw new Error(`unexpected ${path}`)
+      })
+      const adapter = new HermesServerAdapter({ request: vi.fn(), http })
 
-    await adapter.updateSession("researcher", "stored/1", {
-      unread: false,
-    })
+      await adapter.updateSession("researcher", "stored/1", patch)
 
-    expect(http).toHaveBeenLastCalledWith(
-      "/api/sessions/stored%2F1?profile=researcher",
-      { method: "PATCH", body: { unread: false, profile: "researcher" } }
-    )
-
-    await adapter.updateSession("researcher", "stored/1", {
-      pinned: true,
-    })
-
-    expect(http).toHaveBeenLastCalledWith(
-      "/api/sessions/stored%2F1?profile=researcher",
-      { method: "PATCH", body: { pinned: true, profile: "researcher" } }
-    )
-  })
+      expect(http).toHaveBeenLastCalledWith(
+        "/api/sessions/stored%2F1?profile=researcher",
+        { method: "PATCH", body: { ...patch, profile: "researcher" } }
+      )
+    }
+  )
 
   it("declares the native pin and read state available, and read state temporarily unavailable during an outage", async () => {
     const ready = new HermesServerAdapter({

@@ -483,7 +483,7 @@ notification.
 
 | Method                 | Purpose                                                                                                                                                                                              |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_hgw/session/update`  | Set title, archived, or unread (exactly one intent per call; `protocol/acp.ts`)                                                                                                                      |
+| `_hgw/session/update`  | Set title, archived, pinned, or unread (exactly one intent per call; `protocol/acp.ts`); see [Read state](#read-state)                                                                               |
 | `_hgw/session/part`    | Detach this connection from the Session; the Session's work and all other members continue (`HgwSessionPartRequestSchema`, `protocol/acp.ts`)                                                        |
 | `_hgw/session/steer`   | Deliver a text correction to the active run                                                                                                                                                          |
 | `_hgw/session/focus`   | Report the exposed Session and workspace presence; answered `{}`. An absent `sessionId` changes nothing — a client may send `{}` as its liveness probe. (`HgwFocusRequestSchema`, `protocol/acp.ts`) |
@@ -510,6 +510,21 @@ Hermes answers from its own search, which matches Session ids and message
 content; its rows carry no read state, so a Session's known `unread` stands.
 Every other runtime matches titles, ignoring case: OpenCode over its own
 Sessions, and OpenClaw over the first 1000 Sessions the list serves.
+
+#### Read state
+
+`_hgw/session/update` with `unread: false` marks a Session read at once and
+tells the runtime. With `unread: true` it marks the Session unread once the
+runtime takes the write; a refused write changes nothing. A runtime whose
+`sessionReadState` is unavailable refuses `unread: true`.
+
+While a connection's `_hgw/session/focus` names a Session, the gateway
+acknowledges it to the runtime, so activity there does not leave it unread.
+A Session the connection marks unread while it shows it stays unread until
+that connection's focus moves to another Session or to none and back, or the
+connection sends the Session a prompt or a steer or marks it read. A report
+that changes only `foreground` or `idle` does not read it. Another connection
+that shows the Session still reads it.
 
 #### Agent updates and mute
 

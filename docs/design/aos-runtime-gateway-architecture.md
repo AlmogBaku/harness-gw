@@ -383,13 +383,17 @@ smaller staging limits (`src/guest/context.ts`).
 the client arms a debounce timer (400 ms, `FOCUS_DEBOUNCE_MS`). When it fires
 the gateway writes a read watermark to the provider. A floor of 5 000 ms
 (`REACK_FLOOR_MS`) prevents redundant writes. The provider's `sessionReadState`
-capability is checked once and cached. Guest connections carry no read state
+capability is checked once and cached. A Session the connection marks unread
+while it shows it is kept unread: no watermark is written for it until the
+connection's focus moves away and back, or it sends the Session a prompt or a
+steer or marks it read. Guest connections carry no read state
 (`src/acp/types.ts`); a guest's focus report is accepted and moves nothing
 (`src/guest/middleware/commands.ts`).
 
 **`SessionRows`** (`src/core/session-rows.ts`): the gateway-local row cache.
 A write guard of 10 s (`READ_GUARD_MS`) prevents a list read that races the
-mark-read write from clearing an optimistic `unread: false`.
+mark-read write from clearing an optimistic `unread: false`; an accepted write
+that marks the Session unread ends it.
 
 **Activity feed** (`src/acp/activity-feed.ts`): no buffer. On connect, the feed
 hydrates by reading one catalog page (100 entries, `HYDRATION_PAGE_SIZE`),
@@ -405,11 +409,11 @@ Guest connections carry no activity feed (`src/acp/types.ts`).
 
 **Status: Implemented**
 
-| Notification                        | Trigger                                                                                                                                             |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_hgw/catalog_invalidated`          | `subscribeCatalogChanges` fires (Hermes `sessions.changed`, `src/acp/agent.ts`; `src/adapters/hermes/adapter.ts`); also sent after `session/delete` |
-| `session_info_update` (`_meta.hgw`) | `SessionRows` subscriber on a changed row (`src/acp/agent.ts`; `src/core/session-rows.ts`)                                                          |
-| `_hgw/activity`                     | Activity feed push (execution events, unread changes)                                                                                               |
+| Notification                        | Trigger                                                                                                                                                                                              |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `_hgw/catalog_invalidated`          | `subscribeCatalogChanges` fires (Hermes and OpenClaw `sessions.changed`, `src/acp/agent.ts`; `src/adapters/hermes/adapter.ts`, `src/adapters/openclaw/adapter.ts`); also sent after `session/delete` |
+| `session_info_update` (`_meta.hgw`) | `SessionRows` subscriber on a changed row (`src/acp/agent.ts`; `src/core/session-rows.ts`)                                                                                                           |
+| `_hgw/activity`                     | Activity feed push (execution events, unread changes)                                                                                                                                                |
 
 A subscriber that falls behind the fanout bounds is detached (`membership.detached`
 in the log); catch-up happens through a standard `session/resume` with

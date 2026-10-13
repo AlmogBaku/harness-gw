@@ -404,8 +404,12 @@ Implement the optional `subscribeCatalogChanges(listener)` method on
 `ServerRuntime` when the native provider broadcasts catalog-change signals.
 The method returns a `Promise<() => void>` (the unsubscribe function;
 `src/core/runtime.ts:258`). Hermes uses its native
-`sessions.changed` WebSocket event. The ACP layer calls this method to wake
+`sessions.changed` WebSocket event; OpenClaw calls `sessions.subscribe` and
+hears its `sessions.changed`. The ACP layer calls this method to wake
 the activity feed on connect; adapters that omit it simply receive no wake.
+A feed that came up is not dialed again, so an adapter whose native
+subscription ends with its connection subscribes again when its link turns
+ready.
 
 ### Turns the runtime starts by itself
 
@@ -464,6 +468,13 @@ read state (for example, Hermes `last_read_at` NULL means read). Omit `unread`
 when the payload is absent or ambiguous; absent never overwrites a known value in
 the client. Declare the read-state capability unavailable rather than emulating
 it with a synthetic value.
+
+`updateSession` carries `{ unread: false }` to acknowledge a read and
+`{ unread: true }` to mark the Session unread; once the runtime takes an
+unread write the gateway marks the row unread itself, since a detail read
+need not report it. Set `translation.relighting` when the native read position
+moves only on a write: Hermes lists the execution events that re-light a
+focused Session, and OpenClaw lists none.
 
 ### Usage reporting
 

@@ -13,6 +13,7 @@ import {
 } from "@openclaw/gateway-protocol/connect-error-details"
 import { readMissingScopeErrorDetails } from "@openclaw/gateway-protocol/gateway-error-details"
 import {
+  GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
   type EventFrame,
   type HelloOk,
@@ -59,6 +60,8 @@ export type OpenClawNegotiatedPolicy = Readonly<{
     maxBytes: number
     maxImageBytes: number
   }>
+  /** The Gateway keeps Session read state under its acknowledgement contract. */
+  sessionUnreadAck?: true
 }>
 
 export type OpenClawGatewayClientOptions = Pick<
@@ -215,6 +218,11 @@ function negotiatedPolicy(
     policy.maxPayload < 1
   )
     return undefined
+  const readState = hello.features?.capabilities?.includes(
+    GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT
+  )
+    ? ({ sessionUnreadAck: true } as const)
+    : {}
   const attachments = policy.attachments
   if (
     !attachments ||
@@ -223,9 +231,10 @@ function negotiatedPolicy(
     !Number.isSafeInteger(attachments.maxImageBytes) ||
     attachments.maxImageBytes < 1
   )
-    return Object.freeze({ maxPayload: policy.maxPayload })
+    return Object.freeze({ maxPayload: policy.maxPayload, ...readState })
   return Object.freeze({
     maxPayload: policy.maxPayload,
+    ...readState,
     attachments: Object.freeze({
       maxBytes: attachments.maxBytes,
       maxImageBytes: attachments.maxImageBytes,

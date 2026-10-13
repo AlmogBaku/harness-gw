@@ -245,6 +245,7 @@ export function fakeOpenClaw() {
   const methods: string[] = []
   /** The Session key each `chat.history` named, in order. */
   const historyKeys: unknown[] = []
+  let catalogSubscriptions = 0
   let seq = 0
   let nextRow = 1
   let nextSession = 1
@@ -793,6 +794,7 @@ export function fakeOpenClaw() {
         dialed.subscribed.delete(String(params.key))
         return {}
       case "sessions.subscribe":
+        catalogSubscriptions += 1
         dialed.sessionEvents = true
         queueMicrotask(wakeSubscribers)
         return { subscribed: true }
@@ -1096,6 +1098,15 @@ export function fakeOpenClaw() {
     /** How many times the runtime called `method`, as a refused write's test asks. */
     requested: (method: string) =>
       methods.filter((called) => called === method).length,
+    /** How often the connection asked for the Gateway's Session changes. */
+    catalogSubscriptions: () => catalogSubscriptions,
+
+    /** A Gateway-wide event, such as `sessions.changed`, that no run carries. */
+    broadcast(event: string) {
+      if (!connection?.up) return
+      seq += 1
+      connection.options.onEvent?.({ type: "event", event, seq, payload: {} })
+    },
 
     async dropLink() {
       fault = "down"
