@@ -542,6 +542,8 @@ export class OpenCodeEventProjector {
   readonly #sessionId: string
   readonly #epoch: string
   readonly #tools = new Map<string, ToolState>()
+  /** The compactions that started and have not ended, by their message id. */
+  readonly #compactions = new Set<string>()
   readonly #fingerprints = new Map<number, string>()
   readonly #admissionId?: string
   #admissionMatched: boolean
@@ -648,6 +650,7 @@ export class OpenCodeEventProjector {
     const events = this.#closeOpenTools(
       this.#stopping ? "stopped" : "completed"
     )
+    this.#closeOpenCompactions(events)
     events.push({
       kind: TurnEventKind.TurnEnded,
       // A stop the operator asked for outranks how the last step ended.
@@ -668,6 +671,7 @@ export class OpenCodeEventProjector {
     if (this.#closed) return { events: [] }
     this.#closed = true
     const events = this.#closeOpenTools()
+    this.#closeOpenCompactions(events)
     events.push({
       kind: TurnEventKind.TurnFailed,
       code,
@@ -814,18 +818,22 @@ export class OpenCodeEventProjector {
         modelId: openCodeModelOptionId(data.model as ModelRef),
       })
     } else if (type === "session.next.compaction.started") {
+      const compactionId = data.messageID as string
+      this.#compactions.add(compactionId)
       events.push({
         kind: TurnEventKind.CompactionUpdated,
-        compactionId: data.messageID as string,
+        compactionId,
         status: CompactionStatus.Started,
       })
     } else if (type === "session.next.compaction.ended") {
+      const compactionId = data.messageID as string
+      this.#compactions.delete(compactionId)
       // The recent tail OpenCode keeps verbatim stays native: only the
       // summary is what the compaction wrote.
       const summary = data.text as string
       events.push({
         kind: TurnEventKind.CompactionUpdated,
-        compactionId: data.messageID as string,
+        compactionId,
         status: CompactionStatus.Completed,
         ...(summary ? { summary } : {}),
       })
@@ -938,6 +946,20 @@ export class OpenCodeEventProjector {
       parentMessageId: messageId,
     })
     return tool
+  }
+
+  /**
+   * A compaction that fails never sends its end, so one still open when its
+   * turn ends compacted nothing anyone can confirm.
+   */
+  #closeOpenCompactions(events: TurnEvent[]) {
+    for (const compactionId of this.#compactions)
+      events.push({
+        kind: TurnEventKind.CompactionUpdated,
+        compactionId,
+        status: CompactionStatus.Cancelled,
+      })
+    this.#compactions.clear()
   }
 
   /** Ends every open call; a settled turn also finishes each with `status`. */

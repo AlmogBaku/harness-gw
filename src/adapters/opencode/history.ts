@@ -1,6 +1,9 @@
 import type { z } from "zod"
 
-import type { SessionMessage } from "../../../protocol"
+import type {
+  SessionCompactionActivityMessage,
+  SessionMessage,
+} from "../../../protocol"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { publicJsonValue, type JsonValue } from "../json-value"
 import {
@@ -13,7 +16,11 @@ import {
 import { canonicalOpenCodeToolCall, openCodeToolKind } from "./tool-names"
 
 export type NativeMessage = z.output<typeof OpenCodeNativeMessageSchema>
-type ProjectedHistory = SessionMessage[]
+/** A stored row as a client reads it: a message, or a compaction it ran. */
+export type OpenCodeHistoryRow =
+  | SessionMessage
+  | SessionCompactionActivityMessage
+type ProjectedHistory = OpenCodeHistoryRow[]
 
 function safeFilename(value: string | undefined) {
   return value &&
@@ -39,7 +46,7 @@ function safeImage(url: string) {
 function projectMessages(
   message: NativeMessage,
   resolve?: McpToolNameResolver
-): SessionMessage[] {
+): OpenCodeHistoryRow[] {
   const projected = projectMessage(message, resolve)
   if (projected?.role !== "assistant") return projected ? [projected] : []
   const thought = projected.content.filter(({ type }) => type === "reasoning")
@@ -72,7 +79,7 @@ export function openCodeProjectedCount(messages: readonly NativeMessage[]) {
 function projectMessage(
   message: NativeMessage,
   resolve?: McpToolNameResolver
-): SessionMessage | undefined {
+): OpenCodeHistoryRow | undefined {
   const createdAt = openCodeTimestamp(message.time.created)
   if (message.type === "user") {
     const content: SessionMessage["content"] = [
@@ -157,12 +164,18 @@ function projectMessage(
       createdAt,
       content: [{ type: "text", text: message.text }],
     }
+  // The live compaction is named by this message's id, so its row replays as
+  // that compaction. The recent tail OpenCode keeps verbatim stays native, and
+  // an empty summary is left out, as the live end leaves it out.
   if (message.type === "compaction")
     return {
       id: message.id,
-      role: "system",
-      createdAt,
-      content: [{ type: "text", text: message.summary }],
+      role: "activity",
+      activityType: "COMPACTION",
+      content: {
+        compactionId: message.id,
+        ...(message.summary ? { summary: message.summary } : {}),
+      },
     }
   return undefined
 }

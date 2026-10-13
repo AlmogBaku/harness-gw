@@ -1,8 +1,8 @@
 /**
  * fakeOpenCode — one in-memory OpenCode server holding one Agent and one
- * Session, for the runtime and wire contracts: the HTTP routes and the durable
- * event stream a create, a turn and a read reach, and the faults the runtime
- * contract drives. It answers the real `createOpenCodeClient`, built by
+ * Session, beside a child of it that only its list returns, for the runtime
+ * and wire contracts: the HTTP routes and the durable event stream a create, a
+ * turn and a read reach, and the faults the runtime contract drives. It answers the real `createOpenCodeClient`, built by
  * `fakeOpenCodeClient`, through its `fetcher`, so the client's own status
  * mapping and credential tracking are what the contracts prove.
  *
@@ -32,6 +32,18 @@ const SESSION = {
   agent: AGENT_ID,
   title: "Contract Session",
   time: { created: 1_000, updated: 2_000 },
+}
+/**
+ * A child of the Session, as OpenCode's `task` tool spawns one on its older
+ * prompt path: the newer list returns it beside its parent, marked only by
+ * `parentID`. No gateway turn spawns it.
+ */
+const CHILD_SESSION = {
+  id: "session-1-task",
+  agent: AGENT_ID,
+  parentID: SESSION_ID,
+  title: "Contract Session task",
+  time: { created: 1_500, updated: 3_000 },
 }
 const MODEL = { providerID: "contract", id: "contract-model" }
 const NATIVE_FAILURE_STATUS = 500
@@ -111,6 +123,7 @@ export function fakeOpenCode() {
   let calls = 0
   let replies = 0
   let steps = 0
+  let compactions = 0
   let serverEvents = 0
   /** The question the running turn blocks on, and what settles its wait. */
   let asked:
@@ -333,6 +346,36 @@ export function fakeOpenCode() {
     })
   }
 
+  /**
+   * The running turn compacts its context, as the release's own compaction
+   * does: both its events and the message it stores carry one id, and that
+   * message keeps the summary its end streamed. Resolves with that id.
+   */
+  async function compact() {
+    compactions += 1
+    const messageID = `compaction-${compactions}`
+    const summary = "The conversation so far: three names were read."
+    const started = append("session.next.compaction.started", {
+      messageID,
+      reason: "auto",
+    })
+    append("session.next.compaction.ended", {
+      messageID,
+      reason: "auto",
+      text: summary,
+      recent: "Reading the file.",
+    })
+    messages.push({
+      id: messageID,
+      type: "compaction",
+      reason: "auto",
+      summary,
+      recent: "Reading the file.",
+      time: { created: created(started) },
+    })
+    return messageID
+  }
+
   async function finish() {
     running = false
     for (const answer of [...held]) answer.idle?.()
@@ -359,7 +402,10 @@ export function fakeOpenCode() {
         // The release answers a create with the new Session; this fake's one
         // Session stands for it.
         if (request.method === "POST") return json({ data: SESSION })
-        return json({ data: deleted ? [] : [SESSION], cursor: {} })
+        return json({
+          data: deleted ? [] : [SESSION, CHILD_SESSION],
+          cursor: {},
+        })
       case "/api/session/active":
         return json({
           data: running ? { [SESSION_ID]: { type: "running" } } : {},
@@ -438,8 +484,11 @@ export function fakeOpenCode() {
 
     finish,
 
+    compact,
+
     /** The wire contract's turn: two model responses, each its own step. */
     turn: {
+      compact,
       async firstResponse() {
         step({
           reasoning: "I should read the file.",

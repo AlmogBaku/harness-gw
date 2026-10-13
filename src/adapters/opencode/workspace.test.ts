@@ -153,6 +153,39 @@ describe("OpenCode workspace operations", () => {
     }
   )
 
+  // A child is a Session OpenCode's `task` tool spawned, and `parentID` is its
+  // only marker: the parent is the one top-level Session.
+  it("keeps a child Session out of every list, search and invite lookup, whatever else its row holds", async () => {
+    const invited = "aos-invite:guest-1"
+    const logs = captureLogs()
+    const operations = createOpenCodeWorkspaceOperations({
+      client: stubClient({
+        list: async () => ({
+          data: [
+            session({ id: "parent", title: invited }),
+            session({ id: "child", parentID: "parent", title: invited }),
+            session({ id: "unreadable-child", parentID: "parent", title: "" }),
+            session({ id: "other-child", agent: "other", parentID: "parent" }),
+          ],
+          cursor: {},
+        }),
+      }),
+      log: logs.logger,
+    })
+
+    for (const page of [
+      await operations.listSessions("research", 50, 0),
+      await operations.listAllSessions(50, 0),
+      await operations.searchSessions(undefined, "guest"),
+    ])
+      expect(page).toMatchObject({ sessions: [{ id: "parent" }], total: 1 })
+    // Only the parent holds the invited title, and no child row is a bad one.
+    await expect(
+      operations.resolveInvitedSession("research", "guest-1")
+    ).resolves.toEqual({ providerSessionId: "parent", created: false })
+    expect(logs.records()).toEqual([])
+  })
+
   it("lists the other Sessions past a malformed row across cursor pages, and fails only when none can be read", async () => {
     const at = (id: string, updated: number) =>
       session({ id, time: { created: 1, updated } })

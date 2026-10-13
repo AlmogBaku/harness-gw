@@ -24,6 +24,7 @@ import type { McpToolNames } from "../../mcp-apps/tool-names"
 
 import {
   ServerTurnConflictError,
+  ServerTurnUncertainError,
   type RecoveryRequest,
   type ServerTurnEngine,
   type ServerTurnHandle,
@@ -409,6 +410,13 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
    * foreign turn.
    */
   readonly #ownAdmissions = new Map<string, string>()
+  /**
+   * The admission each Session's latest start may have stored, its answer
+   * lost. The coordinator holds that turn uncertain and asks `recover` for
+   * it, so it is no longer own: a discovery or a turn subscription adopts it
+   * once nothing reconciles it, rather than leaving it orphaned.
+   */
+  readonly #uncertainAdmissions = new Map<string, string>()
   /** The foreign admission each Session's latest discovered turn adopted. */
   readonly #adoptedAdmissions = new Map<
     string,
@@ -455,6 +463,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
       this.#turns.size +
       this.#nativeSettlements.size +
       this.#ownAdmissions.size +
+      this.#uncertainAdmissions.size +
       this.#adoptedAdmissions.size
     )
   }
@@ -503,6 +512,8 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
     const id = admission?.data.messageID as string | undefined
     if (!admission || id === undefined || id === this.#ownAdmissions.get(key))
       return undefined
+    if (this.#uncertainAdmissions.get(key) === id)
+      this.#uncertainAdmissions.delete(key)
     this.#adoptedAdmissions.set(key, { turnId, admissionId: id })
     const handle = await this.#recoverRun(scope, undefined, id)
     const startedAt = occurredAt(admission.data)
@@ -742,30 +753,68 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         await this.#options.replies!.dispatch(scope, replies)
       } else {
         this.#ownAdmissions.set(run.key, expectedAdmission!)
-        const acknowledgement = await this.#client.sessions.prompt(
-          scope.providerSessionId,
-          {
+        this.#uncertainAdmissions.delete(run.key)
+        try {
+          const acknowledgement = await this.#client.sessions.prompt(
+            scope.providerSessionId,
+            {
+              id: expectedAdmission!,
+              prompt: { text: text!, ...(files ? { files: [...files] } : {}) },
+              resume: true,
+            },
+            signal
+          )
+          validateAdmission(acknowledgement, {
             id: expectedAdmission!,
-            prompt: { text: text!, ...(files ? { files: [...files] } : {}) },
-            resume: true,
-          },
-          signal
-        )
-        validateAdmission(acknowledgement, {
-          id: expectedAdmission!,
-          sessionId: scope.providerSessionId,
-          text: text!,
-          after,
-        })
+            sessionId: scope.providerSessionId,
+            text: text!,
+            after,
+          })
+        } catch (error) {
+          throw this.#promptFailed(run, error)
+        }
       }
       run.ready = true
-      await this.#reconcile(run)
-      if (!run.nativeTerminal) this.#watchWait(run)
-      return this.#handle(run)
     } catch (error) {
       this.#abandon(run)
       throw error
     }
+    // OpenCode stored the prompt, or took the replies, within its answer, so
+    // the start stands whatever follows: a failed read ends this segment
+    // instead, which the coordinator reconciles.
+    try {
+      await this.#reconcile(run)
+    } catch (error) {
+      this.#reconciliationFailed(run, error)
+    }
+    if (!run.nativeTerminal) this.#watchWait(run)
+    return this.#handle(run)
+  }
+
+  /**
+   * A prompt whose answer was lost may still have been stored, so its start
+   * is uncertain, which the coordinator reconciles through `recover`. Its
+   * admission is no longer own until a recovery finds it.
+   */
+  #promptFailed(run: ActiveTurn, error: unknown) {
+    if (!(error instanceof OpenCodeMutationUncertainError)) return error
+    if (this.#ownAdmissions.get(run.key) === run.expectedAdmission)
+      this.#ownAdmissions.delete(run.key)
+    this.#uncertainAdmissions.set(run.key, run.expectedAdmission!)
+    const uncertain = new ServerTurnUncertainError()
+    uncertain.cause = error
+    return uncertain
+  }
+
+  /**
+   * A recovery found the admission an uncertain start submitted, so the turn
+   * is the one this engine started: own again while it runs, as any other.
+   */
+  #confirmLanded(run: ActiveTurn) {
+    if (this.#uncertainAdmissions.get(run.key) !== run.expectedAdmission) return
+    this.#uncertainAdmissions.delete(run.key)
+    if (!run.nativeTerminal)
+      this.#ownAdmissions.set(run.key, run.expectedAdmission!)
   }
 
   async recover(
@@ -854,6 +903,7 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         await this.#reconcile(run)
         if (!run.nativeTerminal) this.#watchWait(run)
       }
+      this.#confirmLanded(run)
       return this.#handle(run)
     } catch (error) {
       this.#abandon(run)
