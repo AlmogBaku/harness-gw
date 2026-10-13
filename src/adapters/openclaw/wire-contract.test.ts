@@ -100,12 +100,9 @@ runWireContract(
 )
 
 /**
- * Why the guest rows fail here: every guest Send resolves its invitation with
- * `create`, and the adapter answers none for any resolution that may create
- * before it looks (`adapter.ts`, `resolveInvitedSession`), so a guest is
- * refused "not found" on the reserved Session it can resume and read.
- * `docs/runtimes/openclaw.md` says an invitation resolves a pre-existing
- * reserved Session.
+ * Every guest Send resolves its invitation with `create`, which OpenClaw
+ * cannot honour: the Send resolves the reserved Session already there, as a
+ * read does, or the guest's turn could not start at all.
  */
 describe("OpenClaw invitation", () => {
   it("resolves the reserved Session for a Send that may create, as for a read", async () => {
