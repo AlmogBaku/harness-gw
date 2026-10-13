@@ -209,6 +209,7 @@ export function createHistoryMiddleware({
           return event
         case "turn":
         case "child":
+        case "child-history":
         case "request-asked":
         case "request-withdrawn":
         case "question-answered":

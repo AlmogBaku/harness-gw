@@ -54,10 +54,14 @@ export function withoutLiveRows(
       if (index <= prompt) return true
       // A plan replaces the one before it, so restating it costs nothing.
       if (message.role === "activity")
-        return (
-          message.activityType === "PLAN" ||
-          !live.has(message.content.compactionId)
-        )
+        switch (message.activityType) {
+          case "PLAN":
+            return true
+          case "COMPACTION":
+            return !live.has(message.content.compactionId)
+          case "CHILD_SESSION":
+            return !live.has(message.content.childSessionId)
+        }
       return !(
         live.has(message.id) ||
         message.content.some(

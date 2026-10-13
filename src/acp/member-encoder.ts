@@ -508,8 +508,23 @@ export function createMemberEncoder({
     )
   }
 
+  /**
+   * A page as its updates, each child Session it names announced, the way a
+   * live report announces one: a row naming a child that may not be shown is
+   * left out, and nothing of that child follows it.
+   */
   function historyOutbounds(event: Extract<MemberEvent, { kind: "history" }>) {
-    return translators.translateHistory(event.page)
+    const messages = event.page.messages.filter(
+      (message) =>
+        message.role !== "activity" ||
+        message.activityType !== "CHILD_SESSION" ||
+        children.announce(
+          message.content.childSessionId,
+          event.sessionId,
+          undefined
+        )
+    )
+    return translators.translateHistory({ ...event.page, messages })
   }
 
   /**
@@ -571,6 +586,13 @@ export function createMemberEncoder({
         if (event.older) return olderPage(event, event.older)
         for (const outbound of historyOutbounds(event))
           await send(sessionId, outbound, event.sequence)
+        return
+      case "child-history":
+        // A child's transcript follows the announcement its row made.
+        if (!children.has(event.childSessionId)) return
+        for (const outbound of translators.translateHistory(event.page))
+          if (outbound.kind === "update")
+            await update(event.childSessionId, outbound.update)
         return
       case "request-asked":
         return ask(sessionId, event.request)

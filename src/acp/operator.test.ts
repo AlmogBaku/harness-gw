@@ -124,7 +124,12 @@ function createClock(startMs: number) {
 
 type HarnessOptions = Pick<
   AcpHarnessOptions,
-  "rows" | "maxSubscriberEvents" | "permission" | "question" | "translation"
+  | "rows"
+  | "maxSubscriberEvents"
+  | "permission"
+  | "question"
+  | "translation"
+  | "childHistory"
 > & { history?: SessionHistoryResponse }
 
 async function harness({ history, ...options }: HarnessOptions = {}) {
@@ -645,6 +650,139 @@ describe("operator ACP listener", () => {
     expect(shown).not.toContain("subagent_update")
     source.finish()
     test.close()
+  })
+
+  // ACP replays a child through its parent's from-start resume: the child's
+  // announcement, then the child's own updates, under its id.
+  it("replays a stored child Session from the start: its announcement, then its transcript", async () => {
+    const childHistory = vi.fn(async (): Promise<SessionHistoryResponse> => ({
+      sessionId: "child-1",
+      messages: [
+        {
+          id: "child-message",
+          role: "assistant",
+          content: [{ type: "text", text: "Two notes were stale" }],
+          createdAt: NOW,
+        },
+      ],
+      total: 1,
+      limit: 500,
+      offset: 0,
+      nextOffset: 0,
+    }))
+    const test = await harness({
+      childHistory,
+      history: {
+        ...HISTORY,
+        messages: [
+          ...HISTORY.messages,
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: {
+              childSessionId: "child-1",
+              title: "Review the notes",
+              status: "idle",
+            },
+          },
+        ],
+      },
+    })
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Two notes were stale"),
+      "the child's transcript"
+    )
+
+    const childish = updates(test.recorder).filter((params) =>
+      JSON.stringify(params).includes("child-")
+    )
+    expect(
+      childish.map(({ sessionId, update }) => [sessionId, update.sessionUpdate])
+    ).toEqual([
+      [SESSION, "subagent_update"],
+      ["child-1", "agent_message"],
+      ["child-1", "agent_message_chunk"],
+    ])
+    expect(childHistory).toHaveBeenCalledWith(AGENT, SESSION, "child-1")
+    test.close()
+  })
+
+  // A reconnect is a new connection, which knows no child: one announced
+  // before its cursor is announced again ahead of the events after it.
+  it("announces a child again to a positioned reconnect, then streams the child's events after the cursor", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+    const said = (text: string) => ({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "child-1",
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "child-message",
+        text,
+      },
+    })
+    source.emit(turnStarted())
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+      title: "Review the notes",
+      status: ChildSessionStatus.Running,
+    })
+    source.emit(said("Before the drop"))
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("Before the drop"),
+      "the child's first words"
+    )
+    const { turnId } = test.coordinator.snapshot(test.scope)
+    const cursor = Math.max(
+      ...updates(test.recorder).flatMap(({ update }) => {
+        const sequence = (
+          update as { _meta?: { hgw?: { sequence?: unknown } } }
+        )._meta?.hgw?.sequence
+        return typeof sequence === "number" ? [sequence] : []
+      })
+    )
+
+    const reconnected = await test.connect("connection-2")
+    await reconnected.list()
+    await reconnected.agent.request(methods.agent.session.resume, {
+      sessionId: CREATED,
+      cwd: "/",
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId, from: cursor + 1 },
+    })
+    source.emit(said("After the drop"))
+    await reconnected.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("After the drop"),
+      "the child's words after the cursor"
+    )
+
+    const childish = updates(reconnected.recorder).filter((params) =>
+      JSON.stringify(params).includes("child-1")
+    )
+    expect(childish).toMatchObject([
+      {
+        sessionId: CREATED,
+        update: { sessionUpdate: "subagent_update", title: "Review the notes" },
+      },
+      {
+        sessionId: "child-1",
+        update: { sessionUpdate: "agent_message_chunk" },
+      },
+    ])
+    expect(JSON.stringify(reconnected.recorder.entries)).not.toContain(
+      "Before the drop"
+    )
+    source.finish()
+    test.close()
+    reconnected.close()
   })
 
   it("delivers a multi-select question the SDK accepts", async () => {

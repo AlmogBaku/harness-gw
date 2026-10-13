@@ -456,10 +456,43 @@ export type SessionCompactionActivityMessage = z.infer<
   typeof SessionCompactionActivityMessageSchema
 >
 
+/**
+ * A child Session a turn of this one spawned, as its runtime stored it: its
+ * id, the call that spawned it, its display text, and its final state and
+ * facts. It replays as the child's announcement, ahead of the child's own
+ * transcript.
+ */
+export const SessionChildActivityMessageSchema = z.strictObject({
+  id: IdentifierSchema,
+  role: z.literal("activity"),
+  activityType: z.literal("CHILD_SESSION"),
+  content: z.strictObject({
+    childSessionId: IdentifierSchema,
+    toolCallId: IdentifierSchema.optional(),
+    title: z.string().max(65_536).optional(),
+    description: z.string().max(65_536).optional(),
+    status: z
+      .enum(["running", "waiting-for-input", "idle", "failed", "cancelled"])
+      .optional(),
+    model: z.string().min(1).max(256).optional(),
+    filesRead: z.array(z.string().max(4096)).max(1000).optional(),
+    filesWritten: z.array(z.string().max(4096)).max(1000).optional(),
+    durationMs: z.number().int().nonnegative().optional(),
+    summary: z.string().max(65_536).optional(),
+  }),
+})
+export type SessionChildActivityMessage = z.infer<
+  typeof SessionChildActivityMessageSchema
+>
+
 /** A stored row of the Session's activity, not of its conversation. */
 export const SessionActivityMessageSchema = z.discriminatedUnion(
   "activityType",
-  [SessionPlanActivityMessageSchema, SessionCompactionActivityMessageSchema]
+  [
+    SessionPlanActivityMessageSchema,
+    SessionCompactionActivityMessageSchema,
+    SessionChildActivityMessageSchema,
+  ]
 )
 export type SessionActivityMessage = z.infer<
   typeof SessionActivityMessageSchema

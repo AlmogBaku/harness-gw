@@ -618,6 +618,8 @@ export type HarnessOptions = {
   agentFolder?: ServerRuntime["agentFolder"]
   /** The runtime forks Sessions, into `FORKED`; it cannot by default. */
   forks?: boolean
+  /** A child Session's whole transcript; the runtime keeps none by default. */
+  childHistory?: ServerRuntime["childHistory"]
   /** The provider's Agent write; refuses as untested by default. */
   updateAgent?: ServerRuntime["updateAgent"]
   /**
@@ -808,6 +810,7 @@ export async function harness(options: HarnessOptions = {}) {
     getSession,
     createSession,
     ...(options.forks ? { forkSession } : {}),
+    ...(options.childHistory ? { childHistory: options.childHistory } : {}),
     updateSession,
     deleteSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,

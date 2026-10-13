@@ -1,6 +1,6 @@
 import type { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { SessionMessage } from "../../../protocol"
+import type { SessionActivityMessage, SessionMessage } from "../../../protocol"
 import {
   HGW_META_KEY,
   HgwArtifactDescriptorSchema,
@@ -13,7 +13,7 @@ import type {
   TranslateContext,
   TranslateHistory,
 } from "../types"
-import { CompactionStatus } from "../../core/events"
+import { CompactionStatus, TurnEventKind } from "../../core/events"
 import {
   artifactOutbound,
   chunkOutbound,
@@ -27,6 +27,7 @@ import {
   turnMeta,
   update,
 } from "./updates"
+import { translateChildUpdate } from "./children"
 
 type MessagePart = SessionMessage["content"][number]
 type ToolCallPart = Extract<MessagePart, { type: "tool-call" }>
@@ -252,25 +253,37 @@ function fromEmpty(outbound: readonly AcpOutbound[]): AcpOutbound[] {
  * and no turn state but a stored failure's, since no past state still stands.
  * The live turn's state follows the replay on its own.
  */
+/**
+ * A stored activity row as the update its live turn sent: the plan, a
+ * compaction that completed, or a child Session's announcement in the state
+ * its work ended in.
+ */
+function activityUpdate(message: SessionActivityMessage) {
+  switch (message.activityType) {
+    case "PLAN":
+      return planUpdate(message.content.todos, { sequence: 0 })
+    case "COMPACTION":
+      return {
+        ...compactionUpdate({
+          ...message.content,
+          status: CompactionStatus.Completed,
+        }),
+        _meta: { [HGW_META_KEY]: turnMeta(HISTORY_CONTEXT) },
+      }
+    case "CHILD_SESSION":
+      return translateChildUpdate(
+        { kind: TurnEventKind.ChildSessionUpdated, ...message.content },
+        HISTORY_CONTEXT
+      )
+  }
+}
+
 export const translateHistory = ((history) => {
   const context = HISTORY_CONTEXT
   const outbound: AcpOutbound[] = []
   for (const message of history.messages) {
     if (message.role === "activity")
-      outbound.push(
-        update(
-          message.activityType === "PLAN"
-            ? planUpdate(message.content.todos, { sequence: 0 })
-            : // A stored compaction is one that completed.
-              {
-                ...compactionUpdate({
-                  ...message.content,
-                  status: CompactionStatus.Completed,
-                }),
-                _meta: { [HGW_META_KEY]: turnMeta(context) },
-              }
-        )
-      )
+      outbound.push(update(activityUpdate(message)))
     else if (message.role === "assistant")
       outbound.push(
         ...turnOpeningOutbound(message),

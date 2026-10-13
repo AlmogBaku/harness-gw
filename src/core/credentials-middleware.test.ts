@@ -222,6 +222,52 @@ describe("credentials middleware: tool data, for every runtime and both listener
     expect(JSON.stringify([reported, called])).not.toContain(SECRET)
   })
 
+  it("masks a stored child Session as its live report was", () => {
+    const leaked = `/srv/${assigned("token")}`
+    const page: MemberEvent = {
+      sessionId: "s1",
+      kind: "history",
+      sequence: 0,
+      page: {
+        sessionId: "s1",
+        messages: [
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: {
+              childSessionId: "child-1",
+              title: `log in with ${assigned("password")}`,
+              summary: "Read the logs.",
+              filesWritten: ["/srv/app/a.ts", leaked],
+            },
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      },
+    }
+
+    const masked = shown(page)
+
+    expect(masked).toMatchObject({
+      page: {
+        messages: [
+          {
+            content: {
+              title: `log in with ${assigned("password", M)}`,
+              summary: "Read the logs.",
+              filesWritten: ["/srv/app/a.ts"],
+            },
+          },
+        ],
+      },
+    })
+    expect(JSON.stringify(masked)).not.toContain(SECRET)
+  })
+
   it("sends JSON arguments with nothing to mask exactly as written", () => {
     const delta = '{ "path" : "a.txt" }'
 

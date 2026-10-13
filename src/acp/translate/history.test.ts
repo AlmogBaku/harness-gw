@@ -347,6 +347,48 @@ describe("translateHistory", () => {
     })
   })
 
+  // ACP replays a child through its parent: its announcement, with the state
+  // its work ended in, ahead of anything of its own.
+  it("replays a stored child Session as its announcement, in its final state", () => {
+    const updates = updatesOf(
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: {
+              childSessionId: "child-1",
+              toolCallId: "call-spawn",
+              title: "Review the notes",
+              status: "idle",
+              summary: "Two notes were stale.",
+            },
+          },
+        ],
+        total: 1,
+      })
+    )
+
+    expect(updates).toEqual([
+      {
+        sessionUpdate: "subagent_update",
+        sessionId: "child-1",
+        title: "Review the notes",
+        state: { state: "idle", stopReason: "end_turn" },
+        _meta: {
+          [HGW_META_KEY]: {
+            sequence: 0,
+            turnId: "history",
+            toolCallId: "call-spawn",
+            summary: "Two notes were stale.",
+          },
+        },
+      },
+    ])
+  })
+
   it("replays a failed turn that streamed nothing, carrying its failure", () => {
     const updates = updatesOf(
       translateHistory({
@@ -552,6 +594,25 @@ describe("withoutLiveRows", () => {
       compaction("row-1", "k1"),
       user("u1", "list the files"),
       compaction("row-3", "k2"),
+    ])
+  })
+
+  it("drops a child Session the replay announces, keeping an earlier turn's", () => {
+    const child = (id: string, childSessionId: string) => ({
+      id,
+      role: "activity" as const,
+      activityType: "CHILD_SESSION" as const,
+      content: { childSessionId },
+    })
+    const stored = page([
+      child("row-1", "child-early"),
+      user("u1", "list the files"),
+      child("row-2", "child-live"),
+    ])
+
+    expect(withoutLiveRows(stored, new Set(["child-live"])).messages).toEqual([
+      child("row-1", "child-early"),
+      user("u1", "list the files"),
     ])
   })
 

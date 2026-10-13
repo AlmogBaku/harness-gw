@@ -209,6 +209,7 @@ export function createTurnsMiddleware({
         // A child Session is never a guest's: no announcement, event or
         // transcript of one reaches it.
         case "child":
+        case "child-history":
           return undefined
         // What is not a turn's passes: the feeds layer chose the readings and
         // the commands layer projects the command list.

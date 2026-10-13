@@ -112,16 +112,23 @@ function publicSubagent(subagent: Subagent): Subagent {
   }
 }
 
+/** What a child Session's report, live or stored, says in prose and files. */
+type ChildFacts = {
+  title?: string
+  description?: string
+  summary?: string
+  filesRead?: string[]
+  filesWritten?: string[]
+}
+
 /**
  * A child Session's report with its prose masked and every file carrying a
  * credential dropped, as a subagent's is.
  */
-function publicChild(
-  event: Extract<TurnEvent, { kind: typeof TurnEventKind.ChildSessionUpdated }>
-) {
-  const { title, description, summary, filesRead, filesWritten } = event
+function publicChild<Facts extends ChildFacts>(facts: Facts): Facts {
+  const { title, description, summary, filesRead, filesWritten } = facts
   return {
-    ...event,
+    ...facts,
     ...(title === undefined ? {} : { title: maskCredentials(title) }),
     ...(description === undefined
       ? {}
@@ -198,6 +205,9 @@ function maskedHistoryMessage(
   message: HistoryMessage,
   guest: boolean
 ): HistoryMessage {
+  // A stored child is masked as its live report was.
+  if (message.role === "activity" && message.activityType === "CHILD_SESSION")
+    return { ...message, content: publicChild(message.content) }
   if (message.role !== "assistant") return message
   const { status } = message
   return {
@@ -357,6 +367,7 @@ export function createCredentialsMiddleware({
             : { ...event, event: maskedOnce(reported) as ChildTurnEvent }
         }
         case "history":
+        case "child-history":
           return {
             ...event,
             page: {

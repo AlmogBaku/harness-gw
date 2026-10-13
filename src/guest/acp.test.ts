@@ -445,10 +445,13 @@ function harness(options: HarnessOptions = {}) {
   }))
   let catalogChanged: (() => void) | undefined
   let watcher: ServerTurnListener | undefined
-  // The runtime forks, which a guest is never offered.
+  // The runtime forks, which a guest is never offered, and keeps child
+  // transcripts, which a guest is never shown.
   const forkSession = vi.fn(unsupported)
+  const childHistory = vi.fn(unsupported)
   const runtime: ServerRuntime = {
     forkSession,
+    childHistory,
     turns: engine,
     resolveInvitedSession,
     // A guest addresses its conversation by reference; no public id resolves.
@@ -568,6 +571,7 @@ function harness(options: HarnessOptions = {}) {
     runtimeInfo,
     resolveInvitedSession,
     forkSession,
+    childHistory,
     listAllSessions,
     /** The runtime reports that its Session list changed. */
     changeCatalog() {
@@ -2335,6 +2339,38 @@ describe("guest and child Sessions", () => {
     expect(test.recorder.of(methods.client.elicitation.create)).toEqual([])
     // Nothing declined the child's approval for the guest.
     expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("replays a guest no child its history names, and reads no child's transcript", async () => {
+    const test = harness({
+      existing: true,
+      history: () => ({
+        sessionId: REF,
+        messages: [
+          {
+            id: "child-row",
+            role: "activity",
+            activityType: "CHILD_SESSION",
+            content: { childSessionId: CHILD, title: "Review the notes" },
+          },
+        ],
+        total: 1,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    await test.resume(REF, true)
+    await settled()
+
+    const shown = JSON.stringify(test.recorder.entries)
+    for (const hidden of [CHILD, "subagent_update", "Review the notes"])
+      expect(shown).not.toContain(hidden)
+    expect(test.childHistory).not.toHaveBeenCalled()
     test.close()
   })
 

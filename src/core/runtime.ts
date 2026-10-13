@@ -374,6 +374,16 @@ export interface ServerRuntime {
     limit: number,
     offset: number
   ): Promise<SessionHistoryResponse>
+  /**
+   * The whole transcript of a child Session a turn of `providerSessionId`
+   * spawned, as one page: a child's transcript is never paged. Absent when the
+   * runtime keeps none it can read.
+   */
+  childHistory?(
+    agentId: string,
+    providerSessionId: ProviderSessionId,
+    childSessionId: string
+  ): Promise<SessionHistoryResponse>
   getSession(
     agentId: string,
     providerSessionId: ProviderSessionId

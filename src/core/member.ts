@@ -114,6 +114,17 @@ export type SessionEvent =
       event: ChildTurnEvent
       replayed?: true
     }
+  /**
+   * The whole transcript of a child Session a history page named, addressed
+   * to the child's own id as its live events are. It follows the page whose
+   * row announced the child.
+   */
+  | {
+      kind: "child-history"
+      parentSessionId: string
+      childSessionId: string
+      page: SessionHistoryResponse
+    }
   /** A user prompt: another member's, or this member's own echo. */
   | {
       kind: "prompt"

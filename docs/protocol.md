@@ -744,8 +744,19 @@ cancel naming one does nothing. Every other request naming a child answers
 child id is never a top-level Session's, and nothing of a child is shown
 before its announcement.
 
-A guest is shown nothing of a child: no announcement, event, question or
-approval. A child's approval or question in a turn the guest started waits
+A child's events share the parent turn's journal and sequence, so a
+positioned resume replays them with the parent's, a child that finished during
+the gap included. A reconnect is a new connection that knows no child, so the
+resume first announces again, merged, each child the turn reported up to the
+cursor. History stores a child as an `{ role: "activity", activityType:
+"CHILD_SESSION" }` row (`SessionChildActivityMessageSchema`,
+`protocol/index.ts`). A from-start replay or a rebuild announces it in its
+final state, then sends the child's whole transcript under its id, where the
+runtime keeps one (`ServerRuntime.childHistory`); a child's transcript is never
+paged. A resume while the turn runs leaves its children to the turn's replay.
+
+A guest is shown nothing of a child: no announcement, event, question,
+approval, stored row or transcript. A child's approval or question in a turn the guest started waits
 for an operator, who sees it on the child. Child reports and events pass the
 credentials middleware like any turn's tool data, and a child's question tool
 call reaches the operator as written, as its parent's does.

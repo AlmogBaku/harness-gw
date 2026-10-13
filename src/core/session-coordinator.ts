@@ -24,6 +24,7 @@ import {
   type RepliesTurnInput,
   type RequestReply,
   type TurnEvent,
+  type ChildTurnEvent,
   type TurnEventOf,
 } from "./events"
 
@@ -736,6 +737,7 @@ function rowIds({ event }: SequencedTurnEvent): string[] {
       ? [event.toolCallId]
       : []),
     ...("compactionId" in event ? [event.compactionId] : []),
+    ...("childSessionId" in event ? [event.childSessionId] : []),
   ]
 }
 
@@ -1270,6 +1272,57 @@ export class SessionCoordinator {
   ) {
     const segment = this.#executions.get(scopeKey(scope))?.segment
     return !segment || after >= segment.nextSequence
+  }
+
+  /**
+   * Each child Session the live turn `turnId` reported at or before sequence
+   * `upTo`, its reports merged into one, in the order the children were
+   * announced. A view positioned there holds them, but a new connection knows
+   * none, and is told them before the events after its cursor. A child a
+   * child spawned stays reported in that child's stream.
+   */
+  childReports(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    turnId: string,
+    upTo: number
+  ): { sequence: number; event: ChildTurnEvent }[] {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment?.journal || segment.turnId !== turnId) return []
+    type Report = TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>
+    const merged = new Map<
+      string,
+      { sequence: number; report: Report; within?: string }
+    >()
+    const merge = (sequence: number, report: Report, within?: string) => {
+      const known = merged.get(report.childSessionId)
+      merged.set(report.childSessionId, {
+        sequence: known?.sequence ?? sequence,
+        report: { ...known?.report, ...report },
+        ...(within === undefined ? {} : { within }),
+      })
+    }
+    for (const { value } of segment.journal.entries) {
+      if (value.sequence > upTo) break
+      const { event } = value
+      if (event.kind === TurnEventKind.ChildSessionUpdated)
+        merge(value.sequence, event)
+      else if (
+        event.kind === TurnEventKind.ChildSessionEvent &&
+        event.event.kind === TurnEventKind.ChildSessionUpdated
+      )
+        merge(value.sequence, event.event, event.childSessionId)
+    }
+    return [...merged.values()].map(({ sequence, report, within }) => ({
+      sequence,
+      event:
+        within === undefined
+          ? report
+          : {
+              kind: TurnEventKind.ChildSessionEvent,
+              childSessionId: within,
+              event: report,
+            },
+    }))
   }
 
   /**

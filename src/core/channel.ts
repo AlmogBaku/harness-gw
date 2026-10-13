@@ -616,7 +616,7 @@ type CreateChannelsOptions = Omit<
 > & {
   coordinator: SessionCoordinator
   /** Where a resume and an older page read the Session's history. */
-  runtime: Pick<ServerRuntime, "history">
+  runtime: Pick<ServerRuntime, "history" | "childHistory">
   clock?: Clock
   /** Defaults to `HISTORY_REACH`; a small one stands for a long Session. */
   historyReach?: HistoryReach
@@ -643,6 +643,11 @@ type MembershipContext = MembershipOptions & {
     scope: SessionScope,
     paged: boolean
   ) => Promise<SessionHistoryResponse>
+  /** A child Session's whole transcript, where the runtime keeps one. */
+  readChildHistory: (
+    scope: SessionScope,
+    childSessionId: string
+  ) => Promise<SessionHistoryResponse> | undefined
 }
 
 /**
@@ -768,6 +773,14 @@ export function createChannels(options: CreateChannelsOptions) {
     }
   }
 
+  function readChildHistory(scope: SessionScope, childSessionId: string) {
+    return runtime.childHistory?.(
+      scope.agentId,
+      scope.providerSessionId,
+      childSessionId
+    )
+  }
+
   return {
     ...channels,
     historyReach,
@@ -785,7 +798,7 @@ export function createChannels(options: CreateChannelsOptions) {
         channels,
         member,
         scope,
-        { ...membership, coordinator, clock, readReplay },
+        { ...membership, coordinator, clock, readReplay, readChildHistory },
         owner
       )
     },
@@ -1056,7 +1069,9 @@ class Membership {
           sessionId:
             event.kind === "child"
               ? event.event.childSessionId
-              : this.#addressed.sessionId,
+              : event.kind === "child-history"
+                ? event.childSessionId
+                : this.#addressed.sessionId,
           ...event,
         },
         { decline: (requestId) => declines.add(requestId) }
@@ -1260,17 +1275,61 @@ class Membership {
     return this.#showHistory(live ? withoutLiveRows(page, live) : page, older)
   }
 
-  /** Shows this member a history page at the cursor it has reached. */
-  #showHistory(
+  /**
+   * Whether this member's stack shows it a child's transcript at all, asked
+   * with an empty one before the runtime is asked for the real one.
+   */
+  #showsChildHistory(childSessionId: string, page: SessionHistoryResponse) {
+    return (
+      runEvents(
+        this.#member.middleware,
+        {
+          sessionId: childSessionId,
+          kind: "child-history",
+          parentSessionId: this.#addressed.sessionId,
+          childSessionId,
+          page: { ...page, sessionId: childSessionId, messages: [] },
+        },
+        { decline: () => undefined }
+      ) !== undefined
+    )
+  }
+
+  /**
+   * Shows this member a history page at the cursor it has reached, then the
+   * whole transcript of each child Session the page names, under the child's
+   * id. One the member's stack would not show it is not read.
+   */
+  async #showHistory(
     page: SessionHistoryResponse,
     older?: { cursor: string; offset: number }
   ) {
-    return this.emit({
+    await this.emit({
       kind: "history",
       page,
       sequence: this.#sequence,
       ...(older ? { older } : {}),
     })
+    for (const message of page.messages) {
+      if (message.role !== "activity") continue
+      if (message.activityType !== "CHILD_SESSION") continue
+      const { childSessionId } = message.content
+      if (!this.#showsChildHistory(childSessionId, page)) continue
+      const transcript = await this.#options
+        .readChildHistory(this.#scope, childSessionId)
+        ?.catch((err: unknown) => {
+          // A child whose transcript cannot be read is still announced.
+          this.#options.logger.warn({ err }, "membership.child_history.failed")
+          return undefined
+        })
+      if (transcript)
+        await this.emit({
+          kind: "child-history",
+          parentSessionId: this.#addressed.sessionId,
+          childSessionId,
+          page: transcript,
+        })
+    }
   }
 
   /**
@@ -1412,6 +1471,7 @@ class Membership {
     // A settled turn streams nothing more: the view holds it once its cursor
     // reached the turn's last event.
     if (state === "idle") return this.#coordinator.holds(this.#scope, after)
+    if (turnId !== undefined) await this.#reannounceChildren(turnId, after)
     return this.#follow(true, after).then(
       () => true,
       (cause: unknown) => {
@@ -1430,6 +1490,32 @@ class Membership {
   async #followNext() {
     this.joinChannel(true)
     await this.#follow(true, "next")
+  }
+
+  /**
+   * Announces again each child Session the live turn reported up to the
+   * view's cursor: the view holds them, but its connection may be a new one,
+   * which knows none, and the events after the cursor are theirs too.
+   */
+  async #reannounceChildren(turnId: string, after: number) {
+    const stream: TurnStream = {
+      turnId,
+      replayedCorrections: 0,
+      dropped: false,
+    }
+    for (const { sequence, event } of this.#coordinator.childReports(
+      this.#scope,
+      turnId,
+      after
+    ))
+      await this.emit({
+        kind: "child",
+        parentSessionId: this.#addressed.sessionId,
+        stream,
+        sequence,
+        event,
+        replayed: true,
+      })
   }
 
   /**
