@@ -359,6 +359,30 @@ describe("createReadState", () => {
     }
   )
 
+  it("keeps the focused Session held read when this connection marks another one unread", async () => {
+    const { updateSession, readState, sessionRows } = harness()
+    readState.focus(AGENT, SESSION)
+    await settle(FOCUS_DEBOUNCE_MS)
+
+    readState.keepUnread(AGENT, "session-2")
+    // Past the write guard, only the focus hold keeps a re-lit row read.
+    await settle(READ_GUARD_MS)
+    sessionRows.rememberList([
+      {
+        id: SESSION,
+        agentId: AGENT,
+        title: "Weekly digest",
+        archived: false,
+        updatedAt: "2026-09-19T10:05:00.000Z",
+        status: "idle",
+        unread: true,
+      },
+    ])
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
+    await settle(FOCUS_DEBOUNCE_MS)
+    expect(updateSession).toHaveBeenCalledTimes(2)
+  })
+
   it("writes nothing when the runtime does not track read state, and asks again after a failed read", async () => {
     const { updateSession, readState, runtimeInfo } = harness({
       tracked: false,

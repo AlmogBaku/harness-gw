@@ -849,7 +849,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           // Before the write, so no acknowledgement on its way reads it again.
           if (unread === true)
             readState?.keepUnread(scope.agentId, scope.sessionId)
-          await catalog.update(scope, command.patch)
+          try {
+            await catalog.update(scope, command.patch)
+          } catch (cause) {
+            // A refused Mark unread keeps nothing.
+            if (unread === true)
+              readState?.reexpose(scope.agentId, scope.sessionId)
+            throw cause
+          }
           // An explicit read ends what this connection kept unread.
           if (unread === false)
             readState?.reexpose(scope.agentId, scope.sessionId)

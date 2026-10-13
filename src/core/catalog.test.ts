@@ -134,28 +134,23 @@ describe("createCatalog", () => {
 
   it.each([
     {
-      outcome: "marks a read row unread once the runtime takes the write",
-      markedRead: false,
-      refusal: undefined,
-    },
-    {
-      outcome: "ends the read guard of a row it just marked read",
-      markedRead: true,
+      outcome: "marks a row it just marked read unread, ending its read guard",
       refusal: undefined,
     },
     {
       outcome: "changes nothing when the runtime refuses an unread write",
-      markedRead: true,
       refusal: new Error("Upstream request failed"),
     },
-  ])("$outcome", async ({ markedRead, refusal }) => {
+  ])("$outcome", async ({ refusal }) => {
     const { catalog, rows, updateSession } = harness({
+      // What a detail read would bring in, and no unread write reads.
+      held: row({ title: "Renamed elsewhere" }),
       updateSession: async () => {
         if (refusal) throw refusal
       },
     })
-    rows.rememberList([row({ unread: markedRead })])
-    if (markedRead) await catalog.markRead(AGENT, SESSION)
+    rows.rememberList([row({ unread: true })])
+    await catalog.markRead(AGENT, SESSION)
     const published: (boolean | undefined)[] = []
     rows.subscribe(({ unread }) => published.push(unread))
 

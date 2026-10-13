@@ -282,8 +282,12 @@ export function createCatalog({
       await onSession(target, () =>
         runtime.updateSession(target.agentId, target.providerSessionId, patch)
       )
-      // The detail read that follows carries no read state.
-      if ("unread" in patch) rows.markUnread(target.agentId, target.sessionId)
+      // A detail read carries no read state and an unread write changes
+      // nothing else, so the write settles the row itself.
+      if ("unread" in patch && patch.unread === true) {
+        rows.markUnread(target.agentId, target.sessionId)
+        return
+      }
       await read(target)
       // Archiving and pinning move the Session's membership and order in the
       // list, which only a relist settles; a runtime's change feed may be

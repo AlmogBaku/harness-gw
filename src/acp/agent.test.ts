@@ -1120,25 +1120,40 @@ describe("AOS ACP agent", () => {
     {
       marks: "read at once, ending what this connection kept unread",
       unread: false,
+      refusal: undefined,
       kept: [],
       reexposed: [[AGENT, SESSION]],
     },
     {
       marks: "unread, kept so for this connection first",
       unread: true,
+      refusal: undefined,
       kept: [[AGENT, SESSION]],
       reexposed: [],
     },
+    {
+      marks: "unread, keeping nothing once the runtime refuses",
+      unread: true,
+      refusal: new Error("Upstream request failed"),
+      kept: [[AGENT, SESSION]],
+      reexposed: [[AGENT, SESSION]],
+    },
   ])(
     "marks a Session $marks, and tells the runtime",
-    async ({ unread, kept, reexposed }) => {
+    async ({ unread, refusal, kept, reexposed }) => {
       const test = await harness()
       await test.list()
+      if (refusal) test.updateSession.mockRejectedValueOnce(refusal)
 
-      await test.agent.request(HGW_METHODS.session.update, {
+      const updating = test.agent.request(HGW_METHODS.session.update, {
         sessionId: SESSION,
         unread,
       })
+      await (refusal
+        ? expect(updating).rejects.toMatchObject({
+            code: RequestError.internalError().code,
+          })
+        : expect(updating).resolves.toEqual({}))
 
       expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
         unread,
@@ -1146,7 +1161,7 @@ describe("AOS ACP agent", () => {
       expect(test.readState.keepUnread.mock.calls).toEqual(kept)
       expect(test.readState.reexpose.mock.calls).toEqual(reexposed)
       // No acknowledgement already on its way may read it again, and the
-      // read is written before a fresh exposure starts.
+      // write is settled before a fresh exposure starts.
       const [written] = test.updateSession.mock.invocationCallOrder
       for (const order of test.readState.keepUnread.mock.invocationCallOrder)
         expect(order).toBeLessThan(written!)
