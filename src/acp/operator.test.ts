@@ -950,6 +950,26 @@ describe("operator ACP listener", () => {
       expect(unsubscribed).toHaveBeenCalledTimes(1)
     })
 
+    it("gives a viewer who comes back and leaves again the whole grace", async () => {
+      const { test, unsubscribed } = await outlived()
+      const clock = useFakeClock()
+      test.close()
+      await clock.advance(CHILD_FOLLOW_GRACE_MS / 2)
+      const back = await test.connect("connection-2")
+      await back.list()
+      await back.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      back.close()
+
+      await clock.advance(CHILD_FOLLOW_GRACE_MS - 1)
+      expect(unsubscribed).not.toHaveBeenCalled()
+      await clock.advance(1)
+      expect(unsubscribed).toHaveBeenCalledTimes(1)
+    })
+
     // Restating a child long over would announce it to a view that may not
     // hold its turn, as if it had just been spawned.
     it("tells a member who joins later of no child over for longer than the grace", async () => {
