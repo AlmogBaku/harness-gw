@@ -35,6 +35,16 @@ runServerRuntimeContract(
     gaps: {
       typedMessageFields:
         "capability: OpenClaw history carries no correction or turn error code",
+      forkLeavesOriginal:
+        "pending: the OpenClaw lane forks through sessions.create",
+      childAnnouncedFirst:
+        "pending: the OpenClaw lane reports spawned sessions as children",
+      childrenStayUnlisted:
+        "pending: the OpenClaw lane filters children on spawnDepth and spawnedBy",
+      compactionStoredAsRow:
+        "out of scope: OpenClaw compaction replay is ALM-42",
+      rewindAsReported:
+        "pending: the OpenClaw lane rewinds through sessions.rewind",
     },
   }
 )

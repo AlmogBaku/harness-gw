@@ -75,6 +75,9 @@ export type WireContractRow =
   | "thoughtLevelDefault"
   | "everyThoughtAndCallLive"
   | "quietStreamPassedThrough"
+  | "forkJoinsNewSession"
+  | "childAnnouncedBeforeItsEvents"
+  | "compactionReplaysAsLive"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -105,6 +108,18 @@ export type WireTurn = Readonly<{
   quiet?(): Promise<void>
   /** Absent only when every row that asks a question is a gap. */
   questions?: WireQuestions
+  /**
+   * Inside the running turn, after the first response: the turn spawns one
+   * child Session, which says "Child at work." and ends, all stored; resolves
+   * with the id the child is reported under. Absent when its row is a gap.
+   */
+  spawnChild?(): Promise<string>
+  /**
+   * Inside the running turn, after the first response: the turn compacts its
+   * context and completes, stored; resolves with the compaction's id. Absent
+   * when its row is a gap.
+   */
+  compact?(): Promise<string>
 }>
 
 /** The questions a running turn asks, and its Stop, as the release has them. */
@@ -251,6 +266,7 @@ function connectClient(
 ) {
   const bridge = acpBridge(service)
   const updates: SessionUpdate[] = []
+  const addressed: { sessionId: string; update: SessionUpdate }[] = []
   const timeline: TimelineEntry[] = []
   const updateWaiters = new Set<(update: SessionUpdate) => void>()
   const askWaiters = new Set<(ask: WireAsk) => void>()
@@ -275,6 +291,7 @@ function connectClient(
   const app = client({ name: "wire-contract" })
     .onNotification(methods.client.session.update, ({ params }) => {
       updates.push(params.update)
+      addressed.push({ sessionId: params.sessionId, update: params.update })
       timeline.push(params.update)
       for (const settle of updateWaiters) settle(params.update)
     })
@@ -327,6 +344,8 @@ function connectClient(
     folder,
     /** Every `session/update` this client read, in order. */
     updates,
+    /** The same updates, each with the Session it was addressed to. */
+    addressed,
     /** Every update, request and marked answer this client read, in order. */
     timeline,
     /** Marks the answer to a request, where the client read it. */
@@ -1016,6 +1035,108 @@ export function runWireContract(
           await expect(
             askQuestion(clock, plain, questionsOf(turn))
           ).resolves.toBeTypeOf("object")
+        }
+      )
+
+      row(
+        "forkJoinsNewSession",
+        "forks a Session where the runtime offers it, into one holding its conversation",
+        async (harness) => {
+          const { clock, turn } = harness
+          const plain = harness.connectPlain()
+          const initialized = await until(clock, plain.initialize())
+          expect(initialized.capabilities?.session).toMatchObject({ fork: {} })
+          const sessionId = await until(clock, newSession(plain))
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+
+          const forked = await until(
+            clock,
+            plain.connection.agent.request(methods.agent.session.fork, {
+              sessionId,
+              cwd: plain.folder,
+            })
+          )
+
+          expect(forked.sessionId).not.toBe(sessionId)
+          const reader = harness.connectPlain()
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, forked.sessionId))
+          expect(
+            agentSide(reader.updates).messages.map(({ text }) => text)
+          ).toContain("The file lists three names.")
+        }
+      )
+
+      row(
+        "childAnnouncedBeforeItsEvents",
+        "announces a child Session before its own updates, live and on a reload",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const child = await until(clock, turn.spawnChild!())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const reader = harness.connectPlain()
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId))
+
+          for (const client of [plain, reader]) {
+            const named = client.addressed.filter(
+              ({ sessionId: target, update }) =>
+                target === child || JSON.stringify(update).includes(child)
+            )
+            expect(named[0]).toMatchObject({
+              sessionId,
+              update: { sessionUpdate: "subagent_update", sessionId: child },
+            })
+            expect(
+              named.some(
+                ({ sessionId: target, update }) =>
+                  target === child &&
+                  JSON.stringify(update).includes("Child at work.")
+              )
+            ).toBe(true)
+          }
+        }
+      )
+
+      row(
+        "compactionReplaysAsLive",
+        "replays a compaction as the completed divider the live turn showed",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const compactionId = await until(clock, turn.compact!())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const reader = harness.connectPlain()
+          await until(clock, reader.initialize())
+          await until(clock, resumeFromStart(reader, sessionId))
+
+          const completed = (client: WireClient) =>
+            client.updates.filter(
+              (update) =>
+                update.sessionUpdate === "compaction_update" &&
+                update.compactionId === compactionId &&
+                update.status === "completed"
+            )
+          expect(completed(plain)).toHaveLength(1)
+          expect(completed(reader)).toEqual(
+            completed(plain).map((update) => ({
+              ...update,
+              _meta: expect.anything(),
+            }))
+          )
         }
       )
 

@@ -20,6 +20,16 @@ runServerRuntimeContract(
     gaps: {
       settledTurnsFreeRecords:
         "no seam: the adapter exposes no count of its per-Session records",
+      forkLeavesOriginal:
+        "pending: the Hermes lane forks through session.branch",
+      childAnnouncedFirst:
+        "pending: the Hermes lane reports subagents as child Sessions",
+      childrenStayUnlisted:
+        "pending: the Hermes lane reports subagents as child Sessions",
+      compactionStoredAsRow:
+        "pending: the Hermes lane stores its summary carrier as a compaction row",
+      rewindAsReported:
+        "pending: the Hermes lane proves its truncating send on its fake",
     },
   }
 )
