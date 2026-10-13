@@ -502,7 +502,8 @@ token characters, whose last character may also be `=` and is never `.`, so
 a sentence's closing period stays.
 
 - **Broad** masks:
-  - the value a secret name is given with `=` or `:` and any spacing: a quoted
+  - the value a secret name is given with `=` or `:` and any spacing on its
+    line (so a YAML parent's value is never its child's name): a quoted
     value inside its quotes, any other up to whitespace, `,` or `;`, or up to
     a closing quote before one; a `Basic` or `Bearer` word before the value
     stays;
@@ -531,6 +532,8 @@ a sentence's closing period stays.
     `xoxr-` or `xoxs-` and the word characters and `-` after it; so
     `rm -rf sk-backups` stays.
 - **Both** mask:
+  - a PEM private key, from its `BEGIN … PRIVATE KEY` line to its `END` line,
+    whole; one with no `END` line, to the end of the text;
   - a JWT (`eyJ…` in three dot-separated parts);
   - a URL's password: in `scheme://user:password@host`, a password with no
     whitespace and none of ``: / @ $ ( ) { } ` ' "`` goes, and the scheme,
@@ -544,7 +547,8 @@ a sentence's closing period stays.
     URL's scheme stays, because the scanner's database rules take the whole
     URL or only its scheme. A run of more than 2,048 characters without
     whitespace reaches the scanner in 2,048-character pieces, so its work
-    stays in proportion to the text.
+    stays in proportion to the text; a key that straddles two pieces is
+    left to the rules above.
 - **Neither** masks a value that is already `[credential redacted]`, so
   masking text twice, at either strength, leaves one placeholder per
   credential.
@@ -568,7 +572,8 @@ written. A path or a patch that carries a credential is the adapter's to drop
 rather than mask, since masked it would name no file or no longer apply: on
 Hermes, the one runtime that reports them, a location, a diff, and a
 subagent's file. Each text is cut to 262,144 UTF-16 units, a
-terminal's output keeping its tail: plain text before it is masked, so a huge
+terminal's output keeping its tail without the word the cut lands in: plain
+text before it is masked, so a huge
 output costs no more to mask, and JSON after, so no secret-named key is cut
 out of reach. An MCP App view's files are served from the stored call, never
 from its masked input.

@@ -553,6 +553,26 @@ describe("translateTurnEvent tool data masking", () => {
       )
   })
 
+  it("drops the word a terminal's kept tail cuts into, so no name loses its head", () => {
+    // The tail starts inside `DB_PASSWORD`: read whole, `WORD` names nothing.
+    const tail = `WORD=${SECRET} `
+    const data = `x DB_PASS${tail}${"y".repeat(262_144 - tail.length)}`
+    const { outbound } = translate([
+      open,
+      {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "t1",
+        toolCallId: "c1",
+        data,
+      },
+    ])
+    const chunk = updatesOf(outbound).find(
+      (update) => update.sessionUpdate === "terminal_output_chunk"
+    ) as { data: string }
+
+    expect(Buffer.from(chunk.data, "base64").toString()).not.toContain(SECRET)
+  })
+
   it("sends JSON arguments with nothing to mask exactly as written", () => {
     const delta = '{ "path" : "a.txt" }'
     const [, update] = updatesOf(

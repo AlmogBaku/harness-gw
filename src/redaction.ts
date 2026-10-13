@@ -63,6 +63,8 @@ const SAFE_NAMES = new Set([
 const SECRET_NAMES = new Set(["npmconfiguserconfig"])
 /** The longest run of words a `SECRET_TERMS` or `SAFE_NAMES` entry spans. */
 const MAX_RUN = 3
+/** The longest name read: past it a name is no field anyone writes, and reading it costs more. */
+const MAX_NAME = 128
 
 /** A name's words, lowercase: `apiKey`, `API_KEY` and `api-key` are `api`, `key`. */
 function nameWords(name: string) {
@@ -95,10 +97,11 @@ function wordRuns(words: readonly string[]) {
  * its letters ending in one (`PGPASSWORD`), unless a `SAFE_NAMES` run covers it.
  */
 export function isSecretName(name: string) {
-  const letters = name.toLowerCase().replace(/[^a-z0-9]+/gu, "")
+  const read = name.slice(0, MAX_NAME)
+  const letters = read.toLowerCase().replace(/[^a-z0-9]+/gu, "")
   if (SECRET_NAMES.has(letters)) return true
   if (!SECRET_TERMS.some((term) => letters.includes(term))) return false
-  const words = nameWords(name)
+  const words = nameWords(read)
   const joined = words.join("")
   const runs = wordRuns(words)
   const safe = runs.filter((run) => SAFE_NAMES.has(run.joined))
@@ -130,7 +133,16 @@ const URL_PASSWORD = String.raw`\b(?<userinfo>[a-z][\w+.-]{0,31}://[^\s:/@]*:)[^
 /** A value already masked, which neither strength masks again. */
 const ALREADY_MASKED = String.raw`(?!(?:(?:basic|bearer)\s+)?\[credential redacted\])`
 /** A name a value is assigned to, whole, after any flag dashes: never the tail of a longer one. */
-const NAME = String.raw`(?<![\w.-])-*(?<name>[A-Za-z_][\w.-]*)`
+const NAME = String.raw`(?<![\w.-])-*(?<name>\w[\w.-]{0,${MAX_NAME - 1}})`
+/** Spacing that stays on its line, so a YAML parent never takes its child's name as its value. */
+const INLINE_SPACE = String.raw`[^\S\r\n]*`
+/**
+ * A PEM private key, whole, as the scanner masks one; one with no footer is
+ * masked to the end of the text. The scanner's own rule restarts at every
+ * header, so text that repeats one took it minutes; masked here first, none is
+ * left for it to read.
+ */
+const PRIVATE_KEY = String.raw`-----${INLINE_SPACE}BEGIN[ A-Z0-9_-]{0,64}?PRIVATE KEY${INLINE_SPACE}-----[\s\S]*?(?:-----${INLINE_SPACE}END[ A-Z0-9_-]{0,64}?PRIVATE KEY${INLINE_SPACE}-----|$)`
 
 /**
  * The two strengths a credential mask comes in. Each has a pass for the
@@ -147,10 +159,13 @@ const NAME = String.raw`(?<![\w.-])-*(?<name>[A-Za-z_][\w.-]*)`
 const CREDENTIAL_MASKS = {
   broad: {
     shapes: new RegExp(
-      String.raw`\b(?<prefix>(?:basic|bearer)\s+)(?<token>${BEARER_TOKEN})|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|${JWT}|${URL_PASSWORD}`,
+      String.raw`${PRIVATE_KEY}|\b(?<prefix>(?:basic|bearer)\s+)(?<token>${BEARER_TOKEN})|\b(?:gh[opsur]_|sk-|xox[baprs]-)[\w-]+|${JWT}|${URL_PASSWORD}`,
       "giu"
     ),
-    name: new RegExp(String.raw`${NAME}(?<separator>\s*[=:]\s*)`, "gu"),
+    name: new RegExp(
+      String.raw`${NAME}(?<separator>${INLINE_SPACE}[=:]${INLINE_SPACE})`,
+      "gu"
+    ),
     value: new RegExp(
       String.raw`${ALREADY_MASKED}(?<prefix>(?:(?:basic|bearer)\s+)?)(?:(?<quote>["'])(?<quoted>[^"'\r\n]*)\k<quote>|(?<plain>[^\s,;]+?)(?=["']?(?:[\s,;]|$)))`,
       "iuy"
@@ -158,7 +173,7 @@ const CREDENTIAL_MASKS = {
   },
   narrow: {
     shapes: new RegExp(
-      String.raw`\b(?<header>authorization\s*:\s*(?:bearer|basic)\s+)${BEARER_TOKEN}|\bgh[opsur]_[A-Za-z0-9]{30,}|(?<![\w-])sk-(?=[\w-]*\d)[\w-]{20,}|\bxox[baprs]-[\w-]+|${JWT}|${URL_PASSWORD}`,
+      String.raw`${PRIVATE_KEY}|\b(?<header>authorization\s*:\s*(?:bearer|basic)\s+)${BEARER_TOKEN}|\bgh[opsur]_[A-Za-z0-9]{30,}|(?<![\w-])sk-(?=[\w-]*\d)[\w-]{20,}|\bxox[baprs]-[\w-]+|${JWT}|${URL_PASSWORD}`,
       "giu"
     ),
     name: new RegExp(String.raw`${NAME}(?<separator>[=:])`, "gu"),

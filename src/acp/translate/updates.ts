@@ -128,9 +128,10 @@ const MAX_TOOL_TEXT = 262_144
 /** The first, or for a terminal the last, `MAX_TOOL_TEXT` units of `text`. */
 function bounded(text: string, keep: "head" | "tail") {
   if (text.length <= MAX_TOOL_TEXT) return text
-  return keep === "head"
-    ? text.slice(0, MAX_TOOL_TEXT)
-    : text.slice(-MAX_TOOL_TEXT)
+  if (keep === "head") return text.slice(0, MAX_TOOL_TEXT)
+  // A tail cut inside a word would leave a name's or a key's end unread.
+  const tail = text.slice(-MAX_TOOL_TEXT)
+  return tail.slice(tail.search(/\s/u) + 1)
 }
 
 /** Text that reads as a JSON object, array, or string, parsed; anything else `undefined`. */

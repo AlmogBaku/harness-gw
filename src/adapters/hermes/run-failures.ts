@@ -9,8 +9,7 @@
  * redacted copy.
  */
 import type { TURN_FAILURES as SHARED_TURN_FAILURES } from "../../core/failures"
-import { redactForLog } from "../../redaction"
-import { containsCredential } from "../../redaction"
+import { containsCredential, redactForLog } from "../../redaction"
 import { trimmedText } from "./native"
 import { stableNativeId } from "./run-frames"
 

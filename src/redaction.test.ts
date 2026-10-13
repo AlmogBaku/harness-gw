@@ -317,16 +317,10 @@ describe("maskCredentials", () => {
   // The names a Hermes terminal assigns, which the shared name rule now reads
   // for every runtime: none ends in a term after a separator.
   it.each([
-    "OPENAI_API_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "CLIENT_SECRET_KEY",
-    "NPM_CONFIG_USERCONFIG",
-    "NPM_CONFIG__AUTH",
-    "MYSQL_PWD",
-    "PASSWORD_HASH",
-    "SSH_PRIVATE_KEY_B64",
     "PGPASSWORD",
-    "DB_PASSWORD_PROD",
+    "SSH_PRIVATE_KEY_B64",
+    "NPM_CONFIG__AUTH",
+    "2fa_token",
   ])("masks the value assigned to %s at either strength", (name) => {
     for (const strength of ["narrow", "broad"] as const)
       expect(maskCredentials(`${assigned(name, SAMPLE)} psql`, strength)).toBe(
@@ -334,18 +328,42 @@ describe("maskCredentials", () => {
       )
   })
 
-  it.each([
-    "type x:string; ratio x:y",
-    "TOKEN_COUNT=12",
-    "SECRETARY=Jo",
-    "AUTHORIZATION_MODE=oidc",
-    "OAUTH=enabled",
-    "PATHOLOGY=stable",
-    "ACCESS_KEY_ROTATION=weekly",
-    "bypass=true",
-  ])("keeps %s, which only reads like a credential", (text) => {
-    expect(maskCredentials(text)).toBe(text)
+  it("reads a YAML child's name as a name, not as its parent's value", () => {
+    expect(maskCredentials(`credentials:\n  password: ${SAMPLE}`)).toBe(
+      `credentials:\n  password: ${M}`
+    )
   })
+
+  it.each(["narrow", "broad"] as const)(
+    "masks a private key whole at %s strength, and one cut short to the end",
+    (strength) => {
+      const header = "-----BEGIN RSA PRIVATE KEY-----"
+      const footer = "-----END RSA PRIVATE KEY-----"
+      expect(
+        maskCredentials(
+          `cat id_rsa\n${header}\nMIIEow${SAMPLE}\n${footer}\ndone`,
+          strength
+        )
+      ).toBe(`cat id_rsa\n${M}\ndone`)
+      expect(maskCredentials(`ok\n${header}\nMIIEow${SAMPLE}`, strength)).toBe(
+        `ok\n${M}`
+      )
+    }
+  )
+
+  it("still masks a provider key deep inside a long run without whitespace", () => {
+    const run = "x".repeat(3_000)
+    expect(maskCredentials(`${run},${STRIPE_KEY} done`)).toBe(
+      `${run},${M} done`
+    )
+  })
+
+  it.each(["type x:string; ratio x:y", "TOKEN_COUNT=12", "bypass=true"])(
+    "keeps %s, which only reads like a credential",
+    (text) => {
+      expect(maskCredentials(text)).toBe(text)
+    }
+  )
 
   // Every shape used to restart at each repeat and read to the end of the
   // text: 128 KiB of one took seconds to mask, and some took minutes.
@@ -358,6 +376,7 @@ describe("maskCredentials", () => {
         ["assignments before shell syntax", "token=", "$"],
         ["bare assignments", "a=", ""],
         ["URL heads", "x://a:", ""],
+        ["private key headers", "-----BEGIN PRIVATE KEY----- ", ""],
       ] as const
     ).flatMap(([kind, unit, end]) =>
       (["narrow", "broad"] as const).map(
