@@ -216,7 +216,7 @@ describe("server-side Hermes history projection", () => {
     expect(serialized).not.toContain("/home/")
   })
 
-  it("shows an inlined image once rather than beside its own directive", () => {
+  it("shows an inlined image once, as its own directive's artifact", () => {
     const messages = projectHermesHistory([
       {
         id: "inline-image-row",
@@ -234,17 +234,21 @@ describe("server-side Hermes history projection", () => {
       },
     ])
 
-    expect(messages).toMatchObject([
-      {
+    expect(messages).toEqual([
+      expect.objectContaining({
         content: [
           { type: "text", text: "do u see it?" },
-          { type: "image", image: "data:image/png;base64,YQ==" },
+          {
+            type: "data",
+            name: "hgw.artifact",
+            data: expect.objectContaining({ filename: "upload_1.png" }),
+          },
         ],
-      },
+      }),
     ])
     const serialized = JSON.stringify(messages)
     expect(serialized).not.toContain("@image:")
-    expect(serialized).not.toContain("hgw.artifact")
+    expect(serialized).not.toContain("base64")
   })
 
   const tagged = (displayKind: string, content = "Synthetic payload") =>

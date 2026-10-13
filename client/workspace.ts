@@ -27,6 +27,19 @@ export class AgentUpdateError extends Error {
   }
 }
 
+/**
+ * The ACP connection is gone for a request: it has ended, no transport is open
+ * to send on, or a transport closed under a request it does not send again.
+ * `cause` holds what that transport closed with, which a failed socket leaves
+ * a DOM `Event`. Gateway refusals and timeouts reject as they come.
+ */
+export class AcpConnectionClosedError extends Error {
+  constructor(message = "The ACP connection closed", options?: ErrorOptions) {
+    super(message, options)
+    this.name = "AcpConnectionClosedError"
+  }
+}
+
 export type SessionStatus =
   | "idle"
   | "running"

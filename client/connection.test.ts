@@ -20,13 +20,13 @@ import {
   type HgwHistoryCursor,
 } from "../protocol/acp"
 
-import { AgentUpdateError } from "./workspace"
+import { AcpConnectionClosedError, AgentUpdateError } from "./workspace"
 
 import { useFakeClock } from "../test/support/fake-clock"
 import { captureLogs } from "../test/support/log-capture"
 
 import { createAcpConnection } from "./connection"
-import { PART_GRACE_MS } from "./limits"
+import { PART_GRACE_MS, REQUEST_DEADLINE_MS } from "./limits"
 import { pipedSockets } from "./test-socket"
 import type { AcpPendingRequest } from "./types"
 
@@ -84,12 +84,21 @@ function createGatewayAgent(
       updates: readonly (readonly [SessionUpdate, Record<string, unknown>])[]
       history?: HgwHistoryCursor
     }
-    /** Holds each plain resume open briefly, as a real rejoin takes time. */
+    /**
+     * Holds each resume open briefly, a page read's reply after its updates,
+     * as a real rejoin or page read takes time.
+     */
     slowResume?: boolean
     /** The JSON-RPC code an Agent update is refused with. */
     refuseAgentUpdate?: number
     /** The hgw extension version `initialize` announces. */
     version?: number
+    /** Never answers `_hgw/session/focus`, as a reply held behind a replay. */
+    holdFocus?: boolean
+    /** The entries `_hgw/agents/list` answers with. */
+    agents?: readonly unknown[]
+    /** The results `_hgw/sessions/search` answers with. */
+    searchResults?: readonly unknown[]
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -167,6 +176,8 @@ function createGatewayAgent(
             },
           })
         const history = options.page?.history
+        if (options.slowResume)
+          await new Promise((resolve) => setTimeout(resolve, 20))
         return {
           _meta: { [HGW_META_KEY]: history === undefined ? {} : { history } },
         }
@@ -207,7 +218,7 @@ function createGatewayAgent(
     .onRequest(HGW_METHODS.sessions.search, z.unknown(), ({ params }) => {
       record(HGW_METHODS.sessions.search, params)
       return {
-        sessions: [
+        sessions: options.searchResults ?? [
           {
             sessionId: SESSION_ID,
             cwd: FOLDER,
@@ -230,7 +241,10 @@ function createGatewayAgent(
       z.unknown().optional(),
       ({ params }) => {
         record(HGW_METHODS.agents.list, params)
-        return { revision: "revision-1", agents: [catalogEntry()] }
+        return {
+          revision: "revision-1",
+          agents: options.agents ?? [catalogEntry()],
+        }
       }
     )
     .onRequest(HGW_METHODS.agents.update, z.unknown(), ({ params }) => {
@@ -241,7 +255,7 @@ function createGatewayAgent(
     })
     .onRequest(HGW_METHODS.session.focus, z.unknown(), ({ params }) => {
       record(HGW_METHODS.session.focus, params)
-      return {}
+      return options.holdFocus ? new Promise<never>(() => {}) : {}
     })
     .onConnect((connection) => {
       peer = connection.client
@@ -305,6 +319,18 @@ function connectInProcess(proxy: ReturnType<typeof createGatewayAgent>) {
   })
   connection.start()
   return connection
+}
+
+/** A connection to `proxy` over piped sockets, started; `pipe` faults them. */
+function connectOverSockets(proxy: ReturnType<typeof createGatewayAgent>) {
+  const pipe = pipedSockets(() => proxy.app)
+  const connection = createAcpConnection({
+    clientInfo: CLIENT_INFO,
+    url: "ws://proxy.test/api/v1/acp",
+    socketConstructor: pipe.WebSocket,
+  })
+  connection.start()
+  return { pipe, connection }
 }
 
 describe("ACP connection", () => {
@@ -400,6 +426,56 @@ describe("ACP connection", () => {
     expect(proxy.callsOf("initialize")).toHaveLength(1)
   })
 
+  it("keeps the readable Agent entries and search results, and rejects when none can be read", async () => {
+    const result = (sessionId: string) => ({
+      sessionId,
+      cwd: FOLDER,
+      title: sessionId,
+      _meta: { [HGW_META_KEY]: sessionInfoMeta() },
+    })
+    const logs = captureLogs()
+    const connect = (options: Parameters<typeof createGatewayAgent>[0]) => {
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        connectAgent: createGatewayAgent(options).app,
+        logger: logs.logger,
+      })
+      connection.start()
+      return connection
+    }
+    const verbose = { kind: "ready", id: "verbose", name: "n".repeat(257) }
+    const partial = connect({
+      agents: [catalogEntry(), { ...catalogEntry(), summary: verbose }],
+      searchResults: [result("weekly"), { sessionId: "broken" }],
+    })
+
+    const catalog = await partial.listAgents()
+    const searched = await partial.searchSessions({ query: "w" })
+
+    expect(catalog.agents.map(({ summary }) => summary.id)).toEqual([AGENT_ID])
+    expect(searched.sessions.map(({ sessionId }) => sessionId)).toEqual([
+      "weekly",
+    ])
+    expect(
+      logs
+        .records()
+        .filter(({ message }) => message.endsWith("_skipped"))
+        .map(({ message, fields }) => [message, fields])
+    ).toEqual([
+      ["agents.entry_skipped", { id: "verbose" }],
+      ["sessions.result_skipped", { id: "broken" }],
+    ])
+
+    const unreadable = connect({
+      agents: [{ ...catalogEntry(), summary: verbose }],
+      searchResults: [{ sessionId: "broken" }],
+    })
+    await expect(unreadable.listAgents()).rejects.toThrow()
+    await expect(unreadable.searchSessions({ query: "w" })).rejects.toThrow()
+    partial.close()
+    unreadable.close()
+  })
+
   it("redeems an invitation with the AOS login metadata, never logging it", async () => {
     const proxy = createGatewayAgent()
     const logs = captureLogs()
@@ -484,6 +560,34 @@ describe("ACP connection", () => {
       prompt: [{ type: "text", text: "Hello" }],
       _meta: { [HGW_META_KEY]: { attachmentStageId: "stage-1" } },
     })
+    connection.close()
+  })
+
+  it("refuses a prompt or steer whose frame the gateway would not take, sending nothing", async () => {
+    const proxy = createGatewayAgent()
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+    const tooLarge = expect.objectContaining({
+      code: HGW_JSONRPC_ERRORS.requestTooLarge,
+    })
+
+    await expect(
+      connection.prompt(
+        SESSION_ID,
+        [{ type: "text", text: "a".repeat(1_100_000) }],
+        {}
+      )
+    ).rejects.toEqual(tooLarge)
+    // Bytes decide, not characters: each of these takes two in UTF-8.
+    await expect(
+      connection.steer({
+        sessionId: SESSION_ID,
+        requestId: "request-1",
+        text: "א".repeat(600_000),
+      })
+    ).rejects.toEqual(tooLarge)
+    expect(proxy.callsOf(methods.agent.session.prompt)).toHaveLength(0)
+    expect(proxy.callsOf(HGW_METHODS.session.steer)).toHaveLength(0)
     connection.close()
   })
 
@@ -800,13 +904,7 @@ describe("ACP connection", () => {
     it("keeps the latest history a resume reports, and a rejoin without one leaves it", async () => {
       const clock = useFakeClock()
       const proxy = createGatewayAgent({ history: { nextCursor: "cursor-1" } })
-      const pipe = pipedSockets(() => proxy.app)
-      const connection = createAcpConnection({
-        clientInfo: CLIENT_INFO,
-        url: "ws://proxy.test/api/v1/acp",
-        socketConstructor: pipe.WebSocket,
-      })
-      connection.start()
+      const { pipe, connection } = connectOverSockets(proxy)
 
       expect(connection.history(SESSION_ID)).toBeUndefined()
       connection.subscribe(SESSION_ID, {})
@@ -881,13 +979,7 @@ describe("ACP connection", () => {
     it("waits for a recovering transport to rejoin before reading a page", async () => {
       const clock = useFakeClock()
       const proxy = createGatewayAgent({ page: olderPage, slowResume: true })
-      const pipe = pipedSockets(() => proxy.app)
-      const connection = createAcpConnection({
-        clientInfo: CLIENT_INFO,
-        url: "ws://proxy.test/api/v1/acp",
-        socketConstructor: pipe.WebSocket,
-      })
-      connection.start()
+      const { pipe, connection } = connectOverSockets(proxy)
       await connection.initialized
       connection.subscribe(SESSION_ID, {})
       const joined = connection.joined(SESSION_ID)
@@ -917,18 +1009,43 @@ describe("ACP connection", () => {
       expect(order).toEqual(["rejoined", "rejoined", "page"])
       connection.close()
     })
+
+    it("reads a page its socket fails under again, whole, once the Session rejoins", async () => {
+      const clock = useFakeClock()
+      const proxy = createGatewayAgent({ page: olderPage, slowResume: true })
+      const { pipe, connection } = connectOverSockets(proxy)
+      connection.subscribe(SESSION_ID, {})
+      const joined = connection.joined(SESSION_ID)
+      await clock.advance(20)
+      await joined
+
+      // The page's updates arrive, and its socket fails before the reply.
+      const page = connection.resumePage(SESSION_ID, "cursor-1")
+      await clock.advance(0)
+      pipe.sockets[0]!.fail()
+      await clock.advance(300)
+
+      const { updates } = await page
+      expect(updates.map(({ update }) => update.sessionUpdate)).toEqual([
+        "user_message",
+        "state_update",
+      ])
+      const pageReads = proxy
+        .callsOf(methods.agent.session.resume)
+        .filter(
+          (params) =>
+            z.object({ replayFrom: HgwReplayBeforeSchema }).safeParse(params)
+              .success
+        )
+      expect(pageReads).toHaveLength(2)
+      connection.close()
+    })
   })
 
   it("delivers no request over a half-open transport", async () => {
     const clock = useFakeClock()
     const proxy = createGatewayAgent()
-    const pipe = pipedSockets(() => proxy.app)
-    const connection = createAcpConnection({
-      clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/v1/acp",
-      socketConstructor: pipe.WebSocket,
-    })
-    connection.start()
+    const { pipe, connection } = connectOverSockets(proxy)
     await connection.initialized
 
     pipe.sockets[0]?.halfOpen()
@@ -942,13 +1059,7 @@ describe("ACP connection", () => {
   it("reconnects a dropped transport and rejoins every resumed Session", async () => {
     const clock = useFakeClock()
     const proxy = createGatewayAgent()
-    const pipe = pipedSockets(() => proxy.app)
-    const connection = createAcpConnection({
-      clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/v1/acp",
-      socketConstructor: pipe.WebSocket,
-    })
-    connection.start()
+    const { pipe, connection } = connectOverSockets(proxy)
     await connection.initialized
     const seen = vi.fn()
     connection.subscribe(SESSION_ID, { agentId: AGENT_ID, update: seen })
@@ -992,9 +1103,34 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("reports the outage from a drop until the resumed Session has rejoined", async () => {
+  it("reports the outage from a drop until the transport is ready, leaving a rejoin to its Session", async () => {
     const clock = useFakeClock()
     const proxy = createGatewayAgent({ slowResume: true })
+    const { pipe, connection } = connectOverSockets(proxy)
+    connection.subscribe(SESSION_ID, {})
+    const joined = connection.joined(SESSION_ID)
+    await clock.advance(20)
+    await joined
+    expect(connection.outage).toBeUndefined()
+
+    pipe.sockets[0]?.drop()
+    await clock.advance(0)
+    expect(connection.outage).toBe("reconnecting")
+    while (connection.status !== "ready") await clock.advance(1)
+    await clock.advance(0)
+    // The transport is back: the outage is over, and the Session still
+    // rejoining says so in its own state, holding up no other Session.
+    expect(connection.sessionState(SESSION_ID)).toBe("joining")
+    expect(connection.outage).toBeUndefined()
+
+    await clock.advance(20)
+    expect(connection.sessionState(SESSION_ID)).toBe("joined")
+    connection.close()
+  })
+
+  it("keeps a transport whose probe reply is held while its frames keep arriving", async () => {
+    const clock = useFakeClock()
+    const proxy = createGatewayAgent({ holdFocus: true })
     const pipe = pipedSockets(() => proxy.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
@@ -1006,20 +1142,98 @@ describe("ACP connection", () => {
     const joined = connection.joined(SESSION_ID)
     await clock.advance(20)
     await joined
-    expect(connection.outage).toBeUndefined()
 
-    pipe.sockets[0]?.drop()
-    await clock.advance(0)
-    expect(connection.outage).toBe("reconnecting")
-    while (connection.status !== "ready") await clock.advance(1)
-    // The transport is back, but the Session is still rejoining.
-    expect(connection.sessionState(SESSION_ID)).toBe("joining")
-    expect(connection.outage).toBe("reconnecting")
+    connection.focus(SESSION_ID, { foreground: true, idle: false })
+    // The probe's reply waits behind one Session's long replay, whose frames
+    // keep arriving: the transport is alive, so it stays.
+    for (let waited = 0; waited <= REQUEST_DEADLINE_MS.probe; waited += 5_000) {
+      await proxy.pushUpdate(
+        { sessionUpdate: "state_update", state: "running" },
+        { sequence: waited + 1, turnId: "run-1" }
+      )
+      await clock.advance(5_000)
+    }
 
-    await clock.advance(20)
-    expect(connection.sessionState(SESSION_ID)).toBe("joined")
-    expect(connection.outage).toBeUndefined()
+    expect(pipe.sockets).toHaveLength(1)
+    expect(connection.status).toBe("ready")
     connection.close()
+  })
+
+  it("answers a read its socket fails under, or one made while it reconnects, once a transport recovers", async () => {
+    const clock = useFakeClock()
+    const proxy = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(proxy)
+    await connection.initialized
+
+    // In flight as its socket fails.
+    pipe.sockets[0]!.holdOutbound()
+    const catalog = connection.listAgents()
+    await clock.advance(0)
+    pipe.neverAnswerHandshake()
+    pipe.sockets[0]!.fail()
+    await clock.advance(0)
+    expect(connection.status).toBe("reconnecting")
+    // Made while the connection waits to reopen.
+    const listed = connection.listSessions({ agentId: AGENT_ID })
+    await clock.advance(250)
+    // Made while the reopened socket's handshake goes unanswered; it fails.
+    expect(pipe.sockets).toHaveLength(2)
+    const searched = connection.searchSessions({ query: "weekly" })
+    await clock.advance(0)
+    pipe.sockets[1]!.fail()
+    await clock.advance(500)
+
+    expect(pipe.sockets).toHaveLength(3)
+    await expect(catalog).resolves.toMatchObject({ revision: "revision-1" })
+    await expect(listed).resolves.toMatchObject({ nextCursor: "cursor-2" })
+    await expect(searched).resolves.toMatchObject({
+      sessions: [{ title: "Weekly report" }],
+    })
+    // Each reached the gateway once, over the transport that recovered.
+    for (const method of [
+      HGW_METHODS.agents.list,
+      methods.agent.session.list,
+      HGW_METHODS.sessions.search,
+    ])
+      expect(proxy.callsOf(method)).toHaveLength(1)
+    connection.close()
+  })
+
+  it("fails a Session create its socket fails under as a closed connection, and never sends it again", async () => {
+    const clock = useFakeClock()
+    const proxy = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(proxy)
+    await connection.initialized
+
+    pipe.sockets[0]!.holdOutbound()
+    const created = connection
+      .newSession({ agentId: AGENT_ID })
+      .catch((error: unknown) => error)
+    await clock.advance(0)
+    pipe.sockets[0]!.fail()
+
+    const failure = await created
+    expect(failure).toBeInstanceOf(AcpConnectionClosedError)
+    expect(failure).toMatchObject({ cause: expect.any(Event) })
+    await clock.advance(250)
+    expect(connection.status).toBe("ready")
+    expect(proxy.callsOf(methods.agent.session.new)).toEqual([])
+    connection.close()
+  })
+
+  it("rejects a read the connection ends under as a closed connection, never with the socket's event", async () => {
+    const clock = useFakeClock()
+    const { pipe, connection } = connectOverSockets(createGatewayAgent())
+    await connection.initialized
+
+    pipe.sockets[0]!.holdOutbound()
+    const catalog = connection.listAgents().catch((error: unknown) => error)
+    await clock.advance(0)
+    pipe.sockets[0]!.fail()
+    await clock.advance(0)
+    connection.close()
+
+    expect(await catalog).toBeInstanceOf(AcpConnectionClosedError)
   })
 
   it("redeems the invitation again before replaying a recovered transport", async () => {

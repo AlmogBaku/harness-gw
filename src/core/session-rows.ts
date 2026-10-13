@@ -1,3 +1,5 @@
+import type { Logger } from "../../lifecycle"
+import { callEach } from "./listeners"
 import type { Session } from "../../protocol"
 
 /**
@@ -116,7 +118,12 @@ function withReadState(
 
 export function createSessionRows({
   now = Date.now,
-}: { now?: () => number } = {}): SessionRows {
+  logger,
+}: {
+  now?: () => number
+  /** Where a subscriber that throws is told; the others are still notified. */
+  logger?: Logger
+} = {}): SessionRows {
   const rows = new Map<string, SessionRow>()
   const guardedUntil = new Map<string, number>()
   /** The holds that keep each Session read, each with its re-lit callback. */
@@ -132,9 +139,8 @@ export function createSessionRows({
     return false
   }
 
-  const publish = (row: SessionRow) => {
-    for (const listener of [...listeners]) listener(row)
-  }
+  const publish = (row: SessionRow) =>
+    callEach(listeners, logger, "session_rows.listener.failed", row)
 
   const subscribe = (listener: SessionRowListener) => {
     listeners.add(listener)

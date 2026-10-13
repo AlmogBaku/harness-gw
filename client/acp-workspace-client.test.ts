@@ -552,6 +552,36 @@ describe("ACP workspace client", () => {
     expect(connection.listSessions).toHaveBeenCalledTimes(1)
   })
 
+  it("keeps a page's readable rows past one it cannot read, and rejects a page none of whose rows can be read", async () => {
+    const { client, connection } = createClient()
+    const unreadable = {
+      ...listEntry(),
+      sessionId: UNLISTED_SESSION_ID,
+      _meta: {
+        [HGW_META_KEY]: { ...sessionInfoMeta(), status: "pondering" },
+      },
+    }
+    connection.listSessions = vi.fn(async () => ({
+      sessions: [listEntry(), unreadable],
+    }))
+
+    const page = await client.readSessionPage({})
+
+    expect(page.sessions.map(({ sessionId }) => sessionId)).toEqual([
+      SESSION_ID,
+    ])
+    expect(
+      (await client.getSessionMetadata([SESSION_ID])).map(
+        ({ sessionId }) => sessionId
+      )
+    ).toEqual([SESSION_ID])
+
+    connection.listSessions = vi.fn(async () => ({ sessions: [unreadable] }))
+    await expect(
+      client.readSessionPage({ agentId: AGENT_ID })
+    ).rejects.toThrow()
+  })
+
   it("answers for Sessions of a page the thread list read without reading it again", async () => {
     const { client, calls } = createClient()
 
@@ -628,6 +658,50 @@ describe("ACP workspace client", () => {
       SESSION_ID,
       UNLISTED_SESSION_ID,
     ])
+  })
+
+  it("publishes live rows once a read has answered for a Session it did not find", async () => {
+    const { client, join, emitUpdate } = createClient()
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID, UNLISTED_SESSION_ID], (rows) =>
+      published.push(rows)
+    )
+    // The read answers for both: one is listed, the other the catalog lacks.
+    await client.getSessionMetadata([SESSION_ID, UNLISTED_SESSION_ID])
+    expect(published.at(-1)?.map(({ sessionId }) => sessionId)).toEqual([
+      SESSION_ID,
+    ])
+    await join()
+
+    emitUpdate(
+      { sessionUpdate: "session_info_update" },
+      { agentId: AGENT_ID, status: "waiting-for-input", archived: false }
+    )
+
+    // The missing row costs only itself: the listed one still goes live.
+    expect(
+      published.at(-1)?.map(({ sessionId, status }) => [sessionId, status])
+    ).toEqual([[SESSION_ID, "waiting-for-input"]])
+  })
+
+  it("keeps publishing to the other subscribers when one throws", async () => {
+    const { client, join, emitUpdate } = createClient()
+    await client.getSessionMetadata([SESSION_ID])
+    client.subscribeSessionMetadata([SESSION_ID], () => {
+      throw new Error("listener failed")
+    })
+    const published: SessionMetadata[][] = []
+    client.subscribeSessionMetadata([SESSION_ID], (rows) =>
+      published.push(rows)
+    )
+    await join()
+
+    emitUpdate(
+      { sessionUpdate: "session_info_update" },
+      { agentId: AGENT_ID, status: "waiting-for-input", archived: false }
+    )
+
+    expect(published.at(-1)?.[0]?.status).toBe("waiting-for-input")
   })
 
   it("acks read state optimistically before the provider write", async () => {

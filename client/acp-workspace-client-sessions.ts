@@ -21,7 +21,10 @@ import type {
   TodoItem,
   WorkspaceActivityEvent,
 } from "./workspace"
+import type { Logger } from "../lifecycle"
+import { SILENT_LOGGER } from "./connection"
 import { subscribeHgwNotification } from "./hgw-notification"
+import { callEach } from "./log"
 import type { AcpConnection } from "./types"
 
 /**
@@ -41,6 +44,8 @@ export type AcpSessionStoreOptions = {
   now?: () => number
   /** A live turn of a subscribed Session just stopped, however it ended. */
   onTurnFinished?: (sessionId: string) => void
+  /** Where a listener that throws is told; the others still hear. */
+  logger?: Logger
 }
 
 /** The one place a `state_update` becomes a Session status. */
@@ -126,6 +131,7 @@ export function createAcpSessionStore({
   connection,
   now = Date.now,
   onTurnFinished,
+  logger = SILENT_LOGGER,
 }: AcpSessionStoreOptions) {
   const rows = new Map<string, SessionMetadata>()
   const titles = new Map<string, string>()
@@ -153,16 +159,26 @@ export function createAcpSessionStore({
     })
   }
 
+  /** Sessions a metadata read has answered for, found or not. */
+  const answered = new Set<string>()
+
   /**
    * A snapshot answers for every Session it was asked about. One that omits a
    * Session the catalog has not reached yet — a reloaded deep link naming a
    * Session past page one — would read as a Session the workspace does not
-   * have, so the read that resolves it publishes instead.
+   * have, so it waits for the read that resolves it. Once a read has
+   * answered, a Session it did not find costs only its own row: the others
+   * keep publishing.
    */
   function notify(subscription: MetadataSubscription) {
     for (const sessionId of subscription.sessionIds)
-      if (!rows.has(sessionId)) return
-    subscription.listener(rowsFor(subscription.sessionIds))
+      if (!rows.has(sessionId) && !answered.has(sessionId)) return
+    callEach(
+      [subscription.listener],
+      logger,
+      "sessions.listener.failed",
+      rowsFor(subscription.sessionIds)
+    )
   }
 
   function publish(sessionId: string) {
@@ -225,17 +241,25 @@ export function createAcpSessionStore({
   function setTodos(sessionId: string, next: TodoItem[]) {
     todos.set(sessionId, next)
     for (const listener of todoListeners.get(sessionId) ?? [])
-      listener(next.map((todo) => ({ ...todo })))
+      callEach(
+        [listener],
+        logger,
+        "sessions.listener.failed",
+        next.map((todo) => ({ ...todo }))
+      )
   }
 
   function emitActivity(event: WorkspaceActivityEvent) {
-    for (const listener of activityListeners) listener(event)
+    callEach(activityListeners, logger, "sessions.listener.failed", event)
   }
 
   /** Tells a Session's listeners to re-read what the provider now holds. */
   function invalidate(sessionId: string) {
-    for (const listener of invalidationListeners.get(sessionId) ?? [])
-      listener()
+    callEach(
+      invalidationListeners.get(sessionId) ?? [],
+      logger,
+      "sessions.listener.failed"
+    )
   }
 
   /** An update whose `_meta.hgw` does not parse carries nothing to publish. */
@@ -355,6 +379,13 @@ export function createAcpSessionStore({
     },
     put,
     rowsFor,
+    /** Marks Sessions a read has answered for, so a missing one gates no snapshot. */
+    answer(sessionIds: readonly string[]) {
+      for (const sessionId of sessionIds) answered.add(sessionId)
+      for (const subscription of subscriptions)
+        if (sessionIds.some((id) => subscription.sessionIds.has(id)))
+          notify(subscription)
+    },
     /** The provider's title, as a list page or a subscribed Session reports it. */
     setTitle: (sessionId: string, title: string) =>
       titles.set(sessionId, title),

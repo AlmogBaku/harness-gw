@@ -107,6 +107,13 @@ export type AcpSessionListener = {
   state?: (state: AcpSessionState) => void
 }
 
+/**
+ * A read (`listAgents`, `listSessions`, `searchSessions`, `resumePage`) waits
+ * out a reconnect and goes out again on the transport that recovers, and a
+ * write for an opened Session once it has rejoined. Any other call a
+ * transport closes under, and every call once the connection has ended,
+ * rejects as `AcpConnectionClosedError`.
+ */
 export interface AcpConnection {
   readonly status: AcpConnectionStatus
   /**
@@ -119,7 +126,10 @@ export interface AcpConnection {
   /** Resolves with `InitializeResponse._meta.hgw` once the handshake settles. */
   readonly initialized: Promise<z.infer<typeof HgwInitializeMetaSchema>>
   subscribeStatus(listener: (status: AcpConnectionStatus) => void): () => void
-  /** Set from a close until every resumed Session has rejoined. */
+  /**
+   * Set from a close until the transport is ready again. Each Session's
+   * rejoin is its own state (`sessionState`), not the connection's.
+   */
   readonly outage: AcpConnectionOutage | undefined
   subscribeOutage(
     listener: (outage: AcpConnectionOutage | undefined) => void

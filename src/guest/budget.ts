@@ -1,11 +1,12 @@
 type Usage = { inFlight: number; ops: number[] }
 
 /**
- * A per-conversation ceiling on operator-paid speech. One invitation link may
- * hold only a few operations at a time and only so many within a window, so a
- * holder cannot spend a provider budget without bound in either direction.
+ * A per-conversation ceiling on operations the operator pays a provider for.
+ * One invitation link may hold only a few operations at a time and only so
+ * many within a window, so a holder cannot spend a provider budget without
+ * bound in either direction.
  */
-export function createGuestAudioBudget(options: {
+export function createGuestBudget(options: {
   now: () => number
   windowMs: number
   maxInFlight: number
@@ -14,8 +15,8 @@ export function createGuestAudioBudget(options: {
   const usage = new Map<string, Usage>()
 
   /** This conversation's usage with aged-out operations dropped; a drained
-   * conversation leaves the map the next time it speaks, so the map tracks
-   * conversations that keep speaking rather than every one that ever did. */
+   * conversation leaves the map the next time it spends, so the map tracks
+   * conversations that keep spending rather than every one that ever did. */
   const live = (ref: string, current: number): Usage => {
     const entry = usage.get(ref)
     if (!entry) return { inFlight: 0, ops: [] }
@@ -47,3 +48,6 @@ export function createGuestAudioBudget(options: {
     },
   }
 }
+
+/** One invitation-keyed operation budget. */
+export type GuestBudget = ReturnType<typeof createGuestBudget>

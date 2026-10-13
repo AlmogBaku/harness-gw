@@ -1,5 +1,7 @@
 import type { Hono } from "hono"
 
+import type { GuestBudget } from "../budget"
+
 import {
   SessionAttachmentStageRequestSchema,
   SessionAttachmentStageResponseSchema,
@@ -10,6 +12,8 @@ import {
 import type { GuestAuthorization } from "../../auth/guest-invitation"
 import { projectGuestOutbound } from "../../auth/guest-projection"
 import { MAXIMUM_STAGE_REQUEST_BYTES } from "../../core/attachment-stages"
+import type { ProviderSessionId } from "../../core/ids"
+import type { ServerRuntime } from "../../core/runtime"
 import type { PublishedArtifact } from "../../routes/app-files"
 import { recordingBytes } from "../../routes/content"
 import { boundedJson, encodedFilename } from "../../routes/http"
@@ -40,6 +44,38 @@ export function projectedArtifact(
     authorization
   )
   return projected?.payload.type === "artifact" ? projected.payload : undefined
+}
+
+/** A guest Artifact read past its invitation's budget. */
+export class GuestArtifactBudgetError extends Error {
+  constructor() {
+    super("The invitation's Artifact budget is spent")
+    this.name = "GuestArtifactBudgetError"
+  }
+}
+
+/**
+ * An invited Session's Artifact. The runtime reads one by the Session's public
+ * id, which its own row names; a guest knows the Session by its reference.
+ * Every guest read path comes through here, so each spends the invitation's
+ * budget, and one past it reads nothing.
+ */
+export async function invitedArtifact(
+  runtime: ServerRuntime,
+  budget: GuestBudget,
+  ref: string,
+  agentId: string,
+  providerSessionId: ProviderSessionId,
+  artifactId: string
+) {
+  const release = budget.acquire(ref)
+  if (!release) throw new GuestArtifactBudgetError()
+  try {
+    const session = await runtime.getSession(agentId, providerSessionId)
+    return await runtime.artifact(agentId, session.id, artifactId)
+  } finally {
+    release()
+  }
 }
 
 export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
@@ -259,11 +295,14 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
         "artifacts:read"
       )
       if (!authorization) return emptyError(401)
-      const resolved =
-        await routes.options.runtime.runtime.resolveInvitedSession(agentId, ref)
-      if (!resolved) return emptyError(404)
+      const { runtime } = routes.options.runtime
       try {
-        const artifact = await routes.options.runtime.runtime.artifact(
+        const resolved = await runtime.resolveInvitedSession(agentId, ref)
+        if (!resolved) return emptyError(404)
+        const artifact = await invitedArtifact(
+          runtime,
+          routes.artifactBudget,
+          identity.ref,
           agentId,
           resolved.providerSessionId,
           context.req.param("artifactId")
@@ -283,12 +322,20 @@ export function registerGuestContentRoutes(app: Hono, routes: GuestRoutes) {
           },
         })
       } catch (error) {
+        if (error instanceof GuestArtifactBudgetError)
+          return routes.projectedError(
+            identity,
+            agentId,
+            ref,
+            "rate_limited",
+            true,
+            503
+          )
         // The same classification the operator route answers with: an artifact
         // the provider can no longer read is gone, and only an unclassified
         // failure is an outage worth retrying. The projected body carries a
         // fixed description, so neither answer names a native path.
-        const gone =
-          routes.options.runtime.runtime.publicError(error)?.kind === "gone"
+        const gone = runtime.publicError(error)?.kind === "gone"
         return routes.projectedError(
           identity,
           agentId,

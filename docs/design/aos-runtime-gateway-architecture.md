@@ -453,15 +453,20 @@ acceptance order.
 
 **Status: Implemented**
 
-**ACP socket** (`src/acp/socket.ts`):
+**ACP socket** (`src/acp/socket.ts`, `src/acp/service.ts`, `src/server.ts`):
 
-| Limit                        | Value                     |
-| ---------------------------- | ------------------------- |
-| Max inbound frame            | 1 100 000 bytes (≈1.1 MB) |
-| Inbound rate window          | 1 s, 64 frames, 256 KiB   |
-| Outbound queue               | 256 frames, 4 MiB         |
-| Rate exceeded close code     | 1008                      |
-| Output overloaded close code | 1013                      |
+| Limit                          | Value                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Max inbound frame              | `HGW_MAX_FRAME_BYTES`, 1 100 000 bytes; Bun's `maxPayloadLength` closes a larger one first        |
+| Inbound rate window            | 1 s, 64 frames, 2 200 000 bytes (two frames at the cap)                                            |
+| Rate exceeded close code       | 1008                                                                                               |
+| Outbound                       | No gateway queue. The ACP SDK pauses at 8 MiB unsent (`maxBufferedBytes`, read from Bun's buffer) |
+| Reader fell behind close code  | 4409, after 60 s without reading a full buffer (`maxOutputStallMs`); the client reconnects        |
+| Backstop                       | Bun's 16 MiB `backpressureLimit` with `closeOnBackpressureLimit`                                   |
+| Peer capacity close code       | 1013                                                                                               |
+
+Stored user images travel by reference as Artifacts (`resource_link`), never
+as inline frames, so no one Session's history fills the shared socket.
 
 **Per-role execution caps** (`src/config.ts`): `activeExecutions` (global)
 and `guestActiveExecutions`. Both are validated: guest cap must not exceed
@@ -543,7 +548,9 @@ ACP standard codes `-32000` (internal), `-32002` (cancelled), `-32601`
 (method not found), `-32602` (invalid request), `-32800` (request cancelled);
 HGW block `-31010` turnInProgress, `-31011` staleRequest, `-31012`
 revisionConflict, `-31013` temporarilyUnavailable, `-31014` uncertainMutation,
-`-31015` unsupported. Codes `-32001` through `-32009` are no longer used.
+`-31015` unsupported, `-31016` requestTooLarge (raised by the client before
+sending; never sent by the gateway). Codes `-32001` through `-32009` are no
+longer used.
 
 **Vendor stop reasons** on `state_update { state: "idle" }`: `_hgw_error`,
 `_hgw_uncertain` (`protocol/acp.ts`).

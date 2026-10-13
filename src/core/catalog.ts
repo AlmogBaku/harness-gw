@@ -9,6 +9,7 @@ import {
 } from "../../protocol"
 import { defaultClock, type Clock, type Logger } from "../../lifecycle"
 import { coreFailure } from "./failures"
+import { callEach } from "./listeners"
 import * as ids from "./ids"
 import type { ProviderSessionId } from "./ids"
 import { createLink, type Link } from "./link"
@@ -126,9 +127,8 @@ export function createCatalog({
    */
   let changes: Link | undefined
 
-  const invalidate = () => {
-    for (const listener of [...invalidated]) listener()
-  }
+  const invalidate = () =>
+    callEach(invalidated, logger, "catalog.listener.failed")
 
   function scope(agentId: string, sessionId: string) {
     const providerSessionId = runtime.resolveProviderSessionId(
@@ -210,7 +210,7 @@ export function createCatalog({
     async updateAgent(agentId, patch, revision) {
       const updated = await runtime.updateAgent(agentId, patch, revision)
       // Whoever reads Agents learns the write now, not when a cache lapses.
-      for (const listener of [...agentUpdated]) listener(updated.agent)
+      callEach(agentUpdated, logger, "catalog.listener.failed", updated.agent)
       invalidate()
       return updated
     },

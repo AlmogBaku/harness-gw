@@ -78,17 +78,29 @@ same resume rebuilds the Session from history, as described under
 The SDK client reconnects with jittered backoff starting at 250 ms, capped at
 5 000 ms, and resetting once every resumed Session has rejoined or the link has
 been stable for a while. A guest connection re-sends `auth/login` after every
-transport recovery before resuming sessions.
+transport recovery before resuming sessions. A read (`_hgw/agents/list`,
+`session/list`, `_hgw/sessions/search`) that its transport closes under, or
+that is made while the client reconnects, goes out again once a transport has
+recovered. A history page, prompt, config write or steer for an opened Session
+goes out again once that Session has rejoined, a prompt with the same client
+id. Any other request its transport closes under fails as
+`AcpConnectionClosedError`, as does every request once the connection has
+ended; a request's own deadline still fails it.
 
 Close codes the gateway sends:
 
 | Code   | Meaning                                                                                                                                            | Client action                 |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `1008` | Policy violation (expired credential, rate or size exceeded)                                                                                       | No reconnect; ends connection |
+| `1008` | Policy violation (expired credential, rate or frame size exceeded, or another protocol limit the ACP SDK enforces)                                 | No reconnect; ends connection |
 | `1013` | Gateway at capacity                                                                                                                                | Backs off 30–60 s with jitter |
 | `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
+| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, or its waiting requests passed that buffer                       | Normal reconnect              |
 
 Any other code triggers a normal reconnect.
+
+A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
+itself before the gateway reads it, so the client never sends one: it refuses
+an oversized prompt or steer locally with `requestTooLarge`.
 
 ## Handshake: `initialize` and `auth/login`
 
@@ -604,6 +616,31 @@ on its own listener, a guest with its invitation token as a Bearer
 `Authorization` header. The gateway resolves the id only against that Session's
 own provider history.
 
+### Stored user images
+
+A user image the provider stored inline in its transcript replays as an
+Artifact `resource_link` on its `user_message_chunk`, never as an ACP `image`
+block, so no image's bytes travel on the shared socket
+(`src/core/history-image-artifacts.ts`). The images are a Hermes `image_url`
+part or an OpenCode prompt file, stored as a `data:` URL.
+
+- **Id:** `hgw-image-` and 32 hex characters of a SHA-256 over the provider
+  Session id, the data URL, and the part's place in its message.
+- **Name and type:** `name` is the part's own filename or `image.<ext>`.
+  `mimeType` appears only for PNG, JPEG, GIF, WebP, and BMP.
+- **Reading:** a client reads the bytes from the same Artifact route. The
+  gateway re-reads the history page that showed the image, or the newest four
+  pages when it has not placed the id. It answers 404 `not_found` for an image
+  none of them holds.
+- **Hermes:** a row that also carries the image's `@image:` directive replays
+  that directive's Artifact instead.
+- **Size:** a stored history image may be up to 35,000,000 characters as a
+  data URL, the same cap as a staged attachment.
+
+On the guest listener, Artifact reads share a per-invitation budget of 16 in
+flight and 600 per 10 minutes, on every guest path that reads an Artifact.
+Past it, the route answers 503 `turn_capacity_exceeded`.
+
 ## Interactions: permission and elicitation
 
 ACP delivers pending interactions as `session/request_permission` or
@@ -654,6 +691,11 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | `-31013` | `temporarilyUnavailable` | Runtime not reachable; retry later                          |
 | `-31014` | `uncertainMutation`      | Mutation dispatched but outcome unknown                     |
 | `-31015` | `unsupported`            | Runtime cannot store a requested Agent field                |
+| `-31016` | `requestTooLarge`        | Params too large for one frame (`HGW_MAX_FRAME_BYTES`)      |
+
+`requestTooLarge` is raised by the client before a prompt or steer is sent,
+so one oversized request fails alone instead of closing the shared socket. The
+gateway never sends it, and it has no machine name below.
 
 Codes `-32001` through `-32009` are no longer used.
 

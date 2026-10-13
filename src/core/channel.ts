@@ -1031,11 +1031,18 @@ class Membership {
   emit(event: SessionEvent): Promise<void> {
     if (this.detached) return Promise.resolve()
     const declines = new Set<string>()
-    const shown = runEvents(
-      this.#member.middleware,
-      { sessionId: this.#addressed.sessionId, ...event },
-      { decline: (requestId) => declines.add(requestId) }
-    )
+    let shown: ReturnType<typeof runEvents>
+    try {
+      shown = runEvents(
+        this.#member.middleware,
+        { sessionId: this.#addressed.sessionId, ...event },
+        { decline: (requestId) => declines.add(requestId) }
+      )
+    } catch (cause) {
+      // A stack that throws costs this event alone, through the caller's own
+      // handling of a failed send, never the members or events after it.
+      return Promise.reject(cause)
+    }
     if (shown?.kind === "request-asked")
       this.#delivered.add(shown.request.requestId)
     const sent = shown ? this.#member.connection.send(shown) : Promise.resolve()

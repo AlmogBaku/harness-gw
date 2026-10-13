@@ -36,8 +36,11 @@ export function openCodeAgentAvatar(
   return parsed.success ? parsed.data.body.avatar : undefined
 }
 
+export type OpenCodeAgent = z.infer<typeof OpenCodeAgentSchema>
+
+/** Each row is checked on its own, so one malformed Agent costs that Agent alone. */
 export const OpenCodeAgentCatalogSchema = z.object({
-  data: z.array(OpenCodeAgentSchema).max(1_000),
+  data: z.array(z.unknown()).max(1_000),
 })
 
 export const OpenCodeModelRefSchema = z
@@ -120,8 +123,9 @@ export const OpenCodeSessionSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
+/** Each row is checked on its own, so one malformed Session costs that row alone. */
 export const OpenCodeSessionCatalogSchema = z.object({
-  data: z.array(OpenCodeSessionSchema).max(100),
+  data: z.array(z.unknown()).max(100),
   cursor: z.object({
     previous: IdentifierSchema.optional(),
     next: IdentifierSchema.optional(),
@@ -129,7 +133,7 @@ export const OpenCodeSessionCatalogSchema = z.object({
 })
 
 const NativePromptFileAttachmentSchema = z.object({
-  uri: z.string().min(1).max(25_000_000),
+  uri: z.string().min(1).max(35_000_000),
   name: z.string().min(1).max(255).optional(),
   description: z.string().max(4_096).optional(),
   source: z.unknown().optional(),
@@ -263,6 +267,10 @@ export const OpenCodeMessageCatalogSchema = z.object({
 
 export function parseOpenCodeAgentCatalog(value: unknown) {
   return OpenCodeAgentCatalogSchema.safeParse(value)
+}
+
+export function parseOpenCodeAgent(value: unknown) {
+  return OpenCodeAgentSchema.safeParse(value)
 }
 
 export function parseOpenCodeSessionCatalog(value: unknown) {
