@@ -612,6 +612,19 @@ export const SessionWorkspaceCapabilitiesResponseSchema = z.strictObject({
       }),
       CapabilityUnavailableSchema,
     ]),
+    /**
+     * Edit and Retry: a prompt naming `rewindSourceId` replaces that user turn
+     * and every turn after it, with whatever else the runtime rewinds with
+     * them. Reported per Session, as steering is, so a client offers it only
+     * where it works.
+     */
+    rewind: z.union([
+      z.strictObject({
+        status: z.literal("available"),
+        scope: z.literal("user-turn"),
+      }),
+      CapabilityUnavailableSchema,
+    ]),
     approvals: z.strictObject({
       status: z.literal("available"),
       protocol: z.literal(INTERACTION_PROTOCOL),

@@ -17,6 +17,7 @@ import {
   type Middleware,
 } from "../../core/member"
 import { appCallPassesWhole } from "./app-servers"
+import { refusedText } from "./commands"
 import { ARTIFACT_PART_NAME, guestArtifact } from "./artifacts"
 import type { GuestGrant } from "./index"
 
@@ -161,14 +162,20 @@ export function createHistoryMiddleware({
   /**
    * Every user message this guest was shown, in history or as a prompt under
    * the id its provider stored it as, so an Edit or Retry never names the
-   * hidden setup turn or anything unseen.
+   * hidden setup turn or anything unseen. Each records whether its text is one
+   * a guest may not send, which a Retry would send again as written.
    */
-  const shown = new Set<string>()
+  const shown = new Map<string, boolean>()
+  const show = (id: string, texts: readonly string[]) =>
+    shown.set(id, texts.some(refusedText))
   return {
     commands: {
       send: async (command, next) => {
-        const { rewindSourceId } = command
-        if (rewindSourceId !== undefined && !shown.has(rewindSourceId))
+        const { rewindSourceId, text } = command
+        if (rewindSourceId === undefined) return next(command)
+        const refused = shown.get(rewindSourceId)
+        // An Edit sends its own text, which the commands layer checked.
+        if (refused === undefined || (refused && !text))
           throw new CommandRefusedError("invalid")
         return next(command)
       },
@@ -183,11 +190,22 @@ export function createHistoryMiddleware({
             appServers
           )
           for (const message of page.messages)
-            if (message.role === "user") shown.add(message.id)
+            if (message.role === "user")
+              show(
+                message.id,
+                message.content.flatMap((part) =>
+                  part.type === "text" ? [part.text] : []
+                )
+              )
           return { ...event, page }
         }
         case "prompt":
-          shown.add(event.messageId)
+          show(
+            event.messageId,
+            event.content.flatMap((part) =>
+              part.kind === "text" ? [part.text] : []
+            )
+          )
           return event
         case "turn":
         case "request-asked":

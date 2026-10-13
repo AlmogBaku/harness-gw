@@ -49,7 +49,7 @@ const LEADING_PADDING = /^[\s\u200B\u2060\uFEFF]+/u
  * padded. The padding is stripped for this check alone; the text travels as
  * written.
  */
-function refusedText(text: string) {
+export function refusedText(text: string) {
   return (
     text.replace(LEADING_PADDING, "").startsWith("/") ||
     isFirstTurnEnvelopeText(text)

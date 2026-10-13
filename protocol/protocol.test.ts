@@ -56,6 +56,7 @@ describe("AOS v1 normalized protocol", () => {
           status: "unavailable",
           reason: "native-steering-unavailable",
         },
+        rewind: { status: "available", scope: "user-turn" },
         approvals: {
           status: "available",
           protocol: INTERACTION_PROTOCOL,
@@ -186,6 +187,7 @@ describe("AOS v1 normalized protocol", () => {
             input: "text",
             fallback: "provider-queue",
           },
+          rewind: { status: "available", scope: "user-turn" },
           approvals: {
             status: "available",
             protocol: INTERACTION_PROTOCOL,

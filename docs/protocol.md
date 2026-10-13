@@ -166,7 +166,7 @@ The guest listener advertises (`GUEST_EXTENSIONS`, `src/guest/acp.ts`):
 | `historyPages`    | `true`  |
 
 The invited Session's capabilities report slash commands, models, and context
-usage unavailable, and steering as the runtime reports it.
+usage unavailable, and steering and rewind as the runtime reports them.
 
 Every method runs as a member command through the guest middleware stack in
 `src/guest/middleware/` (commands, scope, history, turns,
@@ -177,7 +177,7 @@ invited conversation by its reference alone; any other Session id is
 | Method                                                                                                                                       | Guest behavior                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session/resume`                                                                                                                             | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
-| `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown. |
+| `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
 | `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
 | `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
@@ -288,7 +288,10 @@ rejects every other `replayFrom` type, and an `_hgw/before` without a string
 from.
 
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
-`{ rewindSourceId?, attachmentStageId?, clientId? }`. `clientId` becomes the
+`{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
+the user message an Edit or Retry replaces; a Session offers it only where its
+capabilities report `interactions.rewind` available, since what a rewind undoes
+with the turns, such as restored files, is the runtime's. `clientId` becomes the
 turn's `turnId`; a retry with the same `clientId` returns the first answer
 unchanged. The response carries the minted user-message id as the top-level
 `messageId` field (SDK 1.5.0 `PromptResponse`). As ACP reads an error answer

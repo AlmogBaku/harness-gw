@@ -1077,6 +1077,8 @@ export class HermesServerAdapter implements ServerRuntime {
           input: "text" as const,
           fallback: "provider-queue" as const,
         },
+        // A send naming its source truncates the stored turns from it.
+        rewind: { status: "available" as const, scope: "user-turn" as const },
       },
       content: this.#content.capabilities(),
     }

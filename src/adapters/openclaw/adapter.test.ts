@@ -242,6 +242,10 @@ describe("OpenClaw ServerRuntime assembly", () => {
       adapter.workspaceCapabilities("research", sessionKey)
     ).resolves.toEqual(
       expect.objectContaining({
+        // The gateway drives no OpenClaw rewind yet.
+        interactions: expect.objectContaining({
+          rewind: expect.objectContaining({ status: "unavailable" }),
+        }),
         content: expect.objectContaining({
           attachments: expect.objectContaining({
             maxEncodedRequestBytes: policy.maxPayload,

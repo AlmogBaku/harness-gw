@@ -21,6 +21,10 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
         status: "unavailable" as const,
         reason: "active-turn-steering-unavailable" as const,
       },
+      rewind: {
+        status: "unavailable" as const,
+        reason: "native-rewind-unsupported" as const,
+      },
       approvals: {
         status: "available" as const,
         protocol: INTERACTION_PROTOCOL,

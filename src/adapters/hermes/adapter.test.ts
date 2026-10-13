@@ -161,6 +161,12 @@ describe("Hermes server adapter", () => {
         await adapter.workspaceCapabilities("researcher", sessionId)
       )
     ).not.toContain("live-secret")
+    // Hermes truncates the stored turns from the one an Edit or Retry names.
+    await expect(
+      adapter.workspaceCapabilities("researcher", sessionId)
+    ).resolves.toMatchObject({
+      interactions: { rewind: { status: "available", scope: "user-turn" } },
+    })
   })
 
   it("refreshes the Session's reported model from its own writes and events", async () => {

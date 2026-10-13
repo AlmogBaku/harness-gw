@@ -65,6 +65,7 @@ function workspaceCapabilities() {
     },
     interactions: {
       steering: { status: "unavailable", reason: "not-supported" },
+      rewind: { status: "available", scope: "user-turn" },
       approvals: {
         status: "available",
         protocol: INTERACTION_PROTOCOL,

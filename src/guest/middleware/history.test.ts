@@ -523,6 +523,12 @@ function guarded() {
       }
       return middleware.commands?.send?.(command, next)
     },
+    /** A Retry sends no text of its own: the runtime resends its source's. */
+    retry: (rewindSourceId: string) =>
+      middleware.commands?.send?.(
+        { sessionId: "ref", content: [], text: "", rewindSourceId },
+        next
+      ),
     next,
   }
 }
@@ -545,6 +551,37 @@ describe("guest Edit and Retry", () => {
         CommandRefusedError
       )
     expect(test.next).not.toHaveBeenCalled()
+  })
+
+  // The runtime resends a Retry's source as written, so one that names a slash
+  // command would run it as the operator, as a guest's own text may not.
+  it("refuses a Retry of a slash command it was shown, however padded, and lets an Edit replace one", async () => {
+    const test = guarded()
+    test.show({
+      sessionId: "ref",
+      kind: "history",
+      sequence: 0,
+      page: page([
+        { id: "branch", role: "user", text: "/branch" },
+        { id: "padded", role: "user", text: "\u200B  /fork now" },
+        { id: "plain", role: "user", text: "Hello" },
+      ]),
+    })
+    test.show({
+      sessionId: "ref",
+      kind: "prompt",
+      messageId: "live-slash",
+      content: [{ kind: "text", text: " /compact" }],
+      own: false,
+    })
+
+    for (const id of ["branch", "padded", "live-slash"])
+      await expect(test.retry(id), id).rejects.toBeInstanceOf(
+        CommandRefusedError
+      )
+    expect(test.next).not.toHaveBeenCalled()
+    await expect(test.retry("plain")).resolves.toEqual({ messageId: "sent" })
+    await expect(test.rewind("branch")).resolves.toEqual({ messageId: "sent" })
   })
 
   it("runs on a message the guest was shown in history or as a prompt", async () => {

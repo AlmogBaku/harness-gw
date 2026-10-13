@@ -583,6 +583,8 @@ describe("OpenCode server adapter", () => {
         adapter.workspaceCapabilities("research", "session-1")
       ).resolves.toMatchObject({
         content: { artifacts: { status: "unavailable" } },
+        // No rewind the gateway can drive is proven on OpenCode yet.
+        interactions: { rewind: { status: "unavailable" } },
       })
     })
   })
