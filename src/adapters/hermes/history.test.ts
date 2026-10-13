@@ -1,3 +1,4 @@
+import type { SessionMessage } from "../../../protocol"
 import { StopReason, ToolKind } from "../../core/events"
 import { describe, expect, it } from "vitest"
 
@@ -9,6 +10,13 @@ import {
   userRow,
 } from "./test-utils/history-rows"
 import { jsonObject } from "./test-utils/json-object"
+
+/** The projection of rows that store no activity, as its messages. */
+function projectedMessages(...args: Parameters<typeof projectHermesHistory>) {
+  return projectHermesHistory(...args).filter(
+    (message): message is SessionMessage => message.role !== "activity"
+  )
+}
 
 describe("server-side Hermes history projection", () => {
   it("replays a failed command with its exit code and hint", () => {
@@ -55,7 +63,7 @@ describe("server-side Hermes history projection", () => {
   it("restores trusted TTS media and suppresses a redundant copied marker", () => {
     const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
     const copiedPath = "/home/alice/voice-memos/out/copied-brief.mp3"
-    const messages = projectHermesHistory([
+    const messages = projectedMessages([
       {
         id: "assistant-tts",
         role: "assistant",
@@ -320,10 +328,11 @@ describe("server-side Hermes history projection", () => {
     ...["model_switch", "personality_switch", "unknown_kind"].map(
       (kind): RowCase => [`${kind} row`, tagged(kind), ["u1", "u1-1", "u1-2"]]
     ),
+    // Stored as the compaction it is, and the reply stays with the request.
     [
       "a hidden compaction handoff",
       { ...tagged("hidden"), _compressed_summary: true },
-      ["u1", "u1-1", "u1-2"],
+      ["u1", "u1-1", "x~", "u1-2"],
     ],
   ])("projects %s by its row class", (_name, row, ids) => {
     const messages = projectHermesHistory([
@@ -337,9 +346,10 @@ describe("server-side Hermes history projection", () => {
     ])
 
     expect(
-      messages.map(
-        ({ id, correction, opensTurn }) =>
-          `${id}${correction ? "!" : ""}${opensTurn ? "^" : ""}`
+      messages.map((message) =>
+        message.role === "activity"
+          ? `${message.id}~`
+          : `${message.id}${message.correction ? "!" : ""}${message.opensTurn ? "^" : ""}`
       )
     ).toEqual(ids)
   })
@@ -469,7 +479,7 @@ describe("server-side Hermes history projection", () => {
     }
   )
 
-  it("hides a compaction carrier whose only live content is the replayed request", () => {
+  it("stores a compaction carrier whose only live content is the replayed request as its compaction alone", () => {
     const replay =
       "[STILL IN PROGRESS — this is the active request, restated after the compaction boundary because it was not finished yet. Continue it; do not start over.]\nSummarize the notes"
     const messages = projectHermesHistory([
@@ -482,7 +492,60 @@ describe("server-side Hermes history projection", () => {
       },
     ])
 
-    expect(messages).toEqual([])
+    // No prompt opened a turn before it, so it keeps its own row's id.
+    expect(messages).toEqual([
+      {
+        id: "carrier",
+        role: "activity",
+        activityType: "COMPACTION",
+        content: { compactionId: "carrier" },
+      },
+    ])
+  })
+
+  it("stores each summary carrier as the compaction its live turn named, with no summary", () => {
+    const carrier = (rowId: number) => ({
+      row_id: rowId,
+      role: "user",
+      display_kind: "hidden",
+      content: "Synthetic summary of the notes so far",
+      _compressed_summary: true,
+    })
+    const messages = projectHermesHistory([
+      userRow("u7", "Summarize the notes", { rowId: 7 }),
+      assistantToolCall("a8", [
+        { toolCallId: "c1", name: "read_file", args: { path: "notes.md" } },
+      ]),
+      toolRow("c1", "read_file", "contents"),
+      carrier(10),
+      assistantText("a11", "Still reading."),
+      carrier(12),
+      assistantText("a13", "Done."),
+      userRow("u14", "And the appendix", { rowId: 14 }),
+      carrier(15),
+    ])
+
+    // Live names a compaction by the prompt row Hermes stored and its count
+    // within the turn; the carrier's own row stays its message id.
+    expect(
+      messages.flatMap((message) =>
+        message.role === "activity" ? [[message.id, message.content]] : []
+      )
+    ).toEqual([
+      ["hermes-row-10", { compactionId: "hermes-row-7:compaction:1" }],
+      ["hermes-row-12", { compactionId: "hermes-row-7:compaction:2" }],
+      ["hermes-row-15", { compactionId: "hermes-row-14:compaction:1" }],
+    ])
+    // A carrier splits no reply and shifts no id.
+    expect(messages.map(({ id }) => id)).toEqual([
+      "hermes-row-7",
+      "hermes-row-7-1",
+      "hermes-row-10",
+      "hermes-row-7-2",
+      "hermes-row-12",
+      "hermes-row-14",
+      "hermes-row-15",
+    ])
   })
 
   it("keeps one reply whole across a tagged assistant row", () => {
@@ -535,8 +598,13 @@ describe("server-side Hermes history projection", () => {
       },
     ])
 
+    // The carrier is still where Hermes compacted, ahead of the ask it shows.
     expect(messages).toMatchObject([
       { content: [{ type: "text", text: "own-content" }] },
+      {
+        activityType: "COMPACTION",
+        content: { compactionId: "ordinary-row:compaction:1" },
+      },
       { content: [{ type: "text", text: "recovered-content" }] },
     ])
   })
@@ -966,7 +1034,7 @@ describe("server-side Hermes history projection", () => {
       ),
     ],
   ])("flags the user row %s persisted mid-turn", (_name, correction) => {
-    const messages = projectHermesHistory([
+    const messages = projectedMessages([
       userRow("u1", "Summarize the notes", { rowId: 1 }),
       correction,
     ])
@@ -986,7 +1054,7 @@ describe("server-side Hermes history projection", () => {
   })
 
   it("leaves an ordinary prompt unflagged whatever its api_content carries", () => {
-    const messages = projectHermesHistory([
+    const messages = projectedMessages([
       userRow("u1", "Summarize the notes", { rowId: 1 }),
       userRow("u2", "And the appendix", {
         rowId: 2,
@@ -1022,7 +1090,7 @@ describe("server-side Hermes history projection", () => {
   })
 
   it("ends a single-row turn where it started", () => {
-    const [message] = projectHermesHistory([
+    const [message] = projectedMessages([
       assistantText("a1", "Done.", { timestamp: 100 }),
     ])
 
@@ -1030,7 +1098,7 @@ describe("server-side Hermes history projection", () => {
   })
 
   it("records no completion for rows the provider kept no time for", () => {
-    const [message] = projectHermesHistory([assistantText("a1", "Done.")])
+    const [message] = projectedMessages([assistantText("a1", "Done.")])
 
     expect(message).toMatchObject({
       content: [{ type: "text", text: "Done." }],
@@ -1041,7 +1109,7 @@ describe("server-side Hermes history projection", () => {
   it("keeps a stored edit's kind, location, and diff", () => {
     const path = "/home/operator/project/notes.md"
     const diff = `--- a${path}\n+++ b${path}\n@@ -1 +1 @@\n-old\n+new\n`
-    const messages = projectHermesHistory([
+    const messages = projectedMessages([
       assistantToolCall("a1", [
         { toolCallId: "c1", name: "patch", args: { path, old_string: "old" } },
       ]),
@@ -1056,7 +1124,7 @@ describe("server-side Hermes history projection", () => {
   })
 
   it("stops a stored turn the way its newest row finished", () => {
-    const messages = projectHermesHistory([
+    const messages = projectedMessages([
       userRow("u1", "Write it"),
       { ...assistantText("a1", "Partial"), finish_reason: "length" },
       userRow("u2", "Look it up"),
@@ -1093,7 +1161,7 @@ describe("server-side Hermes history projection", () => {
   })
 
   it("replays a turn Hermes closed after a Stop as cancelled, without its marker", () => {
-    const messages = projectHermesHistory([
+    const messages = projectedMessages([
       userRow("u1", "Count slowly"),
       {
         ...assistantToolCall("a1", [
@@ -1116,7 +1184,7 @@ describe("server-side Hermes history projection", () => {
   ])(
     "replays a turn Hermes closed with a failed-turn notice as cancelled: %s",
     (notice) => {
-      const messages = projectHermesHistory([
+      const messages = projectedMessages([
         userRow("u1", "Describe these"),
         { ...assistantText("a1", notice), finish_reason: null },
       ])
@@ -1130,7 +1198,7 @@ describe("server-side Hermes history projection", () => {
   it("keeps a model reply that quotes a failed-turn notice", () => {
     const notice =
       "Your request was not processed. Send it again if you still want me to carry it out."
-    const messages = projectHermesHistory([
+    const messages = projectedMessages([
       userRow("u1", "What does the notice say?"),
       { ...assistantText("a1", notice), finish_reason: "stop" },
     ])

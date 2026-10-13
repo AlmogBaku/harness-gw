@@ -128,6 +128,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   let nextRowId = 1
   /** The rows the running turn stored, its prompt's first. */
   let turnRows: number[] = []
+  /** How many compactions the running turn ran. */
+  let compactions = 0
   let inflight: Record<string, unknown> | undefined
   /** The server request the running turn blocks on, as `server_requests` holds it. */
   let open:
@@ -339,6 +341,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       case "prompt.submit": {
         running = true
         turnRows = []
+        compactions = 0
         const text = typeof params.text === "string" ? params.text : ""
         const userRowId = store({ role: "user", content: text })
         return { result: { status: "streaming", user_row_id: userRowId } }
@@ -692,6 +695,38 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
      */
     async quiet() {
       toolProgress = false
+    },
+
+    /**
+     * A compaction inside the running turn, as Hermes runs one: `compacting`,
+     * the summary carrier it stores in place, then `compacted`. Resolves with
+     * the id the adapter names it by: the prompt's row and its count in the
+     * turn, as history names the carrier.
+     */
+    async compact() {
+      startStreaming()
+      compactions += 1
+      emit(
+        turn.frame("status.update", {
+          kind: "compacting",
+          text: "Compacting the context",
+        })
+      )
+      // `_project_for_display` hides a carrier with no recovered ask
+      // (`hermes_cli/web_routers/sessions.py:503`).
+      store({
+        role: "user",
+        content: "Synthetic summary of the turn so far",
+        display_kind: "hidden",
+        _compressed_summary: true,
+      })
+      emit(
+        turn.frame("status.update", {
+          kind: "compacted",
+          text: "Context compression complete",
+        })
+      )
+      return `hermes-row-${turnRows[0]}:compaction:${compactions}`
     },
 
     /** The wire contract's second model response: the final text. */

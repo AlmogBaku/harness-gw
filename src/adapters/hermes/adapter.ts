@@ -35,6 +35,7 @@ import {
   hermesHistoryToolNames,
   hermesTurnStart,
   projectHermesHistory,
+  type HermesHistoryMessage,
 } from "./history"
 import { createHermesMcpApps } from "./mcp-apps"
 import {
@@ -1747,7 +1748,7 @@ export class HermesServerAdapter implements ServerRuntime {
     // projection drops. A page that projects to nothing therefore means "keep
     // reading older rows", not "the conversation is empty".
     let rows: unknown[] = []
-    let messages: Array<SessionMessage | SessionPlanActivityMessage> = []
+    let messages: Array<HermesHistoryMessage | SessionPlanActivityMessage> = []
     let pagination: { total: number; nextOffset: number } | undefined
     let resolve: McpToolNameResolver | undefined
     let scanOffset = offset
@@ -1836,7 +1837,16 @@ export class HermesServerAdapter implements ServerRuntime {
     // ending with an unanswered prompt, or with a tool call nothing answered,
     // is the one history load that asks Hermes for the retained turn. Every
     // other load leaves the Session alone.
-    const prompt = offset === 0 ? unansweredPrompt(messages) : undefined
+    // Activity is no answer, so the newest page is judged by its messages.
+    const prompt =
+      offset === 0
+        ? unansweredPrompt(
+            messages.filter(
+              (message): message is SessionMessage =>
+                message.role !== "activity"
+            )
+          )
+        : undefined
     const restored = prompt
       ? await this.#restoredFailedTurn(profile, storedId, prompt)
       : undefined

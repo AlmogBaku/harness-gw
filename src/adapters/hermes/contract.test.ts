@@ -26,8 +26,6 @@ runServerRuntimeContract(
         "pending: the Hermes lane reports subagents as child Sessions",
       childrenStayUnlisted:
         "pending: the Hermes lane reports subagents as child Sessions",
-      compactionStoredAsRow:
-        "pending: the Hermes lane stores its summary carrier as a compaction row",
       rewindAsReported:
         "pending: the Hermes lane proves its truncating send on its fake",
     },

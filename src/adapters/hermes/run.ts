@@ -42,7 +42,7 @@ import {
   projectHermesToolCall,
   projectHermesToolOutcome,
 } from "./tool-data"
-import { hermesRowMessageId } from "./history"
+import { hermesCompactionId, hermesRowMessageId } from "./history"
 import type { HermesPublishedArtifacts } from "./published-artifacts"
 import type { HermesMediaOptions } from "./media-artifacts"
 import { boundedNativeBytes, publicReason, sessionKey } from "./native"
@@ -982,13 +982,18 @@ export class HermesTurnEngine {
    * `compacted`; it reports no failure of its own, and only status text. Its
    * gateway also tags any lifecycle notice that mentions compaction as
    * `compacting` (a threshold notice on a Session's first turn), and Hermes'
-   * own client clears that indicator when the turn ends.
+   * own client clears that indicator when the turn ends. Hermes names no
+   * compaction, so one is named as history names the carrier it stores: by
+   * the prompt's row, where Hermes named it, and its count within the turn.
    */
   #acceptStatus(active: ActiveTurn, payload: Record<string, unknown>) {
     const { compaction } = active
     if (payload.kind === "compacting" && !compaction.open) {
       compaction.count += 1
-      compaction.open = `${active.turnId}:compaction:${compaction.count}`
+      compaction.open = hermesCompactionId(
+        active.messageBase ?? active.turnId,
+        compaction.count
+      )
       this.#emit(active, {
         kind: TurnEventKind.CompactionUpdated,
         compactionId: compaction.open,

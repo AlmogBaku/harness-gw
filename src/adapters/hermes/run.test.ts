@@ -5410,6 +5410,43 @@ describe("Hermes native provider facts", () => {
     ])
   })
 
+  it("names a compaction after the prompt row Hermes stored, as its stored carrier is named", async () => {
+    const { engine, publish } = liveEngine({
+      submit: async () => ({ ...accepted, userRowId: 7 }),
+    })
+    const handle = await engine.start(scope, input())
+    const t = nativeTurn("live-secret", 1)
+    publish(t.messageStart("m1"))
+    publish(t.frame("status.update", { kind: "compacting", text: "Wait" }))
+    publish(t.frame("status.update", { kind: "compacted", text: "Done" }))
+    publish(t.complete("m1", "Done"))
+    const events = await collect(handle)
+
+    const live = ofKind(events, TurnEventKind.CompactionUpdated)
+    expect(live.map(({ compactionId }) => compactionId)).toEqual([
+      "hermes-row-7:compaction:1",
+      "hermes-row-7:compaction:1",
+    ])
+    // The carrier Hermes stores for it replays under the same id, so a reload
+    // during the turn drops the stored one and shows the divider once.
+    const stored = projectHermesHistory([
+      { row_id: 7, role: "user", content: "Hello Hermes" },
+      {
+        row_id: 8,
+        role: "user",
+        display_kind: "hidden",
+        content: "Synthetic summary",
+        _compressed_summary: true,
+      },
+    ])
+    expect(stored).toContainEqual(
+      expect.objectContaining({
+        activityType: "COMPACTION",
+        content: { compactionId: live[0]!.compactionId },
+      })
+    )
+  })
+
   it("cancels a compaction Hermes never confirmed when the turn ends", async () => {
     // Hermes' gateway tags a threshold notice as `compacting` and never
     // follows it with `compacted`.

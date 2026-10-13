@@ -51,8 +51,6 @@ runWireContract("Hermes", hermesRuntime, {
       "pending: the Hermes lane forks through session.branch",
     childAnnouncedBeforeItsEvents:
       "pending: the Hermes lane reports subagents as child Sessions",
-    compactionReplaysAsLive:
-      "pending: the Hermes lane stores its summary carrier as a compaction row",
   },
 })
 runWireListenerContract("Hermes", hermesRuntime)

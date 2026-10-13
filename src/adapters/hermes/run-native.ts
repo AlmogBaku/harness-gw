@@ -302,7 +302,7 @@ function rewindSubmitParams(
     ({ id, role }) => id === rewindSourceId && role === "user"
   )
   const target = targetIndex < 0 ? undefined : history[targetIndex]
-  if (!target) throw new HermesTurnRewindConflictError()
+  if (target?.role !== "user") throw new HermesTurnRewindConflictError()
 
   const row = /^hermes-row-(\d+)$/u.exec(target.id)?.[1]
   const rowId = row === undefined ? undefined : Number(row)
