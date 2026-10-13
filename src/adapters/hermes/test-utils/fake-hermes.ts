@@ -349,7 +349,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
             },
           }
         }
-        if (deleted) return { error: SESSION_NOT_FOUND }
+        if (deleted || params.session_id !== STORED_ID)
+          return { error: SESSION_NOT_FOUND }
         // A live draft with no stored row reattaches lazy
         // (`tui_gateway/methods_session.py:628`).
         if (!saved)

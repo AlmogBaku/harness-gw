@@ -2004,6 +2004,8 @@ export class HermesServerAdapter implements ServerRuntime {
         omit_messages: true,
       })
     } catch (error) {
+      // Hermes holds no record of it, stored or live.
+      if (isSessionGone(error)) throw new HermesSessionNotFoundError()
       throwUnavailable(error)
     }
     if (

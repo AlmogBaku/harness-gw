@@ -1463,6 +1463,19 @@ describe("Hermes server adapter", () => {
     await expect(
       missing.getSession("researcher", "missing")
     ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    // Hermes answers a resume of a Session it holds no record of with 4007
+    // (`tui_gateway/methods_session.py` `_resume_locate`).
+    const unknown = new HermesServerAdapter({
+      request: vi.fn(async () => {
+        throw new HermesRpcRejectedError(4007, "session not found")
+      }),
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+    await expect(
+      unknown.getSession("researcher", "missing")
+    ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
 
     const conflict = new HermesServerAdapter({
       request: vi.fn(),
