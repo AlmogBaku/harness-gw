@@ -14,7 +14,11 @@ import type {
   OpenCodeSessionEvents,
 } from "./client"
 import { providerSessionId, sessionId } from "../../core/ids"
-import { ServerTurnConflictError, type SessionScope } from "../../core/runtime"
+import {
+  ServerTurnConflictError,
+  ServerTurnUncertainError,
+  type SessionScope,
+} from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { READY_LINK } from "../../core/link"
 import { OpenCodeClientError, OpenCodeMutationUncertainError } from "./client"
@@ -1229,13 +1233,12 @@ describe("OpenCodeRunEngine", () => {
     const stage = new OpenCodeContent().stage([
       { type: "file", dataUrl: "data:text/plain;base64,SGVsbG8=" },
     ])
-    await expect(
-      new OpenCodeTurnEngine(promptCase.native, { logger }).start(
-        scope,
-        input(),
-        stage
-      )
-    ).rejects.toBe(promptUncertain)
+    // The prompt may stand, so the coordinator holds its turn uncertain.
+    const unsure = await new OpenCodeTurnEngine(promptCase.native, { logger })
+      .start(scope, input(), stage)
+      .catch((error: unknown) => error)
+    expect(unsure).toBeInstanceOf(ServerTurnUncertainError)
+    expect(unsure).toHaveProperty("cause", promptUncertain)
     expect(promptCase.sessions.prompt).toHaveBeenCalledOnce()
     expect(promptCase.sessions.prompt).toHaveBeenCalledWith(
       scope.providerSessionId,
@@ -1643,5 +1646,122 @@ describe("OpenCodeRunEngine foreign turns", () => {
     ).resolves.toBeUndefined()
     running = false
     await handle.stop()
+  })
+})
+
+describe("OpenCodeRunEngine uncertain sends", () => {
+  /**
+   * A native Session whose prompt lands but whose answer is lost: OpenCode
+   * admits it and runs it until `idle()`.
+   */
+  function landedButUnanswered() {
+    const log = nativeLog()
+    let running = false
+    const state = client({
+      history: log.history,
+      events: vi.fn(async () => controlledStream().source),
+      active: vi.fn(async () => activity(running)),
+      prompt: vi.fn(async (_id: string, request: PromptRequest) => {
+        log.events.push(admitted(0, request.id), textEnded(1, "Landed"))
+        running = true
+        throw new OpenCodeMutationUncertainError()
+      }),
+      // No native wait: each backoff reconciles instead.
+      wait: vi.fn(async () => {
+        throw new OpenCodeClientError("unavailable")
+      }),
+    })
+    const engine = new OpenCodeTurnEngine(state.native, {
+      logger,
+      waitRetryMs: 1,
+    })
+    return {
+      state,
+      engine,
+      idle() {
+        running = false
+      },
+    }
+  }
+
+  it("adopts an uncertain send that landed through the coordinator's reconcile", async () => {
+    const { state, engine, idle } = landedButUnanswered()
+    const recovered = vi.spyOn(engine, "recover")
+    const sessions = new SessionCoordinator({
+      engine,
+      // No test here subscribes anything to a reading.
+      readings: {
+        context: vi.fn(),
+        models: vi.fn(),
+        updateModel: vi.fn(),
+        createSession: vi.fn(),
+        publicError: () => undefined,
+        link: READY_LINK,
+      },
+      maxActiveExecutions: 8,
+      maxSubscriberEvents: 8,
+      maxSubscriberBytes: 64 * 1024,
+      logger: captureLogs().logger,
+    })
+    const access = {
+      membershipId: "operator",
+      principalId: "operator",
+    } as const
+
+    // The prompt may stand, so it is answered under the gateway's own id.
+    await expect(sessions.start(scope, input(), access)).resolves.toMatchObject(
+      { turnId: "run-1", messageId: "user-1" }
+    )
+    await until(() => expect(sessions.state(scope)).toBe("running"))
+    expect(recovered.mock.calls[0]?.[1]).toMatchObject({ turnId: "run-1" })
+    idle()
+    await until(() => expect(sessions.state(scope)).toBe("idle"))
+
+    expect(state.sessions.prompt).toHaveBeenCalledOnce()
+    expect(engine.retainedRecords).toBe(0)
+  })
+
+  it("leaves an uncertain send that landed for a discovery once nothing reconciles it", async () => {
+    const { engine, idle } = landedButUnanswered()
+    await expect(engine.start(scope, input())).rejects.toBeInstanceOf(
+      ServerTurnUncertainError
+    )
+    const observer = watcher()
+    const stop = engine.subscribeTurns(scope, observer)
+
+    await until(() => expect(observer.onTurn).toHaveBeenCalledOnce())
+    const discovered = await engine.discover(scope, "aos-recovered-1")
+    expect(discovered).toMatchObject({ state: "running", fromStart: true })
+    idle()
+    expect(await collect(discovered!.handle)).toEqual([
+      { kind: TurnEventKind.TurnStarted },
+      {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "assistant-1",
+        text: "Landed",
+      },
+      { kind: TurnEventKind.TurnEnded },
+    ])
+    stop()
+    expect(engine.retainedRecords).toBe(0)
+  })
+
+  it("owns an uncertain send again once a reconcile finds it landed", async () => {
+    const { engine, idle } = landedButUnanswered()
+    await expect(engine.start(scope, input())).rejects.toBeInstanceOf(
+      ServerTurnUncertainError
+    )
+
+    const handle = await engine.recover(scope, {
+      sessionId: scope.sessionId,
+      turnId: "run-1",
+    })
+
+    await expect(
+      engine.discover(scope, "aos-recovered-1")
+    ).resolves.toBeUndefined()
+    idle()
+    await collect(handle)
+    expect(engine.retainedRecords).toBe(0)
   })
 })
