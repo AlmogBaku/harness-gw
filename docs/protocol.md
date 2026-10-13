@@ -78,7 +78,14 @@ same resume rebuilds the Session from history, as described under
 The SDK client reconnects with jittered backoff starting at 250 ms, capped at
 5 000 ms, and resetting once every resumed Session has rejoined or the link has
 been stable for a while. A guest connection re-sends `auth/login` after every
-transport recovery before resuming sessions.
+transport recovery before resuming sessions. A read (`_hgw/agents/list`,
+`session/list`, `_hgw/sessions/search`) that its transport closes under, or
+that is made while the client reconnects, goes out again once a transport has
+recovered. A history page, prompt, config write or steer for an opened Session
+goes out again once that Session has rejoined, a prompt with the same client
+id. Any other request its transport closes under fails as
+`AcpConnectionClosedError`, as does every request once the connection has
+ended; a request's own deadline still fails it.
 
 Close codes the gateway sends:
 

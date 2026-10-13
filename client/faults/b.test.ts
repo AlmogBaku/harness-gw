@@ -36,23 +36,21 @@ describe("browser connection faults", () => {
     await expect(connection.listAgents()).resolves.toBeDefined()
   })
 
-  it("closes a transport that holds a request back and its check-in, and reconnects", async () => {
+  it("closes a transport that holds a read back and its check-in, and answers the read on the next", async () => {
     const clock = useFakeClock()
     const { pipe, connection } = connectBrowser(await harness())
     connection.start()
     await connection.initialized
 
     pipe.sockets[0]!.holdOutbound()
-    const stalled = expect(connection.listAgents()).rejects.toMatchObject({
-      name: "TimeoutError",
-    })
-    await clock.advance(REQUEST_DEADLINE_MS.short)
-    await stalled
-    await clock.advance(REQUEST_DEADLINE_MS.probe + 250)
+    const held = connection.listAgents()
+    // The quiet transport's check-in goes unanswered too, which closes it
+    // before the read's own deadline.
+    await clock.advance(LIVENESS_SILENCE_MS + REQUEST_DEADLINE_MS.probe + 250)
 
     expect(pipe.sockets).toHaveLength(2)
     expect(connection.status).toBe("ready")
-    await expect(connection.listAgents()).resolves.toBeDefined()
+    await expect(held).resolves.toBeDefined()
   })
 
   it("backs off any other close with full jitter up to 5 s until every Session rejoins, then starts over", async () => {
@@ -261,11 +259,13 @@ describe("browser connection faults", () => {
     await clock.advance(125) // reconnect backoff
 
     expect(pipe.sockets).toHaveLength(2)
-    // recover() sends the focus again once the new socket is initialized.
+    // recover() sends the focus again once the new socket is initialized; the
+    // probe that closed the old one is not sent again.
     const reopened = frames.findLastIndex((f) => f.method === "initialize")
     const focusFrames = frames
       .slice(reopened)
       .filter((f) => f.method === HGW_METHODS.session.focus)
-    expect(focusFrames.at(-1)?.params).toMatchObject({ sessionId: SESSION })
+    expect(focusFrames).toHaveLength(1)
+    expect(focusFrames[0]?.params).toMatchObject({ sessionId: SESSION })
   })
 })

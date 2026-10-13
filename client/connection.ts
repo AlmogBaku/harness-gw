@@ -58,7 +58,7 @@ import {
   type HgwInitializeMeta,
 } from "../protocol/acp"
 
-import { AgentUpdateError } from "./workspace"
+import { AcpConnectionClosedError, AgentUpdateError } from "./workspace"
 import {
   CAPACITY_BACKOFF,
   HANDSHAKE_DEADLINE_MS,
@@ -220,11 +220,6 @@ const SESSION_STATES = new Map<unknown, AcpSessionState>([
   ["gone", "gone"],
 ])
 
-/** A request's own deadline fired, as opposed to its transport closing. */
-function isTimeout(error: unknown) {
-  return error instanceof DOMException && error.name === "TimeoutError"
-}
-
 /** The Agent update refusals a caller can act on, as typed errors. */
 function agentUpdateError(error: unknown) {
   if (codeOf(error) === HGW_JSONRPC_ERRORS.unsupported)
@@ -298,6 +293,26 @@ type Transport = {
   /** Settles once the proxy answers `initialize`. */
   ready: Promise<void>
 }
+
+/**
+ * Whether a request failed because `transport` closed under it: it rejected
+ * with the transport's own close reason, not with an answer or a deadline of
+ * its own. Only an unanswered liveness probe closes a transport with its
+ * deadline, which then is every request's reason on it, the probe's too.
+ */
+function closedUnder({ connection }: Transport, error: unknown) {
+  return connection.signal.aborted && error === connection.signal.reason
+}
+
+/**
+ * Which requests go out again once their transport closes under them: every
+ * read, once a transport has recovered, and a request for an opened Session,
+ * once that Session has rejoined, with the same params and so the same client
+ * id. Each waits for the same before it first goes out; one for a Session
+ * that is not open waits for a transport to recover, and goes out once, as
+ * any other request does.
+ */
+type Resend = "read" | { sessionId: string }
 
 type ConnectionEvent =
   | { type: "closed"; code: number | undefined }
@@ -698,6 +713,8 @@ export function createAcpConnection(
   let recovering = false
   /** Whether a Session opened now may join at once, the transport recovered. */
   let joinable = false
+  /** What reads waiting for a transport to recover wait on, while one does. */
+  let recovery: PromiseWithResolvers<void> | undefined
   // The guest listener's principal, replayed when a new transport redeems it.
   let invitation: string | undefined
   // The last presence report, replayed whenever a new transport recovers.
@@ -885,17 +902,36 @@ export function createAcpConnection(
     sessions.get(notice.sessionId)?.owner?.actor.send({ type: "gone" })
   }
 
-  async function readyTransport(): Promise<Transport> {
+  /** The live transport, its handshake answered or not; fails while none is. */
+  async function liveTransport(): Promise<Transport> {
     // React commits children before their parent, so a consumer's effect can
     // reach the wire before the effect that owns the transport. The first call
     // opens it; `start` stays the only place that decides to.
     start()
     // In a debug dev build the owner exists once the inspector has loaded.
     if (inspecting) await inspecting
-    const current = live
-    if (ended || !current) throw new Error("The ACP connection is not open")
+    if (ended || !live)
+      throw new AcpConnectionClosedError("The ACP connection is not open")
+    return live
+  }
+
+  async function readyTransport(): Promise<Transport> {
+    const current = await liveTransport()
     await current.ready
     return current
+  }
+
+  /**
+   * Settles once a transport has recovered: its handshake answered and, after
+   * a reconnect, its invitation redeemed, so a Session may join it. Rejects
+   * only once the connection has ended.
+   */
+  function recovered(): Promise<void> {
+    start()
+    if (ended) return Promise.reject(new AcpConnectionClosedError())
+    if (joinable) return Promise.resolve()
+    recovery ??= Promise.withResolvers()
+    return recovery.promise
   }
 
   type Send<Response> = (
@@ -904,15 +940,48 @@ export function createAcpConnection(
   ) => Promise<Response>
 
   /**
-   * Sends one request under its tier's deadline. A reply that never comes
-   * fails the request and checks the transport in with a liveness probe; only
-   * an unanswered probe closes it, so a slow gateway costs no reconnect. A
-   * request `parent` aborts leaves the transport as it is.
+   * Sends one request on the live transport. One that `resend` names waits
+   * until it may go out, and goes out again once its transport closes under
+   * it, while its Session, if it names one, stays open. Any other request a
+   * transport closes under fails as `AcpConnectionClosedError`, never with
+   * the transport's own reason, which a failed socket leaves a DOM `Event`.
    */
-  async function request<Response>(tier: RequestTier, send: Send<Response>) {
-    return requestOn(await readyTransport(), tier, send)
+  async function request<Response>(
+    tier: RequestTier,
+    send: Send<Response>,
+    resend?: Resend
+  ): Promise<Response> {
+    const sessionId = resend === "read" ? undefined : resend?.sessionId
+    for (;;) {
+      if (sessionId !== undefined && sessions.has(sessionId))
+        await joined(sessionId)
+      else if (resend) await recovered()
+      const transport = await liveTransport()
+      try {
+        await transport.ready
+        return await requestOn(transport, tier, send)
+      } catch (error) {
+        if (!closedUnder(transport, error)) throw error
+        const again =
+          resend === "read" ||
+          (sessionId !== undefined && sessions.has(sessionId))
+        if (!again)
+          throw new AcpConnectionClosedError(undefined, { cause: error })
+        // Once its close is handled, the transport has been lost: a read
+        // waits for the next one to recover, a Session for its rejoin.
+        await transport.connection.closed.catch((err: unknown) =>
+          logger.warn({ err }, "acp.connection.closed_with_error")
+        )
+      }
+    }
   }
 
+  /**
+   * Sends one request on `transport` under its tier's deadline. A reply that
+   * never comes fails the request and checks the transport in with a liveness
+   * probe; only an unanswered probe closes it, so a slow gateway costs no
+   * reconnect. A request `parent` aborts leaves the transport as it is.
+   */
   async function requestOn<Response>(
     { connection }: Transport,
     tier: RequestTier,
@@ -934,36 +1003,6 @@ export function createAcpConnection(
         else if (lastInboundAt <= sentAt) connection.close(error)
       }
       throw error
-    }
-  }
-
-  /**
-   * Sends one write for a Session, once it is joined if it is open. A
-   * transport that closes under the write sends it again, with the same
-   * params and so the same client id, once the Session has rejoined on the
-   * next one; a write that stalled its transport fails instead.
-   */
-  async function write<Response>(
-    sessionId: string,
-    tier: RequestTier,
-    send: Send<Response>
-  ): Promise<Response> {
-    for (;;) {
-      if (sessions.has(sessionId)) await joined(sessionId)
-      const transport = await readyTransport()
-      try {
-        return await requestOn(transport, tier, send)
-      } catch (error) {
-        const closedUnder =
-          transport.connection.signal.aborted &&
-          !isTimeout(error) &&
-          sessions.has(sessionId)
-        if (!closedUnder) throw error
-        // Once its close is handled, the Session has left `joined`.
-        await transport.connection.closed.catch((err: unknown) =>
-          logger.warn({ err }, "acp.connection.closed_with_error")
-        )
-      }
     }
   }
 
@@ -1115,8 +1154,11 @@ export function createAcpConnection(
   /** The Agent catalog, an entry at a time: one bad entry costs that Agent. */
   async function listAgents() {
     const response = AgentsListEntriesSchema.parse(
-      await request("short", (agent, options) =>
-        agent.request(HGW_METHODS.agents.list, undefined, options)
+      await request(
+        "short",
+        (agent, options) =>
+          agent.request(HGW_METHODS.agents.list, undefined, options),
+        "read"
       )
     )
     return {
@@ -1278,24 +1320,29 @@ export function createAcpConnection(
     sessionId: string,
     cursor: string
   ): Promise<AcpHistoryPage> {
-    // The gateway reads a page only for a Session this connection has joined,
-    // which a recovered transport has not done until it rejoins.
-    await joined(sessionId)
     const open = sessions.get(sessionId)
     if (!open) throw notOpen()
-    const updates: PageUpdates = []
-    open.page = updates
+    let updates: PageUpdates = []
     try {
-      const response = await request("medium", (agent, options) =>
-        agent.request(
-          methods.agent.session.resume,
-          {
-            sessionId,
-            cwd: AGENT_CWD,
-            replayFrom: { type: HGW_REPLAY_BEFORE, cursor },
-          },
-          options
-        )
+      // The gateway reads a page only for a Session this connection has
+      // joined, which a recovered transport has not done until it rejoins.
+      const response = await request(
+        "medium",
+        (agent, options) => {
+          // Each send reads the page whole, so one sent again starts over.
+          updates = []
+          open.page = updates
+          return agent.request(
+            methods.agent.session.resume,
+            {
+              sessionId,
+              cwd: AGENT_CWD,
+              replayFrom: { type: HGW_REPLAY_BEFORE, cursor },
+            },
+            options
+          )
+        },
+        { sessionId }
       )
       const { history } = HgwHistoryPageResponseMetaSchema.parse(
         hgwMetaOf(response._meta)
@@ -1327,6 +1374,8 @@ export function createAcpConnection(
     // The connection is back. Each Session's rejoin is its own state, so one
     // slow resume holds up no other Session's view of the connection.
     setOutage(undefined)
+    recovery?.resolve()
+    recovery = undefined
     const opened = [...sessions.keys()]
     for (const open of sessions.values())
       open.owner?.actor.send({ type: "ready" })
@@ -1457,13 +1506,15 @@ export function createAcpConnection(
     ended = true
     setStatus("closed")
     setOutage(undefined)
-    failInitialized?.(new Error("The ACP connection closed"))
+    failInitialized?.(new AcpConnectionClosedError())
     failInitialized = undefined
     settleInitialized = undefined
+    recovery?.reject(new AcpConnectionClosedError())
+    recovery = undefined
     for (const open of sessions.values()) {
       clock.clearTimeout(open.grace)
       open.owner?.dispose()
-      open.waiters?.reject(new Error("The ACP connection closed"))
+      open.waiters?.reject(new AcpConnectionClosedError())
     }
     sessions.clear()
     live?.connection.close()
@@ -1510,15 +1561,18 @@ export function createAcpConnection(
     },
 
     async listSessions(meta, cursor) {
-      const response = await request("short", (agent, options) =>
-        agent.request(
-          methods.agent.session.list,
-          {
-            ...(cursor === undefined ? {} : { cursor }),
-            _meta: { [HGW_META_KEY]: meta },
-          },
-          options
-        )
+      const response = await request(
+        "short",
+        (agent, options) =>
+          agent.request(
+            methods.agent.session.list,
+            {
+              ...(cursor === undefined ? {} : { cursor }),
+              _meta: { [HGW_META_KEY]: meta },
+            },
+            options
+          ),
+        "read"
       )
       return {
         sessions: response.sessions,
@@ -1529,14 +1583,19 @@ export function createAcpConnection(
     /** Search results, one at a time: one bad result costs that result. */
     async searchSessions(meta) {
       const response = SessionSearchEntriesSchema.parse(
-        await request("short", (agent, options) =>
-          agent.request(
-            HGW_METHODS.sessions.search,
-            {
-              _meta: { [HGW_META_KEY]: HgwSessionSearchMetaSchema.parse(meta) },
-            },
-            options
-          )
+        await request(
+          "short",
+          (agent, options) =>
+            agent.request(
+              HGW_METHODS.sessions.search,
+              {
+                _meta: {
+                  [HGW_META_KEY]: HgwSessionSearchMetaSchema.parse(meta),
+                },
+              },
+              options
+            ),
+          "read"
         )
       )
       return {
@@ -1567,8 +1626,11 @@ export function createAcpConnection(
         _meta: { [HGW_META_KEY]: meta },
       }
       assertFrameFits(params)
-      const response = await write(sessionId, "long", (agent, options) =>
-        agent.request(methods.agent.session.prompt, params, options)
+      const response = await request(
+        "long",
+        (agent, options) =>
+          agent.request(methods.agent.session.prompt, params, options),
+        { sessionId }
       )
       return { messageId: response.messageId }
     },
@@ -1581,12 +1643,15 @@ export function createAcpConnection(
     },
 
     async setConfigOption(sessionId, configId, value) {
-      const response = await write(sessionId, "medium", (agent, options) =>
-        agent.request(
-          methods.agent.session.setConfigOption,
-          { sessionId, configId, type: "id", value },
-          options
-        )
+      const response = await request(
+        "medium",
+        (agent, options) =>
+          agent.request(
+            methods.agent.session.setConfigOption,
+            { sessionId, configId, type: "id", value },
+            options
+          ),
+        { sessionId }
       )
       return response.configOptions
     },
@@ -1606,8 +1671,11 @@ export function createAcpConnection(
     async steer(steer) {
       assertFrameFits(steer)
       return HgwSteerResponseSchema.parse(
-        await write(steer.sessionId, "medium", (agent, options) =>
-          agent.request(HGW_METHODS.session.steer, steer, options)
+        await request(
+          "medium",
+          (agent, options) =>
+            agent.request(HGW_METHODS.session.steer, steer, options),
+          { sessionId: steer.sessionId }
         )
       )
     },

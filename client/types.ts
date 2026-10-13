@@ -107,6 +107,13 @@ export type AcpSessionListener = {
   state?: (state: AcpSessionState) => void
 }
 
+/**
+ * A read (`listAgents`, `listSessions`, `searchSessions`, `resumePage`) waits
+ * out a reconnect and goes out again on the transport that recovers, and a
+ * write for an opened Session once it has rejoined. Any other call a
+ * transport closes under, and every call once the connection has ended,
+ * rejects as `AcpConnectionClosedError`.
+ */
 export interface AcpConnection {
   readonly status: AcpConnectionStatus
   /**
