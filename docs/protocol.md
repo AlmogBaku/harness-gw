@@ -125,11 +125,23 @@ A client advertises what it supports in `clientCapabilities._meta.hgw`
 
 ## Guest listener
 
-A guest connection reaches nothing but `initialize` and `auth/login` until it
-redeems an invitation (`src/guest/acp.ts`). Its `initialize` omits
-the runtime's title and advertises only the `hgw-invite` auth method. A
-connection acts as one invitation for its whole life: a second `auth/login` is
-refused with `-32000`.
+A guest connection reaches nothing but `initialize`, `auth/login` and
+`auth/logout` until it redeems an invitation (`src/guest/acp.ts`). Its
+`initialize` omits the runtime's title and advertises only the `hgw-invite`
+auth method. A connection acts as one invitation at a time: a second
+`auth/login` while one is redeemed is refused with `-32000`.
+
+`auth/logout` answers `{}` and keeps the connection open. The guest leaves its
+Sessions: nothing more of them reaches it, the questions it was asked are
+withdrawn, and an answer that arrives after is dropped. Every later gated
+request answers `-32000` until an `auth/login`, which may redeem another
+invitation; that connection then acts for it alone. A command still held when
+the logout came, a login still verifying among them, acts for nobody. A logout
+that ended a login puts the socket back in its handshake: the 15 s deadline
+starts again, and the socket counts toward the listener's budget of 32. A
+logout that ended nothing extends neither. Logout ends the connection's use of
+the invitation; it does not revoke it. The operator listener authenticates its
+upgrade instead, so it answers `auth/logout` with `-32601`.
 
 From the invitation's expiry no frame passes in either direction
 (`src/acp/socket.ts`): a request received after it is answered
@@ -170,6 +182,7 @@ invited conversation by its reference alone; any other Session id is
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
 | `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
+| `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
 | `session/new`, `session/list` | `-31016` forbidden: the session capability promises both, so they exist, but not for a guest. |
 | `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
 

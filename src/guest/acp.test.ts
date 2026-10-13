@@ -24,6 +24,7 @@ import {
 import { createChannels } from "../core/channel"
 import {
   connectClient,
+  EventSource,
   MODELS,
   settled,
   updates,
@@ -54,7 +55,7 @@ import type {
   ServerTurnListener,
   ServerRuntime,
 } from "../core/runtime"
-import { HANDSHAKE_DEADLINE_MS } from "../core/limits"
+import { HANDSHAKE_BUDGET, HANDSHAKE_DEADLINE_MS } from "../core/limits"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
 import { createSessionRows } from "../core/session-rows"
@@ -591,6 +592,7 @@ function harness(options: HarnessOptions = {}) {
         methodId: HGW_AUTH_METHOD_INVITE,
         _meta: { [HGW_META_KEY]: { token } },
       }),
+    logout: () => connection.agent.request(methods.agent.auth.logout, {}),
     resume: (sessionId: string, replay = false) =>
       connection.agent.request(methods.agent.session.resume, {
         sessionId,
@@ -629,8 +631,10 @@ type Frame = {
  * One guest browser on the raw WebSocket the listener opens, frame by frame,
  * so what the socket itself writes and closes is observable.
  */
-async function wire(listener: GuestAcpServiceOptions) {
-  const service = createGuestAcpService(listener)
+async function wire(
+  listener: GuestAcpServiceOptions,
+  service = createGuestAcpService(listener)
+) {
   const upgrade = await service.authorizeUpgrade(
     new Request(`${ORIGIN}/api/v1/acp`, { headers: { origin: ORIGIN } })
   )
@@ -663,8 +667,12 @@ async function wire(listener: GuestAcpServiceOptions) {
 }
 
 /** Opens a raw guest connection that redeemed `token`. */
-async function loggedInWire(listener: GuestAcpServiceOptions, token: string) {
-  const socket = await wire(listener)
+async function loggedInWire(
+  listener: GuestAcpServiceOptions,
+  token: string,
+  service?: ReturnType<typeof createGuestAcpService>
+) {
+  const socket = await wire(listener, service)
   await socket.request(methods.agent.initialize, {
     protocolVersion: ACP_PROTOCOL_VERSION,
     info: { name: "aos-guest-browser", version: "1" },
@@ -881,10 +889,15 @@ describe("guest ACP listener", () => {
     await test.resume(REF)
     await test.prompt("Start the interview")
     await settled()
+    // Nor as it logs out and in again with another invitation.
+    await test.logout()
+    const next = await invite(test.invitations)
+    await test.login(next)
+    await settled()
 
     expect(test.logs.records()).not.toEqual([])
     const logged = JSON.stringify(test.logs.records())
-    expect(logged).not.toContain(token)
+    for (const secret of [token, next]) expect(logged).not.toContain(secret)
     expect(logged).not.toContain(INSTRUCTION)
     test.close()
   })
@@ -2080,5 +2093,185 @@ describe("guest scope and commands", () => {
     // Nor does it list the deployment's Sessions to seed one.
     expect(test.listAllSessions).not.toHaveBeenCalled()
     test.close()
+  })
+})
+
+// ACP's auth/logout ends the authenticated session: the guest leaves its
+// conversation, the connection stays open, and gated requests need a login.
+describe("guest logout", () => {
+  const OTHER_REF = "guest_other"
+
+  it("refuses a logged-out guest's requests and shows it nothing, until another invitation acts for its own conversation alone", async () => {
+    const source = new EventSource()
+    const test = harness({ existing: true, handle: () => source })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Start the interview")
+    source.emit({ kind: TurnEventKind.TurnStarted })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"running"'),
+      "the running turn"
+    )
+
+    await expect(test.logout()).resolves.toEqual({})
+    const from = test.recorder.entries.length
+    source.emit({
+      kind: TurnEventKind.MessageChunk,
+      messageId: "assistant-native",
+      text: "Said after logout",
+    })
+    await expect(test.resume(REF)).rejects.toMatchObject({
+      code: AUTHENTICATION_REQUIRED,
+    })
+    await expect(test.prompt("Still here?")).rejects.toMatchObject({
+      code: AUTHENTICATION_REQUIRED,
+    })
+    await settled()
+    expect(test.recorder.entries.slice(from)).toEqual([])
+
+    await test.login(await invite(test.invitations, OTHER_REF))
+    await expect(test.resume(REF)).rejects.toMatchObject({ code: NOT_FOUND })
+    await expect(test.resume(OTHER_REF)).resolves.toBeDefined()
+    // Its conversation reaches it, shaped for the invitation it now acts as.
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes(`"${OTHER_REF}"`),
+      "an update for the new conversation"
+    )
+    test.close()
+  })
+
+  it("leaves a connection logged out when its login was still in flight", async () => {
+    const test = harness({ existing: true })
+    const verify = test.invitations.verify.bind(test.invitations)
+    const verified = Promise.withResolvers<void>()
+    vi.spyOn(test.invitations, "verify").mockImplementation(async (token) => {
+      await verified.promise
+      return verify(token)
+    })
+    await test.initialize()
+    const login = test.login(await invite(test.invitations))
+    await settled()
+
+    await test.logout()
+    verified.resolve()
+
+    await expect(login).rejects.toMatchObject({ code: AUTHENTICATION_REQUIRED })
+    await expect(test.resume(REF)).rejects.toMatchObject({
+      code: AUTHENTICATION_REQUIRED,
+    })
+    test.close()
+  })
+
+  it("starts no turn for a send held across a logout and the next login", async () => {
+    const test = harness()
+    const resolve = test.resolveInvitedSession.getMockImplementation()!
+    const created = Promise.withResolvers<void>()
+    test.resolveInvitedSession.mockImplementation(async (...args) => {
+      if (args[2]) await created.promise
+      return resolve(...args)
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    const held = test.prompt("Start the interview")
+    // Held where its first Send creates the invited conversation.
+    await vi.waitFor(() =>
+      expect(
+        test.resolveInvitedSession.mock.calls.some(([, , create]) => create)
+      ).toBe(true)
+    )
+
+    await test.logout()
+    await test.login(await invite(test.invitations))
+    created.resolve()
+
+    await expect(held).rejects.toMatchObject({ code: AUTHENTICATION_REQUIRED })
+    await settled()
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  it("withdraws a question asked before logout and drops an answer that comes after", async () => {
+    const asked = Promise.withResolvers<AbortSignal>()
+    const answer = Promise.withResolvers<void>()
+    const test = harness({
+      existing: true,
+      handle: () => asking(QUESTION, test.start.mock.calls.length),
+      question: async (_params, signal) => {
+        asked.resolve(signal)
+        await answer.promise
+        return { action: "accept", content: { q0: "later" } }
+      },
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF)
+    await test.prompt("Export the notes")
+    const signal = await asked.promise
+
+    await test.logout()
+    expect(signal.aborted).toBe(true)
+    answer.resolve()
+    await settled()
+
+    expect(test.start).toHaveBeenCalledTimes(1)
+    test.close()
+  })
+
+  it("re-arms the handshake deadline only for a logout that ended a login", async () => {
+    const clock = useFakeClock()
+    const test = harness({ existing: true })
+    const never = await wire(test.listener)
+    await never.request(methods.agent.initialize, {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      info: { name: "aos-guest-browser", version: "1" },
+    })
+    const logout = (socket: Awaited<ReturnType<typeof wire>>) =>
+      socket.request(methods.agent.auth.logout, {})
+    // A logout that ended nothing gives a socket no more time to log in.
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2)
+    expect(await logout(never)).toMatchObject({ result: {} })
+    const guest = await loggedInWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2)
+    expect(never.closed).toEqual([expect.objectContaining({ code: 4408 })])
+
+    // A real logout starts the handshake again; a second one does not extend it.
+    expect(await logout(guest)).toMatchObject({ result: {} })
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2)
+    expect(await logout(guest)).toMatchObject({ result: {} })
+    await clock.advance(HANDSHAKE_DEADLINE_MS / 2 - 1)
+    expect(guest.closed).toEqual([])
+    await clock.advance(1)
+    expect(guest.closed).toEqual([expect.objectContaining({ code: 4408 })])
+    guest.close()
+    never.close()
+  })
+
+  it("lets the handshake budget evict a logged-out socket", async () => {
+    const test = harness({ existing: true })
+    const service = createGuestAcpService(test.listener)
+    const guest = await loggedInWire(
+      test.listener,
+      await invite(test.invitations),
+      service
+    )
+    expect(await guest.request(methods.agent.auth.logout, {})).toMatchObject({
+      result: {},
+    })
+
+    const waiting = await Promise.all(
+      Array.from({ length: HANDSHAKE_BUDGET }, () =>
+        wire(test.listener, service)
+      )
+    )
+
+    expect(guest.closed).toEqual([
+      expect.objectContaining({ code: 4408, reason: "Handshake budget" }),
+    ])
+    for (const socket of [guest, ...waiting]) socket.close()
   })
 })

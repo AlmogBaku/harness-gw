@@ -80,6 +80,11 @@ type AcpConnectionBase = {
    * authenticates over ACP.
    */
   handshakeComplete?: () => void
+  /**
+   * Called by the agent once a logout ended a login: the socket is in its
+   * handshake again, under a fresh deadline and the listener's budget.
+   */
+  handshakeRestart?: () => void
 }
 
 /**
@@ -116,6 +121,12 @@ export type ConnectionAuthentication = {
   extensions: HgwExtensions
   /** Redeems one credential; `false` means it is not usable. */
   authenticate(token: string): Promise<boolean>
+  /**
+   * Ends the redeemed credential, and any login still verifying: the
+   * connection stays open, and a gated request needs a new login. `true` when
+   * it ended a redeemed credential.
+   */
+  logout(): boolean
   /** Who the credential acts as, and its stack; absent before it is redeemed. */
   member(): Omit<Member, "connection"> | undefined
   /** Whether a redeemed credential still holds, before its close arrives. */

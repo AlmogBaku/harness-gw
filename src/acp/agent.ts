@@ -262,8 +262,16 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     execute: CommandNext<K>,
     requestId?: JsonRpcId
   ): Promise<CommandResults[K]> {
+    // A command acts for the identity it began as: one that a logout, or the
+    // next login, replaced while it was held reaches nothing.
+    const { authentication } = context
+    const acting = authentication?.member()
+    const current: CommandNext<K> = (next) =>
+      !authentication || authentication.member() === acting
+        ? execute(next)
+        : Promise.reject(authenticationRequired())
     try {
-      return await runCommand(stack(), kind, command, execute)
+      return await runCommand(stack(), kind, command, current)
     } catch (cause) {
       const error =
         cause instanceof CommandRefusedError
@@ -547,6 +555,20 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     if (!(await authentication.authenticate(token)))
       throw authenticationRequired()
     context.handshakeComplete?.()
+    return {}
+  })
+
+  // ACP ends the authenticated session and keeps the connection: the guest
+  // leaves its Sessions, and its next gated request needs a login. Its
+  // invitation stands.
+  app.onRequest(methods.agent.auth.logout, async () => {
+    const { authentication } = context
+    if (!authentication)
+      throw RequestError.methodNotFound(methods.agent.auth.logout)
+    if (authentication.logout()) {
+      sessions.close()
+      context.handshakeRestart?.()
+    }
     return {}
   })
 

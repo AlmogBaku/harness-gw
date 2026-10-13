@@ -239,10 +239,16 @@ export function createSessions(
       )
     },
 
+    /**
+     * Ends everything this connection did as its identity: it leaves every
+     * Session, which withdraws what it was asked, and forgets their owners and
+     * the member it joined them as, so a later identity starts from nothing.
+     */
     close() {
       for (const membership of memberships.values()) membership.part()
       memberships.clear()
       owners.clear()
+      member = undefined
     },
   }
 }

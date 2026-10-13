@@ -2471,6 +2471,17 @@ describe("Session rooms", () => {
     other.close()
   })
 
+  // The operator listener authenticates its upgrade, so it has no ACP login
+  // to end.
+  it("refuses an operator's logout as a method it does not serve", async () => {
+    const test = await harness()
+
+    await expect(
+      test.agent.request(methods.agent.auth.logout, {})
+    ).rejects.toMatchObject({ code: RequestError.methodNotFound("").code })
+    test.close()
+  })
+
   it("refuses a resume that names its position in metadata", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
