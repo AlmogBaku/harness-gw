@@ -56,8 +56,6 @@ export const TurnEventKind = {
   CompactionUpdated: "compaction-updated",
   /** The Session now runs on another model. */
   ModelChanged: "model-changed",
-  /** Progress of a subagent a tool call spawned. */
-  SubagentUpdated: "subagent-updated",
   /**
    * A child Session the turn spawned, as a patch; the first report of an id
    * announces it.
@@ -199,38 +197,6 @@ export type Cost = z.infer<typeof CostSchema>
 /** Timestamps are UTC ISO 8601, as `Date.prototype.toISOString` writes them. */
 const TimestampSchema = z.iso.datetime()
 
-/** How far a delegated subagent has got. */
-export const SubagentStatus = {
-  Running: "running",
-  Completed: "completed",
-  Failed: "failed",
-  Cancelled: "cancelled",
-} as const
-export type SubagentStatus =
-  (typeof SubagentStatus)[keyof typeof SubagentStatus]
-
-/**
- * A subagent a tool call delegated to, keyed by `id`. A later report is a
- * patch: it restates only what changed.
- */
-export const SubagentSchema = z.strictObject({
-  id: z.string().min(1),
-  goal: z.string().optional(),
-  model: z.string().min(1).optional(),
-  /** 1 for a subagent the turn spawned, 2 for one that subagent spawned. */
-  depth: z.number().int().min(1).optional(),
-  status: z.enum(SubagentStatus).optional(),
-  /** Every token the subagent spent. */
-  tokens: CountSchema.optional(),
-  filesRead: z.array(z.string()).optional(),
-  filesWritten: z.array(z.string()).optional(),
-  durationMs: CountSchema.optional(),
-  /** The provider Session the subagent runs in, when it has its own. */
-  childSessionId: z.string().min(1).optional(),
-  summary: z.string().optional(),
-})
-export type Subagent = z.infer<typeof SubagentSchema>
-
 /** How far a child Session's own work has got. */
 export const ChildSessionStatus = {
   Running: "running",
@@ -253,12 +219,6 @@ export const CompactionStatus = {
 } as const
 export type CompactionStatus =
   (typeof CompactionStatus)[keyof typeof CompactionStatus]
-
-/**
- * The subagent that produced an event; absent means the turn's own agent did.
- * Only what a subagent streams back into its parent's turn carries it.
- */
-const subagentId = z.string().min(1).optional()
 
 /** One admitted user prompt. */
 export const PromptTurnInputSchema = z.strictObject({
@@ -336,13 +296,11 @@ export const OwnTurnEventSchema = z.discriminatedUnion("kind", [
   turnEvent(TurnEventKind.MessageChunk, {
     messageId: z.string(),
     text: z.string(),
-    subagentId,
   }),
   /** Reasoning; `messageId` names the assistant message it reasons toward. */
   turnEvent(TurnEventKind.ThoughtChunk, {
     messageId: z.string(),
     text: z.string(),
-    subagentId,
   }),
   turnEvent(TurnEventKind.ToolCallStarted, {
     toolCallId: z.string(),
@@ -356,11 +314,8 @@ export const OwnTurnEventSchema = z.discriminatedUnion("kind", [
     startedAt: TimestampSchema.optional(),
     /** The assistant message that made the call. */
     parentMessageId: z.string().optional(),
-    /** The subagent this call delegated to. */
-    subagent: SubagentSchema.optional(),
     /** The tool declares an MCP App view, so the browser draws it from here. */
     app: z.literal(true).optional(),
-    subagentId,
   }),
   /** A piece of the call's JSON arguments text. */
   turnEvent(TurnEventKind.ToolCallInputChunk, {
@@ -419,11 +374,6 @@ export const OwnTurnEventSchema = z.discriminatedUnion("kind", [
   }),
   /** `modelId` is the model's id in the Session's model catalog. */
   turnEvent(TurnEventKind.ModelChanged, { modelId: z.string().min(1) }),
-  /** A patch of the subagent `toolCallId` spawned. */
-  turnEvent(TurnEventKind.SubagentUpdated, {
-    toolCallId: z.string(),
-    subagent: SubagentSchema,
-  }),
   /** The Session's whole Todo list, replacing the previous one. */
   turnEvent(TurnEventKind.PlanUpdated, {
     todos: SessionTodosResponseSchema.shape.todos,

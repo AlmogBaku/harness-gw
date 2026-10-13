@@ -469,46 +469,6 @@ export const HgwChildSessionMetaSchema = readObject({
 })
 export type HgwChildSessionMeta = z.infer<typeof HgwChildSessionMetaSchema>
 
-/** How far a delegated subagent has got. */
-export const HGW_SUBAGENT_STATUSES = [
-  "running",
-  "completed",
-  "failed",
-  "cancelled",
-] as const
-
-/**
- * One delegated subagent, as a patch keyed by `id`: a later report restates
- * only what changed, so an omitted key leaves the known value standing.
- */
-export const HgwSubagentSchema = readObject({
-  id: IdentifierSchema,
-  goal: z.string().max(65_536).optional(),
-  model: z.string().min(1).max(256).optional(),
-  /** 1 for a subagent the turn spawned, 2 for one that subagent spawned. */
-  depth: z.number().int().min(1).optional(),
-  status: z.enum(HGW_SUBAGENT_STATUSES).optional(),
-  /** Every token the subagent spent. */
-  tokens: CountSchema.optional(),
-  filesRead: z.array(z.string()).optional(),
-  filesWritten: z.array(z.string()).optional(),
-  durationMs: CountSchema.optional(),
-  /** The provider Session the subagent runs in, when it has its own. */
-  childSessionId: IdentifierSchema.optional(),
-  summary: z.string().max(65_536).optional(),
-})
-export type HgwSubagent = z.infer<typeof HgwSubagentSchema>
-
-/**
- * Names the delegated subagent a chunk or tool call came from and, when the
- * spawning call is in the same stream, that call. Absent means the turn's own
- * agent produced it.
- */
-const SubagentAttribution = {
-  subagentId: IdentifierSchema.optional(),
-  parentToolCallId: IdentifierSchema.optional(),
-}
-
 /** `state_update._meta.hgw` */
 export const HgwStateMetaSchema = readObject({
   ...TurnMetaBase,
@@ -538,15 +498,11 @@ export const HgwStateMetaSchema = readObject({
 })
 
 /** `agent_message_chunk` / `agent_thought_chunk` `_meta.hgw` */
-export const HgwChunkMetaSchema = readObject({
-  ...TurnMetaBase,
-  ...SubagentAttribution,
-})
+export const HgwChunkMetaSchema = readObject({ ...TurnMetaBase })
 
 /** `tool_call_update` / `tool_call_content_chunk` `_meta.hgw` */
 export const HgwToolCallMetaSchema = readObject({
   ...TurnMetaBase,
-  ...SubagentAttribution,
   messageId: IdentifierSchema,
   /** Streaming arguments text; ACP replaces `rawInput` wholesale. */
   argsTextDelta: z.string().optional(),
@@ -556,8 +512,6 @@ export const HgwToolCallMetaSchema = readObject({
   completedAt: z.iso.datetime().optional(),
   /** How long the call ran, when the provider reports a span, not the ends. */
   durationMs: CountSchema.optional(),
-  /** The subagent this call spawned; later updates patch it by `id`. */
-  subagent: HgwSubagentSchema.optional(),
   /** The tool declares an MCP App view; a flag only, never a resource URI. */
   app: z.strictObject({}).optional(),
 })

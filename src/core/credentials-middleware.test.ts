@@ -124,17 +124,11 @@ describe("credentials middleware: tool data, for every runtime and both listener
   })
 
   // A path or a patch a mask would break is dropped, not masked.
-  it("drops a location, a diff, a working directory, and a subagent's file that carry a credential, masking its prose", () => {
+  it("drops a location, a diff, and a working directory that carry a credential", () => {
     const leaked = `/srv/${assigned("token")}`
     const started = shownTurn({
       ...open,
       locations: [{ path: "/srv/app/a.ts" }, { path: leaked }],
-      subagent: {
-        id: "sub-1",
-        goal: `log in with ${assigned("password")}`,
-        summary: "Read the logs.",
-        filesRead: ["/srv/app/a.ts", leaked],
-      },
     })
     const finished = shownTurn({
       kind: TurnEventKind.ToolCallFinished,
@@ -158,12 +152,6 @@ describe("credentials middleware: tool data, for every runtime and both listener
 
     expect(started).toMatchObject({
       locations: [{ path: "/srv/app/a.ts" }],
-      subagent: {
-        id: "sub-1",
-        goal: `log in with ${assigned("password", M)}`,
-        summary: "Read the logs.",
-        filesRead: ["/srv/app/a.ts"],
-      },
     })
     expect(finished).toMatchObject({
       diffs: [

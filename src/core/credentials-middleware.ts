@@ -13,7 +13,6 @@ import {
   type OwnTurnEvent,
   type PendingQuestion,
   type PendingRequest,
-  type Subagent,
   type ToolDiff,
   type ToolLocation,
   type TurnEvent,
@@ -98,20 +97,6 @@ function publicPaths(paths: readonly string[]) {
   return paths.filter((path) => !containsCredential(path))
 }
 
-/** A subagent's report with its prose masked and every file carrying a credential dropped. */
-function publicSubagent(subagent: Subagent): Subagent {
-  const { goal, summary, filesRead, filesWritten } = subagent
-  return {
-    ...subagent,
-    ...(goal === undefined ? {} : { goal: maskCredentials(goal) }),
-    ...(summary === undefined ? {} : { summary: maskCredentials(summary) }),
-    ...(filesRead === undefined ? {} : { filesRead: publicPaths(filesRead) }),
-    ...(filesWritten === undefined
-      ? {}
-      : { filesWritten: publicPaths(filesWritten) }),
-  }
-}
-
 /** What a child Session's report, live or stored, says in prose and files. */
 type ChildFacts = {
   title?: string
@@ -123,7 +108,7 @@ type ChildFacts = {
 
 /**
  * A child Session's report with its prose masked and every file carrying a
- * credential dropped, as a subagent's is.
+ * credential dropped, since masked a path names no file.
  */
 function publicChild<Facts extends ChildFacts>(facts: Facts): Facts {
   const { title, description, summary, filesRead, filesWritten } = facts
@@ -151,7 +136,6 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent {
         ...(event.locations
           ? { locations: publicLocations(event.locations) }
           : {}),
-        ...(event.subagent ? { subagent: publicSubagent(event.subagent) } : {}),
       }
     case TurnEventKind.ToolCallInputChunk:
       return { ...event, delta: maskedToolValue(event.delta) }
@@ -175,8 +159,6 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent {
         ...(data === undefined ? {} : { data: maskedTerminalData(data) }),
       }
     }
-    case TurnEventKind.SubagentUpdated:
-      return { ...event, subagent: publicSubagent(event.subagent) }
     case TurnEventKind.ChildSessionUpdated:
       return publicChild(event)
     // A child's own event is masked as the same event of its parent would be.

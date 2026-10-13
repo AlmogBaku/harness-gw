@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest"
 import {
   HGW_META_KEY,
   HGW_PLAN_ID,
-  HgwChunkMetaSchema,
   HgwPlanMetaSchema,
   HgwStateMetaSchema,
   HgwToolCallMetaSchema,
@@ -17,7 +16,6 @@ import {
   CompactionStatus,
   DiffOperation,
   StopReason,
-  SubagentStatus,
   ToolKind,
   TurnEventKind,
   type TurnEvent,
@@ -811,53 +809,6 @@ describe("provider facts", () => {
     })
   })
 
-  it("attributes a subagent's chunks and calls to the call that spawned it", () => {
-    const updates = updatesOf(
-      translate([
-        toolStarted({
-          name: "delegate_task",
-          subagent: { id: "sub-1", goal: "audit", depth: 1 },
-        }),
-        {
-          kind: TurnEventKind.MessageChunk,
-          messageId: "m1",
-          text: "child prose",
-          subagentId: "sub-1",
-        },
-        toolStarted({ toolCallId: "c2", subagentId: "sub-1" }),
-      ]).outbound
-    )
-    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[0]!)).subagent).toEqual({
-      id: "sub-1",
-      goal: "audit",
-      depth: 1,
-    })
-    expect(HgwChunkMetaSchema.parse(aosMeta(updates[1]!))).toEqual({
-      ...turn,
-      subagentId: "sub-1",
-      parentToolCallId: "c1",
-    })
-    expect(HgwToolCallMetaSchema.parse(aosMeta(updates[2]!))).toMatchObject({
-      subagentId: "sub-1",
-      parentToolCallId: "c1",
-    })
-  })
-
-  it("names a subagent without a parent it never saw spawned", () => {
-    const update = lastUpdate([
-      {
-        kind: TurnEventKind.ThoughtChunk,
-        messageId: "m1",
-        text: "child thought",
-        subagentId: "sub-9",
-      },
-    ])
-    expect(HgwChunkMetaSchema.parse(aosMeta(update))).toEqual({
-      ...turn,
-      subagentId: "sub-9",
-    })
-  })
-
   it("appends streamed tool output as call content", () => {
     const update = lastUpdate([
       toolStarted(),
@@ -1015,41 +966,5 @@ describe("provider facts", () => {
       translate([{ kind: TurnEventKind.ModelChanged, modelId: "claude" }])
         .outbound
     ).toEqual([{ kind: "model-changed", modelId: "claude" }])
-  })
-
-  it("patches a subagent onto the call that spawned it", () => {
-    const update = lastUpdate([
-      toolStarted(),
-      {
-        kind: TurnEventKind.SubagentUpdated,
-        toolCallId: "c1",
-        subagent: {
-          id: "sub-1",
-          status: SubagentStatus.Completed,
-          summary: "done",
-        },
-      },
-    ])
-    expect(update).toMatchObject({
-      sessionUpdate: "tool_call_update",
-      toolCallId: "c1",
-    })
-    expect(HgwToolCallMetaSchema.parse(aosMeta(update)).subagent).toEqual({
-      id: "sub-1",
-      status: "completed",
-      summary: "done",
-    })
-  })
-
-  it("drops a subagent patch the wire contract refuses", () => {
-    expect(
-      translate([
-        {
-          kind: TurnEventKind.SubagentUpdated,
-          toolCallId: "c1",
-          subagent: { id: "" },
-        },
-      ]).outbound
-    ).toEqual([])
   })
 })

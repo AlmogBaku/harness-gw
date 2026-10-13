@@ -719,8 +719,7 @@ function compactedEvent(
     (previous.kind === TurnEventKind.MessageChunk ||
       previous.kind === TurnEventKind.ThoughtChunk) &&
     previous.kind === next.kind &&
-    previous.messageId === next.messageId &&
-    previous.subagentId === next.subagentId
+    previous.messageId === next.messageId
   )
     return { ...previous, text: previous.text + next.text }
   return undefined

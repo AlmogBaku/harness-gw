@@ -207,7 +207,7 @@ What a guest is shown:
   inline size or count caps beyond the frame and queue limits every
   connection has; the REST byte caps still apply.
 - Reasoning, tool input and output, terminals, compaction, the model, and
-  subagent prose are dropped. A tool call that declares an MCP App reaches
+  child Sessions are dropped. A tool call that declares an MCP App reaches
   the guest as its card; when its server is in `guest.appServers` (default
   `aos-ui`), its result passes whole too, as the guest's own view route would
   hand it. Arguments never pass, since they may name host paths.
@@ -575,7 +575,8 @@ or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
 
 | Where                                                                 | Masked                                                                                                                                               |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, its terminal's command and output, and its subagent's goal and summary                      |
+| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, and its terminal's command and output                                                        |
+| A child Session, live and replayed                                    | its title, description and summary, and its own tool calls and failures as a turn's are                                                              |
 | A failed turn, live and replayed                                      | its message                                                                                                                                          |
 | A question a guest is shown                                           | its prompt, header, and choices; a guest's answer reaches the runtime as the choice it wrote, and an answer echoed back to a guest is masked        |
 | `requestText` in `_hgw/activity`, and every Web Push text             | the one line it shows                                                                                                                                |
@@ -594,8 +595,8 @@ call the same masker.
 
 Text is masked; a path or a patch that carries a credential is dropped rather
 than masked, since masked it would name no file or no longer apply: a
-location, a diff that names one, a terminal's working directory, and a
-subagent's file.
+location, a diff that names one, a terminal's working directory, and a file a
+child Session read or wrote.
 
 A name is secret when a run of up to three of its words spells a word of
 `SECRET_TERMS` (`src/redaction.ts`), or when its letters end in one. Its words

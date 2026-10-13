@@ -14,7 +14,6 @@ import {
   ReplyStatus,
   RequestReplySchema,
   StopReason,
-  SubagentStatus,
   sumTokenCounts,
   ToolKind,
   TurnEventKind,
@@ -66,20 +65,6 @@ const tokenUsage = {
   cachedWriteTokens: 66,
 }
 
-const subagent = {
-  id: "subagent-1",
-  goal: "audit the tests",
-  model: "claude",
-  depth: 1,
-  status: SubagentStatus.Completed,
-  tokens: 1200,
-  filesRead: ["/repo/a.ts"],
-  filesWritten: ["/repo/b.ts"],
-  durationMs: 4200,
-  childSessionId: "session-2",
-  summary: "two tests were missing",
-}
-
 const location = { path: "/repo/README.md", line: 3 }
 
 const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
@@ -107,13 +92,11 @@ const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
     kind: TurnEventKind.MessageChunk,
     messageId: "message-1",
     text: "hello",
-    subagentId: "subagent-1",
   },
   [TurnEventKind.ThoughtChunk]: {
     kind: TurnEventKind.ThoughtChunk,
     messageId: "message-1",
     text: "thinking",
-    subagentId: "subagent-1",
   },
   [TurnEventKind.ToolCallStarted]: {
     kind: TurnEventKind.ToolCallStarted,
@@ -124,8 +107,6 @@ const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
     locations: [location],
     startedAt: "2026-01-01T00:00:00.000Z",
     parentMessageId: "message-1",
-    subagent,
-    subagentId: "subagent-0",
   },
   [TurnEventKind.ToolCallInputChunk]: {
     kind: TurnEventKind.ToolCallInputChunk,
@@ -182,11 +163,6 @@ const eventFixtures: Record<TurnEventKind, Record<string, unknown>> = {
   [TurnEventKind.ModelChanged]: {
     kind: TurnEventKind.ModelChanged,
     modelId: "claude",
-  },
-  [TurnEventKind.SubagentUpdated]: {
-    kind: TurnEventKind.SubagentUpdated,
-    toolCallId: "call-1",
-    subagent,
   },
   [TurnEventKind.PlanUpdated]: {
     kind: TurnEventKind.PlanUpdated,
@@ -249,7 +225,6 @@ const requiredFields: Record<TurnEventKind, readonly string[]> = {
   [TurnEventKind.TerminalOutput]: ["terminalId", "toolCallId"],
   [TurnEventKind.CompactionUpdated]: ["compactionId", "status"],
   [TurnEventKind.ModelChanged]: ["modelId"],
-  [TurnEventKind.SubagentUpdated]: ["toolCallId", "subagent"],
   [TurnEventKind.PlanUpdated]: ["todos"],
   [TurnEventKind.ArtifactPublished]: ["artifact"],
   [TurnEventKind.SteerAccepted]: ["requestId", "text", "delivery"],
@@ -384,16 +359,6 @@ describe("the provider facts a turn event carries", () => {
     expect(isTurnEvent(toolFinished({ completedAt: "yesterday" }))).toBe(false)
     expect(
       isTurnEvent(toolFinished({ completedAt: "2026-01-01T02:00:00+02:00" }))
-    ).toBe(false)
-  })
-
-  it("admits only the subagent statuses the vocabulary names", () => {
-    expect(
-      isTurnEvent({
-        kind: TurnEventKind.SubagentUpdated,
-        toolCallId: "call-1",
-        subagent: { id: "subagent-1", status: "timeout" },
-      })
     ).toBe(false)
   })
 })

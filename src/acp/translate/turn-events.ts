@@ -7,14 +7,12 @@ import type {
 import {
   HGW_META_KEY,
   HgwArtifactDescriptorSchema,
-  HgwSubagentSchema,
 } from "../../../protocol/acp"
 import {
   isAwaitingStopFailure,
   isUnobservedFailure,
   sumTokenCounts,
   TurnEventKind,
-  type Subagent,
   type TokenUsage,
   type TurnEvent,
   type TurnEventOf,
@@ -90,25 +88,6 @@ function turnUpdate(context: TranslateContext, value: Built<SessionUpdate>) {
   return update({ ...value, _meta: { [HGW_META_KEY]: turnMeta(context) } })
 }
 
-/** The subagent an event came from and, once seen, the call that spawned it. */
-function attribution(state: TranslateState, subagentId: string | undefined) {
-  if (subagentId === undefined) return {}
-  const parentToolCallId = state.subagents[subagentId]
-  return {
-    subagentId,
-    ...(parentToolCallId === undefined ? {} : { parentToolCallId }),
-  }
-}
-
-/**
- * Adapters are typed, not validated: a subagent the wire contract refuses is
- * dropped rather than costing the browser the whole tool meta.
- */
-function wireSubagent(subagent: Subagent | undefined) {
-  const parsed = HgwSubagentSchema.safeParse(subagent)
-  return parsed.success ? { subagent: parsed.data } : {}
-}
-
 /**
  * One ACP usage for the whole turn. ACP requires the input and output counts,
  * so a turn whose provider reported neither reports no usage rather than zeros.
@@ -149,8 +128,7 @@ function chunkStep(
         context,
         message ? "agent_message_chunk" : "agent_thought_chunk",
         event.messageId,
-        event.text,
-        attribution(state, event.subagentId)
+        event.text
       ),
     ],
   }
@@ -294,8 +272,6 @@ function toolStarted(
   }
   const extra = {
     ...(event.startedAt ? { startedAt: event.startedAt } : {}),
-    ...wireSubagent(event.subagent),
-    ...attribution(state, event.subagentId),
     ...(event.app ? { app: {} } : {}),
   }
   const messageId = event.parentMessageId ?? attachedTo(state, context)
@@ -309,15 +285,7 @@ function toolStarted(
     ""
   )
   return {
-    state: event.subagent
-      ? {
-          ...opened,
-          subagents: {
-            ...opened.subagents,
-            [event.subagent.id]: event.toolCallId,
-          },
-        }
-      : opened,
+    state: opened,
     outbound: [toolOutbound(context, messageId, call, extra)],
   }
 }
@@ -494,23 +462,6 @@ function compactionOutbound(
   return [turnUpdate(context, compactionUpdate(event))]
 }
 
-function subagentOutbound(
-  state: TranslateState,
-  context: TranslateContext,
-  event: TurnEventOf<typeof TurnEventKind.SubagentUpdated>
-): AcpOutbound[] {
-  const extra = wireSubagent(event.subagent)
-  if (!extra.subagent) return []
-  return [
-    toolOutbound(
-      context,
-      attachedTo(state, context, event.toolCallId),
-      { toolCallId: event.toolCallId },
-      extra
-    ),
-  ]
-}
-
 function planOutbound(
   context: TranslateContext,
   event: TurnEventOf<typeof TurnEventKind.PlanUpdated>
@@ -556,8 +507,6 @@ export const translateTurnEvent = ((state, event: TurnEvent, context) => {
         state,
         outbound: [{ kind: "model-changed", modelId: event.modelId }],
       }
-    case TurnEventKind.SubagentUpdated:
-      return { state, outbound: subagentOutbound(state, context, event) }
     // A child's reports and events reach its readers as the child's own,
     // under its id, never as the parent turn's.
     case TurnEventKind.ChildSessionUpdated:

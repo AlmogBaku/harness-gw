@@ -76,14 +76,8 @@ describe("guest turn projection", () => {
     ).toBeUndefined()
   })
 
-  it("drops a subagent's prose and every tool, terminal, compaction, and model fact", () => {
+  it("drops every tool, terminal, compaction, and model fact", () => {
     const hidden: TurnEvent[] = [
-      {
-        kind: TurnEventKind.MessageChunk,
-        messageId: "assistant-1",
-        text: "child prose",
-        subagentId: "sub-1",
-      },
       { kind: TurnEventKind.ToolCallOutputChunk, toolCallId: "t", text: "ls" },
       {
         kind: TurnEventKind.TerminalOutput,
@@ -99,11 +93,6 @@ describe("guest turn projection", () => {
         summary: "private context",
       },
       { kind: TurnEventKind.ModelChanged, modelId: "private-model" },
-      {
-        kind: TurnEventKind.SubagentUpdated,
-        toolCallId: "t",
-        subagent: { id: "sub-1", goal: "private goal" },
-      },
     ]
 
     for (const event of hidden)

@@ -240,14 +240,9 @@ async function watchedRun(
   return emitted
 }
 
-/** A delta of the assistant's message, or of a subagent's prose inside it. */
-function chunk(text: string, subagentId?: string): TurnEvent {
-  return {
-    kind: TurnEventKind.MessageChunk,
-    messageId: "assistant-1",
-    text,
-    ...(subagentId ? { subagentId } : {}),
-  }
+/** A delta of the assistant's message. */
+function chunk(text: string): TurnEvent {
+  return { kind: TurnEventKind.MessageChunk, messageId: "assistant-1", text }
 }
 
 const turnStarted = { kind: TurnEventKind.TurnStarted } as const
@@ -527,7 +522,7 @@ describe("SessionCoordinator", () => {
         ],
       ],
       [
-        "merges tool output per call and keeps a subagent's prose apart",
+        "merges tool output per call and a message's prose",
         8,
         [
           turnStarted,
@@ -537,8 +532,8 @@ describe("SessionCoordinator", () => {
           terminal,
           terminal,
           chunk("own "),
-          chunk("child ", "sub-1"),
-          chunk("prose", "sub-1"),
+          chunk("child "),
+          chunk("prose"),
         ],
         [
           datedStart,
@@ -546,8 +541,7 @@ describe("SessionCoordinator", () => {
           output("tool-2", "c"),
           terminal,
           terminal,
-          chunk("own "),
-          chunk("child prose", "sub-1"),
+          chunk("own child prose"),
         ],
       ],
     ])(
