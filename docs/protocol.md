@@ -739,10 +739,11 @@ Later reports patch it.
 
 The child's own updates arrive under its id on the same connection, numbered
 in the parent turn's sequence, and its tokens in its own idle usage. Its
-approvals and questions are asked with the child's `sessionId` where the
-runtime names the child that asks, and an answer settles the parent turn's
-wait. Hermes names none, so a Hermes child's approval or question is asked as
-its parent turn's. `session/cancel` naming the child stops its
+approvals and questions are asked with the child's `sessionId`, and an answer
+settles the parent turn's wait. A Hermes child asks a client nothing: it has
+no question callback, Hermes decides its approvals by its own
+`delegation.subagent_auto_approve` setting, and a sudo or secret prompt is one
+the gateway holds unrendered for every Session. `session/cancel` naming the child stops its
 work, where `cancel` is offered, through the Session that owns it; any other
 cancel naming one does nothing. Every other request naming a child answers
 `-32601`: a child permits a client nothing its capabilities do not name. A
@@ -762,10 +763,7 @@ paged. A resume while the turn runs leaves its children to the turn's replay.
 
 A guest is shown nothing of a child: no announcement, event, question,
 approval, stored row or transcript. A child's approval or question in a turn
-the guest started waits for an operator, who sees it on the child, where the
-runtime names the child that asks; on Hermes, which names none, it is the
-parent turn's, so its approval is declined for the guest as any is, and its
-question reaches the guest. Child reports and events pass the
+the guest started waits for an operator, who sees it on the child. Child reports and events pass the
 credentials middleware like any turn's tool data, and a child's question tool
 call reaches the operator as written, as its parent's does.
 
