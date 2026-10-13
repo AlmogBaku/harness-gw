@@ -106,6 +106,7 @@ export type SessionActionCapabilities = {
   archive: boolean
   delete: boolean
   pin: boolean
+  unread: boolean
 }
 
 export type TodoStatus = "pending" | "active" | "completed" | "failed"

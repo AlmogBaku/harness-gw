@@ -389,8 +389,11 @@ export function createAcpSessionStore({
     /** The provider's title, as a list page or a subscribed Session reports it. */
     setTitle: (sessionId: string, title: string) =>
       titles.set(sessionId, title),
-    /** The gateway's read state, or the operator's own optimistic ack. */
-    setUnread: (sessionId: string, unread: boolean) =>
+    /**
+     * The gateway's read state, or the operator's own optimistic write;
+     * `undefined` restores a refused one.
+     */
+    setUnread: (sessionId: string, unread: boolean | undefined) =>
       patch(sessionId, { unread }),
     /** The operator's own optimistic pin; `undefined` restores a refused one. */
     setPinned: (sessionId: string, pinned: boolean | undefined) =>
