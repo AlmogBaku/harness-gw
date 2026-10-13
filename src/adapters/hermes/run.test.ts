@@ -26,6 +26,7 @@ import type {
 } from "./attachment-registry"
 import {
   HermesTurnEngine,
+  HermesTurnRewindConflictError,
   hermesRecoveryToken,
   type HermesRecovery,
   type HermesTurnScope,
@@ -466,6 +467,65 @@ describe("HermesRunEngine", () => {
         ofKind(await collect(handle), TurnEventKind.TurnEnded)
       ).toHaveLength(1)
       await expect(handle.stored).rejects.toMatchObject({ ending: "ended" })
+    })
+
+    it.each([
+      [
+        "Hermes refused the submit",
+        async () =>
+          ({
+            acknowledgement: "rejected",
+            reason: "in-use",
+            detail: "Open elsewhere",
+          }) as const,
+        "HGW_SESSION_IN_USE",
+      ],
+      [
+        "a command carried attachments",
+        async () =>
+          ({
+            acknowledgement: "rejected",
+            reason: "command-with-attachments",
+          }) as const,
+        "HGW_COMMAND_WITH_ATTACHMENTS",
+      ],
+      [
+        "the rewind's row is gone",
+        async () => {
+          throw new HermesTurnRewindConflictError()
+        },
+        "HGW_REWIND_CONFLICT",
+      ],
+    ])(
+      "ends the receipt unstored once %s: Hermes stored nothing of the prompt",
+      async (_case, submit, code) => {
+        const { engine } = liveEngine({ submit })
+
+        const handle = await engine.start(scope, input())
+
+        expect(ofKind(await collect(handle), TurnEventKind.TurnFailed)).toEqual(
+          [expect.objectContaining({ code })]
+        )
+        await expect(handle.stored).rejects.toMatchObject({
+          ending: "failed",
+          code,
+          unstored: true,
+        })
+      }
+    )
+
+    it("leaves a command Hermes answered in band without a receipt", async () => {
+      const { engine } = liveEngine({
+        submit: async () => ({
+          acknowledgement: "accepted",
+          status: "streaming",
+          completion: { output: "Done." },
+        }),
+      })
+
+      const handle = await engine.start(scope, input({ prompt: "/status" }))
+
+      expect(handle.stored).toBeUndefined()
     })
   })
 

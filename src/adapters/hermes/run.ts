@@ -640,7 +640,7 @@ export class HermesTurnEngine {
       outcome = await this.#native.submit(active.liveSessionId, prompt, signal)
     } catch (error) {
       if (error instanceof HermesTurnRewindConflictError) {
-        this.#fail(active, TURN_FAILURES.rewindConflict)
+        this.#refuse(active, TURN_FAILURES.rewindConflict)
         return
       }
       // Nothing was written, so this run never began: it settles silently and
@@ -691,9 +691,9 @@ export class HermesTurnEngine {
       throw new ServerTurnConflictError()
     }
     if (outcome.reason === "command-with-attachments")
-      return this.#fail(active, TURN_FAILURES.commandWithAttachments)
+      return this.#refuse(active, TURN_FAILURES.commandWithAttachments)
     if (outcome.reason !== "session-gone")
-      return this.#fail(
+      return this.#refuse(
         active,
         withDetail(REFUSAL_FAILURES[outcome.reason], outcome.detail)
       )
@@ -1334,13 +1334,32 @@ export class HermesTurnEngine {
     this.#emit(active, { kind: TurnEventKind.TurnStarted })
   }
 
-  #fail(active: ActiveTurn, failure: TurnFailure) {
+  /**
+   * `written.unstored`: the run ends knowing Hermes stored nothing of its
+   * prompt, so its receipt says so.
+   */
+  #fail(
+    active: ActiveTurn,
+    failure: TurnFailure,
+    written: { unstored?: boolean } = {}
+  ) {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#settleCompaction(active)
     const failed = this.#failed(active, failure)
     this.#emit(active, failed)
-    this.#settle(active, failed)
+    this.#settle(active, failed, written)
+  }
+
+  /**
+   * The prompt was refused before Hermes stored any of it: by Hermes, which
+   * refuses a submit before it writes its row, or by this run before sending
+   * it. The run fails, and its receipt says nothing was stored, so the prompt
+   * is answered with an error rather than as accepted.
+   */
+  #refuse(active: ActiveTurn, failure: TurnFailure) {
+    if (active.promptMessageId) active.stored ??= storageReceipt()
+    this.#fail(active, failure, { unstored: true })
   }
 
   /**
@@ -1401,10 +1420,14 @@ export class HermesTurnEngine {
   }
 
   /** `ending` is the event that ended the run, when one did. */
-  #settle(active: ActiveTurn, ending?: TurnEvent) {
+  #settle(
+    active: ActiveTurn,
+    ending?: TurnEvent,
+    written: { unstored?: boolean } = {}
+  ) {
     if (active.terminal) return
     active.terminal = true
-    active.stored?.end(ending)
+    active.stored?.end(ending, written)
     // A settling watcher keeps the native observation until Hermes reports the
     // Session idle; without one nothing observes this Session any more.
     if (this.#settling.get(sessionKey(active.scope))?.active !== active)
