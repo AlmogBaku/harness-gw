@@ -145,7 +145,13 @@ describe("gateway executable", () => {
       return { server: { stop: vi.fn() }, shutdown }
     })
     const lifecycle = await runGatewayCli(
-      ["bun", "harness-gw", "serve", "--config", (await gatewayConfig()).configFile],
+      [
+        "bun",
+        "harness-gw",
+        "serve",
+        "--config",
+        (await gatewayConfig()).configFile,
+      ],
       {
         runtimeFactory: (config, limits, services) => {
           if (config.kind !== "hermes") throw new Error("a Hermes runtime only")
@@ -403,13 +409,16 @@ describe("gateway executable", () => {
     const start = vi.fn()
     const missing = join(tmpdir(), "harness-gw-absent", "config.yaml")
     const check = (path: string, writeOut = vi.fn()) =>
-      runGatewayCli(["bun", "harness-gw", "config", "check", "--config", path], {
-        createLogger: () => captureLogs().logger,
-        credentials: new CredentialValues(),
-        getenv: () => undefined,
-        start,
-        writeOut,
-      })
+      runGatewayCli(
+        ["bun", "harness-gw", "config", "check", "--config", path],
+        {
+          createLogger: () => captureLogs().logger,
+          credentials: new CredentialValues(),
+          getenv: () => undefined,
+          start,
+          writeOut,
+        }
+      )
 
     const writeOut = vi.fn()
     await check(configFile, writeOut)

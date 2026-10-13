@@ -10,6 +10,7 @@ import {
   FOCUS_DEBOUNCE_MS,
   REACK_FLOOR_MS,
 } from "./read-state"
+import type { ReadState } from "./types"
 
 const AGENT = "researcher"
 const SESSION = "session-1"
@@ -283,6 +284,103 @@ describe("createReadState", () => {
     await settle(FOCUS_DEBOUNCE_MS)
     expect(updateSession).toHaveBeenCalledTimes(2)
     expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
+  })
+
+  it.each([
+    {
+      until: "focus moves to another Session and back",
+      look: (readState: ReadState) => {
+        readState.focus(AGENT, "session-2")
+        readState.focus(AGENT, SESSION)
+      },
+    },
+    {
+      until: "focus moves to none and back",
+      look: (readState: ReadState) => {
+        readState.blur()
+        readState.focus(AGENT, SESSION)
+      },
+    },
+    {
+      // A message and an explicit read re-expose it alike.
+      until: "this connection re-exposes it",
+      look: (readState: ReadState) => readState.reexpose(AGENT, SESSION),
+    },
+  ])(
+    "keeps a Session this connection marks unread so until $until",
+    async ({ look }) => {
+      const { updateSession, readState, sessionRows } = harness()
+      readState.focus(AGENT, SESSION)
+      await settle(FOCUS_DEBOUNCE_MS)
+      // Re-exposing a Session nobody kept unread acknowledges nothing more.
+      readState.reexpose(AGENT, SESSION)
+      await settle(FOCUS_DEBOUNCE_MS)
+      expect(updateSession).toHaveBeenCalledTimes(1)
+
+      // Marked unread while a re-ack waits on the debounce, then the floor.
+      readState.onExecution(lifecycle("turn-finished"))
+      readState.keepUnread(AGENT, SESSION)
+      sessionRows.markUnread(AGENT, SESSION)
+      await settle(REACK_FLOOR_MS)
+      // An idle toggle re-reports the same focus; activity re-lights it.
+      readState.focus(AGENT, SESSION)
+      readState.onExecution(lifecycle("turn-finished"))
+      sessionRows.rememberList([
+        {
+          id: SESSION,
+          agentId: AGENT,
+          title: "Weekly digest",
+          archived: false,
+          updatedAt: "2026-09-19T10:05:00.000Z",
+          status: "idle",
+          unread: true,
+        },
+      ])
+      await settle(REACK_FLOOR_MS * 2)
+      expect(updateSession).toHaveBeenCalledTimes(1)
+      expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(true)
+
+      look(readState)
+      await settle(FOCUS_DEBOUNCE_MS)
+      expect(updateSession).toHaveBeenCalledTimes(2)
+      expect(updateSession).toHaveBeenLastCalledWith(
+        AGENT,
+        `stored-${SESSION}`,
+        {
+          unread: false,
+        }
+      )
+      expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
+
+      // Read again, it is kept no longer: the next exposure acknowledges.
+      readState.focus(AGENT, SESSION)
+      await settle(FOCUS_DEBOUNCE_MS)
+      expect(updateSession).toHaveBeenCalledTimes(3)
+    }
+  )
+
+  it("keeps the focused Session held read when this connection marks another one unread", async () => {
+    const { updateSession, readState, sessionRows } = harness()
+    readState.focus(AGENT, SESSION)
+    await settle(FOCUS_DEBOUNCE_MS)
+
+    readState.keepUnread(AGENT, "session-2")
+    // Past the write guard, only the focus hold keeps a re-lit row read.
+    await settle(READ_GUARD_MS)
+    sessionRows.rememberList([
+      {
+        id: SESSION,
+        agentId: AGENT,
+        title: "Weekly digest",
+        archived: false,
+        updatedAt: "2026-09-19T10:05:00.000Z",
+        status: "idle",
+        unread: true,
+      },
+    ])
+    expect(sessionRows.get(AGENT, SESSION)?.unread).toBe(false)
+    await settle(FOCUS_DEBOUNCE_MS)
+    expect(updateSession).toHaveBeenCalledTimes(2)
   })
 
   it("writes nothing when the runtime does not track read state, and asks again after a failed read", async () => {

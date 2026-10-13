@@ -628,14 +628,14 @@ describe("ACP connection", () => {
       "opus"
     )
     expect(options[0]).toMatchObject({ currentValue: "opus" })
-    expect(gateway.paramsOf(methods.agent.session.setConfigOption)).toMatchObject(
-      {
-        sessionId: SESSION_ID,
-        configId: "model",
-        type: "id",
-        value: "opus",
-      }
-    )
+    expect(
+      gateway.paramsOf(methods.agent.session.setConfigOption)
+    ).toMatchObject({
+      sessionId: SESSION_ID,
+      configId: "model",
+      type: "id",
+      value: "opus",
+    })
 
     await connection.deleteSession(SESSION_ID)
     await connection.updateSession({ sessionId: SESSION_ID, unread: false })
@@ -903,7 +903,9 @@ describe("ACP connection", () => {
 
     it("keeps the latest history a resume reports, and a rejoin without one leaves it", async () => {
       const clock = useFakeClock()
-      const gateway = createGatewayAgent({ history: { nextCursor: "cursor-1" } })
+      const gateway = createGatewayAgent({
+        history: { nextCursor: "cursor-1" },
+      })
       const { pipe, connection } = connectOverSockets(gateway)
 
       expect(connection.history(SESSION_ID)).toBeUndefined()
@@ -967,7 +969,9 @@ describe("ACP connection", () => {
     })
 
     it("fails a page whose reply carries no history", async () => {
-      const gateway = createGatewayAgent({ page: { updates: olderPage.updates } })
+      const gateway = createGatewayAgent({
+        page: { updates: olderPage.updates },
+      })
       const connection = connectInProcess(gateway)
 
       await expect(

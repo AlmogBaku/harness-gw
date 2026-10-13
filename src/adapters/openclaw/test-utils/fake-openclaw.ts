@@ -150,6 +150,7 @@ export function fakeOpenClaw() {
   let failure: Error | undefined
   let deleted = false
   let calls = 0
+  let catalogSubscriptions = 0
   let seq = 0
   let run: { id: string; seq: number } | undefined
   /** The rows the Session stored, as `chat.history` reads them back. */
@@ -307,6 +308,9 @@ export function fakeOpenClaw() {
         // The release answers a new Session with its key; this fake's one
         // Session stands for it.
         return { ok: true, key: SESSION_KEY, sessionId: "transcript-a" }
+      case "sessions.subscribe":
+        catalogSubscriptions += 1
+        return { subscribed: true }
       case "sessions.messages.subscribe":
         return { key: params.key }
       case "sessions.messages.unsubscribe":
@@ -535,6 +539,16 @@ export function fakeOpenClaw() {
     },
 
     nativeCalls: () => calls,
+
+    /** How often the connection asked for the Gateway's Session changes. */
+    catalogSubscriptions: () => catalogSubscriptions,
+
+    /** A Gateway-wide event, such as `sessions.changed`, that no run carries. */
+    broadcast(event: string) {
+      if (!connection?.up) return
+      seq += 1
+      connection.options.onEvent?.({ type: "event", event, seq, payload: {} })
+    },
 
     async dropLink() {
       fault = "down"

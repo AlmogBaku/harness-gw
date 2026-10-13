@@ -806,6 +806,8 @@ export async function harness(options: HarnessOptions = {}) {
   const logs = options.logs ?? captureLogs()
   const readState = {
     focus: vi.fn(),
+    keepUnread: vi.fn(),
+    reexpose: vi.fn(),
     blur: vi.fn(),
     onExecution: vi.fn(),
     close: vi.fn(),

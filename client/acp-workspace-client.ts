@@ -491,6 +491,17 @@ export function createAcpWorkspaceClient({
         throw reason
       }
     },
+    /** As a pin does, the row leads the write and a refusal takes it back. */
+    async markSessionUnread(sessionId: string) {
+      const [previous] = store.rowsFor([sessionId])
+      store.setUnread(sessionId, true)
+      try {
+        await connection.updateSession({ sessionId, unread: true })
+      } catch (reason) {
+        store.setUnread(sessionId, previous?.unread)
+        throw reason
+      }
+    },
     /**
      * The runtime's own report, read once. A failed read is not an answer, so
      * it is not remembered.
@@ -503,6 +514,7 @@ export function createAcpWorkspaceClient({
           archive: offers(capabilities.sessionArchival),
           delete: offers(capabilities.sessionDeletion),
           pin: offers(capabilities.sessionPin),
+          unread: offers(capabilities.sessionReadState),
         }))
         .catch((reason: unknown) => {
           sessionActions = undefined

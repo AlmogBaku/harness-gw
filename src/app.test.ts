@@ -206,11 +206,14 @@ describe("gateway", () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
     const gateway = app(runtime)
 
-    const response = await gateway.request(`${origin}/api/v1/guest-invitations`, {
-      method: "POST",
-      headers: { origin, "content-type": "application/json" },
-      body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
-    })
+    const response = await gateway.request(
+      `${origin}/api/v1/guest-invitations`,
+      {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
+      }
+    )
 
     expect(response.status).toBe(404)
   })
@@ -348,9 +351,9 @@ describe("gateway", () => {
     // An artifact read is a REST route that reaches the provider, so an outage
     // there is the failure a log line has to name its path for.
     const path = "/api/v1/agents/researcher/sessions/stored/artifacts/art-1"
-    expect((await gateway.request(`${origin}${path}?token=secret`)).status).toBe(
-      503
-    )
+    expect(
+      (await gateway.request(`${origin}${path}?token=secret`)).status
+    ).toBe(503)
 
     expect(logs.records()).toContainEqual({
       level: "error",
@@ -849,7 +852,9 @@ describe("MCP App files", () => {
       })
     )
 
-    const ranged = await gateway.request(url, { headers: { range: "bytes=1-2" } })
+    const ranged = await gateway.request(url, {
+      headers: { range: "bytes=1-2" },
+    })
     expect(ranged.status).toBe(206)
     expect(ranged.headers.get("content-range")).toBe("bytes 1-2/6")
     expect(await ranged.text()).toBe("PD")
@@ -1033,7 +1038,11 @@ describe("Published Artifact views", () => {
     sessionId: "stored",
     artifactId: "artifact-1",
   }
-  const post = (gateway: ReturnType<typeof app>, path: string, body?: unknown) =>
+  const post = (
+    gateway: ReturnType<typeof app>,
+    path: string,
+    body?: unknown
+  ) =>
     gateway.request(`${origin}${path}`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
@@ -1079,7 +1088,9 @@ describe("Published Artifact views", () => {
     )
     const address = view.files?.addresses.path ?? ""
 
-    expect(await observed(await gateway.request(`${origin}${address}`))).toEqual({
+    expect(
+      await observed(await gateway.request(`${origin}${address}`))
+    ).toEqual({
       status: 200,
       headers: {
         ...LISTENER_HEADERS,
