@@ -1002,12 +1002,11 @@ function nestedDeadlines(): Row {
       await t.clock.advance(0)
       const signal = t.test.faults.calls("start")[0]?.[3] as AbortSignal
       signal.addEventListener("abort", () => (marks.aborted = mark(t)))
+      // The provider may have taken the prompt, so ACP owes it an id.
       t.settling.push(
         expect(
           answer.finally(() => (marks.answered = mark(t)))
-        ).rejects.toMatchObject({
-          code: HGW_JSONRPC_ERRORS.uncertainMutation,
-        })
+        ).resolves.toMatchObject({ messageId: expect.any(String) })
       )
     },
     bound: ADMISSION_DEADLINE_MS + TICK_MS,

@@ -1716,15 +1716,34 @@ describe("Session rooms", () => {
       appendTo: (text) => text,
       cleanup,
     })
-    const unanswered = expect(
-      prompt(test, "Again", SESSION, { attachmentStageId })
-    ).rejects.toMatchObject({ code: HGW_JSONRPC_ERRORS.uncertainMutation })
+    const from = test.recorder.entries.length
+    const unanswered = prompt(test, "Again", SESSION, { attachmentStageId })
     await clock.advance(ADMISSION_DEADLINE_MS)
-    await unanswered
+    // The provider may have taken it, so ACP owes it an id: the gateway's,
+    // and the Session reports what it cannot observe as unknown.
+    await expect(unanswered).resolves.toEqual(expect.any(String))
+    await clock.advance(10)
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"state":"unknown"'),
+      "the unknown state"
+    )
     expect(cleanup).not.toHaveBeenCalled()
     // No reconcile confirmed the turn by its deadline, so it never started.
     await clock.advance(UNCERTAINTY_DEADLINE_MS)
     expect(cleanup).toHaveBeenCalledOnce()
+    await clock.advance(10)
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes('"stopReason":"error"'),
+      "the error stop reason"
+    )
+    expect(
+      flow(test.recorder, SESSION, from).filter((item) =>
+        item.startsWith("state")
+      )
+    ).toEqual(["state unknown", "state idle"])
+    expect(JSON.stringify(test.recorder.entries.slice(from))).toContain(
+      "HGW_OUTCOME_UNKNOWN"
+    )
     test.close()
   })
 

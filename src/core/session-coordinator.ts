@@ -909,6 +909,13 @@ const ENDED: AsyncIterable<SequencedTurnEvent> = {
   }),
 }
 
+/** A provider stream with nothing in it. */
+const ENDED_EVENTS: AsyncIterable<TurnEvent> = {
+  [Symbol.asyncIterator]: () => ({
+    next: async () => ({ done: true, value: undefined }),
+  }),
+}
+
 /** The requests a paused segment still waits on: those nobody has answered. */
 function openRequests(segment: Segment) {
   return segment.requests.filter(
@@ -934,6 +941,26 @@ function settledNow(settled: Promise<void>) {
     ),
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 0)),
   ])
+}
+
+/**
+ * What the readers of a start no answer proved are told: the gateway cannot
+ * observe whether its provider took the turn.
+ */
+const SEND_UNCERTAIN = {
+  kind: TurnEventKind.TurnFailed,
+  code: "HGW_SEND_UNCERTAIN",
+} as const
+
+/**
+ * The handle of a start no answer reached: it streams nothing, and a Stop it
+ * cannot deliver leaves the turn stopping until a reconcile settles it.
+ */
+const UNANSWERED: ServerTurnHandle = {
+  events: ENDED_EVENTS,
+  settled: new Promise(() => {}),
+  stop: async () => "stopping",
+  recoveryPosition: () => undefined,
 }
 
 /** How an uncertain turn ends once no recover confirmed it by its deadline. */
@@ -1610,11 +1637,58 @@ export class SessionCoordinator {
       this.#consume(execution, execution.segment)
       return execution
     } catch (error) {
-      if (!deadline.signal.aborted) throw error
-      throw this.#unanswered(key, turn, generation, input.turnId, stage)
+      if (
+        !deadline.signal.aborted &&
+        !(error instanceof ServerTurnUncertainError)
+      )
+        throw error
+      return this.#uncertainStart(scope, turn, generation, input, access, stage)
     } finally {
       this.#endAdmission(turn, generation)
     }
+  }
+
+  /**
+   * A start its provider never answered, or answered uncertain: the prompt
+   * may stand, so its turn takes the Session uncertain until a reconcile
+   * settles it, and keeps what the start staged. Its stand-in segment tells
+   * every reader the send went unobserved, and holds the journal a recovery
+   * continues and the deadline's outcome lands in.
+   */
+  #uncertainStart(
+    scope: SessionScope,
+    turn: Turn,
+    generation: number,
+    input: PromptTurnInput,
+    access: CoordinatorAccess,
+    stage: ServerAttachmentStage | undefined
+  ): Execution {
+    const key = scopeKey(scope)
+    this.#unanswered(key, turn, generation, input.turnId, stage)
+    const segment = this.#createSegment({
+      cacheKey: key,
+      turnId: input.turnId,
+      generation: turn.owner.generation,
+      handle: UNANSWERED,
+      history: { journal: "start", at: Date.now() },
+      onTerminal: access.onTerminal,
+    })
+    segment.terminal = true
+    this.#remember(segment, {
+      sequence: ++segment.nextSequence,
+      event: SEND_UNCERTAIN,
+    })
+    segment.fanout.close()
+    const execution = this.#createExecution({
+      scope,
+      turn,
+      turnId: input.turnId,
+      request: input,
+      segment,
+    })
+    this.#executions.set(key, execution)
+    this.#trackJournal(segment)
+    return execution
   }
 
   /**

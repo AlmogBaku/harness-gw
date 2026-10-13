@@ -2340,7 +2340,7 @@ describe("SessionCoordinator", () => {
     ).resolves.toBeDefined()
   })
 
-  it("leaves a start its provider never answers uncertain at the admission deadline", async () => {
+  it("answers a start its provider never answers under the gateway's id, uncertain, at the admission deadline", async () => {
     const { advance } = useFakeClock()
     const recovered = new EventSource()
     const engine: ServerTurnEngine = {
@@ -2356,12 +2356,21 @@ describe("SessionCoordinator", () => {
     const sessions = coordinator(engine)
     const observed: ExecutionEvent[] = []
     sessions.subscribeExecutions((event) => observed.push(event))
-    const hung = expect(
-      sessions.start(scope, input("run-1"), access("one"))
-    ).rejects.toBeInstanceOf(ServerTurnUncertainError)
+    const hung = sessions.start(scope, input("run-1"), access("one"))
 
     await advance(ADMISSION_DEADLINE_MS)
-    await hung
+    // The provider may have taken the prompt, which ACP owes an id; its reader
+    // is told the send went unobserved.
+    const answer = await hung
+    expect(answer).toMatchObject({
+      turnId: "run-1",
+      messageId: "message-run-1",
+    })
+    const told: TurnEvent[] = []
+    for await (const { event } of answer.events) told.push(event)
+    expect(told).toEqual([
+      { kind: TurnEventKind.TurnFailed, code: "HGW_SEND_UNCERTAIN" },
+    ])
     expect(sessions.state(scope)).toBe("uncertain")
     expect(vi.mocked(engine.start).mock.calls[0]?.[3]?.aborted).toBe(true)
     // A Stop has no handle to reach, but the turn is not over.

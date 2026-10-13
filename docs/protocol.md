@@ -282,7 +282,9 @@ unchanged. The response carries the minted user-message id as the top-level
 as a prompt never inserted, the answer waits for the runtime's storage receipt
 and names the id it stored the prompt under. A prompt the runtime may have
 stored without proving it, because its receipt outlasted the admission
-deadline or its turn ended first, is answered under the id the gateway minted.
+deadline, its turn ended first, or its start went unanswered, is answered
+under the id the gateway minted. An unanswered start then reports the
+`unknown` state until a recover confirms the turn or its deadline ends it.
 Only a turn its adapter knows stored nothing is answered with an error.
 A `$/cancel_request` for the prompt answers `-32800` only while the start has
 not reached the runtime. From then on the prompt may stand, so its answer
