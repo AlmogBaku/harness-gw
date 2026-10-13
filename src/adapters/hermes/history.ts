@@ -270,11 +270,29 @@ function leadOf(
   return notice ? [{ type: "data", name: "hgw-notice", data: notice }] : []
 }
 
-/** Converts provider-native durable rows into the strict public history shape. */
+/**
+ * A reply `session.branch` copied into its fork: Hermes copies a reply's text
+ * alone, without the calls or the `finish_reason` of the model call that made
+ * it (`tui_gateway/methods_session.py` `_BRANCH_COPY_FIELDS`), so nothing but
+ * the row itself bounds the response it was.
+ */
+function isCopiedReply(value: JsonRecord, prose: boolean) {
+  return (
+    prose &&
+    value.finish_reason == null &&
+    !(Array.isArray(value.tool_calls) && value.tool_calls.length > 0)
+  )
+}
+
+/**
+ * Converts provider-native durable rows into the strict public history shape.
+ * `branched`: the rows are a fork's, whose copied replies each stand alone.
+ */
 export function projectHermesHistory(
   rows: readonly unknown[],
   resolve?: McpToolNameResolver,
-  media: HermesMediaOptions = {}
+  media: HermesMediaOptions = {},
+  { branched = false }: { branched?: boolean } = {}
 ): HermesHistoryMessage[] {
   const messages: SessionMessage[] = []
   /** Activity rows, each after the messages that preceded it. */
@@ -451,7 +469,10 @@ export function projectHermesHistory(
       reasoning || visibleText || assistantContent?.artifacts.length
     )
     const previousAssistant =
-      role === "assistant" && response !== undefined && !(toolSince && prose)
+      role === "assistant" &&
+      response !== undefined &&
+      !(toolSince && prose) &&
+      !(branched && isCopiedReply(value, prose))
         ? messages[response]
         : undefined
     let id = rowMessageId

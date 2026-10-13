@@ -50,6 +50,57 @@ const REDIRECT_SCAFFOLD = "[Context from the interrupted assistant response]"
 type Fault = "none" | "native" | "refused" | "down"
 type Reply = { result: unknown } | { error: { code: number; message: string } }
 
+/** A stored Session besides the one the fake runs: a fork Hermes branched. */
+type OtherSession = {
+  rows: Record<string, unknown>[]
+  title: string
+  parent: string
+  /** The live Session a resume or a branch bound it to. */
+  liveId?: string
+}
+
+/** The fields `session.branch` copies of a row (`_BRANCH_COPY_FIELDS`). */
+const BRANCH_COPY_FIELDS = ["reasoning", "display_kind", "timestamp"] as const
+
+/**
+ * `_visible_branch_history`: the user and assistant rows with visible text,
+ * which a branch copies and nothing else, tool rows and calls included.
+ */
+function branchedRows(rows: readonly unknown[]) {
+  return rows.flatMap((row) => {
+    const value = row as Record<string, unknown>
+    if (value.role !== "user" && value.role !== "assistant") return []
+    if (typeof value.content !== "string" || !value.content.trim()) return []
+    return [
+      {
+        role: value.role,
+        content: value.content,
+        ...Object.fromEntries(
+          BRANCH_COPY_FIELDS.flatMap((field) =>
+            value[field] === undefined ? [] : [[field, value[field]]]
+          )
+        ),
+      },
+    ]
+  })
+}
+
+/** One `order=latest` page of `rows`, as `hermes_state_messages.py:1063` reads it. */
+function messagesPage(storedId: string, rows: readonly unknown[], url: URL) {
+  const limit = Number(url.searchParams.get("limit"))
+  const offset = Number(url.searchParams.get("offset"))
+  const end =
+    url.searchParams.get("order") === "latest"
+      ? rows.length - offset
+      : offset + limit
+  const page = rows.slice(Math.max(0, end - limit), Math.max(0, end))
+  return {
+    session_id: storedId,
+    messages: page,
+    pagination: { limit, offset, returned: page.length, total: rows.length },
+  }
+}
+
 /** A socket that answers every request frame the way Hermes would. */
 class HermesFakeSocket extends FakeSocket {
   constructor(
@@ -153,8 +204,18 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   /** Every dashboard request, as Hermes received it. */
   const httpRequests: { url: URL; headers: Headers }[] = []
 
+  /** The stored Sessions besides the one this fake runs, by stored id. */
+  const others = new Map<string, OtherSession>()
+  let nextOther = 1
+  /** Every `session.branch` Hermes received, as its params. */
+  const branches: Record<string, unknown>[] = []
+  /** Every live Session `session.close` tore down. */
+  const closed: string[] = []
+
   const socket = () => sockets.at(-1)
-  const latestSeq = () => frames.at(-1)?.seq ?? 0
+  /** Each live Session numbers its own frames (`event_replay._stamp_event`). */
+  const latestSeq = (liveId = LIVE_ID) =>
+    frames.findLast(({ session_id }) => session_id === liveId)?.seq ?? 0
   /** `_open_requests`: what a resume or a replay re-delivers. */
   const openRequests = () =>
     open ? [{ id: open.id, method: open.method, params: open.params }] : []
@@ -275,7 +336,19 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         return params.key === "project" && params.profile === PROFILE
           ? { result: { cwd: PROJECT_FOLDER, branch: null } }
           : { error: NATIVE_FAILURE }
-      case "session.resume":
+      case "session.resume": {
+        const other = others.get(String(params.session_id))
+        if (other) {
+          other.liveId ??= `live-${String(params.session_id)}`
+          return {
+            result: {
+              session_id: other.liveId,
+              stored_session_id: params.session_id,
+              running: false,
+              open_requests: [],
+            },
+          }
+        }
         if (deleted) return { error: SESSION_NOT_FOUND }
         // A live draft with no stored row reattaches lazy
         // (`tui_gateway/methods_session.py:628`).
@@ -302,16 +375,65 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
             open_requests: openRequests(),
           },
         }
-      case "session.events.since":
+      }
+      case "session.events.since": {
+        const liveId = String(params.session_id)
         return {
           result: {
             epoch: EPOCH,
-            latest_seq: latestSeq(),
+            latest_seq: latestSeq(liveId),
             truncated: false,
-            events: frames.filter(({ seq }) => seq > Number(params.last_seen)),
-            open_requests: openRequests(),
+            events: frames.filter(
+              ({ session_id, seq }) =>
+                session_id === liveId && seq > Number(params.last_seen)
+            ),
+            open_requests: liveId === LIVE_ID ? openRequests() : [],
           },
         }
+      }
+      // `_with_live_session`: only a live Session branches; its stored
+      // conversation is copied into a new listed Session, and the original is
+      // left as it was (`tui_gateway/methods_session.py:1985`).
+      case "session.branch": {
+        branches.push(params)
+        if (params.session_id !== LIVE_ID)
+          return { error: { code: 4001, message: "session not found" } }
+        const copied = branchedRows(rows)
+        if (copied.length === 0)
+          return {
+            error: {
+              code: 4008,
+              message: "nothing to branch — send a message first",
+            },
+          }
+        const n = nextOther++
+        const storedId = `fork-${n}`
+        const title =
+          typeof params.name === "string" && params.name
+            ? params.name
+            : `Contract Session #${n + 1}`
+        others.set(storedId, {
+          rows: copied.map((row) => ({
+            ...row,
+            id: nextRowId++,
+            session_id: storedId,
+          })),
+          title,
+          parent: STORED_ID,
+          liveId: `live-${storedId}`,
+        })
+        return {
+          result: {
+            session_id: `live-${storedId}`,
+            stored_session_id: storedId,
+            title,
+            parent: STORED_ID,
+            message_count: copied.length,
+            messages: [],
+            info: { model: "contract-model" },
+          },
+        }
+      }
       case "session.active_list":
         return {
           result: {
@@ -397,8 +519,13 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
             },
           },
         }
-      case "session.close":
-        return { result: {} }
+      case "session.close": {
+        const liveId = String(params.session_id)
+        closed.push(liveId)
+        for (const other of others.values())
+          if (other.liveId === liveId) other.liveId = undefined
+        return { result: { closed: true } }
+      }
       default:
         return { error: { code: -32601, message: "method not found" } }
     }
@@ -414,13 +541,40 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   function route(url: URL) {
     const base = `/api/sessions/${encodeURIComponent(STORED_ID)}`
     const listed = saved && !deleted
-    if (url.pathname === "/api/sessions")
-      return json(200, {
-        sessions: listed
+    if (url.pathname === "/api/sessions") {
+      // A fork stays listed by its `_branched_from` marker.
+      const sessions = [
+        ...(listed
           ? [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }]
-          : [],
-        total: listed ? 1 : 0,
-      })
+          : []),
+        ...[...others].map(([id, { title, parent }]) => ({
+          id,
+          profile: PROFILE,
+          title,
+          parent_session_id: parent,
+        })),
+      ]
+      return json(200, { sessions, total: sessions.length })
+    }
+    const [, otherId, messages] =
+      /^\/api\/sessions\/([^/]+)(\/messages)?$/u.exec(url.pathname) ?? []
+    const other =
+      otherId === undefined
+        ? undefined
+        : others.get(decodeURIComponent(otherId))
+    if (other) {
+      const storedId = decodeURIComponent(otherId!)
+      return messages
+        ? json(200, messagesPage(storedId, other.rows, url))
+        : json(200, {
+            id: storedId,
+            profile: PROFILE,
+            title: other.title,
+            parent_session_id: other.parent,
+            // `db.get_session` serves the row's JSON column as stored.
+            model_config: JSON.stringify({ _branched_from: other.parent }),
+          })
+    }
     // A listing names no Session; each entry carries the real path Hermes
     // resolved it to, and one it cannot resolve fails the whole listing
     // (`hermes_cli/web_routers/files.py:367`, `web_server_files.py:181`).
@@ -494,25 +648,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       })
     // `order=latest` pages back from the newest row, each page in order
     // (`hermes_state_messages.py:1063`).
-    if (url.pathname === `${base}/messages`) {
-      const limit = Number(url.searchParams.get("limit"))
-      const offset = Number(url.searchParams.get("offset"))
-      const end =
-        url.searchParams.get("order") === "latest"
-          ? rows.length - offset
-          : offset + limit
-      const page = rows.slice(Math.max(0, end - limit), Math.max(0, end))
-      return json(200, {
-        session_id: STORED_ID,
-        messages: page,
-        pagination: {
-          limit,
-          offset,
-          returned: page.length,
-          total: rows.length,
-        },
-      })
-    }
+    if (url.pathname === `${base}/messages`)
+      return json(200, messagesPage(STORED_ID, rows, url))
     return json(404)
   }
 
@@ -545,6 +682,12 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       if (fault === "native") return json(NATIVE_FAILURE_STATUS)
       return route(url)
     }) as unknown as typeof fetch,
+
+    /** Every `session.branch` Hermes received, as its params. */
+    branches: () => [...branches],
+
+    /** Every live Session `session.close` tore down, in order. */
+    closedSessions: () => [...closed],
 
     /** The dashboard requests Hermes received for `pathname`. */
     httpRequests: (pathname: string) =>

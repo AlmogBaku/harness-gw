@@ -20,8 +20,6 @@ runServerRuntimeContract(
     gaps: {
       settledTurnsFreeRecords:
         "no seam: the adapter exposes no count of its per-Session records",
-      forkLeavesOriginal:
-        "pending: the Hermes lane forks through session.branch",
       childAnnouncedFirst:
         "pending: the Hermes lane reports subagents as child Sessions",
       childrenStayUnlisted:

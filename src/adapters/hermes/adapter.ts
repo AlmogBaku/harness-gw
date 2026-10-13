@@ -72,6 +72,11 @@ import {
   HermesInteractions,
 } from "./interactions"
 import { HermesDashboardClient } from "./dashboard-client"
+import {
+  branchLiveSession,
+  HermesForkRefusedError,
+  HermesForkUncertainError,
+} from "./fork"
 import { createHermesFileReader } from "./file-reader"
 import {
   HermesAttachmentRegistry,
@@ -102,7 +107,13 @@ import {
   retryTransient,
   type HermesRetrySchedule,
 } from "./transient-rejections"
-import { isRecord, nativeId, timestampMs, trimmedText } from "./native"
+import {
+  isRecord,
+  nativeId,
+  parseJson,
+  timestampMs,
+  trimmedText,
+} from "./native"
 
 export type { HermesRpcTransport } from "./gateway"
 
@@ -924,8 +935,15 @@ export class HermesServerAdapter implements ServerRuntime {
     // A write that went out with no known result may have landed, so the
     // browser reconciles before trying it again. A read never reaches here:
     // each read path reports the same lost answer as an outage.
-    if (cause instanceof HermesRpcUncertainError)
+    if (
+      cause instanceof HermesRpcUncertainError ||
+      cause instanceof HermesForkUncertainError
+    )
       return failureOf("uncertain", cause)
+    // Hermes refuses to fork a Session with no visible message yet; the same
+    // fork meets the same refusal until one is sent.
+    if (cause instanceof HermesForkRefusedError)
+      return failureOf("invalid_request", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
     if (cause instanceof HermesTurnPublicError)
@@ -1742,7 +1760,7 @@ export class HermesServerAdapter implements ServerRuntime {
   ) {
     const dashboard = this.#dashboard
     if (!dashboard) throw new HermesUnavailableError()
-    await this.getSession(profile, storedId)
+    const { branched } = await this.#storedSession(profile, storedId)
     // This contract pages in conversation messages while Hermes pages in durable
     // rows, and an unbounded number of those rows are display chrome the
     // projection drops. A page that projects to nothing therefore means "keep
@@ -1812,7 +1830,7 @@ export class HermesServerAdapter implements ServerRuntime {
         profile,
         hermesHistoryToolNames(page)
       )
-      messages = projectHermesHistory(rows, resolve, this.#media)
+      messages = projectHermesHistory(rows, resolve, this.#media, { branched })
       // A short page means Hermes has no older rows left; an empty page says the
       // same even if a caller passed a degenerate limit.
       if (messages.length > 0 || page.length === 0 || page.length < limit) break
@@ -1831,7 +1849,7 @@ export class HermesServerAdapter implements ServerRuntime {
         ...pagination,
         nextOffset: pagination.nextOffset - turnStart,
       }
-      messages = projectHermesHistory(rows, resolve, this.#media)
+      messages = projectHermesHistory(rows, resolve, this.#media, { branched })
     }
     // Hermes keeps a turn that failed out of its transcript, so the newest page
     // ending with an unanswered prompt, or with a tool call nothing answered,
@@ -1922,13 +1940,27 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async getSession(profile: string, storedId: string) {
+    return (await this.#storedSession(profile, storedId)).session
+  }
+
+  /**
+   * The Session as Hermes stores it, and whether `session.branch` made it:
+   * Hermes marks a fork's row with `model_config._branched_from`.
+   */
+  async #storedSession(
+    profile: string,
+    storedId: string
+  ): Promise<{ session: Session; branched: boolean }> {
     if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
       payload = await this.#dashboard.getSession(profile, storedId)
     } catch (error) {
       if (error instanceof HermesHttpError && error.status === 404)
-        return this.#unpersistedDraft(profile, storedId)
+        return {
+          session: await this.#unpersistedDraft(profile, storedId),
+          branched: false,
+        }
       throwUnavailable(error)
     }
     if (!isRecord(payload) || trimmedText(payload.id) !== storedId)
@@ -1951,7 +1983,12 @@ export class HermesServerAdapter implements ServerRuntime {
       // activity timestamp, so read state is unknowable here.
     })
     if (!result.success) throw new HermesUnavailableError()
-    return result.data
+    const config = parseJson(payload.model_config)
+    return {
+      session: result.data,
+      branched:
+        isRecord(config) && trimmedText(config._branched_from) !== undefined,
+    }
   }
 
   /**
@@ -2029,6 +2066,45 @@ export class HermesServerAdapter implements ServerRuntime {
         agentId: profile,
       },
     })
+  }
+
+  /**
+   * Forks a Session through `session.branch`, which needs it live: the fork
+   * keeps the visible conversation and stays listed, and the original is left
+   * as it was. Answered as `createSession` answers.
+   */
+  async forkSession(profile: string, storedId: string) {
+    const branch = await this.#branch(profile, storedId)
+    return SessionCreateResponseSchema.parse({
+      session: {
+        id: sessionId(profile, branch.storedSessionId),
+        agentId: profile,
+      },
+    })
+  }
+
+  /**
+   * Branches the Session on its live binding. A live Session Hermes no longer
+   * holds refused the branch before writing anything, so the binding is
+   * renewed and the branch sent once more.
+   */
+  async #branch(profile: string, storedId: string) {
+    for (let attempt = 0; ; attempt += 1) {
+      const { liveSessionId } = await this.#requireResumedSession(
+        profile,
+        storedId
+      )
+      try {
+        return await branchLiveSession(this.transport, liveSessionId, {
+          retry: this.#retry,
+          ...(this.#log ? { log: this.#log } : {}),
+        })
+      } catch (error) {
+        if (!isSessionGone(error)) throw error
+        this.#attachments.invalidate(liveSessionId)
+        if (attempt > 0) throw new HermesUnavailableError({ cause: error })
+      }
+    }
   }
 
   updateSession(profile: string, storedId: string, patch: SessionPatch) {

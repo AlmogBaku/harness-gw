@@ -999,6 +999,163 @@ describe("Hermes server adapter", () => {
     expect(request).toHaveBeenCalledTimes(1)
   })
 
+  describe("forking a Session", () => {
+    /** The owned Session `stored`, whose `session.branch` answers `branch`. */
+    function forking(branch: () => Promise<unknown>) {
+      const router = rpcRouter({
+        "session.branch": branch,
+        "session.close": async () => ({ closed: true }),
+      })
+      const adapter = new HermesServerAdapter({
+        ...router,
+        http: ownedSessionHttp(),
+      })
+      return { router, adapter }
+    }
+    const branched = async () => ({
+      session_id: "live-branch",
+      stored_session_id: "stored-fork",
+      title: "Owned #2",
+      parent: "stored",
+      message_count: 2,
+      messages: [],
+      info: {},
+    })
+
+    it("branches the live Session and answers as a create does, closing the branch's live Session", async () => {
+      const { router, adapter } = forking(branched)
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).resolves.toEqual({
+        session: { id: "stored-fork", agentId: "researcher" },
+      })
+      // Branched on the live Session a resume attached, keeping all history.
+      expect(router.calls("session.resume")).toHaveLength(1)
+      expect(
+        router.calls("session.branch").map(({ params }) => params)
+      ).toEqual([{ session_id: "live-secret" }])
+      // Hermes exempts the branch's live Session from its reapers.
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-branch" }]
+      )
+    })
+
+    it("still answers the fork when closing its live Session fails", async () => {
+      const { router, adapter } = forking(branched)
+      router.request = (
+        (request) =>
+        async (method: string, params: Readonly<Record<string, unknown>>) => {
+          if (method === "session.close") throw new HermesRpcUncertainError()
+          return request(method, params)
+        }
+      )(router.request.bind(router))
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).resolves.toEqual({
+        session: { id: "stored-fork", agentId: "researcher" },
+      })
+    })
+
+    it.each([
+      [
+        "an agent that failed after the fork was stored",
+        () => new HermesRpcRejectedError(5000, "agent init failed on branch"),
+      ],
+      ["a lost acknowledgement", () => new HermesRpcUncertainError()],
+    ])("reports %s as an uncertain fork", async (_case, failure) => {
+      const { adapter } = forking(async () => {
+        throw failure()
+      })
+
+      const error = await adapter
+        .forkSession("researcher", "stored")
+        .catch((cause: unknown) => cause)
+
+      expect(adapter.publicError(error)?.kind).toBe("uncertain")
+    })
+
+    it("refuses to fork a Session with nothing to branch", async () => {
+      const { adapter } = forking(async () => {
+        throw new HermesRpcRejectedError(4008, "nothing to branch")
+      })
+
+      const error = await adapter
+        .forkSession("researcher", "stored")
+        .catch((cause: unknown) => cause)
+
+      expect(adapter.publicError(error)?.kind).toBe("invalid_request")
+    })
+
+    it("reports a fork Hermes could not store as unavailable", async () => {
+      const { adapter } = forking(async () => {
+        throw new HermesRpcRejectedError(5008, "database unavailable")
+      })
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+    })
+
+    it("rebinds a live Session Hermes no longer holds and branches once more", async () => {
+      let refusals = 1
+      const { router, adapter } = forking(async () => {
+        if (refusals-- > 0)
+          throw new HermesRpcRejectedError(4001, "session not found")
+        return branched()
+      })
+
+      await expect(
+        adapter.forkSession("researcher", "stored")
+      ).resolves.toEqual({
+        session: { id: "stored-fork", agentId: "researcher" },
+      })
+      expect(router.calls("session.resume")).toHaveLength(2)
+      expect(router.calls("session.branch")).toHaveLength(2)
+    })
+
+    it("replays a fork's copied replies each as its own response", async () => {
+      const http = vi.fn(async (path: string) => {
+        if (path.startsWith("/api/sessions/stored-fork?"))
+          return {
+            id: "stored-fork",
+            profile: "researcher",
+            parent_session_id: "stored",
+            model_config: JSON.stringify({ _branched_from: "stored" }),
+          }
+        if (path.includes("/messages?"))
+          return {
+            session_id: "stored-fork",
+            messages: [
+              { row_id: 1, role: "user", content: "List the files" },
+              { row_id: 2, role: "assistant", content: "Reading the file." },
+              { row_id: 3, role: "assistant", content: "It lists names." },
+            ],
+          }
+        throw new Error(`unexpected ${path}`)
+      })
+      const adapter = new HermesServerAdapter({ ...rpcRouter(), http })
+
+      const page = await adapter.history("researcher", "stored-fork", 50, 0)
+
+      expect(page.messages.map(({ id }) => id)).toEqual([
+        "hermes-row-1",
+        "hermes-row-1-1",
+        "hermes-row-1-2",
+      ])
+    })
+
+    it("answers a Session another profile holds as not found", async () => {
+      const { router, adapter } = forking(branched)
+
+      await expect(adapter.forkSession("other", "stored")).rejects.toSatisfy(
+        (error) => adapter.publicError(error)?.kind === "gone"
+      )
+      expect(router.calls("session.branch")).toHaveLength(0)
+    })
+  })
+
   it("leaves a new Session untitled so Hermes can auto-title its first exchange", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "profiles.list") return { profiles: [profile()] }

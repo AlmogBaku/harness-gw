@@ -548,6 +548,56 @@ describe("server-side Hermes history projection", () => {
     ])
   })
 
+  it("keeps each reply a branch copied as its own response", () => {
+    // `session.branch` copies replies as text alone: no tool rows, no calls,
+    // no `finish_reason` (`tui_gateway/methods_session.py` `_BRANCH_COPY_FIELDS`).
+    const copied = [
+      userRow("u1", "List the files", { rowId: 1 }),
+      {
+        row_id: 2,
+        role: "assistant",
+        content: "Reading the file.",
+        reasoning: "I should read the file.",
+      },
+      { row_id: 3, role: "assistant", content: "The file lists three names." },
+      { row_id: 4, role: "user", content: "Thanks" },
+      {
+        row_id: 5,
+        role: "assistant",
+        content: "Glad",
+        finish_reason: "length",
+      },
+      {
+        row_id: 6,
+        role: "assistant",
+        content: " to help.",
+        finish_reason: "stop",
+      },
+    ]
+
+    expect(
+      projectHermesHistory(copied, undefined, {}, { branched: true }).map(
+        ({ id }) => id
+      )
+    ).toEqual([
+      "hermes-row-1",
+      "hermes-row-1-1-thought",
+      "hermes-row-1-1",
+      "hermes-row-1-2",
+      "hermes-row-4",
+      // A turn the fork ran itself keeps the ordinary rule.
+      "hermes-row-4-1",
+    ])
+    // Outside a branch, rows of one response stay one message.
+    expect(projectHermesHistory(copied).map(({ id }) => id)).toEqual([
+      "hermes-row-1",
+      "hermes-row-1-1-thought",
+      "hermes-row-1-1",
+      "hermes-row-4",
+      "hermes-row-4-1",
+    ])
+  })
+
   it("keeps one reply whole across a tagged assistant row", () => {
     const messages = projectHermesHistory([
       userRow("u1", "Summarize the notes"),
