@@ -132,6 +132,55 @@ describe("createCatalog", () => {
     expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
   })
 
+  it.each([
+    {
+      outcome: "marks a read row unread once the runtime takes the write",
+      markedRead: false,
+      refusal: undefined,
+    },
+    {
+      outcome: "ends the read guard of a row it just marked read",
+      markedRead: true,
+      refusal: undefined,
+    },
+    {
+      outcome: "changes nothing when the runtime refuses an unread write",
+      markedRead: true,
+      refusal: new Error("Upstream request failed"),
+    },
+  ])("$outcome", async ({ markedRead, refusal }) => {
+    const { catalog, rows, updateSession } = harness({
+      updateSession: async () => {
+        if (refusal) throw refusal
+      },
+    })
+    rows.rememberList([row({ unread: markedRead })])
+    if (markedRead) await catalog.markRead(AGENT, SESSION)
+    const published: (boolean | undefined)[] = []
+    rows.subscribe(({ unread }) => published.push(unread))
+
+    const writing = catalog.update(
+      {
+        agentId: AGENT,
+        sessionId: ids.sessionId(SESSION),
+        providerSessionId: ids.providerSessionId(`stored-${SESSION}`),
+      },
+      { unread: true }
+    )
+    await (refusal
+      ? expect(writing).rejects.toBe(refusal)
+      : expect(writing).resolves.toBeUndefined())
+
+    expect(updateSession).toHaveBeenLastCalledWith(AGENT, `stored-${SESSION}`, {
+      unread: true,
+    })
+    expect(published).toEqual(refusal ? [] : [true])
+    // Only a write the runtime took ends the read guard, so a page reporting
+    // the Session unread stands.
+    rows.rememberList([row({ unread: true })])
+    expect(rows.get(AGENT, SESSION)?.unread).toBe(!refusal)
+  })
+
   it("matches titles of the listed window, ignoring case, when the runtime cannot search", async () => {
     const { catalog } = harness({
       window: [

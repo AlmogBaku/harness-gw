@@ -1116,20 +1116,36 @@ describe("AOS ACP agent", () => {
     other.close()
   })
 
-  it("marks a Session read at once, and tells the runtime", async () => {
-    const test = await harness()
-    await test.list()
+  it.each([
+    { marks: "read at once", unread: false, kept: [] },
+    {
+      marks: "unread, kept so for this connection first",
+      unread: true,
+      kept: [[AGENT, SESSION]],
+    },
+  ])(
+    "marks a Session $marks, and tells the runtime",
+    async ({ unread, kept }) => {
+      const test = await harness()
+      await test.list()
 
-    await test.agent.request(HGW_METHODS.session.update, {
-      sessionId: SESSION,
-      unread: false,
-    })
+      await test.agent.request(HGW_METHODS.session.update, {
+        sessionId: SESSION,
+        unread,
+      })
 
-    expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
-      unread: false,
-    })
-    test.close()
-  })
+      expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
+        unread,
+      })
+      expect(test.readState.keepUnread.mock.calls).toEqual(kept)
+      // No acknowledgement already on its way may read it again.
+      for (const order of test.readState.keepUnread.mock.invocationCallOrder)
+        expect(order).toBeLessThan(
+          test.updateSession.mock.invocationCallOrder[0]!
+        )
+      test.close()
+    }
+  )
 
   it("steers only the run a browser follows, and reports the delivery", async () => {
     const opening = gate()
@@ -1140,6 +1156,8 @@ describe("AOS ACP agent", () => {
       prompt: [{ type: "text", text: "Start" }],
       _meta: { [HGW_META_KEY]: {} },
     })
+    // A message this connection sends reads a Session it kept unread.
+    expect(test.readState.prompted.mock.calls).toEqual([[AGENT, CREATED]])
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     await waitFor(() =>
@@ -1176,6 +1194,11 @@ describe("AOS ACP agent", () => {
     })
 
     expect(steered).toEqual({ status: "steered" })
+    // A steer is a message too; a refused one is none.
+    expect(test.readState.prompted.mock.calls).toEqual([
+      [AGENT, CREATED],
+      [AGENT, CREATED],
+    ])
     // The steer goes out as the user message it adds to the turn.
     const accepted = await test.recorder.wait(
       said("steer-1"),

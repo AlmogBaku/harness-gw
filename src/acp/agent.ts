@@ -414,7 +414,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     let stage: ReturnType<typeof context.attachmentStages.take>
     const membership = sessions.join(client, scope)
     try {
-      return await membership.startTurn(
+      const sent = await membership.startTurn(
         {
           // A send without a client id is one no repeat names.
           clientId: command.clientId ?? crypto.randomUUID(),
@@ -452,6 +452,8 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         () => echoedParts(command.content, stage?.artifactIds?.() ?? []),
         { quota: command.quota, signal }
       )
+      readState?.prompted(scope.agentId, scope.sessionId)
+      return sent
     } finally {
       membership.joined()
     }
@@ -840,8 +842,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         { sessionId: params.sessionId, patch },
         // The new row reaches each member of the Session; a connection that
         // is not one is not made one.
-        (command) =>
-          catalog.update(sessions.scope(command.sessionId), command.patch),
+        (command) => {
+          const scope = sessions.scope(command.sessionId)
+          // Before the write, so no acknowledgement on its way reads it again.
+          if ("unread" in command.patch && command.patch.unread)
+            readState?.keepUnread(scope.agentId, scope.sessionId)
+          return catalog.update(scope, command.patch)
+        },
         requestId
       )
       return {}
@@ -865,7 +872,15 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           // A connection steers only a Session it joined, as it stops one.
           const membership = sessions.membership(command.sessionId)
           if (!membership) throw notFound()
-          return await membership.steer(command.requestId, command.text)
+          const steered = await membership.steer(
+            command.requestId,
+            command.text
+          )
+          readState?.prompted(
+            membership.scope.agentId,
+            membership.scope.sessionId
+          )
+          return steered
         },
         requestId
       )

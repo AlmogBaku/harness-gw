@@ -219,6 +219,13 @@ type WithoutSession<T> = T extends unknown ? Omit<T, "sessionId"> : never
  */
 export interface ReadState {
   focus(agentId: string, sessionId: string): void
+  /**
+   * The operator marks the Session unread. Focused here, it stays unread
+   * until focus moves to another Session or to none and back, or `prompted`.
+   */
+  keepUnread(agentId: string, sessionId: string): void
+  /** This connection sent the Session a message, which reads one kept unread. */
+  prompted(agentId: string, sessionId: string): void
   blur(): void
   onExecution(event: ExecutionEvent): void
   close(): void
