@@ -472,7 +472,14 @@ export const SessionChildActivityMessageSchema = z.strictObject({
     title: z.string().max(65_536).optional(),
     description: z.string().max(65_536).optional(),
     status: z
-      .enum(["running", "waiting-for-input", "idle", "failed", "cancelled"])
+      .enum([
+        "running",
+        "waiting-for-input",
+        "idle",
+        "failed",
+        "cancelled",
+        "unknown",
+      ])
       .optional(),
     model: z.string().min(1).max(256).optional(),
     filesRead: z.array(z.string().max(4096)).max(1000).optional(),

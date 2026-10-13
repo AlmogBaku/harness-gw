@@ -55,6 +55,8 @@ describe("child Session announcement", () => {
     [ChildSessionStatus.WaitingForInput, { state: "requires_action" }],
     [ChildSessionStatus.Idle, { state: "idle", stopReason: "end_turn" }],
     [ChildSessionStatus.Cancelled, { state: "idle", stopReason: "cancelled" }],
+    // No outcome: nothing observes the child any more.
+    [ChildSessionStatus.Unknown, { state: "unknown" }],
     [
       ChildSessionStatus.Failed,
       {

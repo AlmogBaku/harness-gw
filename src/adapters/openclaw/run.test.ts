@@ -1,6 +1,7 @@
 import { useFakeClock } from "../../../test/support/fake-clock"
 import { captureLogs } from "../../../test/support/log-capture"
 import {
+  ChildSessionStatus,
   PendingRequestKind,
   StopReason,
   ToolKind,
@@ -2884,6 +2885,44 @@ describe("OpenClaw run engine child Sessions", () => {
         line.startsWith(`${CHILD}> ${TurnEventKind.TurnEnded}`)
       )
     ).toHaveLength(1)
+  })
+
+  // A spawned child may outlive its parent's run, and nothing follows it past
+  // the run: it is reported unobserved, and no longer stoppable from here.
+  it("reports a child still at work when its parent's run ends as unknown, with nothing left to cancel", async () => {
+    const native = spawning()
+    native.histories[CHILD] = {
+      sessionKey: CHILD,
+      sessionId: "child-transcript",
+      messages: [],
+      sessionInfo: { hasActiveRun: true, activeRunIds: [] },
+    }
+    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+    childStream(subscriptions).agent("assistant", { delta: "Still working." })
+    chat(subscriptions, "run-a", { state: "final" })
+    const events = (await drain(handle.events)) as Array<
+      Record<string, unknown>
+    >
+
+    const reports = events.filter(
+      (event) =>
+        event.kind === TurnEventKind.ChildSessionUpdated &&
+        event.childSessionId === CHILD
+    )
+    expect(reports.at(-1)).toMatchObject({
+      status: ChildSessionStatus.Unknown,
+      cancellable: false,
+    })
+    expect(events.indexOf(reports.at(-1)!)).toBeLessThan(
+      events.findIndex((event) => event.kind === TurnEventKind.TurnEnded)
+    )
   })
 
   it("shows a child that finished before it was followed from its stored reply", async () => {

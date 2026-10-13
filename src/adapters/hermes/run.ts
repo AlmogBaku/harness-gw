@@ -46,7 +46,12 @@ import {
 import { hermesCompactionId, hermesRowMessageId } from "./history"
 import type { HermesPublishedArtifacts } from "./published-artifacts"
 import type { HermesChildSessions } from "./child-sessions"
-import { acceptSubagent, releaseChildren, stopChild } from "./run-children"
+import {
+  abandonChildren,
+  acceptSubagent,
+  releaseChildren,
+  stopChild,
+} from "./run-children"
 import type { HermesMediaOptions } from "./media-artifacts"
 import { boundedNativeBytes, publicReason, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
@@ -1273,6 +1278,7 @@ export class HermesTurnEngine {
       tools: ending.stopped ? "stopped" : "completed",
     })
     this.#settleCompaction(active)
+    abandonChildren(this.#host, active)
     // Hermes reports only a completed or an interrupted turn; a turn that
     // settled without saying how goes unsaid.
     const stopReason =
@@ -1351,6 +1357,7 @@ export class HermesTurnEngine {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#settleCompaction(active)
+    abandonChildren(this.#host, active)
     const failed = this.#failed(active, failure)
     this.#emit(active, failed)
     this.#settle(active, failed, written)

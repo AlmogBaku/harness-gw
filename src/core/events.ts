@@ -205,6 +205,11 @@ export const ChildSessionStatus = {
   Idle: "idle",
   Failed: "failed",
   Cancelled: "cancelled",
+  /**
+   * Nothing follows its work any more, as when it outlives its parent's run:
+   * it may still be running, and nothing says how it ended.
+   */
+  Unknown: "unknown",
 } as const
 export type ChildSessionStatus =
   (typeof ChildSessionStatus)[keyof typeof ChildSessionStatus]

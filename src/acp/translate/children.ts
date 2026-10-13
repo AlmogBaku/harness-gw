@@ -23,6 +23,8 @@ const CHILD_STATES = {
     stopReason: "error",
     error: turnError(undefined),
   },
+  // ACP's state for activity nothing can observe, which is no outcome.
+  [ChildSessionStatus.Unknown]: { state: "unknown" },
 } as const satisfies Record<ChildSessionStatus, Built<StateUpdate>>
 
 /** Display text about a child, bounded; the credentials middleware masked it. */

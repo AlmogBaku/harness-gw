@@ -3067,13 +3067,24 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   /**
    * The run ends: every spawning call still waiting on its child finishes,
-   * announcing nothing, and no child is followed any longer.
+   * announcing nothing, and no child is followed any longer. A child still
+   * at work outlives the run unobserved, so it is reported as ACP's unknown
+   * state, with nothing left here to stop it by.
    */
   #endChildren(active: ActiveRun) {
     for (const events of active.held.values())
       for (const event of events) active.queue.push(event)
     active.held.clear()
-    for (const child of active.children.values()) this.#releaseChild(child)
+    for (const child of active.children.values()) {
+      if (!child.stream.terminal)
+        this.#streamOf(active, child.parentKey).push({
+          kind: TurnEventKind.ChildSessionUpdated,
+          childSessionId: child.key,
+          status: ChildSessionStatus.Unknown,
+          cancellable: false,
+        })
+      this.#releaseChild(child)
+    }
   }
 
   /** Settles every tool the native run left open when the turn ends. */

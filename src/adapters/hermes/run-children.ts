@@ -198,8 +198,10 @@ function appendText(
 }
 
 /**
- * Ends the child's own stream once, closing its watch: as Hermes completed
- * it when the parent's frame says how, or as its mirror completed it.
+ * Ends the child's own stream once, closing its watch, as Hermes completed it
+ * on the parent's Session: only that frame says how, and with what tokens, so
+ * the mirror's own completion ends nothing. A child the mirror relayed nothing
+ * of still ends where Hermes reported its tokens or summary.
  */
 function endStream(
   host: TurnEngineHost,
@@ -216,7 +218,10 @@ function endStream(
   stream.ended = true
   child.stopWatch?.()
   child.stopWatch = undefined
-  if (!stream.started) return
+  if (!stream.started) {
+    if (!ending.usage && !ending.summary) return
+    startStream(host, active, child)
+  }
   // The mirror streams a reply only as the child relays it; one it never
   // relayed is the summary Hermes completed the child with.
   if (!stream.text && ending.summary)
@@ -427,7 +432,6 @@ export function acceptChildFrame(
       if (text && text.startsWith(stream.text))
         if (text.length > stream.text.length)
           appendText(host, active, child, text.slice(stream.text.length))
-      endStream(host, active, child)
       return
     }
   }
@@ -446,6 +450,23 @@ export async function stopChild(
   const child = childOf(active, childSessionId)
   if (!child || child.parent !== undefined || child.done) return
   await host.native.interruptChild(active.liveSessionId, child.subagentId)
+}
+
+/**
+ * The turn ends with children still at work, as a parent stop that reaches no
+ * background child leaves them: nothing follows them past it, so each is
+ * reported as ACP's unknown state, with nothing left here to stop it by.
+ */
+export function abandonChildren(host: TurnEngineHost, active: ActiveTurn) {
+  for (const child of active.children.values()) {
+    if (child.done) continue
+    child.done = true
+    report(host, active, child, {
+      childSessionId: child.childSessionId,
+      status: ChildSessionStatus.Unknown,
+      cancellable: false,
+    })
+  }
 }
 
 /** Closes every watch the run holds open: nothing reads its frames any more. */

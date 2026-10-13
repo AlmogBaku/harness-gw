@@ -1,4 +1,5 @@
 import {
+  ChildSessionStatus,
   PendingRequestKind,
   ReplyStatus,
   StopReason,
@@ -5713,6 +5714,85 @@ describe("Hermes child Sessions", () => {
     expect(watches).toMatchObject([{ childSessionId: CHILD }])
   })
 
+  // Hermes reports a child's tokens only on `subagent.complete`, which the
+  // mirror's own completion may come before, or stand in for when it relayed
+  // nothing: the child's own end carries them either way.
+  it.each([
+    ["the mirror completed first", true],
+    ["the mirror relayed nothing", false],
+  ])(
+    "ends a child with the tokens Hermes reported where %s",
+    async (_case, mirrorFirst) => {
+      const { engine, publish, mirror, mirrored } = delegating()
+      const handle = await engine.start(scope, input())
+      const t = nativeTurn("live-secret", 1)
+      publish(t.messageStart("m1"))
+      publish(t.toolStart("delegate-1", "delegate_task", { goal: "Inspect" }))
+      publish(started(t))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      if (mirrorFirst) {
+        mirrored(mirror.frame("message.start"))
+        mirrored(mirror.delta("Child at work."))
+        mirrored(mirror.frame("message.complete", { text: "Child at work." }))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      publish(
+        t.frame("subagent.complete", {
+          subagent_id: "sa-0-1",
+          child_session_id: CHILD,
+          depth: 0,
+          status: "completed",
+          summary: "Child at work.",
+          input_tokens: 30,
+          output_tokens: 12,
+          model: "claude-safe",
+        })
+      )
+      publish(t.toolComplete("delegate-1", "delegate_task", { results: [] }))
+      publish(t.complete("m1", "Done."))
+      const events = await collect(handle)
+
+      const own = ofKind(events, TurnEventKind.ChildSessionEvent).map(
+        ({ event }) => event
+      )
+      expect(
+        own.filter(({ kind }) => kind === TurnEventKind.TurnEnded)
+      ).toEqual([
+        {
+          kind: TurnEventKind.TurnEnded,
+          stopReason: StopReason.EndTurn,
+          usage: [{ model: "claude-safe", inputTokens: 30, outputTokens: 12 }],
+        },
+      ])
+    }
+  )
+
+  // Nothing follows a child past its parent's turn: one still at work then is
+  // reported unobserved, with nothing left to stop it by.
+  it("reports a child still at work when the turn ends as unknown, no longer cancellable", async () => {
+    const { engine, publish } = delegating()
+    const handle = await engine.start(scope, input())
+    const t = nativeTurn("live-secret", 1)
+    publish(t.messageStart("m1"))
+    publish(t.toolStart("delegate-1", "delegate_task", { goal: "Inspect" }))
+    publish(started(t))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    publish(t.toolComplete("delegate-1", "delegate_task", { results: [] }))
+    publish(t.complete("m1", "Done."))
+    const events = await collect(handle)
+
+    const reports = ofKind(events, TurnEventKind.ChildSessionUpdated)
+    expect(reports.at(-1)).toEqual({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: CHILD,
+      status: ChildSessionStatus.Unknown,
+      cancellable: false,
+    })
+    expect(events.indexOf(reports.at(-1)!)).toBeLessThan(
+      events.findIndex((event) => event.kind === TurnEventKind.TurnEnded)
+    )
+  })
+
   it("streams a child's summary as its reply where the mirror relayed none", async () => {
     const { engine, publish, mirror, mirrored } = delegating()
     const handle = await engine.start(scope, input())
@@ -5942,11 +6022,12 @@ describe("Hermes child Sessions", () => {
         summary: "Child at work.",
       },
     ])
+    // Still at work when the turn ended, the grandchild is kept unobserved.
     expect(childSessions.childrenOf(scope, CHILD)).toEqual([
       {
         childSessionId: GRANDCHILD,
         title: "Count the pages",
-        status: "running",
+        status: "unknown",
       },
     ])
   })
