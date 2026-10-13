@@ -452,7 +452,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         () => echoedParts(command.content, stage?.artifactIds?.() ?? []),
         { quota: command.quota, signal }
       )
-      readState?.resume(scope.agentId, scope.sessionId)
+      readState?.reexpose(scope.agentId, scope.sessionId)
       return sent
     } finally {
       membership.joined()
@@ -852,7 +852,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           await catalog.update(scope, command.patch)
           // An explicit read ends what this connection kept unread.
           if (unread === false)
-            readState?.resume(scope.agentId, scope.sessionId)
+            readState?.reexpose(scope.agentId, scope.sessionId)
         },
         requestId
       )
@@ -881,7 +881,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             command.requestId,
             command.text
           )
-          readState?.resume(
+          readState?.reexpose(
             membership.scope.agentId,
             membership.scope.sessionId
           )

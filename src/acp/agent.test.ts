@@ -1121,17 +1121,17 @@ describe("AOS ACP agent", () => {
       marks: "read at once, ending what this connection kept unread",
       unread: false,
       kept: [],
-      resumed: [[AGENT, SESSION]],
+      reexposed: [[AGENT, SESSION]],
     },
     {
       marks: "unread, kept so for this connection first",
       unread: true,
       kept: [[AGENT, SESSION]],
-      resumed: [],
+      reexposed: [],
     },
   ])(
     "marks a Session $marks, and tells the runtime",
-    async ({ unread, kept, resumed }) => {
+    async ({ unread, kept, reexposed }) => {
       const test = await harness()
       await test.list()
 
@@ -1144,13 +1144,13 @@ describe("AOS ACP agent", () => {
         unread,
       })
       expect(test.readState.keepUnread.mock.calls).toEqual(kept)
-      expect(test.readState.resume.mock.calls).toEqual(resumed)
+      expect(test.readState.reexpose.mock.calls).toEqual(reexposed)
       // No acknowledgement already on its way may read it again, and the
       // read is written before a fresh exposure starts.
       const [written] = test.updateSession.mock.invocationCallOrder
       for (const order of test.readState.keepUnread.mock.invocationCallOrder)
         expect(order).toBeLessThan(written!)
-      for (const order of test.readState.resume.mock.invocationCallOrder)
+      for (const order of test.readState.reexpose.mock.invocationCallOrder)
         expect(order).toBeGreaterThan(written!)
       test.close()
     }
@@ -1166,7 +1166,7 @@ describe("AOS ACP agent", () => {
       _meta: { [HGW_META_KEY]: {} },
     })
     // A message this connection sends reads a Session it kept unread.
-    expect(test.readState.resume.mock.calls).toEqual([[AGENT, CREATED]])
+    expect(test.readState.reexpose.mock.calls).toEqual([[AGENT, CREATED]])
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
     await waitFor(() =>
@@ -1204,7 +1204,7 @@ describe("AOS ACP agent", () => {
 
     expect(steered).toEqual({ status: "steered" })
     // A steer is a message too; a refused one is none.
-    expect(test.readState.resume.mock.calls).toEqual([
+    expect(test.readState.reexpose.mock.calls).toEqual([
       [AGENT, CREATED],
       [AGENT, CREATED],
     ])

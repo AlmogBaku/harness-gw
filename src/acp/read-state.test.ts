@@ -302,9 +302,9 @@ describe("createReadState", () => {
       },
     },
     {
-      // A message and an explicit read resume it alike.
-      until: "this connection resumes it",
-      look: (readState: ReadState) => readState.resume(AGENT, SESSION),
+      // A message and an explicit read re-expose it alike.
+      until: "this connection re-exposes it",
+      look: (readState: ReadState) => readState.reexpose(AGENT, SESSION),
     },
   ])(
     "keeps a Session this connection marks unread so until $until",
@@ -312,8 +312,8 @@ describe("createReadState", () => {
       const { updateSession, readState, sessionRows } = harness()
       readState.focus(AGENT, SESSION)
       await settle(FOCUS_DEBOUNCE_MS)
-      // Resuming a Session nobody kept unread acknowledges nothing more.
-      readState.resume(AGENT, SESSION)
+      // Re-exposing a Session nobody kept unread acknowledges nothing more.
+      readState.reexpose(AGENT, SESSION)
       await settle(FOCUS_DEBOUNCE_MS)
       expect(updateSession).toHaveBeenCalledTimes(1)
 

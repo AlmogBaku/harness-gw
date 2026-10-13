@@ -221,14 +221,14 @@ export interface ReadState {
   focus(agentId: string, sessionId: string): void
   /**
    * The operator marks the Session unread. Focused here, it stays unread
-   * until focus moves to another Session or to none and back, or `resume`.
+   * until focus moves to another Session or to none and back, or `reexpose`.
    */
   keepUnread(agentId: string, sessionId: string): void
   /**
    * The operator engaged with the Session it kept unread — a send, a steer,
    * or an explicit read — so a fresh exposure starts.
    */
-  resume(agentId: string, sessionId: string): void
+  reexpose(agentId: string, sessionId: string): void
   blur(): void
   onExecution(event: ExecutionEvent): void
   close(): void
