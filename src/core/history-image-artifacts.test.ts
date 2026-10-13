@@ -107,6 +107,45 @@ describe("withHistoryImageArtifacts", () => {
     ])
   })
 
+  // A child's transcript has no Session of its own an artifact read could
+  // reach, so its bytes would ride the shared socket whole.
+  it("leaves a child Session's stored data-URL images out, and gives a runtime with no child history none", async () => {
+    const child = userMessage("child-row-1", [
+      { type: "text", text: "Here is the chart" },
+      { type: "image", image: PNG, filename: "chart.png" },
+      { type: "image", image: "https://images.test/chart.png" },
+    ])
+    const { native } = nativeRuntime([])
+    const childHistory = vi.fn<NonNullable<ServerRuntime["childHistory"]>>(
+      async () => ({
+        sessionId: "child-1",
+        messages: [child],
+        total: 1,
+        limit: 1,
+        offset: 0,
+        nextOffset: 1,
+      })
+    )
+    const runtime = withHistoryImageArtifacts(
+      Object.assign(native, { childHistory })
+    )
+
+    const page = await runtime.childHistory!(AGENT, STORED, "child-1")
+
+    expect(page.messages).toEqual([
+      {
+        ...child,
+        content: [
+          { type: "text", text: "Here is the chart" },
+          { type: "image", image: "https://images.test/chart.png" },
+        ],
+      },
+    ])
+    expect(
+      withHistoryImageArtifacts(nativeRuntime([]).native).childHistory
+    ).toBeUndefined()
+  })
+
   it("reads a placed image's page once for every image on it, under whatever id its message returns", async () => {
     const message = userMessage("hermes-history-0", [
       { type: "image", image: PNG, filename: "chart.png" },
