@@ -1649,6 +1649,78 @@ describe("OpenCodeRunEngine foreign turns", () => {
   })
 })
 
+/** The coordinator a gateway runs `engine` under, read by no one. */
+function coordinatorOver(engine: OpenCodeTurnEngine) {
+  return new SessionCoordinator({
+    engine,
+    readings: {
+      context: vi.fn(),
+      models: vi.fn(),
+      updateModel: vi.fn(),
+      createSession: vi.fn(),
+      publicError: () => undefined,
+      link: READY_LINK,
+    },
+    maxActiveExecutions: 8,
+    maxSubscriberEvents: 8,
+    maxSubscriberBytes: 64 * 1024,
+    logger: captureLogs().logger,
+  })
+}
+
+const OPERATOR = { membershipId: "operator", principalId: "operator" } as const
+
+describe("OpenCodeRunEngine prompt answers", () => {
+  // Nothing landed, so the gateway answers the prompt with an error.
+  it("refuses a prompt OpenCode refused, its turn never begun", async () => {
+    const refusal = new OpenCodeClientError("invalid_request")
+    const state = client({ prompt: vi.fn(async () => Promise.reject(refusal)) })
+    const sessions = coordinatorOver(
+      new OpenCodeTurnEngine(state.native, { logger })
+    )
+
+    await expect(sessions.start(scope, input(), OPERATOR)).rejects.toBe(refusal)
+    expect(sessions.state(scope)).toBe("idle")
+  })
+
+  // OpenCode stores a prompt within its answer: a later failure ends the
+  // work, which the coordinator reconciles, and never the answer.
+  it("answers a prompt OpenCode stored when the read after it fails, ending the segment instead", async () => {
+    const log = nativeLog()
+    let running = false
+    let reads = 0
+    const state = client({
+      // The reads around the subscription answer; the one after the prompt fails.
+      history: vi.fn(async (id: string, options?: { after?: number }) => {
+        reads += 1
+        if (reads > 2) throw new OpenCodeClientError("unavailable")
+        return log.history(id, options)
+      }),
+      events: vi.fn(async () => controlledStream().source),
+      active: vi.fn(async () => activity(running)),
+      prompt: vi.fn(async (_id: string, request: PromptRequest) => {
+        log.events.push(admitted(0, request.id))
+        running = true
+        return promptAdmission(request)
+      }),
+      wait: vi.fn(async () => new Promise<void>(() => {})),
+    })
+    const engine = new OpenCodeTurnEngine(state.native, { logger })
+
+    const handle = await engine.start(scope, input())
+
+    await expect(handle.stored).resolves.toBe(admission["run-1"])
+    expect(await collect(handle)).toEqual([
+      { kind: TurnEventKind.TurnStarted },
+      expect.objectContaining({
+        kind: TurnEventKind.TurnFailed,
+        code: "HGW_CONNECTION_INTERRUPTED",
+      }),
+    ])
+    expect(state.sessions.prompt).toHaveBeenCalledOnce()
+  })
+})
+
 describe("OpenCodeRunEngine uncertain sends", () => {
   /**
    * A native Session whose prompt lands but whose answer is lost: OpenCode
@@ -1687,31 +1759,12 @@ describe("OpenCodeRunEngine uncertain sends", () => {
   it("adopts an uncertain send that landed through the coordinator's reconcile", async () => {
     const { state, engine, idle } = landedButUnanswered()
     const recovered = vi.spyOn(engine, "recover")
-    const sessions = new SessionCoordinator({
-      engine,
-      // No test here subscribes anything to a reading.
-      readings: {
-        context: vi.fn(),
-        models: vi.fn(),
-        updateModel: vi.fn(),
-        createSession: vi.fn(),
-        publicError: () => undefined,
-        link: READY_LINK,
-      },
-      maxActiveExecutions: 8,
-      maxSubscriberEvents: 8,
-      maxSubscriberBytes: 64 * 1024,
-      logger: captureLogs().logger,
-    })
-    const access = {
-      membershipId: "operator",
-      principalId: "operator",
-    } as const
+    const sessions = coordinatorOver(engine)
 
     // The prompt may stand, so it is answered under the gateway's own id.
-    await expect(sessions.start(scope, input(), access)).resolves.toMatchObject(
-      { turnId: "run-1", messageId: "user-1" }
-    )
+    await expect(
+      sessions.start(scope, input(), OPERATOR)
+    ).resolves.toMatchObject({ turnId: "run-1", messageId: "user-1" })
     await until(() => expect(sessions.state(scope)).toBe("running"))
     expect(recovered.mock.calls[0]?.[1]).toMatchObject({ turnId: "run-1" })
     idle()

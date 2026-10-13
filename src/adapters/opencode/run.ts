@@ -775,13 +775,20 @@ export class OpenCodeTurnEngine implements ServerTurnEngine {
         }
       }
       run.ready = true
-      await this.#reconcile(run)
-      if (!run.nativeTerminal) this.#watchWait(run)
-      return this.#handle(run)
     } catch (error) {
       this.#abandon(run)
       throw error
     }
+    // OpenCode stored the prompt, or took the replies, within its answer, so
+    // the start stands whatever follows: a failed read ends this segment
+    // instead, which the coordinator reconciles.
+    try {
+      await this.#reconcile(run)
+    } catch (error) {
+      this.#reconciliationFailed(run, error)
+    }
+    if (!run.nativeTerminal) this.#watchWait(run)
+    return this.#handle(run)
   }
 
   /**
