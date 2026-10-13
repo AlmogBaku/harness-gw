@@ -8,7 +8,10 @@ import {
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2"
 
-import type { SessionContextResponse } from "../../protocol"
+import type {
+  SessionContextResponse,
+  SessionHistoryResponse,
+} from "../../protocol"
 import {
   HGW_METHODS,
   HGW_META_KEY,
@@ -257,7 +260,11 @@ export type MemberEncoderOptions = {
       parentSessionId: string,
       cancellable: boolean | undefined
     ): boolean
-    has(childSessionId: string): boolean
+    /**
+     * Whether `childSessionId` was announced, at any depth, under the
+     * top-level Session `sessionId`: only that Session speaks for it.
+     */
+    owns(sessionId: string, childSessionId: string): boolean
   }
 }
 
@@ -347,7 +354,8 @@ export function createMemberEncoder({
    */
   function askedOn(sessionId: string, request: PendingRequest) {
     const { childSessionId } = request
-    return childSessionId !== undefined && children.has(childSessionId)
+    return childSessionId !== undefined &&
+      children.owns(sessionId, childSessionId)
       ? childSessionId
       : sessionId
   }
@@ -471,7 +479,7 @@ export function createMemberEncoder({
     if (reported.kind === TurnEventKind.ChildSessionUpdated)
       return reportChild(parentSessionId, reported, context)
     const { childSessionId, event: own } = reported
-    if (!children.has(childSessionId)) return
+    if (!children.owns(parentSessionId, childSessionId)) return
     // A child that a child spawned is announced on that child.
     if (own.kind === TurnEventKind.ChildSessionUpdated)
       return reportChild(childSessionId, own, context)
@@ -509,22 +517,19 @@ export function createMemberEncoder({
   }
 
   /**
-   * A page as its updates, each child Session it names announced, the way a
-   * live report announces one: a row naming a child that may not be shown is
-   * left out, and nothing of that child follows it.
+   * A page of `owner`'s as its updates, each child Session it names announced
+   * under `owner`, the way a live report announces one: a row naming a child
+   * that may not be shown is left out, and nothing of that child follows it.
+   * A child's own transcript names its children so too.
    */
-  function historyOutbounds(event: Extract<MemberEvent, { kind: "history" }>) {
-    const messages = event.page.messages.filter(
+  function historyOutbounds(page: SessionHistoryResponse, owner: string) {
+    const messages = page.messages.filter(
       (message) =>
         message.role !== "activity" ||
         message.activityType !== "CHILD_SESSION" ||
-        children.announce(
-          message.content.childSessionId,
-          event.sessionId,
-          undefined
-        )
+        children.announce(message.content.childSessionId, owner, undefined)
     )
-    return translators.translateHistory({ ...event.page, messages })
+    return translators.translateHistory({ ...page, messages })
   }
 
   /**
@@ -535,11 +540,12 @@ export function createMemberEncoder({
     event: Extract<MemberEvent, { kind: "history" }>,
     older: { cursor: string; offset: number }
   ) {
-    const updates = historyOutbounds(event).flatMap((outbound) =>
-      outbound.kind === "update" &&
-      outbound.update.sessionUpdate !== "plan_update"
-        ? [pageUpdate(outbound.update, older.cursor)]
-        : []
+    const updates = historyOutbounds(event.page, event.sessionId).flatMap(
+      (outbound) =>
+        outbound.kind === "update" &&
+        outbound.update.sessionUpdate !== "plan_update"
+          ? [pageUpdate(outbound.update, older.cursor)]
+          : []
     )
     for (const value of updates) await update(event.sessionId, value)
     logger.info(
@@ -584,13 +590,16 @@ export function createMemberEncoder({
         return prompt(event)
       case "history":
         if (event.older) return olderPage(event, event.older)
-        for (const outbound of historyOutbounds(event))
+        for (const outbound of historyOutbounds(event.page, sessionId))
           await send(sessionId, outbound, event.sequence)
         return
       case "child-history":
         // A child's transcript follows the announcement its row made.
-        if (!children.has(event.childSessionId)) return
-        for (const outbound of translators.translateHistory(event.page))
+        if (!children.owns(event.parentSessionId, event.childSessionId)) return
+        for (const outbound of historyOutbounds(
+          event.page,
+          event.childSessionId
+        ))
           if (outbound.kind === "update")
             await update(event.childSessionId, outbound.update)
         return

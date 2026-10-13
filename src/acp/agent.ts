@@ -206,7 +206,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       children: {
         announce: (childSessionId, parentSessionId, cancellable) =>
           sessions.announceChild(childSessionId, parentSessionId, cancellable),
-        has: (childSessionId) => sessions.child(childSessionId) !== undefined,
+        owns: (sessionId, childSessionId) =>
+          sessions.child(childSessionId) !== undefined &&
+          sessions.rootOf(childSessionId) === sessionId,
       },
     })
   )

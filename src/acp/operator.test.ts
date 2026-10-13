@@ -27,7 +27,10 @@ import {
   NOW,
   SESSION,
   harness as acpHarness,
+  open,
+  prompt,
   sessionRow,
+  settled,
   turnStarted,
   updates,
   type HarnessOptions as AcpHarnessOptions,
@@ -526,6 +529,65 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
+  // Only the Session that announced a child speaks for it: another Session
+  // naming that child is shown nothing under the child's id.
+  it("shows another Session's events and asks naming a child under that child's id never", async () => {
+    const test = await harness({
+      permission: async () => ({
+        outcome: { outcome: "selected", optionId: "once" },
+      }),
+    })
+    const { source: owner } = await runningTurn(test, "Review it")
+    owner.emit(turnStarted())
+    owner.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "child-1",
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("subagent_update"),
+      "the child's announcement"
+    )
+    await open(test, { _meta: { [HGW_META_KEY]: { agentId: AGENT } } })
+    await prompt(test, "Other work", SESSION)
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(2))
+    const other = test.sources[1]!
+
+    other.emit(turnStarted())
+    other.emit({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: "child-1",
+      event: {
+        kind: TurnEventKind.MessageChunk,
+        messageId: "stray",
+        text: "Speaking for another's child",
+      },
+    })
+    other.emit({
+      kind: TurnEventKind.TurnRequiresAction,
+      requests: [
+        {
+          requestId: "stray-approval",
+          kind: PendingRequestKind.Permission,
+          childSessionId: "child-1",
+          message: "Read the notes?",
+          responseSchema: { enum: ["once", "deny"] },
+        },
+      ],
+    })
+
+    const asked = await test.recorder.wait(
+      (entry) => entry.method === methods.client.session.requestPermission,
+      "the stray approval"
+    )
+    expect(asked.params).toMatchObject({ sessionId: SESSION })
+    expect(JSON.stringify(test.recorder.entries)).not.toContain(
+      "Speaking for another's child"
+    )
+    owner.finish()
+    other.finish()
+    test.close()
+  })
+
   // A client cancels a child's work with session/cancel naming the child, only
   // where the child's capabilities offer it; a notification answers nothing.
   it.each([
@@ -712,6 +774,61 @@ describe("operator ACP listener", () => {
       ["child-1", "agent_message_chunk"],
     ])
     expect(childHistory).toHaveBeenCalledWith(AGENT, SESSION, "child-1")
+    test.close()
+  })
+
+  // A child's own transcript names its children as the parent's names it:
+  // each is announced under the child that owns it, by the same checks.
+  it("replays a child's own children under it, refusing one that names a top-level Session or the child itself", async () => {
+    const row = (childSessionId: string) => ({
+      id: `row-${childSessionId}`,
+      role: "activity" as const,
+      activityType: "CHILD_SESSION" as const,
+      content: { childSessionId, title: `Posing as ${childSessionId}` },
+    })
+    const test = await harness({
+      childHistory: async () => ({
+        sessionId: "child-1",
+        messages: [row("grandchild-1"), row(SESSION), row("child-1")],
+        total: 3,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+      history: {
+        ...HISTORY,
+        messages: [...HISTORY.messages, row("child-1")],
+      },
+    })
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+    })
+    await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("grandchild-1"),
+      "the grandchild's announcement"
+    )
+    await settled()
+
+    expect(
+      updates(test.recorder).flatMap(({ sessionId, update }) =>
+        update.sessionUpdate === "subagent_update"
+          ? [[sessionId, update.sessionId]]
+          : []
+      )
+    ).toEqual([
+      [SESSION, "child-1"],
+      ["child-1", "grandchild-1"],
+    ])
+    // Announced, the grandchild is a child no request may name.
+    await expect(
+      test.agent.request(HGW_METHODS.session.focus, {
+        sessionId: "grandchild-1",
+      })
+    ).rejects.toMatchObject({ code: RequestError.methodNotFound("").code })
     test.close()
   })
 
