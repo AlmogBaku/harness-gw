@@ -122,7 +122,7 @@ describe("credentials middleware: tool data, for every runtime and both listener
   })
 
   // A path or a patch a mask would break is dropped, not masked.
-  it("drops a location, a diff, a working directory, and subagent prose or files that carry a credential", () => {
+  it("drops a location, a diff, a working directory, and a subagent's file that carry a credential, masking its prose", () => {
     const leaked = `/srv/${assigned("token")}`
     const started = shownTurn({
       ...open,
@@ -158,6 +158,7 @@ describe("credentials middleware: tool data, for every runtime and both listener
       locations: [{ path: "/srv/app/a.ts" }],
       subagent: {
         id: "sub-1",
+        goal: `log in with ${assigned("password", M)}`,
         summary: "Read the logs.",
         filesRead: ["/srv/app/a.ts"],
       },
@@ -184,7 +185,8 @@ describe("credentials middleware: tool data, for every runtime and both listener
     ).toMatchObject({ delta })
   })
 
-  it("masks a JSON output's secret-named key before cutting it to the browser's bound", () => {
+  // Only a terminal is cut, to the tail a browser keeps of one.
+  it("masks a large JSON output whole, keeping it JSON", () => {
     const output = JSON.stringify({ apiKey: SECRET, pad: "x".repeat(300_000) })
     const masked = shownTurn({
       kind: TurnEventKind.ToolCallFinished,
@@ -193,12 +195,10 @@ describe("credentials middleware: tool data, for every runtime and both listener
       failed: false,
     })
 
-    expect(masked).toMatchObject({
-      output: expect.stringMatching(/^\{"apiKey":"\[credential redacted\]"/u),
-    })
     expect(
-      masked?.kind === TurnEventKind.ToolCallFinished && masked.output.length
-    ).toBe(262_144)
+      masked?.kind === TurnEventKind.ToolCallFinished &&
+        JSON.parse(masked.output)
+    ).toEqual({ apiKey: M, pad: "x".repeat(300_000) })
   })
 
   it("drops the word a terminal's kept tail cuts into, so no name loses its head", () => {
@@ -338,6 +338,7 @@ describe("credentials middleware: questions", () => {
         status: ReplyStatus.Resolved,
         payload: { answers: [[`${assigned("token", M)} (option 2)`]] },
       },
+      answers: [[`${assigned("token", M)} (option 2)`]],
     }
 
     await layer!.commands!.answer!(command, next)
@@ -345,6 +346,7 @@ describe("credentials middleware: questions", () => {
       {
         ...command,
         reply: { ...command.reply, payload: { answers: [["something else"]] } },
+        answers: [["something else"]],
       },
       next
     )

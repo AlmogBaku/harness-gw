@@ -302,7 +302,7 @@ function project(value: unknown) {
 
 /**
  * Projects operator-visible tool arguments without carrying provider session
- * metadata into the browser; the gateway's translate step masks credentials
+ * metadata into the browser; the credentials middleware masks credentials
  * for every runtime. Guest projections discard tool calls before reaching this
  * boundary.
  */

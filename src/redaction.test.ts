@@ -249,6 +249,7 @@ describe("maskCredentials", () => {
   // every runtime: none ends in a term after a separator.
   it.each([
     "PGPASSWORD",
+    "MYSQL_PWD",
     "SSH_PRIVATE_KEY_B64",
     "NPM_CONFIG__AUTH",
     "2fa_token",
@@ -287,12 +288,14 @@ describe("maskCredentials", () => {
     )
   })
 
-  it.each(["type x:string; ratio x:y", "TOKEN_COUNT=12", "bypass=true"])(
-    "keeps %s, which only reads like a credential",
-    (text) => {
-      expect(maskCredentials(text)).toBe(text)
-    }
-  )
+  it.each([
+    "type x:string; ratio x:y",
+    "TOKEN_COUNT=12",
+    "bypass=true",
+    "PWD=/srv/app OLDPWD=/srv",
+  ])("keeps %s, which only reads like a credential", (text) => {
+    expect(maskCredentials(text)).toBe(text)
+  })
 
   // Every shape used to restart at each repeat and read to the end of the
   // text: 128 KiB of one took seconds to mask, and some took minutes.

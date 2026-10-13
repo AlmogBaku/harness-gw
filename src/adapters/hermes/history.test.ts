@@ -823,7 +823,7 @@ describe("server-side Hermes history projection", () => {
     }
   )
 
-  // Credentials are masked in translate, for every runtime; this adapter drops
+  // Credentials are masked by the credentials middleware, for every runtime; this adapter drops
   // only what the provider keeps to itself.
   it("preserves inspectable tool data while dropping provider metadata", () => {
     const messages = projectHermesHistory([

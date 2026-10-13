@@ -488,7 +488,7 @@ or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
 
 | Where                                                                 | Masked                                                                                                                                               |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, and its terminal's command and output                                                       |
+| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, its terminal's command and output, and its subagent's goal and summary                      |
 | A failed turn, live and replayed                                      | its message                                                                                                                                          |
 | A question a guest is shown                                           | its prompt, header, and choices; a guest's answer reaches the runtime as the choice it wrote, and an answer echoed back to a guest is masked        |
 | `requestText` in `_hgw/activity`, and every Web Push text             | the one line it shows                                                                                                                                |
@@ -503,10 +503,10 @@ stack, masks what passes a member; Activity and Web Push, which leave the
 conversation, and the MCP App view route, which no member's stack carries,
 call the same masker.
 
-A path or a patch that carries a credential is dropped rather than masked,
-since masked it would name no file or no longer apply: a location, a diff that
-names one, a terminal's working directory, and a subagent's file. A subagent's
-goal or summary that carries one is dropped too.
+Text is masked; a path or a patch that carries a credential is dropped rather
+than masked, since masked it would name no file or no longer apply: a
+location, a diff that names one, a terminal's working directory, and a
+subagent's file.
 
 A name is secret when a run of up to three of its words spells a word of
 `SECRET_TERMS` (`src/redaction.ts`), or when its letters end in one. Its words
@@ -554,12 +554,12 @@ twice leaves one placeholder per credential.
 
 Tool data is JSON-aware: a JSON value, and text that parses as one, is masked
 by key and by value, a secret-named key keeping its name and losing any value
-but a boolean or `null`; JSON with nothing to mask is sent as written. Each
-tool text is cut to 262,144 UTF-16 units, a terminal's output keeping its tail
-without the word the cut lands in: plain text before it is masked, so a huge
-output costs no more to mask, and JSON after, so no secret-named key is cut
-out of reach. An MCP App view's files are served from the stored call, never
-from its masked input.
+but a boolean or `null`; JSON with nothing to mask is sent as written, and
+streamed output is masked as plain text, never re-encoded. A terminal's output
+keeps its last 262,144 UTF-16 units, the most a browser keeps of one, without
+the word the cut lands in; nothing else is cut. Each event is masked once,
+however many members are shown it. An MCP App view's files are served from
+the stored call, never from its masked input.
 
 Masking finds a credential by its name, URL position, or known shape. One with
 none of these is sent as written, and a credential split across two streamed

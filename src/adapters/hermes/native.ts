@@ -67,9 +67,9 @@ const PRIVATE_LOCATION_VALUE =
 /**
  * True when a native string looks like a credential or a private filesystem or
  * internal-network location. It guards what the guest listener may receive from
- * the adapter: published artifact identities. Operator-only data (tool calls,
- * diffs, locations, failure details) is held to `containsCredential`
- * alone, because the guest projection never forwards it.
+ * the adapter: published artifact identities, which name the files a guest may
+ * read and so are rejected rather than masked. Everything else is the
+ * credentials middleware's to mask.
  */
 export function containsPrivateValue(value: string) {
   return containsCredential(value) || PRIVATE_LOCATION_VALUE.test(value)

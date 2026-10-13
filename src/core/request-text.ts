@@ -36,6 +36,15 @@ export function distinctChoices(choices: readonly string[]) {
   )
 }
 
+/** The choice a shown answer names, as the runtime wrote it; any other answer as typed. */
+export function answeredChoice(
+  choices: readonly string[],
+  shown: readonly string[],
+  value: string
+) {
+  return choices[shown.indexOf(value)] ?? value
+}
+
 /** One printable line: no controls, no reordering, single spaces. */
 function oneLine(value: string) {
   return value

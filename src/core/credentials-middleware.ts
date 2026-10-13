@@ -7,6 +7,7 @@ import {
 } from "../redaction"
 import {
   PendingRequestKind,
+  ReplyStatus,
   TurnEventKind,
   type PendingQuestion,
   type PendingRequest,
@@ -16,34 +17,29 @@ import {
   type TurnEvent,
 } from "./events"
 import type { Middleware, MemberCommands, MemberEvent } from "./member"
-import { askText, distinctChoices } from "./request-text"
+import { answeredChoice, askText, distinctChoices } from "./request-text"
 
 /**
  * The one place the gateway masks credentials in what a member is shown: every
  * runtime's tool data, live and replayed, and its run failures, on the operator
- * listener and the guest one alike. An adapter masks nothing. A question
+ * listener and the guest one alike. Text is masked, and a path or a patch that
+ * a mask would break is dropped instead. An adapter masks nothing. A question
  * reaches the operator as the runtime wrote it, since they must read what they
  * answer; a guest is shown it masked, and its answer reaches the runtime as the
  * choice the runtime wrote. A permission reaches the operator alone, whole.
  */
 
-/**
- * The most text one tool field carries, which is also the most a browser keeps
- * of a terminal: plain text is cut to it before it is masked, so one huge
- * output costs the masker no more than this.
- */
-const MAX_TOOL_TEXT = 262_144
+/** The most of a terminal's output a browser keeps: its last 256 KiB. */
+const TERMINAL_TAIL = 262_144
 
 /**
- * The first, or for a terminal the last, `MAX_TOOL_TEXT` units of `text`. A
- * tail cut inside a word drops that word, so a name's or a key's end is never
- * read as a whole.
+ * The last `TERMINAL_TAIL` units of a terminal's output, masked. A cut inside
+ * a word drops that word, so a name's or a key's end is never read whole.
  */
-function bounded(text: string, keep: "head" | "tail") {
-  if (text.length <= MAX_TOOL_TEXT) return text
-  if (keep === "head") return text.slice(0, MAX_TOOL_TEXT)
-  const tail = text.slice(-MAX_TOOL_TEXT)
-  return tail.slice(tail.search(/\s/u) + 1)
+function maskedTerminalData(data: string) {
+  if (data.length <= TERMINAL_TAIL) return maskCredentials(data)
+  const tail = data.slice(-TERMINAL_TAIL)
+  return maskCredentials(tail.slice(tail.search(/\s/u) + 1))
 }
 
 /** Text that reads as a JSON object, array, or string, parsed; anything else `undefined`. */
@@ -57,20 +53,15 @@ function parsedJson(text: string): Json | undefined {
 }
 
 /**
- * A tool's text as a member is shown it. JSON is masked by key and value, and
- * sent as written when nothing in it was a credential, then bounded; any other
- * text is bounded, then masked.
+ * A tool's arguments or result as a member is shown them: JSON masked by key
+ * and value, and sent as written when nothing in it was a credential; any
+ * other text masked as text.
  */
-function maskedToolText(text: string, keep: "head" | "tail" = "head") {
+function maskedToolValue(text: string) {
   const json = parsedJson(text)
-  if (json === undefined) return maskCredentials(bounded(text, keep))
+  if (json === undefined) return maskCredentials(text)
   const masked = maskJson(json)
-  return bounded(masked === json ? text : JSON.stringify(masked), keep)
-}
-
-/** A text that carries a credential is dropped where masking it would mislead. */
-function withoutCredential(text: string | undefined) {
-  return text === undefined || containsCredential(text) ? undefined : text
+  return masked === json ? text : JSON.stringify(masked)
 }
 
 /** The locations whose path carries no credential: masked, a path names no file. */
@@ -94,25 +85,22 @@ function publicDiffs(diffs: readonly ToolDiff[]) {
   })
 }
 
-/**
- * A subagent's report without a goal, summary, or file that carries a
- * credential: its prose is the subagent's own account, so a credential in it
- * drops it rather than leave a sentence with a hole.
- */
+/** The paths that carry no credential: masked, a path names no file. */
+function publicPaths(paths: readonly string[]) {
+  return paths.filter((path) => !containsCredential(path))
+}
+
+/** A subagent's report with its prose masked and every file carrying a credential dropped. */
 function publicSubagent(subagent: Subagent): Subagent {
-  const { goal, summary, filesRead, filesWritten, ...rest } = subagent
-  const files = (paths: readonly string[]) =>
-    paths.filter((path) => !containsCredential(path))
-  const publicGoal = withoutCredential(goal)
-  const publicSummary = withoutCredential(summary)
+  const { goal, summary, filesRead, filesWritten } = subagent
   return {
-    ...rest,
-    ...(publicGoal === undefined ? {} : { goal: publicGoal }),
-    ...(publicSummary === undefined ? {} : { summary: publicSummary }),
-    ...(filesRead === undefined ? {} : { filesRead: files(filesRead) }),
+    ...subagent,
+    ...(goal === undefined ? {} : { goal: maskCredentials(goal) }),
+    ...(summary === undefined ? {} : { summary: maskCredentials(summary) }),
+    ...(filesRead === undefined ? {} : { filesRead: publicPaths(filesRead) }),
     ...(filesWritten === undefined
       ? {}
-      : { filesWritten: files(filesWritten) }),
+      : { filesWritten: publicPaths(filesWritten) }),
   }
 }
 
@@ -122,20 +110,20 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent {
     case TurnEventKind.ToolCallStarted:
       return {
         ...event,
-        title: maskedToolText(event.title),
+        title: maskCredentials(event.title),
         ...(event.locations
           ? { locations: publicLocations(event.locations) }
           : {}),
         ...(event.subagent ? { subagent: publicSubagent(event.subagent) } : {}),
       }
     case TurnEventKind.ToolCallInputChunk:
-      return { ...event, delta: maskedToolText(event.delta) }
+      return { ...event, delta: maskedToolValue(event.delta) }
     case TurnEventKind.ToolCallOutputChunk:
-      return { ...event, text: maskedToolText(event.text) }
+      return { ...event, text: maskCredentials(event.text) }
     case TurnEventKind.ToolCallFinished:
       return {
         ...event,
-        output: maskedToolText(event.output),
+        output: maskedToolValue(event.output),
         ...(event.diffs ? { diffs: publicDiffs(event.diffs) } : {}),
         ...(event.locations
           ? { locations: publicLocations(event.locations) }
@@ -143,12 +131,11 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent {
       }
     case TurnEventKind.TerminalOutput: {
       const { command, cwd, data, ...rest } = event
-      const publicCwd = withoutCredential(cwd)
       return {
         ...rest,
-        ...(command === undefined ? {} : { command: maskedToolText(command) }),
-        ...(publicCwd === undefined ? {} : { cwd: publicCwd }),
-        ...(data === undefined ? {} : { data: maskedToolText(data, "tail") }),
+        ...(command === undefined ? {} : { command: maskCredentials(command) }),
+        ...(cwd === undefined || containsCredential(cwd) ? {} : { cwd }),
+        ...(data === undefined ? {} : { data: maskedTerminalData(data) }),
       }
     }
     case TurnEventKind.SubagentUpdated:
@@ -182,13 +169,13 @@ function maskedHistoryMessage(message: HistoryMessage): HistoryMessage {
         : {
             ...part,
             args: maskJson(part.args),
-            argsText: maskedToolText(part.argsText),
+            argsText: maskedToolValue(part.argsText),
             ...(part.result === undefined
               ? {}
               : {
                   result:
                     typeof part.result === "string"
-                      ? maskedToolText(part.result)
+                      ? maskedToolValue(part.result)
                       : maskJson(part.result),
                 }),
             ...(part.diffs ? { diffs: publicDiffs(part.diffs) } : {}),
@@ -231,29 +218,6 @@ function guestRequest(request: PendingRequest): PendingRequest {
   }
 }
 
-/** Whether `value` is one list of answers per question. */
-function isAnswerSets(value: unknown): value is string[][] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (values) =>
-        Array.isArray(values) &&
-        values.every((answer) => typeof answer === "string")
-    )
-  )
-}
-
-/** The answers a reply carries, when it carries a question's. */
-function replyAnswers(payload: unknown) {
-  if (
-    typeof payload !== "object" ||
-    payload === null ||
-    !("answers" in payload)
-  )
-    return undefined
-  return isAnswerSets(payload.answers) ? payload.answers : undefined
-}
-
 /**
  * A guest's answer as the runtime takes it: a choice it was shown masked is
  * the choice the runtime wrote, and free text goes as typed.
@@ -261,21 +225,31 @@ function replyAnswers(payload: unknown) {
 function nativeAnswer(
   command: MemberCommands["answer"]
 ): MemberCommands["answer"] {
-  const answers = replyAnswers(command.reply.payload)
-  const questions = command.request.questions
-  if (!answers || !questions) return command
+  const { answers, request, reply } = command
+  const questions = request.questions
+  if (!answers || !questions || reply.status !== ReplyStatus.Resolved)
+    return command
   const native = answers.map((values, index) => {
     const question = questions[index]
     if (!question) return values
     const shown = shownToGuest(question)
-    return values.map(
-      (value) => question.choices[shown.indexOf(value)] ?? value
-    )
+    return values.map((value) => answeredChoice(question.choices, shown, value))
   })
-  return {
-    ...command,
-    reply: { ...command.reply, payload: { answers: native } },
-  }
+  return { ...command, reply: { ...reply, payload: { answers: native } } }
+}
+
+/**
+ * Turn events every member is shown, masked once: each member's stack reads
+ * the same event, so a second tab or a guest costs the masker nothing more.
+ */
+const maskedTurnEvents = new WeakMap<TurnEvent, TurnEvent>()
+
+function maskedOnce(event: TurnEvent) {
+  const known = maskedTurnEvents.get(event)
+  if (known) return known
+  const masked = maskedTurnEvent(event)
+  maskedTurnEvents.set(event, masked)
+  return masked
 }
 
 /**
@@ -290,7 +264,7 @@ export function createCredentialsMiddleware({
     event(event: MemberEvent): MemberEvent {
       switch (event.kind) {
         case "turn":
-          return { ...event, event: maskedTurnEvent(event.event) }
+          return { ...event, event: maskedOnce(event.event) }
         case "history":
           return {
             ...event,

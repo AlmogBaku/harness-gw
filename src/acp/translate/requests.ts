@@ -17,7 +17,11 @@ import {
   type PendingQuestion,
   type PendingRequest,
 } from "../../core/events"
-import { askText, distinctChoices } from "../../core/request-text"
+import {
+  answeredChoice,
+  askText,
+  distinctChoices,
+} from "../../core/request-text"
 import type {
   AcpOutbound,
   PendingRequestToOutbound,
@@ -243,8 +247,8 @@ export const replyFromElicitation = ((request, response) => {
   const content = record(response.content)
   const answers = pendingQuestionsOf(request).map((question, index) => {
     const shown = shownChoices(question)
-    return answerValues(content?.[`q${index}`]).map(
-      (value) => question.choices[shown.indexOf(value)] ?? value
+    return answerValues(content?.[`q${index}`]).map((value) =>
+      answeredChoice(question.choices, shown, value)
     )
   })
   return {

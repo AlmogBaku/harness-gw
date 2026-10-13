@@ -318,10 +318,12 @@ from native multimodal audio input or output.
 
 An adapter masks no credential, and drops none: the gateway's credentials
 middleware masks the text every runtime's tool data and run failures carry on
-the way to a member, and drops a path, a patch, or a subagent's prose that
-carries one (protocol, [Credential masking](../protocol.md#credential-masking)).
-An adapter reports questions and approvals in the runtime's own words, and
-drops only provider-private fields.
+the way to a member, and drops a path or a patch that carries one (protocol,
+[Credential masking](../protocol.md#credential-masking)). An adapter reports
+questions and approvals in the runtime's own words, and drops only
+provider-private fields. The one exception is an identity a guest may read
+through: Hermes rejects a published artifact name that carries a credential or
+a private location (`containsPrivateValue`), since the name selects the file.
 
 ## Share execution, project authorization
 

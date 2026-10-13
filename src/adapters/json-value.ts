@@ -6,7 +6,7 @@
  * array and object keeps its first `MAX_ENTRIES` entries, a string longer than
  * `MAX_STRING_LENGTH` is dropped, a key naming provider-private data is dropped
  * with its value, and a copy that still serializes past `MAX_JSON_BYTES` of
- * UTF-8 is no copy at all. Credentials are the translate step's to mask, for
+ * UTF-8 is no copy at all. Credentials are the credentials middleware's to mask, for
  * every runtime alike.
  */
 
