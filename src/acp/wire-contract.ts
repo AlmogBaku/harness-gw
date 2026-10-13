@@ -83,6 +83,7 @@ export type WireContractRow =
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
   | "guestRetryOfSlashRefused"
+  | "childHiddenFromGuest"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -179,6 +180,12 @@ export type WireRuntime = Readonly<{
    * stored conversation. Absent only when every row that counts them is a gap.
    */
   rewinds?(): number
+  /**
+   * How many times the runtime was asked so far for the transcript of the
+   * child Session `childId`. Absent only when every row that counts them is a
+   * gap.
+   */
+  childReads?(childId: string): number
 }>
 
 export type WireContractOptions = {
@@ -209,6 +216,7 @@ type WireHarness = Readonly<{
   /** The runtime's hooks, each failing the row that calls it if absent. */
   invite: NonNullable<WireRuntime["invite"]>
   rewinds: NonNullable<WireRuntime["rewinds"]>
+  childReads: NonNullable<WireRuntime["childReads"]>
   clock: Clock
   /** Connects a client to `service`, closed with the case. */
   connect(
@@ -528,6 +536,13 @@ async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
   return client
 }
 
+/** Every frame the gateway sent `client` that names `id` anywhere in it. */
+function framesNaming(client: WireClient, id: string) {
+  return client.bridge
+    .sockets()
+    .flatMap(({ frames }) => frames.filter((raw) => raw.includes(id)))
+}
+
 /**
  * The runtime asks its question; resolves once `plain` holds it, with what
  * settles once the runtime holds an answer.
@@ -804,6 +819,10 @@ function wireCase(
         rewinds: () => {
           if (!runtime.rewinds) throw lacks("count of rewinds")
           return runtime.rewinds()
+        },
+        childReads: (childId) => {
+          if (!runtime.childReads) throw lacks("count of child reads")
+          return runtime.childReads(childId)
         },
         clock,
         connect,
@@ -1345,6 +1364,48 @@ export function runWireContract(
             )
           )
           expect(rewinds()).toBe(0)
+        }
+      )
+
+      row(
+        "childHiddenFromGuest",
+        "shows a guest nothing of a child Session its own turn spawned, live or on a reload, and reads no child transcript for it",
+        async (harness) => {
+          const { clock, turn, invite, childReads } = harness
+          const operatorId = await until(clock, invite(GUEST_REF))
+          const guest = await invitedGuest(harness)
+          await until(clock, resumeFromStart(guest, GUEST_REF))
+          const idle = guest.nextIdle()
+          await until(clock, prompt(guest, GUEST_REF, "list the files"))
+          await until(clock, turn.firstResponse())
+          const child = await until(clock, turn.spawnChild!())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const readBefore = childReads(child)
+          const reloaded = await invitedGuest(harness)
+          await until(clock, resumeFromStart(reloaded, GUEST_REF))
+          const guestReads = childReads(child) - readBefore
+          // An operator's reload reads the child's transcript, so the count
+          // is one a reload moves.
+          const operator = await reload(harness, operatorId)
+
+          for (const client of [guest, reloaded]) {
+            expect(
+              client.updates.filter(SessionUpdate.isSubagentUpdate)
+            ).toEqual([])
+            expect(framesNaming(client, child)).toEqual([])
+          }
+          // The guest read its own turn, the parent's side of it.
+          expect(
+            agentSide(guest.updates)
+              .messages.map(({ text }) => text)
+              .join("\n")
+          ).toContain("The file lists three names.")
+          expect(guestReads).toBe(0)
+          expect(childReads(child)).toBeGreaterThan(readBefore)
+          expect(
+            operator.addressed.some(({ sessionId }) => sessionId === child)
+          ).toBe(true)
         }
       )
 

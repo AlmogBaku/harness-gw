@@ -243,6 +243,8 @@ export function fakeOpenClaw() {
   let calls = 0
   /** Every method the runtime called, in order, refused calls included. */
   const methods: string[] = []
+  /** The Session key each `chat.history` named, in order. */
+  const historyKeys: unknown[] = []
   let seq = 0
   let nextRow = 1
   let nextSession = 1
@@ -931,6 +933,8 @@ export function fakeOpenClaw() {
         ) {
           calls += 1
           methods.push(method)
+          if (method === "chat.history")
+            historyKeys.push((params as Row | undefined)?.sessionKey)
           if (!dialed.up) throw new Error("gateway not connected")
           if (fault === "native") throw failure
           return (await answer(
@@ -1000,6 +1004,10 @@ export function fakeOpenClaw() {
         })
       }
     },
+
+    /** How many times the runtime read Session `key`'s transcript. */
+    historyReads: (key: string) =>
+      historyKeys.filter((named) => named === key).length,
 
     /** The Session `key` as the Gateway stores it, for a test to read back. */
     stored(key: string) {

@@ -62,6 +62,7 @@ runWireContract(
         return key
       },
       rewinds: () => openclaw.requested("sessions.rewind"),
+      childReads: (childId) => openclaw.historyReads(childId),
     }
   },
   {

@@ -45,6 +45,8 @@ function hermesRuntime(): WireRuntime {
       return hermes.scope.sessionId
     },
     rewinds: () => hermes.truncations().length,
+    childReads: (childId) =>
+      hermes.httpRequests(`/api/sessions/${childId}/messages`).length,
   }
 }
 
