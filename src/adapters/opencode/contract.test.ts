@@ -28,13 +28,16 @@ runServerRuntimeContract(
       typedMessageFields:
         "capability: OpenCode history carries no correction or turn error code",
       forkLeavesOriginal:
-        "pending: OpenCode forks only if the live check of its older route passes",
+        "pending: forking through OpenCode's older route needs the live OpenCode check",
+      // OpenCode's `task` tool appears to run only on its older prompt path, so
+      // the fake cannot honestly spawn a child through a gateway turn.
       childAnnouncedFirst:
-        "pending: the live check decides whether gateway turns spawn children",
+        "pending: whether gateway turns spawn children needs the live OpenCode check",
+      // The list's filter on `parentID` is proven over the fake in adapter.test.ts.
       childrenStayUnlisted:
-        "pending: the OpenCode lane filters children by parentID",
+        "pending: whether gateway turns spawn children needs the live OpenCode check",
       rewindAsReported:
-        "pending: OpenCode reports no rewind until revert passes the live check",
+        "pending: rewind through OpenCode's revert needs the live OpenCode check",
     },
   }
 )

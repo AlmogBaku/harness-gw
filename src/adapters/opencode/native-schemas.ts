@@ -123,6 +123,21 @@ export const OpenCodeSessionSchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 })
 
+/**
+ * Whether a native Session row is a child, as OpenCode's `task` tool spawns
+ * one: `parentID` is its only marker, and the Session schema does not keep it,
+ * so the raw row is read, whatever else it holds.
+ */
+export function isOpenCodeChildSession(row: unknown) {
+  return (
+    typeof row === "object" &&
+    row !== null &&
+    "parentID" in row &&
+    row.parentID !== undefined &&
+    row.parentID !== null
+  )
+}
+
 /** Each row is checked on its own, so one malformed Session costs that row alone. */
 export const OpenCodeSessionCatalogSchema = z.object({
   data: z.array(z.unknown()).max(100),

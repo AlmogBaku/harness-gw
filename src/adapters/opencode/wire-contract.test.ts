@@ -39,9 +39,11 @@ runWireContract(
   {
     gaps: {
       forkJoinsNewSession:
-        "pending: OpenCode forks only if the live check of its older route passes",
+        "pending: forking through OpenCode's older route needs the live OpenCode check",
+      // OpenCode's `task` tool appears to run only on its older prompt path, so
+      // the fake cannot honestly spawn a child through a gateway turn.
       childAnnouncedBeforeItsEvents:
-        "pending: the live check decides whether gateway turns spawn children",
+        "pending: whether gateway turns spawn children needs the live OpenCode check",
       // Every question and permission carries a presentable form, so the
       // adapter holds none back, and OpenCode lists each pending one
       // (`GET /api/session/{sessionID}/question` and `…/permission`), so a
