@@ -325,6 +325,34 @@ describe("Hermes native submit outcomes", () => {
     )
   })
 
+  // Hermes takes the text a rewind submits as the turn's new text, so a Retry
+  // hands back the turn it replaces, as Hermes' own client does.
+  it("submits a Retry with the text of the turn it replaces", async () => {
+    const { native, router } = runtime(
+      { "prompt.submit": async () => ({ status: "streaming" }) },
+      [
+        { row_id: 10, role: "user", text: "Keep" },
+        { row_id: 11, role: "assistant", text: "Kept reply" },
+        { row_id: 12, role: "user", text: "Original" },
+      ]
+    )
+
+    await native.submit("live-secret", {
+      scope,
+      text: "",
+      turnId: "retry-run",
+      rewindSourceId: "hermes-row-12",
+    })
+
+    expect(router.calls("prompt.submit").map(({ params }) => params)).toEqual([
+      expect.objectContaining({
+        text: "Original",
+        confirm_truncate: true,
+        truncate_before_row_id: 12,
+      }),
+    ])
+  })
+
   it("rewinds a just-sent prompt by the id its completion receipt saved it under", async () => {
     // The rows the receipt `{ row_ids: [7, 8, 9, 10], complete: true }` names.
     const rows = [

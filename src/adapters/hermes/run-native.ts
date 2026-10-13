@@ -326,7 +326,7 @@ function completionOutcome(
 function rewindSubmitParams(
   rows: readonly unknown[],
   rewindSourceId: string
-): { params: Record<string, unknown>; images: string[] } {
+): { params: Record<string, unknown>; images: string[]; text: string } {
   const history = projectHermesHistory(rows)
   const targetIndex = history.findIndex(
     ({ id, role }) => id === rewindSourceId && role === "user"
@@ -352,7 +352,14 @@ function rewindSubmitParams(
     return image ? [image.reference] : []
   })
 
+  // A Retry hands back the turn it replaces, as Hermes' own client does: the
+  // text the transcript shows, which Hermes re-expands where a skill made it.
+  const text = target.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+
   return {
+    text,
     params: {
       confirm_truncate: true,
       ...address,
@@ -442,9 +449,14 @@ export class HermesNativeRuntime implements HermesTurnNative {
 
     let rewind: Record<string, unknown> = {}
     let images: readonly string[] = []
+    let replaced = ""
     if (!invocation && prompt.rewindSourceId !== undefined) {
       try {
-        ;({ params: rewind, images } = rewindSubmitParams(
+        ;({
+          params: rewind,
+          images,
+          text: replaced,
+        } = rewindSubmitParams(
           await this.#history(prompt.scope),
           prompt.rewindSourceId
         ))
@@ -495,9 +507,10 @@ export class HermesNativeRuntime implements HermesTurnNative {
     // A rewind that stages attachments of its own replaces the source row's.
     const reattached = prompt.hasAttachments ? [] : images
     await this.#attachImages(liveSessionId, reattached)
+    // A Retry names no text of its own and sends again the turn it replaces.
     const outcome = await this.#submitPrompt(
       liveSessionId,
-      { text: prompt.text, ...rewind },
+      { text: prompt.text || replaced, ...rewind },
       signal
     )
     // A refused write consumed nothing, so the images it would have carried
