@@ -273,6 +273,7 @@ function createFakeConnection() {
       return () => statusListeners.delete(listener)
     },
     outage: undefined,
+    capabilities: undefined,
     subscribeOutage: () => () => {},
     subscribe(sessionId, listener) {
       record("subscribe", sessionId, listener.agentId)
@@ -292,6 +293,10 @@ function createFakeConnection() {
     sessionState: () => "joined",
     async login(token) {
       record("login", token)
+    },
+    async forkSession(sessionId) {
+      record("forkSession", sessionId)
+      return { sessionId: `${sessionId}-fork` }
     },
     async newSession(meta) {
       record("newSession", meta)

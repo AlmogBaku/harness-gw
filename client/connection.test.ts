@@ -32,6 +32,10 @@ import { pipedSockets } from "./test-socket"
 import type { AcpPendingRequest } from "./types"
 
 const SESSION_ID = "session-1"
+/** The Session a fork of `SESSION_ID` makes. */
+const FORKED_ID = "session-forked"
+/** A child Session a turn of `SESSION_ID` spawned. */
+const CHILD_ID = "child-1"
 const AGENT_ID = "agent-1"
 const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 const CLIENT_INFO = { name: "aos-ui", version: "1.2.3" }
@@ -100,6 +104,8 @@ function createGatewayAgent(
     agents?: readonly unknown[]
     /** The results `_hgw/sessions/search` answers with. */
     searchResults?: readonly unknown[]
+    /** Advertises `session/fork`, which answers `FORKED_ID`. */
+    forks?: boolean
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -114,6 +120,9 @@ function createGatewayAgent(
       return {
         protocolVersion: 2,
         info: { name: "harness-gw", version: "9.9.9" },
+        capabilities: {
+          session: { delete: {}, ...(options.forks ? { fork: {} } : {}) },
+        },
         _meta: {
           [HGW_META_KEY]: {
             version: options.version ?? HGW_EXTENSION_VERSION,
@@ -254,6 +263,10 @@ function createGatewayAgent(
         throw new RequestError(options.refuseAgentUpdate, "refused")
       return { revision: "revision-2", agent: catalogEntry() }
     })
+    .onRequest(methods.agent.session.fork, ({ params }) => {
+      record(methods.agent.session.fork, params)
+      return { sessionId: FORKED_ID }
+    })
     .onRequest(HGW_METHODS.session.focus, z.unknown(), ({ params }) => {
       record(HGW_METHODS.session.focus, params)
       return options.holdFocus ? new Promise<never>(() => {}) : {}
@@ -269,9 +282,13 @@ function createGatewayAgent(
       calls.flatMap((call) => (call.method === method ? [call.params] : [])),
     paramsOf: (method: string) =>
       calls.find((call) => call.method === method)?.params,
-    pushUpdate(update: SessionUpdate, meta?: Record<string, unknown>) {
+    pushUpdate(
+      update: SessionUpdate,
+      meta?: Record<string, unknown>,
+      sessionId = SESSION_ID
+    ) {
       return peer?.notify(methods.client.session.update, {
-        sessionId: SESSION_ID,
+        sessionId,
         update: {
           ...update,
           ...(meta ? { _meta: { [HGW_META_KEY]: meta } } : {}),
@@ -282,11 +299,11 @@ function createGatewayAgent(
       return peer?.notify(method, params)
     },
     /** Aborting `withdrawal` withdraws the request with `$/cancel_request`. */
-    askPermission(withdrawal?: AbortSignal) {
+    askPermission(withdrawal?: AbortSignal, sessionId = SESSION_ID) {
       return peer?.request(
         methods.client.session.requestPermission,
         {
-          sessionId: SESSION_ID,
+          sessionId,
           title: "Run the tool?",
           options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
           _meta: {
@@ -383,6 +400,120 @@ describe("ACP connection", () => {
     connection.start()
 
     await expect(connection.listAgents()).resolves.toBeDefined()
+    connection.close()
+  })
+
+  it("reads the gateway's ACP capabilities at initialize", async () => {
+    const forking = connectInProcess(createGatewayAgent({ forks: true }))
+    const plain = connectInProcess(createGatewayAgent())
+    await Promise.all([forking.initialized, plain.initialized])
+
+    expect(forking.capabilities?.session).toMatchObject({ fork: {} })
+    expect(plain.capabilities?.session).not.toHaveProperty("fork")
+    forking.close()
+    plain.close()
+  })
+
+  it("forks a Session into one the gateway joined it to", async () => {
+    const proxy = createGatewayAgent({ forks: true })
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+
+    await expect(connection.forkSession(SESSION_ID)).resolves.toEqual({
+      sessionId: FORKED_ID,
+    })
+    expect(proxy.paramsOf(methods.agent.session.fork)).toEqual({
+      sessionId: SESSION_ID,
+      cwd: "",
+    })
+    // Opened in its grace, as a created Session is.
+    expect(connection.sessionState(FORKED_ID)).toBeDefined()
+    connection.close()
+  })
+
+  // ACP v2 child Sessions arrive on the same connection, under their own id,
+  // announced first on the Session that owns them.
+  it("gives a child Session's updates to the listeners of the Session that owns it, in its turn's position", async () => {
+    const clock = useFakeClock()
+    const proxy = createGatewayAgent()
+    const pipe = pipedSockets(() => proxy.app)
+    const connection = createAcpConnection({
+      clientInfo: CLIENT_INFO,
+      url: "ws://proxy.test/api/v1/acp",
+      socketConstructor: pipe.WebSocket,
+    })
+    connection.start()
+    await connection.initialized
+    const updated = vi.fn()
+    const child = vi.fn()
+    connection.subscribe(SESSION_ID, {
+      agentId: AGENT_ID,
+      update: updated,
+      child,
+    })
+    await connection.joined(SESSION_ID)
+
+    await proxy.pushUpdate(
+      {
+        sessionUpdate: "subagent_update",
+        sessionId: CHILD_ID,
+        title: "Review",
+      },
+      { sequence: 4, turnId: "run-1" }
+    )
+    await proxy.pushUpdate(
+      {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "child-message",
+        content: { type: "text", text: "Reading" },
+      },
+      { sequence: 5, turnId: "run-1" },
+      CHILD_ID
+    )
+    await clock.advance(0)
+
+    expect(updated).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionUpdate: "subagent_update" }),
+      expect.anything()
+    )
+    expect(child).toHaveBeenCalledWith(
+      CHILD_ID,
+      expect.objectContaining({ sessionUpdate: "agent_message_chunk" }),
+      { sequence: 5, turnId: "run-1" }
+    )
+    // The child's events share its parent turn's sequence.
+    pipe.sockets[0]?.drop()
+    await clock.advance(250)
+    expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
+      replayFrom: { type: HGW_REPLAY_POSITION, turnId: "run-1", from: 6 },
+    })
+    connection.close()
+  })
+
+  it("names the Session that owns a child Session asking for permission", async () => {
+    const proxy = createGatewayAgent()
+    const connection = connectInProcess(proxy)
+    await connection.initialized
+    const pending = vi.fn()
+    connection.subscribePendingRequests(pending)
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
+    await connection.joined(SESSION_ID)
+    await proxy.pushUpdate(
+      { sessionUpdate: "subagent_update", sessionId: CHILD_ID },
+      { sequence: 1, turnId: "run-1" }
+    )
+
+    void proxy.askPermission(undefined, CHILD_ID)
+
+    await vi.waitFor(() =>
+      expect(pending).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "permission",
+          sessionId: CHILD_ID,
+          parentSessionId: SESSION_ID,
+        })
+      )
+    )
     connection.close()
   })
 

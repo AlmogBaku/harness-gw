@@ -1,4 +1,5 @@
 import type {
+  AgentCapabilities,
   ContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
@@ -47,6 +48,8 @@ export type AcpPendingRequest =
   | {
       kind: "permission"
       sessionId: string
+      /** The Session that owns the child Session `sessionId` names, if it is one. */
+      parentSessionId?: string
       request: RequestPermissionRequest
       respond(response: RequestPermissionResponse): void
       /** Aborts when the proxy withdraws the request, which needs no answer. */
@@ -55,6 +58,8 @@ export type AcpPendingRequest =
   | {
       kind: "elicitation"
       sessionId: string | undefined
+      /** The Session that owns the child Session `sessionId` names, if it is one. */
+      parentSessionId?: string
       request: CreateElicitationRequest
       respond(response: CreateElicitationResponse): void
       signal: AbortSignal
@@ -99,6 +104,16 @@ export type AcpSessionListener = {
   /** `session/update` notifications for the Session, with `_meta.hgw`. */
   update?: AcpSessionUpdateListener
   /**
+   * The updates of a child Session this one owns, announced by a
+   * `subagent_update` this listener's `update` saw: ACP sends them under the
+   * child's own id, on this connection.
+   */
+  child?: (
+    childSessionId: string,
+    update: SessionUpdate,
+    meta: Record<string, unknown> | undefined
+  ) => void
+  /**
    * Fires just before a from-start replay is requested, so whoever projects
    * the Session can drop the transcript that replay is about to resend. It
    * may return a callback, called once that replay has settled either way.
@@ -125,6 +140,11 @@ export interface AcpConnection {
   start(): void
   /** Resolves with `InitializeResponse._meta.hgw` once the handshake settles. */
   readonly initialized: Promise<z.infer<typeof HgwInitializeMetaSchema>>
+  /**
+   * ACP's `InitializeResponse.capabilities` from the latest handshake:
+   * `session.fork` says the gateway forks. Undefined before one settles.
+   */
+  readonly capabilities: AgentCapabilities | undefined
   subscribeStatus(listener: (status: AcpConnectionStatus) => void): () => void
   /**
    * Set from a close until the transport is ready again. Each Session's
@@ -148,6 +168,12 @@ export interface AcpConnection {
   newSession(
     meta: z.infer<typeof HgwSessionNewMetaSchema> & { agentId: string }
   ): Promise<{ sessionId: string }>
+  /**
+   * Forks a Session into a new one holding its conversation so far, where
+   * `capabilities.session.fork` says the gateway forks; the gateway joins
+   * this connection to it, as `newSession` does.
+   */
+  forkSession(sessionId: string): Promise<{ sessionId: string }>
   listSessions(
     meta: z.infer<typeof HgwSessionListMetaSchema>,
     cursor?: string

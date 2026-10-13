@@ -2,7 +2,9 @@ import {
   client,
   methods,
   RequestError,
+  SessionUpdate,
   type AgentApp,
+  type AgentCapabilities,
   type AnyWireMessage,
   type ClientConnection,
   type ClientContext,
@@ -715,6 +717,14 @@ export function createAcpConnection(
   // The gateway answers `notFound` for a Session a fresh connection has not
   // listed or created, so every resume names the Agent that owns it.
   const owners = new Map<string, string>()
+  /**
+   * The child Sessions an opened Session announced with `subagent_update`,
+   * each with the Session that announced it: ACP sends a child's own updates
+   * and requests under its id, which only this tells apart from a stranger's.
+   */
+  const children = new Map<string, string>()
+  /** ACP's capabilities from the latest handshake. */
+  let agentCapabilities: AgentCapabilities | undefined
 
   let status: AcpConnectionStatus = "connecting"
   let outage: AcpConnectionOutage | undefined
@@ -763,7 +773,23 @@ export function createAcpConnection(
     callEach(outageListeners, logger, "acp.listener.failed", next)
   }
 
+  /**
+   * The opened Session that owns `sessionId`, a child or a child's child, or
+   * undefined for a Session no opened one announced.
+   */
+  function ownerOf(sessionId: string) {
+    let owner = children.get(sessionId)
+    for (let depth = 0; owner !== undefined && depth < 8; depth += 1) {
+      if (sessions.has(owner)) return owner
+      owner = children.get(owner)
+    }
+    return undefined
+  }
+
   function emitPending(request: AcpPendingRequest) {
+    const parentSessionId =
+      request.sessionId === undefined ? undefined : ownerOf(request.sessionId)
+    if (parentSessionId !== undefined) request = { ...request, parentSessionId }
     for (const listener of pendingListeners)
       try {
         listener(request)
@@ -866,7 +892,13 @@ export function createAcpConnection(
       // Every `_meta.hgw` the protocol defines for an update belongs to the
       // update itself, not to the notification carrying it.
       const meta = hgwMetaOf(params.update._meta)
-      const open = sessions.get(params.sessionId)
+      // A Session announces each child before any update of the child's.
+      if (SessionUpdate.isSubagentUpdate(params.update))
+        children.set(params.update.sessionId, params.sessionId)
+      const owner = sessions.has(params.sessionId)
+        ? undefined
+        : ownerOf(params.sessionId)
+      const open = sessions.get(owner ?? params.sessionId)
       if (!open) return
       // An older page's updates belong to the page read alone: its turns are
       // long over, so a live listener or the rejoin position would take its
@@ -884,6 +916,20 @@ export function createAcpConnection(
           after: position.data.sequence,
         }
       if (open.replaying) open.replaying.delivered = true
+      // A child's own update goes to the listeners of the Session that owns
+      // it; its position is that Session's turn's too.
+      if (owner !== undefined) {
+        for (const { listener } of open.listeners)
+          callEach(
+            listener.child ? [listener.child] : [],
+            logger,
+            "acp.listener.failed",
+            params.sessionId,
+            params.update,
+            meta
+          )
+        return
+      }
       for (const { listener } of open.listeners)
         callEach(
           listener.update ? [listener.update] : [],
@@ -1053,6 +1099,7 @@ export function createAcpConnection(
       },
     })
     const announced = hgwMetaOf(response._meta)
+    agentCapabilities = response.capabilities ?? undefined
     // A retry cannot change the gateway's version, so a mismatch ends the
     // connection instead of reconnecting against it.
     if (announced?.version !== HGW_EXTENSION_VERSION) {
@@ -1320,6 +1367,8 @@ export function createAcpConnection(
   function part(sessionId: string, open: OpenSession) {
     sessions.delete(sessionId)
     owners.delete(sessionId)
+    for (const [child, parent] of children)
+      if (parent === sessionId) children.delete(child)
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
@@ -1545,6 +1594,9 @@ export function createAcpConnection(
     get status() {
       return status
     },
+    get capabilities() {
+      return agentCapabilities
+    },
     start,
     initialized,
     subscribeStatus: (listener) => subscribeTo(statusListeners, listener),
@@ -1573,6 +1625,28 @@ export function createAcpConnection(
         )
       }
       return { sessionId }
+    },
+
+    async forkSession(sessionId) {
+      const forked = await request("short", (agent, options) =>
+        agent.request(
+          methods.agent.session.fork,
+          { sessionId, cwd: AGENT_CWD },
+          options
+        )
+      )
+      const agentId = owners.get(sessionId)
+      if (agentId !== undefined) owners.set(forked.sessionId, agentId)
+      // The gateway joined this connection to it; it parts in its grace
+      // unless a listener comes to it.
+      if (!sessions.has(forked.sessionId)) {
+        const open = openSession(forked.sessionId, [], true)
+        open.grace = clock.setTimeout(
+          () => part(forked.sessionId, open),
+          PART_GRACE_MS
+        )
+      }
+      return { sessionId: forked.sessionId }
     },
 
     async listSessions(meta, cursor) {
