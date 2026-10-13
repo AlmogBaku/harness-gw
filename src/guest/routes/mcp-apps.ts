@@ -1,5 +1,7 @@
 import type { Hono } from "hono"
 
+import type { GuestBudget } from "../budget"
+
 import type {
   GuestAuthorization,
   GuestOperation,
@@ -32,6 +34,7 @@ import { invitedArtifact, projectedArtifact } from "./content"
  */
 function guestSubject(
   runtime: ServerRuntime,
+  budget: GuestBudget,
   target: AppTarget,
   authorization?: GuestAuthorization
 ): AppSubject {
@@ -42,6 +45,8 @@ function guestSubject(
     read: async (scope) => {
       const artifact = await invitedArtifact(
         runtime,
+        budget,
+        ref,
         agentId,
         scope.providerSessionId,
         artifactId
@@ -98,7 +103,7 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
           grant: files,
           target: { agentId, sessionId: ref },
           subject: (authorization) =>
-            guestSubject(runtime, target, authorization),
+            guestSubject(runtime, routes.artifactBudget, target, authorization),
           argument,
           allow: limit("files"),
           login: async () => {
@@ -138,7 +143,12 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
           providerSessionId: resolved.providerSessionId,
           sessionId: ids.sessionId(ref),
         },
-        subject: guestSubject(runtime, target, authorization),
+        subject: guestSubject(
+          runtime,
+          routes.artifactBudget,
+          target,
+          authorization
+        ),
         operation,
         request: context.req.raw,
         allow: limit(operation),

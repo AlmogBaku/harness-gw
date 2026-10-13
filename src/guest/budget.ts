@@ -48,3 +48,6 @@ export function createGuestBudget(options: {
     },
   }
 }
+
+/** One invitation-keyed operation budget. */
+export type GuestBudget = ReturnType<typeof createGuestBudget>

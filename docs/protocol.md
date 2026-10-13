@@ -84,7 +84,7 @@ Close codes the gateway sends:
 
 | Code   | Meaning                                                                                                                                            | Client action                 |
 | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `1008` | Policy violation (expired credential, rate exceeded)                                                                                               | No reconnect; ends connection |
+| `1008` | Policy violation (expired credential, rate or frame size exceeded, or another protocol limit the ACP SDK enforces)                                 | No reconnect; ends connection |
 | `1013` | Gateway at capacity                                                                                                                                | Backs off 30–60 s with jitter |
 | `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
 | `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, or its waiting requests passed that buffer                       | Normal reconnect              |
@@ -616,7 +616,8 @@ part or an OpenCode prompt file, stored as a `data:` URL.
   data URL, the same cap as a staged attachment.
 
 On the guest listener, Artifact reads share a per-invitation budget of 16 in
-flight and 600 per 10 minutes. Past it, the route answers 503 `rate_limited`.
+flight and 600 per 10 minutes, on every guest path that reads an Artifact.
+Past it, the route answers 503 `turn_capacity_exceeded`.
 
 ## Interactions: permission and elicitation
 

@@ -756,10 +756,10 @@ export function createAcpConnection(
     }, LIVENESS_SILENCE_MS)
   }
 
-  /** Called on every inbound frame; resets the silence window. */
   /** When the gateway was last heard from, on any transport. */
   let lastInboundAt = Number.NEGATIVE_INFINITY
 
+  /** Called on every inbound frame; resets the silence window. */
   function onInbound() {
     lastInboundAt = clock.now()
     armSilenceTimer()

@@ -1,8 +1,11 @@
 // @vitest-environment node
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
+import type { ServerRuntime } from "../core/runtime"
+import { providerSessionId } from "../core/ids"
 import { createGuestBudget } from "./budget"
+import { GuestArtifactBudgetError, invitedArtifact } from "./routes/content"
 
 const NOW = 1_700_000_000_000
 const WINDOW_MS = 600_000
@@ -96,5 +99,44 @@ describe("guest budget", () => {
 
     expect(budget.acquire(REF)).toBeDefined()
     expect(budget.acquire(REF)).toBeUndefined()
+  })
+})
+
+describe("guest Artifact reads", () => {
+  it("spend the invitation's budget on every read path, and read nothing past it", async () => {
+    const { budget } = harness({ maxInFlight: 1 })
+    const runtime = {
+      getSession: vi.fn(async () => ({ id: "public-1" })),
+      artifact: vi.fn(async () => ({ bytes: new Uint8Array(), filename: "a" })),
+    } as unknown as ServerRuntime
+    const held = budget.acquire(REF)
+
+    await expect(
+      invitedArtifact(
+        runtime,
+        budget,
+        REF,
+        "agent",
+        providerSessionId("p-1"),
+        "hgw-image-1"
+      )
+    ).rejects.toBeInstanceOf(GuestArtifactBudgetError)
+    expect(runtime.getSession).not.toHaveBeenCalled()
+    expect(runtime.artifact).not.toHaveBeenCalled()
+
+    held?.()
+    await invitedArtifact(
+      runtime,
+      budget,
+      REF,
+      "agent",
+      providerSessionId("p-1"),
+      "hgw-image-1"
+    )
+    expect(runtime.artifact).toHaveBeenCalledWith(
+      "agent",
+      "public-1",
+      "hgw-image-1"
+    )
   })
 })

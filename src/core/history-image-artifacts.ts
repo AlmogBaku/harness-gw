@@ -163,7 +163,10 @@ function servedImage(
  */
 export function withHistoryImageArtifacts<Runtime extends ServerRuntime>(
   native: Runtime,
-  { scanPages = SCAN_PAGES }: { scanPages?: number } = {}
+  {
+    scanPages = SCAN_PAGES,
+    now = Date.now,
+  }: { scanPages?: number; now?: () => number } = {}
 ): Runtime {
   const locations = new Map<string, Location>()
   const misses = new Map<string, number>()
@@ -225,9 +228,9 @@ export function withHistoryImageArtifacts<Runtime extends ServerRuntime>(
       const found = servedImage(page, providerSessionId, artifactId, placed)
       if (found) return found
     }
-    if ((misses.get(key) ?? 0) > Date.now()) return undefined
+    if ((misses.get(key) ?? 0) > now()) return undefined
     const found = await scan(agentId, providerSessionId, artifactId)
-    if (!found) remember(misses, key, Date.now() + MISS_TTL_MS, MAX_MISSES)
+    if (!found) remember(misses, key, now() + MISS_TTL_MS, MAX_MISSES)
     return found
   }
 
