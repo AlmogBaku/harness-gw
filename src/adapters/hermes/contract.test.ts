@@ -20,8 +20,6 @@ runServerRuntimeContract(
     gaps: {
       settledTurnsFreeRecords:
         "no seam: the adapter exposes no count of its per-Session records",
-      rewindAsReported:
-        "pending: the Hermes lane proves its truncating send on its fake",
     },
   }
 )

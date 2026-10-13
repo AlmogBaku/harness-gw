@@ -221,6 +221,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   const closed: string[] = []
   /** Every socket method Hermes received, in order. */
   const received: string[] = []
+  /** Every truncation a submit asked for. */
+  const truncations: Record<string, unknown>[] = []
   /** The child Sessions waiting for a watch, each told its live id once open. */
   const watchers = new Map<string, (liveId: string) => void>()
   let nextChild = 1
@@ -334,6 +336,45 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       })
     )
     emit(turn.idle())
+  }
+
+  /**
+   * The stored rows a submit leaves, as `_truncate_history_for_submit` cuts
+   * them for an Edit or a Retry: everything from the user row it names is
+   * dropped, and the survivors are stored again as new rows. Truncation needs
+   * `confirm_truncate` (4029), a row Hermes holds (4018), and its own consent
+   * to drop every row (4028).
+   */
+  function truncated(
+    params: Record<string, unknown>
+  ): { rows: unknown[] } | Extract<Reply, { error: unknown }> {
+    const target = params.truncate_before_row_id
+    if (target === undefined) return { rows }
+    truncations.push({
+      truncate_before_row_id: target,
+      confirm_truncate: params.confirm_truncate,
+      confirm_empty_truncate: params.confirm_empty_truncate,
+    })
+    if (params.confirm_truncate !== true)
+      return {
+        error: { code: 4029, message: "truncation requires confirm_truncate" },
+      }
+    const index = rows.findIndex((row) => {
+      const value = row as Record<string, unknown>
+      return value.id === target && value.role === "user"
+    })
+    if (index < 0)
+      return { error: { code: 4018, message: "stale truncation target" } }
+    if (index === 0 && params.confirm_empty_truncate !== true)
+      return {
+        error: { code: 4028, message: "truncation would erase the transcript" },
+      }
+    return {
+      rows: rows.slice(0, index).map((row) => ({
+        ...(row as Record<string, unknown>),
+        id: nextRowId++,
+      })),
+    }
   }
 
   function rpc(method: string, params: Record<string, unknown>): Reply {
@@ -484,6 +525,9 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         interrupted?.()
         return { result: { status: "interrupted" } }
       case "prompt.submit": {
+        const cut = truncated(params)
+        if ("error" in cut) return cut
+        rows = cut.rows
         running = true
         turnRows = []
         compactions = 0
@@ -729,6 +773,9 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
 
     /** Every socket method Hermes received, in order. */
     received: () => [...received],
+
+    /** Every truncating `prompt.submit`, as its truncation params. */
+    truncations: () => [...truncations],
 
     /** The dashboard requests Hermes received for `pathname`. */
     httpRequests: (pathname: string) =>
