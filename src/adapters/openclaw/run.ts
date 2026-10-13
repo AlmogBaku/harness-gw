@@ -17,6 +17,7 @@ import {
   validateChatHistoryParams,
   validateChatSendParams,
   validateSessionsAbortParams,
+  validateSessionsRewindParams,
   type EventFrame,
 } from "@openclaw/gateway-protocol"
 import { Check } from "typebox/value"
@@ -128,6 +129,17 @@ export class OpenClawTurnPublicError extends Error {
   ) {
     super(message, options)
     this.name = "OpenClawRunPublicError"
+  }
+}
+
+/**
+ * An Edit or Retry OpenClaw cannot rewind to: it refused the rewind, or the
+ * Session holds no user turn the rewind names. Nothing changed.
+ */
+export class OpenClawRewindRefusedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("OpenClaw cannot rewind this Session to that message", options)
+    this.name = "OpenClawRewindRefusedError"
   }
 }
 
@@ -722,6 +734,30 @@ function admittedRun(value: unknown) {
 }
 
 /**
+ * The user turn an Edit or Retry rewinds before, found in the Session's own
+ * history by the id OpenClaw stores it under (`__openclaw.id`), which is the
+ * id its history page names it by. A Retry sends that turn's text again, so it
+ * needs text, and nothing besides that it could not send again.
+ */
+function rewindTarget(
+  history: HistorySnapshot,
+  entryId: string,
+  retry: boolean
+) {
+  const row = history.messages.map(record).find((candidate) => {
+    const envelope = record(candidate?.__openclaw)
+    return candidate?.role === "user" && envelope?.id === entryId
+  })
+  if (!row) throw new OpenClawRewindRefusedError()
+  if (!retry) return { entryId }
+  const text = messageText(row)
+  const parts = Array.isArray(row.content) ? row.content : []
+  if (!text?.trim() || parts.some((part) => record(part)?.type !== "text"))
+    throw new OpenClawRewindRefusedError()
+  return { entryId, text }
+}
+
+/**
  * Whether a failed write may have landed: the client's word for its own
  * failure, and a sent request for a failure after its answer.
  */
@@ -808,6 +844,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const input = TurnInputSchema.parse(candidate)
     const replies = isRepliesTurn(input) ? input.replies : undefined
     const text = isRepliesTurn(input) ? undefined : input.prompt
+    const rewindSourceId = isRepliesTurn(input)
+      ? undefined
+      : input.rewindSourceId
+    // A Retry is an empty prompt that sends the turn it rewinds again.
+    const retry = rewindSourceId !== undefined && !text?.trim()
     const stagedAttachments = readOpenClawChatAttachments(attachmentStage)
     if (attachmentStage && !stagedAttachments)
       throw new Error(
@@ -824,10 +865,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         throw new Error(
           "OpenClaw request replies require one bound native interaction"
         )
-    } else if (
-      !text?.trim() ||
-      ("rewindSourceId" in input && input.rewindSourceId !== undefined)
-    )
+    } else if (!text?.trim() && !retry)
       throw new Error(
         "AOS turns require exactly one authorized plain-text turn"
       )
@@ -900,14 +938,18 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         replies && baseline.inFlightRun?.runId === repliesBinding?.runId
           ? baseline.inFlightRun
           : undefined
-      const sendParams = replies
-        ? undefined
-        : stagedAttachments
+      // Checked against the turns the Session holds before anything is written.
+      const rewind =
+        rewindSourceId === undefined
+          ? undefined
+          : rewindTarget(baseline, rewindSourceId, retry)
+      const sendFor = (message: string) => {
+        const params = stagedAttachments
           ? prepareOpenClawChatAttachments(
               {
                 sessionKey: baseline.sessionKey,
                 agentId: scope.agentId,
-                message: text!,
+                message,
                 idempotencyKey: input.turnId,
                 attachments: stagedAttachments.attachments,
               },
@@ -916,11 +958,19 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           : {
               sessionKey: baseline.sessionKey,
               agentId: scope.agentId,
-              message: text!,
+              message,
               idempotencyKey: input.turnId,
             }
-      if (sendParams && !validateChatSendParams(sendParams))
-        throw new Error("Invalid OpenClaw chat.send request")
+        if (
+          encoder.encode(message).byteLength > MAX_TURN_BYTES ||
+          !validateChatSendParams(params)
+        )
+          throw new Error("Invalid OpenClaw chat.send request")
+        return params
+      }
+      let sendParams = replies
+        ? undefined
+        : sendFor(retry ? rewind!.text! : text!)
       if (!replies)
         await this.#enableAosTools(scope.agentId, baseline.sessionKey)
       await this.#mcpToolNames?.load(scope.agentId, baseline.sessionKey)
@@ -984,6 +1034,36 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         return this.#handle(active)
       }
 
+      // Rewind and send are two writes: once the rewind landed, a send that
+      // then fails leaves the Session changed, so the turn is uncertain.
+      if (rewind) {
+        let moved: { editorText?: string } | undefined
+        try {
+          moved = await this.#rewind(active, rewind.entryId)
+        } catch (error) {
+          this.#active.delete(key)
+          active.queue.close()
+          active.resolveSettled()
+          throw error
+        }
+        try {
+          if (moved && retry)
+            sendParams = sendFor(
+              moved.editorText?.trim() ? moved.editorText : rewind.text!
+            )
+        } catch {
+          moved = undefined
+        }
+        if (!moved) {
+          this.#markUncertain(
+            active,
+            "HGW_SEND_UNCERTAIN",
+            "OpenClaw may have rewound this Session without sending the turn."
+          )
+          return this.#handle(active)
+        }
+      }
+
       let sent = false
       let admitted: ReturnType<typeof admittedRun>
       try {
@@ -1006,7 +1086,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             "OpenClaw may have accepted this turn."
           )
       } catch (error) {
-        if (mayHaveLanded(error, sent)) {
+        if (rewind || mayHaveLanded(error, sent)) {
           active.uncertain = true
           this.#markUncertain(
             active,
@@ -1040,8 +1120,59 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (error instanceof ServerSessionNotFoundError) throw error
       if (error instanceof OpenClawTurnPublicError) throw error
       if (error instanceof OpenClawContentPublicError) throw error
+      if (error instanceof OpenClawRewindRefusedError) throw error
       throw providerUnavailable(error)
     }
+  }
+
+  /**
+   * Rewinds the Session before the user turn `entryId`, then reads the
+   * transcript the rewind moved it to, which the run's events and its
+   * reconciliation are read against. Resolves with the text OpenClaw hands
+   * back for that turn, or `undefined` when the rewind may have landed without
+   * its outcome being known. A refusal changed nothing.
+   */
+  async #rewind(
+    active: ActiveRun,
+    entryId: string
+  ): Promise<{ editorText?: string } | undefined> {
+    const params = {
+      sessionKey: active.nativeSessionKey,
+      agentId: active.scope.agentId,
+      entryId,
+    }
+    if (!validateSessionsRewindParams(params))
+      throw new OpenClawRewindRefusedError()
+    let sent = false
+    let answer: unknown
+    try {
+      answer = await this.#client.request<unknown>("sessions.rewind", params, {
+        onSent: () => {
+          sent = true
+        },
+      })
+    } catch (error) {
+      if (mayHaveLanded(error, sent)) return undefined
+      if (
+        error instanceof OpenClawClientRequestError &&
+        error.kind === "rejected"
+      )
+        throw new OpenClawRewindRefusedError({ cause: error })
+      throw providerUnavailable(error)
+    }
+    // A rewind drops stored turns, so the turn it rewinds before is recorded.
+    this.#watch.logger.warn(
+      { sessionId: active.scope.sessionId, entryId },
+      "openclaw.rewind.applied"
+    )
+    try {
+      const moved = await this.#history(active.scope, active.lease)
+      active.nativeSessionId = moved.sessionId
+    } catch {
+      return undefined
+    }
+    const editorText = boundedText(record(answer)?.editorText)
+    return editorText === undefined ? {} : { editorText }
   }
 
   async recover(

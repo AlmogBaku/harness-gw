@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { providerSessionId, sessionId } from "../../core/ids"
 import {
+  ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
   type SessionScope,
 } from "../../core/runtime"
@@ -61,6 +62,10 @@ class ControlledNative implements OpenClawRunRequestClient {
     mcpServers: { "aos-ui": true },
   }
   patchError?: unknown
+  rewindResult: unknown = { editorText: "Investigate this" }
+  rewindError?: unknown
+  /** The history a rewind moves the Session to, read from then on. */
+  rewound?: unknown
 
   sent(method: string) {
     return this.calls.filter((call) => call.method === method)
@@ -117,6 +122,12 @@ class ControlledNative implements OpenClawRunRequestClient {
           ? await this.abortRequest()
           : structuredClone(this.abortResult)
       ) as T
+    }
+    if (method === "sessions.rewind") {
+      options?.onSent?.()
+      if (this.rewindError) throw this.rewindError
+      if (this.rewound !== undefined) this.history = this.rewound
+      return structuredClone(this.rewindResult) as T
     }
     if (method === "chat.send") {
       if (options?.signal?.aborted)
@@ -2241,5 +2252,205 @@ describe("OpenClaw run engine AOS tools", () => {
         .filter(({ kind }) => kind === TurnEventKind.ToolCallStarted)
         .map(({ name }) => name)
     ).toEqual(["render_chart", "other__lookup"])
+  })
+})
+
+/** A stored transcript row under its history id. */
+function stored(id: string, role: string, content: unknown[]) {
+  return { role, content, __openclaw: { id, seq: 1 } }
+}
+
+/** An idle Session holding one user turn and its reply. */
+function answeredTurn() {
+  return {
+    ...idle(),
+    messages: [
+      stored("entry-user", "user", [
+        { type: "text", text: "Investigate this" },
+      ]),
+      stored("entry-reply", "assistant", [{ type: "text", text: "Found it" }]),
+    ],
+  }
+}
+
+/** The prompt that rewinds the Session before `rewindSourceId` with `prompt`. */
+function rewindInput(prompt: string, rewindSourceId = "entry-user") {
+  return { ...input(), prompt, rewindSourceId }
+}
+
+describe("OpenClaw run engine rewind", () => {
+  it("rewinds before the named user entry, rereads the transcript it moved to, then sends the edit", async () => {
+    const native = new ControlledNative()
+    native.history = answeredTurn()
+    native.rewound = { ...idle(), sessionId: "transcript-b" }
+    const { subscriptions, engine } = engineOver(native)
+
+    const handle = await engine.start(scope, rewindInput("Investigate that"))
+    // The transcript the rewind left is no longer the Session's: neither its
+    // events nor a history read of it are.
+    const reply = (frame: number, sessionId: string, delta: string) =>
+      subscriptions.accept(
+        {
+          type: "event",
+          event: "agent",
+          seq: frame,
+          payload: {
+            runId: "run-a",
+            sessionKey: scope.providerSessionId,
+            agentId: scope.agentId,
+            sessionId,
+            seq: 0,
+            stream: "assistant",
+            ts: 1_000,
+            data: { delta },
+          },
+        },
+        subscriptions.generation
+      )
+    reply(90, "transcript-a", "Stale")
+    reply(91, "transcript-b", "Rewound reply")
+    native.history = { ...idle(), sessionId: "transcript-b" }
+    await subscriptions.replaceGeneration("gap")
+    const events = await drain(handle.events)
+
+    const methods = native.calls.map(({ method }) => method)
+    const rewound = methods.indexOf("sessions.rewind")
+    expect(native.sent("sessions.rewind")).toMatchObject([
+      {
+        params: {
+          sessionKey: scope.providerSessionId,
+          agentId: scope.agentId,
+          entryId: "entry-user",
+        },
+      },
+    ])
+    expect(methods.slice(rewound + 1, rewound + 3)).toEqual([
+      "chat.history",
+      "chat.send",
+    ])
+    expect(native.sent("chat.send")).toMatchObject([
+      { params: { message: "Investigate that", idempotencyKey: "run-a" } },
+    ])
+    expect(events).toMatchObject([
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.MessageChunk, text: "Rewound reply" },
+      { kind: TurnEventKind.TurnEnded },
+    ])
+  })
+
+  it("sends an empty Retry as the editor text its rewind returned", async () => {
+    const native = new ControlledNative()
+    native.history = answeredTurn()
+    native.rewindResult = { editorText: "Investigate this, as typed" }
+    const { engine } = engineOver(native)
+
+    await engine.start(scope, rewindInput(""))
+
+    expect(native.sent("chat.send")).toMatchObject([
+      { params: { message: "Investigate this, as typed" } },
+    ])
+  })
+
+  it.each([
+    ["names a reply", "entry-reply"],
+    ["names no entry the Session holds", "entry-missing"],
+  ])("refuses a rewind that %s before any write", async (_case, source) => {
+    const native = new ControlledNative()
+    native.history = answeredTurn()
+    const { engine } = engineOver(native)
+
+    const error = await engine
+      .start(scope, rewindInput("Investigate that", source))
+      .catch((cause: unknown) => cause)
+
+    expect(openClawPublicError(error)?.kind).toBe("invalid_request")
+    expect(native.sent("sessions.rewind")).toHaveLength(0)
+    expect(native.sent("chat.send")).toHaveLength(0)
+    expect(native.sent("sessions.messages.unsubscribe")).toHaveLength(1)
+  })
+
+  it("refuses an empty Retry of a turn that carried attachments, which it cannot send again", async () => {
+    const native = new ControlledNative()
+    native.history = {
+      ...idle(),
+      messages: [
+        stored("entry-user", "user", [
+          { type: "text", text: "Describe this" },
+          { type: "image", data: "aGk=", mimeType: "image/png" },
+        ]),
+      ],
+    }
+    const { engine } = engineOver(native)
+
+    const error = await engine
+      .start(scope, rewindInput(""))
+      .catch((cause: unknown) => cause)
+
+    expect(openClawPublicError(error)?.kind).toBe("invalid_request")
+    expect(native.sent("sessions.rewind")).toHaveLength(0)
+  })
+
+  it("refuses a rewind OpenClaw refuses, sending nothing", async () => {
+    const native = new ControlledNative()
+    native.history = answeredTurn()
+    native.rewindError = new OpenClawClientRequestError("rejected", false, {
+      cause: new Error("Rewind is unavailable for an archived session"),
+    })
+    const { engine } = engineOver(native)
+
+    const error = await engine
+      .start(scope, rewindInput("Investigate that"))
+      .catch((cause: unknown) => cause)
+
+    expect(openClawPublicError(error)?.kind).toBe("invalid_request")
+    expect(native.sent("chat.send")).toHaveLength(0)
+    expect(native.sent("sessions.messages.unsubscribe")).toHaveLength(1)
+  })
+
+  it("refuses a rewind while the Session works, before any write", async () => {
+    const native = new ControlledNative()
+    native.history = {
+      ...running("foreign-run"),
+      messages: answeredTurn().messages,
+    }
+    const { engine } = engineOver(native)
+
+    await expect(
+      engine.start(scope, rewindInput("Investigate that"))
+    ).rejects.toBeInstanceOf(ServerTurnConflictError)
+    expect(native.sent("sessions.rewind")).toHaveLength(0)
+  })
+
+  it.each([
+    {
+      name: "a send that fails after a good rewind",
+      fault: (native: ControlledNative) => {
+        native.sendError = new OpenClawClientRequestError("rejected")
+      },
+      sends: 1,
+    },
+    {
+      name: "a rewind that may have landed",
+      fault: (native: ControlledNative) => {
+        native.rewindError = new OpenClawClientRequestError("timeout", true)
+      },
+      sends: 0,
+    },
+  ])("reports $name as an uncertain send", async ({ fault, sends }) => {
+    const native = new ControlledNative()
+    native.history = answeredTurn()
+    fault(native)
+    const { engine } = engineOver(native)
+
+    const handle = await engine.start(scope, rewindInput("Investigate that"))
+    const receipt = handle.stored?.catch((cause: unknown) => cause)
+
+    await expect(drain(handle.events)).resolves.toMatchObject([
+      { kind: TurnEventKind.TurnStarted },
+      { kind: TurnEventKind.TurnFailed, code: "HGW_SEND_UNCERTAIN" },
+    ])
+    // Something may have landed, so the prompt is never answered unstored.
+    await expect(receipt).resolves.toMatchObject({ unstored: false })
+    expect(native.sent("chat.send")).toHaveLength(sends)
   })
 })

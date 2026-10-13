@@ -302,7 +302,16 @@ export function fakeOpenClaw() {
       return
     }
     dialed.up = true
-    dialed.options.onHelloOk?.({ protocol: PROTOCOL_VERSION } as never)
+    // The connection policy every hello carries; this Gateway takes no
+    // chat attachments.
+    dialed.options.onHelloOk?.({
+      protocol: PROTOCOL_VERSION,
+      policy: {
+        maxPayload: 26_214_400,
+        maxBufferedBytes: 52_428_800,
+        tickIntervalMs: 30_000,
+      },
+    } as never)
   }
 
   /** Ends the live connection the way a dropped socket does. */
@@ -884,7 +893,8 @@ export function fakeOpenClaw() {
     scope: {
       agentId: AGENT_ID,
       providerSessionId: ids.providerSessionId(SESSION_KEY),
-      sessionId: ids.sessionId("contract-session"),
+      // OpenClaw names a Session publicly by its key, as the adapter resolves it.
+      sessionId: ids.sessionId(SESSION_KEY),
     },
 
     createGatewayClient(
