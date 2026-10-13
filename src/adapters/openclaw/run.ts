@@ -310,6 +310,11 @@ type ActiveRun = {
   resumed?: () => void
   terminal: boolean
   stopping: boolean
+  /**
+   * The native run's own end, held while a child it spawned works on: the
+   * child's work and approvals are the turn's, so the last child ends it.
+   */
+  finishing?: { stopReason?: StopReason }
   uncertain: boolean
   lastSeen: number
   lastAgentSeq: number
@@ -387,6 +392,8 @@ type ChildRun = {
   lease?: OpenClawSessionLease
   /** Its live events while its transcript is read, replayed after it. */
   pending?: EventFrame[]
+  /** Nothing streams its run any more, so no turn waits on it. */
+  unfollowed?: true
 }
 
 function settlement() {
@@ -2845,12 +2852,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       depth,
       stream: new ChildStream(spawned.runId, {
         emit: (event) => this.#streamOf(active, key).push(event),
-        ended: (status) =>
+        ended: (status) => {
           this.#streamOf(active, parent.key).push({
             kind: TurnEventKind.ChildSessionUpdated,
             childSessionId: key,
             status,
-          }),
+          })
+          this.#childEnded(active)
+        },
         spawned: (toolCallId, grandchild, args, finish) =>
           this.#spawned(
             active,
@@ -2953,7 +2962,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         },
         // A child whose subscription is lost streams no more; its transcript
         // is still read whole on a reload.
-        () => undefined
+        () => this.#unfollow(active, child)
       )
       if (active.terminal) return this.#releaseChild(child)
       await this.#subscriptions
@@ -2971,7 +2980,28 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         { code: "child-unfollowed" },
         "openclaw.child.dropped"
       )
+      this.#unfollow(active, child)
     }
+  }
+
+  /** A child nothing follows any more holds the turn no longer. */
+  #unfollow(active: ActiveRun, child: ChildRun) {
+    child.unfollowed = true
+    this.#childEnded(active)
+  }
+
+  /** Whether a child the turn follows is still at work. */
+  #childrenAtWork(active: ActiveRun) {
+    for (const child of active.children.values())
+      if (!child.stream.terminal && !child.unfollowed) return true
+    return false
+  }
+
+  /** The native run already ended: the last child at work ends the turn. */
+  #childEnded(active: ActiveRun) {
+    const { finishing } = active
+    if (finishing && !this.#childrenAtWork(active))
+      this.#finish(active, finishing.stopReason)
   }
 
   /** Shows what `child` did that its live events did not, then those events. */
@@ -3196,6 +3226,18 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       )
       return active.terminal ? "idle" : "stopping"
     }
+    // The native run is over and only its children work on: Stop aborts
+    // each, and the turn ends now rather than waiting on any of them.
+    if (active.finishing) {
+      active.stopping = true
+      for (const child of [...active.children.values()])
+        if (!child.stream.terminal && !child.unfollowed)
+          await this.#stopChild(active, child.key).catch((err: unknown) =>
+            this.#watch.logger.warn({ err }, "openclaw.child.stop_failed")
+          )
+      this.#finish(active, StopReason.Cancelled)
+      return "idle"
+    }
     active.stopping = true
     const params = {
       key: active.nativeSessionKey,
@@ -3277,6 +3319,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   #finish(active: ActiveRun, stopReason?: StopReason) {
     if (active.terminal) return
+    // A child still at work keeps the turn open past the native run's end,
+    // unless the turn is being stopped.
+    if (!active.stopping && this.#childrenAtWork(active)) {
+      active.finishing = stopReason ? { stopReason } : {}
+      return
+    }
     this.#endChildren(active)
     active.terminal = true
     this.#endOpenTools(
