@@ -130,7 +130,7 @@ export type McpAppResourceReadRequest = z.infer<
 >
 
 /**
- * The MCP App sandbox proxy: a static page, served beside the workspace on
+ * The MCP App sandbox gateway: a static page, served beside the workspace on
  * every listener, that holds only the relay creating the App's own frame. It
  * is a real document rather than `srcdoc` so it carries this policy instead of
  * inheriting the embedding page's, which on the guest surface forbids inline
@@ -153,7 +153,7 @@ export const MCP_APP_SANDBOX_CSP = [
   "img-src 'self' data: https:",
   "font-src 'self' data: https:",
   // A view plays the call's own media straight from its file address, which
-  // a loopback proxy serves over http.
+  // a loopback gateway serves over http.
   ["media-src 'self' data: https:", ...LOOPBACK_SOURCES("http")].join(" "),
   [
     "connect-src https: wss:",

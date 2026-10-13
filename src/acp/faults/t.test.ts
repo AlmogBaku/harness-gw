@@ -101,24 +101,24 @@ type Member = {
 }
 
 /** A guest browser that redeemed an invitation to the seeded Session. */
-async function connectGuest(proxy: Gateway): Promise<Member> {
+async function connectGuest(gateway: Gateway): Promise<Member> {
   const invitations = createGuestInvitationService({
     issuer: "aos-invite",
     audience: "aos-guest",
     deploymentId: "deployment-a",
-    runtimeId: proxy.runtimeInstance.id,
+    runtimeId: gateway.runtimeInstance.id,
     keys: [{ id: "current", secret: new Uint8Array(32).fill(7) }],
   })
   const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
   const context = createGuestConnection(
     {
-      runtimeInstance: proxy.runtimeInstance,
+      runtimeInstance: gateway.runtimeInstance,
       invitations,
       attachmentStages: new AttachmentStageRegistry(),
-      channels: proxy.channels,
-      catalog: proxy.catalog,
+      channels: gateway.channels,
+      catalog: gateway.catalog,
       guestActiveExecutions: 2,
-      logger: proxy.logs.logger,
+      logger: gateway.logs.logger,
     },
     "guest-connection"
   )
@@ -142,9 +142,9 @@ async function connectGuest(proxy: Gateway): Promise<Member> {
   }
 }
 
-/** An operator browser on `proxy`, registered with the Session's Agent. */
-async function connectOperator(proxy: Gateway, connectionId: string) {
-  const browser = await proxy.connect(connectionId)
+/** An operator browser on `gateway`, registered with the Session's Agent. */
+async function connectOperator(gateway: Gateway, connectionId: string) {
+  const browser = await gateway.connect(connectionId)
   await browser.list()
   return { ...browser, sessionId: SESSION }
 }
@@ -181,8 +181,8 @@ function foreignTurns() {
 
 type Table = {
   test: Test
-  /** The proxy process the members are connected to now. */
-  proxy: Gateway
+  /** The gateway process the members are connected to now. */
+  gateway: Gateway
   clock: ReturnType<typeof useFakeClock>
   operator: Member
   guest: Member
@@ -330,7 +330,7 @@ type Row = {
     | "gone"
     | "answers after its own events"
     | "native link drop"
-    | "proxy restart"
+    | "gateway restart"
   /** Where the operator and the guest are when the fault is armed. */
   stage: Stage
   options?: HarnessOptions
@@ -945,7 +945,7 @@ const ROWS: Row[] = [
   // --- a journey across every owner.
   {
     operation: "every owner",
-    fault: "proxy restart",
+    fault: "gateway restart",
     stage: "live",
     foreign: true,
     async meet(t) {
@@ -955,9 +955,9 @@ const ROWS: Row[] = [
       await t.clock.advance(0)
       // The native turn runs on, and the new process attaches to it afresh.
       t.test.sources.push(t.foreign.start())
-      t.proxy = t.test.restart()
-      t.operator = await connectOperator(t.proxy, "connection-3")
-      t.guest = await connectGuest(t.proxy)
+      t.gateway = t.test.restart()
+      t.operator = await connectOperator(t.gateway, "connection-3")
+      t.guest = await connectGuest(t.gateway)
       t.browsers.push(t.operator, t.guest)
     },
     bound: 0,
@@ -1105,7 +1105,7 @@ const counts = (test: Test) =>
     ])
   )
 
-describe("proxy fault table", () => {
+describe("gateway fault table", () => {
   it.each(ROWS)("$operation × $fault", async (row) => {
     const clock = useFakeClock()
     const foreign = foreignTurns()
@@ -1119,7 +1119,7 @@ describe("proxy fault table", () => {
     const guest = await connectGuest(test)
     const t: Table = {
       test,
-      proxy: test,
+      gateway: test,
       clock,
       operator,
       guest,
@@ -1153,7 +1153,7 @@ describe("proxy fault table", () => {
 
     for (const browser of t.browsers) browser.close()
     await clock.advance(0)
-    assertLeakFree(t.proxy)
+    assertLeakFree(t.gateway)
   })
 })
 

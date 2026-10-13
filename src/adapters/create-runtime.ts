@@ -11,7 +11,7 @@ import {
 } from "./openclaw/factory"
 import { createOpenCodeRuntime } from "./opencode/factory"
 
-/** What the proxy hands every runtime it constructs. */
+/** What the gateway hands every runtime it constructs. */
 export type RuntimeServices = {
   /** The redacting root every runtime line is written through. */
   logger: Logger

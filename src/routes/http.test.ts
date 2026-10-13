@@ -36,7 +36,7 @@ describe("boundedJson", () => {
     "cancels a %s-content-length body as soon as it exceeds the byte limit",
     async (_name, contentLength) => {
       const stream = oversizedBody(8)
-      const request = new Request("http://proxy.test/input", {
+      const request = new Request("http://gateway.test/input", {
         method: "POST",
         headers: {
           "content-type": "application/json",

@@ -90,7 +90,7 @@ describe("normalized AOS REST byte client", () => {
     })
   })
 
-  it("uses a normalized error description instead of proxy response details", async () => {
+  it("uses a normalized error description instead of gateway response details", async () => {
     const client = new HgwRemoteClient({
       fetcher: vi.fn(async () =>
         Response.json(
@@ -114,7 +114,7 @@ describe("normalized AOS REST byte client", () => {
     } satisfies Partial<HgwClientError>)
   })
 
-  it("reports an unreachable proxy separately from a proxy failure", async () => {
+  it("reports an unreachable gateway separately from a gateway failure", async () => {
     const offline = new HgwRemoteClient({
       fetcher: vi.fn(async () => {
         throw new Error("network down")
@@ -128,7 +128,7 @@ describe("normalized AOS REST byte client", () => {
       kind: "connection-interrupted",
     })
     await expect(invalid.runtimeInfo()).rejects.toMatchObject({
-      kind: "proxy-failure",
+      kind: "gateway-failure",
     })
   })
 
@@ -239,18 +239,18 @@ describe("normalized AOS REST byte client", () => {
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
 
     await expect(client.readArtifact(SESSION_ID, "   ")).rejects.toMatchObject({
-      kind: "proxy-failure",
+      kind: "gateway-failure",
     })
     await expect(
       client.transcribe(SESSION_ID, new Blob([], { type: "" }))
-    ).rejects.toMatchObject({ kind: "proxy-failure" })
+    ).rejects.toMatchObject({ kind: "gateway-failure" })
     // A blob response without a declared media type cannot be presented safely.
     await expect(
       client.readArtifact(SESSION_ID, "artifact-1")
-    ).rejects.toMatchObject({ kind: "proxy-failure" })
+    ).rejects.toMatchObject({ kind: "gateway-failure" })
   })
 
-  it("separates a pruned artifact from a proxy failure and a provider outage", async () => {
+  it("separates a pruned artifact from a gateway failure and a provider outage", async () => {
     const pruned = new HgwRemoteClient({
       fetcher: vi.fn(async () =>
         Response.json(
@@ -279,7 +279,7 @@ describe("normalized AOS REST byte client", () => {
     } satisfies Partial<HgwClientError>)
     // Only the artifact read reads a 404 as bytes the provider no longer holds.
     await expect(pruned.speak(SESSION_ID, "Hello")).rejects.toMatchObject({
-      kind: "proxy-failure",
+      kind: "gateway-failure",
     })
     await expect(
       outage.readArtifact(SESSION_ID, "artifact-1")
@@ -315,7 +315,7 @@ describe("this device's push subscription", () => {
       publicKey: "k".repeat(87),
     })
     await expect(malformed.pushInfo()).rejects.toMatchObject({
-      kind: "proxy-failure",
+      kind: "gateway-failure",
     })
   })
 
@@ -348,18 +348,18 @@ describe("this device's push subscription", () => {
     ])
   })
 
-  it("refuses an endpoint it cannot send and reports proxy failures", async () => {
+  it("refuses an endpoint it cannot send and reports gateway failures", async () => {
     const client = new HgwRemoteClient({
       fetcher: vi.fn(async () => new Response(null, { status: 500 })),
     })
 
     await expect(client.deletePushSubscription("")).rejects.toMatchObject({
-      kind: "proxy-failure",
+      kind: "gateway-failure",
       message: "Invalid push subscription",
     })
     await expect(
       client.putPushSubscription(registration)
-    ).rejects.toMatchObject({ kind: "proxy-failure" })
+    ).rejects.toMatchObject({ kind: "gateway-failure" })
   })
 })
 
@@ -444,7 +444,7 @@ describe("MCP App routes", () => {
     ).toBe("Bearer invitation-token")
   })
 
-  it("refuses an empty tool call id before asking the proxy", async () => {
+  it("refuses an empty tool call id before asking the gateway", async () => {
     const fetcher = appFetcher()
     const client = new HgwRemoteClient({ fetcher })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
@@ -452,7 +452,7 @@ describe("MCP App routes", () => {
     await expect(
       client.openMcpApp(SESSION_ID, { toolCallId: "" })
     ).rejects.toMatchObject({
-      kind: "proxy-failure",
+      kind: "gateway-failure",
     })
     expect(fetcher).not.toHaveBeenCalled()
   })

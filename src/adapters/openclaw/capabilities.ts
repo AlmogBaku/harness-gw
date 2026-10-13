@@ -1,6 +1,6 @@
 import { INTERACTION_PROTOCOL } from "../../../protocol"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
-import { OPENCLAW_ATTACHMENT_PROXY_LIMITS } from "./content"
+import { OPENCLAW_ATTACHMENT_GATEWAY_LIMITS } from "./content"
 import type { OpenClawNegotiatedPolicy } from "./client"
 import { OPENCLAW_MAX_PENDING_INTERACTIONS } from "./interactions"
 import { OPENCLAW_MCP_APP_MAX_BYTES } from "./mcp-apps"
@@ -60,7 +60,7 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
             inputs: ["image", "file"] as const,
             imageMimeTypes: "provider-dependent" as const,
             fileMimeTypes: "provider-dependent" as const,
-            ...OPENCLAW_ATTACHMENT_PROXY_LIMITS,
+            ...OPENCLAW_ATTACHMENT_GATEWAY_LIMITS,
             maxImageBytes: policy.attachments.maxImageBytes,
             maxFileBytes: policy.attachments.maxBytes,
             maxTotalBytes: "complete-request" as const,

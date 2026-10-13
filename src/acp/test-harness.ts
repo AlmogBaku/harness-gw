@@ -524,7 +524,7 @@ const ModelPatchSchema = z.object({
   effortId: z.string().optional(),
 })
 
-/** A browser's answers to what the proxy asks; `signal` aborts on withdrawal. */
+/** A browser's answers to what the gateway asks; `signal` aborts on withdrawal. */
 export type ClientAnswers = {
   permission?: (
     params: unknown,
@@ -591,7 +591,7 @@ export type HarnessOptions = {
   rows?: Session[]
   total?: number
   activity?: Activity[]
-  /** This browser's answer; `signal` aborts as the proxy withdraws the request. */
+  /** This browser's answer; `signal` aborts as the gateway withdraws the request. */
   permission?: (
     params: unknown,
     signal: AbortSignal
@@ -951,7 +951,7 @@ export async function harness(options: HarnessOptions = {}) {
       }
     }
 
-    /** One in-process browser connection to the proxy. */
+    /** One in-process browser connection to the gateway. */
     async function connect(
       connectionId: string,
       answers: {
@@ -1016,8 +1016,8 @@ export async function harness(options: HarnessOptions = {}) {
     }
   }
 
-  const proxy = serve()
-  const primary = await proxy.connect(CONNECTION)
+  const gateway = serve()
+  const primary = await gateway.connect(CONNECTION)
 
   const scope: SessionScope = {
     agentId: AGENT,
@@ -1027,7 +1027,7 @@ export async function harness(options: HarnessOptions = {}) {
 
   return {
     ...primary,
-    ...proxy,
+    ...gateway,
     /**
      * A new gateway process over the same runtime, as a restart starts one: the
      * provider and its turns carry on, and nothing of the old process is kept.
@@ -1050,7 +1050,7 @@ export async function harness(options: HarnessOptions = {}) {
     readState,
     presence,
     rows,
-    /** Every structured line the proxy wrote, whatever its level. */
+    /** Every structured line the gateway wrote, whatever its level. */
     logged: () =>
       logs
         .records()
@@ -1127,7 +1127,7 @@ export function prompts(recorder: Recorder, sessionId = SESSION) {
   })
 }
 
-/** Sends one prompt and returns the user message id the proxy minted. */
+/** Sends one prompt and returns the user message id the gateway minted. */
 export async function prompt(
   browser: Browser,
   content: string | ContentBlock[],
@@ -1282,7 +1282,7 @@ export function gate() {
   return { held: promise, release: () => resolve() }
 }
 
-/** A browser holding its answer until the proxy withdraws the request. */
+/** A browser holding its answer until the gateway withdraws the request. */
 export function heldUntilWithdrawn(signal: AbortSignal) {
   return new Promise<never>((_resolve, reject) => {
     signal.addEventListener("abort", () => reject(signal.reason), {

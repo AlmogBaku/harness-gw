@@ -1,7 +1,7 @@
 /**
  * Compile-time proof that a recovery position is opaque above the adapters:
  * whatever string a handle mints is what `recover` is asked with, and no
- * layer above an adapter can require a shape of it. `tsconfig.proxy.json`
+ * layer above an adapter can require a shape of it. `tsconfig.gateway.json`
  * typechecks this file; nothing imports or runs it.
  */
 import type { RecoveryRequest, ServerTurnHandle } from "./runtime"

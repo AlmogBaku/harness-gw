@@ -27,7 +27,7 @@ import {
 /** One MCP server the runtime's native config registers. */
 export type McpAppServer = {
   name: string
-  /** A Streamable HTTP endpoint the proxy may connect to; absent otherwise. */
+  /** A Streamable HTTP endpoint the gateway may connect to; absent otherwise. */
   url?: string
 }
 

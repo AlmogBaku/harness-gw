@@ -2,7 +2,7 @@ import type { z } from "zod"
 
 import type { AcpConnection } from "./types"
 
-/** Runs `handler` for every notification of `method` the proxy sends. */
+/** Runs `handler` for every notification of `method` the gateway sends. */
 export function subscribeHgwNotification<Value>(
   connection: Pick<AcpConnection, "subscribeNotification">,
   method: string,

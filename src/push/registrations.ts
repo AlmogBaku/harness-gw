@@ -16,7 +16,7 @@ import {
   type PushRegistration,
 } from "../../protocol/push"
 
-/** Where the proxy keeps the operator's push devices, inside the state dir. */
+/** Where the gateway keeps the operator's push devices, inside the state dir. */
 export const PUSH_REGISTRATIONS_FILE = "push-subscriptions.json"
 
 /** How many devices one principal may register at once. */
@@ -69,7 +69,7 @@ export interface PushRegistrations {
   prune(): Promise<void>
 }
 
-/** Fails closed: a state directory the proxy cannot write is a startup error. */
+/** Fails closed: a state directory the gateway cannot write is a startup error. */
 async function requireWritableDirectory(stateDir: string) {
   try {
     const details = await stat(stateDir)

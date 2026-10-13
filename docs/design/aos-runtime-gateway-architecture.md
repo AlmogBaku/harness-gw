@@ -494,7 +494,7 @@ global cap (`src/config.ts`).
   separate origin and listener; `shutdownGraceMs`.
 
 `parseGatewayConfig` stays opaque for library callers: it rejects the whole
-config with `"Invalid proxy configuration"` so rejected input containing
+config with `"Invalid gateway configuration"` so rejected input containing
 secrets is never logged. The startup path is different. `loadGatewayConfig` in
 `src/config-file.ts` resolves the path (via `HARNESS_GW_CONFIG_FILE` or the
 discovered `${XDG_CONFIG_HOME:-$HOME/.config}/harness-gw/config.yaml`), checks

@@ -1,4 +1,4 @@
-/** The largest artifact the proxy reads back for the browser. */
+/** The largest artifact the gateway reads back for the browser. */
 export const MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 
 const MAX_PATH_BYTES = 4_096

@@ -6,7 +6,7 @@ import { useFakeClock } from "../../test/support/fake-clock"
 import { connectBrowser } from "./support"
 
 describe("fault harness", () => {
-  it("gives each browser reconnection a proxy connection of its own", async () => {
+  it("gives each browser reconnection a gateway connection of its own", async () => {
     const clock = useFakeClock()
     const { test, pipe, connection } = connectBrowser(await harness())
     const join = vi.spyOn(test.channels, "join")

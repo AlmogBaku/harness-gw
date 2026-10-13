@@ -111,7 +111,7 @@ describe("log redaction", () => {
     })
   })
 
-  it("writes no credential value the proxy has read or a child binds, its rotated successor and Basic form included", async () => {
+  it("writes no credential value the gateway has read or a child binds, its rotated successor and Basic form included", async () => {
     const credentials = new CredentialValues()
     const basic = (password: string) =>
       Buffer.from(`aos:${password}`).toString("base64")

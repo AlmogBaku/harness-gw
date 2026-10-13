@@ -28,8 +28,8 @@ afterEach(async () => {
  * discover it. The explicit mode matters: a default one under `umask 002` is
  * group-writable, which the loader refuses.
  */
-async function proxyConfig() {
-  const directory = await mkdtemp(join(tmpdir(), "aos-proxy-cli-"))
+async function gatewayConfig() {
+  const directory = await mkdtemp(join(tmpdir(), "harness-gw-cli-"))
   temporaryDirectories.push(directory)
   const key = Buffer.alloc(32, 7).toString("base64url")
   const writeSecret = async (name: string, value: string) => {
@@ -112,13 +112,13 @@ function stubbedStart() {
   }))
 }
 
-describe("proxy executable", () => {
+describe("gateway executable", () => {
   it("prints CLI help without reporting a startup failure", async () => {
     const logs = captureLogs()
     const start = vi.fn()
 
     await expect(
-      runGatewayCli(["bun", "proxy", "--help"], {
+      runGatewayCli(["bun", "harness-gw", "--help"], {
         createLogger: () => logs.logger,
         credentials: new CredentialValues(),
         start,
@@ -145,7 +145,7 @@ describe("proxy executable", () => {
       return { server: { stop: vi.fn() }, shutdown }
     })
     const lifecycle = await runGatewayCli(
-      ["bun", "proxy", "serve", "--config", (await proxyConfig()).configFile],
+      ["bun", "harness-gw", "serve", "--config", (await gatewayConfig()).configFile],
       {
         runtimeFactory: (config, limits, services) => {
           if (config.kind !== "hermes") throw new Error("a Hermes runtime only")
@@ -230,7 +230,7 @@ describe("proxy executable", () => {
     let output = ""
 
     await expect(
-      runGatewayCli(["bun", "proxy", "invite", "--help"], {
+      runGatewayCli(["bun", "harness-gw", "invite", "--help"], {
         createLogger: () => captureLogs().logger,
         credentials: new CredentialValues(),
         getenv: () => undefined,
@@ -259,7 +259,7 @@ describe("proxy executable", () => {
   })
 
   it("generates a stable conversation reference when --ref is omitted", async () => {
-    const { configFile } = await proxyConfig()
+    const { configFile } = await gatewayConfig()
     let output = ""
     let entropyCall = 0
 
@@ -267,7 +267,7 @@ describe("proxy executable", () => {
       runGatewayCli(
         [
           "bun",
-          "proxy",
+          "gateway",
           "invite",
           "--agent",
           "default",
@@ -335,14 +335,14 @@ describe("proxy executable", () => {
   })
 
   it("preserves an explicit trimmed --ref, defaults to 72 hours, and needs no first-turn instruction", async () => {
-    const { configFile } = await proxyConfig()
+    const { configFile } = await gatewayConfig()
     let output = ""
 
     await expect(
       runGatewayCli(
         [
           "bun",
-          "proxy",
+          "gateway",
           "invite",
           "--config",
           configFile,
@@ -377,11 +377,11 @@ describe("proxy executable", () => {
   })
 
   it("serves the discovered configuration file when no flag is given", async () => {
-    const { configHome } = await proxyConfig()
+    const { configHome } = await gatewayConfig()
     const start = stubbedStart()
     const logs = captureLogs()
 
-    const lifecycle = await runGatewayCli(["bun", "proxy", "serve"], {
+    const lifecycle = await runGatewayCli(["bun", "harness-gw", "serve"], {
       runtimeFactory: stubbedHermesRuntime(),
       createLogger: () => logs.logger,
       credentials: new CredentialValues(),
@@ -399,11 +399,11 @@ describe("proxy executable", () => {
   })
 
   it("checks a configuration and its secret files without starting anything, and names a file it rejects", async () => {
-    const { configFile, tokenFile, invitationKey } = await proxyConfig()
+    const { configFile, tokenFile, invitationKey } = await gatewayConfig()
     const start = vi.fn()
-    const missing = join(tmpdir(), "aos-proxy-absent", "config.yaml")
+    const missing = join(tmpdir(), "harness-gw-absent", "config.yaml")
     const check = (path: string, writeOut = vi.fn()) =>
-      runGatewayCli(["bun", "proxy", "config", "check", "--config", path], {
+      runGatewayCli(["bun", "harness-gw", "config", "check", "--config", path], {
         createLogger: () => captureLogs().logger,
         credentials: new CredentialValues(),
         getenv: () => undefined,
@@ -425,7 +425,7 @@ describe("proxy executable", () => {
 
   it("requires an explicit configuration file to mint an invitation", async () => {
     await expect(
-      runGatewayCli(["bun", "proxy", "invite", "--agent", "default"], {
+      runGatewayCli(["bun", "harness-gw", "invite", "--agent", "default"], {
         createLogger: () => captureLogs().logger,
         credentials: new CredentialValues(),
         getenv: () => undefined,
@@ -435,10 +435,10 @@ describe("proxy executable", () => {
 
   it("reports a start failure an operator can act on", async () => {
     const start = vi.fn()
-    const missing = join(tmpdir(), "aos-proxy-absent", "proxy.yaml")
+    const missing = join(tmpdir(), "harness-gw-absent", "config.yaml")
 
     const failure = await runGatewayCli(
-      ["bun", "proxy", "serve", "--config", missing],
+      ["bun", "harness-gw", "serve", "--config", missing],
       {
         createLogger: () => captureLogs().logger,
         credentials: new CredentialValues(),

@@ -1958,7 +1958,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
     return { subscriptions, engine, turns, stop }
   }
 
-  it("stays silent through the proxy's own turn", async () => {
+  it("stays silent through the gateway's own turn", async () => {
     const native = new ControlledNative()
     const { subscriptions, engine, turns } = await watching(native)
 
@@ -2120,7 +2120,7 @@ describe("OpenClaw run engine runtime-started turns", () => {
     expect(native.sent("chat.send")).toHaveLength(0)
   })
 
-  it("discovers nothing for the proxy's own run, even while it settles", async () => {
+  it("discovers nothing for the gateway's own run, even while it settles", async () => {
     const native = new ControlledNative()
     const { subscriptions, engine } = engineFor(native)
     const handle = await engine.start(scope, input())

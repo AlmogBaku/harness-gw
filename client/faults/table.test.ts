@@ -123,7 +123,7 @@ const ROWS: Row[] = [
     transcript: WHOLE,
   },
   {
-    fault: "the proxy closes at capacity (1013)",
+    fault: "the gateway closes at capacity (1013)",
     inject: (pipe) => pipe.sockets[0]!.closeFromGateway(1013),
     holds: { ms: CAPACITY_BACKOFF.minMs, status: "capacity" },
     bound: CAPACITY_BACKOFF.maxMs,
@@ -133,7 +133,7 @@ const ROWS: Row[] = [
     transcript: WHOLE,
   },
   {
-    fault: "the proxy closes on a policy violation (1008)",
+    fault: "the gateway closes on a policy violation (1008)",
     inject: (pipe) => pipe.sockets[0]!.closeFromGateway(1008),
     bound: 0,
     status: "closed",

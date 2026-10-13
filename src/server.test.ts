@@ -23,7 +23,7 @@ function handshake(url: string, headers: Record<string, string> = {}) {
   })
 }
 
-describe("Bun proxy server lifecycle", () => {
+describe("Bun gateway server lifecycle", () => {
   afterEach(() => {
     vi.useRealTimers()
   })

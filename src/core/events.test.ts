@@ -265,7 +265,7 @@ function without(fixture: Record<string, unknown>, key: string) {
   )
 }
 
-describe("the proxy-owned turn vocabulary", () => {
+describe("the gateway-owned turn vocabulary", () => {
   it("parses a full fixture of every kind unchanged", () => {
     for (const [kind, fixture] of fixtures) {
       expect(TurnEventSchema.parse(fixture), kind).toEqual(fixture)
@@ -299,7 +299,7 @@ describe("the proxy-owned turn vocabulary", () => {
     }
   })
 
-  it("rejects a kind outside the proxy vocabulary", () => {
+  it("rejects a kind outside the gateway vocabulary", () => {
     expect(isTurnEvent({ kind: "STEP_STARTED", stepName: "one" })).toBe(false)
   })
 

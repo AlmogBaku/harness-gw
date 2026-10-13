@@ -121,7 +121,7 @@ function hermesGateway() {
     logger
   )
   onTestFinished(() => instance.close())
-  const proxy = createGatewayApp({
+  const gateway = createGatewayApp({
     runtimeInstance: instance,
     logger,
     health: () => ({
@@ -146,13 +146,13 @@ function hermesGateway() {
   return {
     hermes,
     file: (toolCallId: string, argument: string) =>
-      proxy.request(
+      gateway.request(
         `${ORIGIN}/api/v1/agents/${agentId}/sessions/${sessionId}/tool-calls/${toolCallId}/app/files/${argument}`
       ),
   }
 }
 
-describe("Hermes MCP App files through the proxy", () => {
+describe("Hermes MCP App files through the gateway", () => {
   it("serves a call's file until its real path leaves the Agent's folder", async () => {
     const { hermes, file } = hermesGateway()
     const report = `${PROJECT_FOLDER}/report.txt`

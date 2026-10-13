@@ -34,7 +34,7 @@ export {
  * rather than a protocol's framing.
  */
 
-/** Every kind of turn event the proxy carries from a runtime to its readers. */
+/** Every kind of turn event the gateway carries from a runtime to its readers. */
 export const TurnEventKind = {
   TurnStarted: "turn-started",
   /** The turn finished cleanly. */
@@ -564,7 +564,7 @@ export type ExecutionEvent = {
   | {
       kind: "attention-requested"
       request: PendingRequest
-      /** The principal that admitted the turn, when this proxy admitted it. */
+      /** The principal that admitted the turn, when this gateway admitted it. */
       startedBy?: string
     }
   | { kind: "attention-resolved"; requestId: string }

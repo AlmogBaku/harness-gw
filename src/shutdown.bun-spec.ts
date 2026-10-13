@@ -35,7 +35,7 @@ async function freePort() {
   return port
 }
 
-/** Answers the native WebSocket handshake so the proxy holds a live provider socket. */
+/** Answers the native WebSocket handshake so the gateway holds a live provider socket. */
 function fakeHermes(): FakeHermes {
   let announceConnected!: () => void
   const connected = new Promise<void>((resolve) => {
@@ -71,12 +71,12 @@ function fakeHermes(): FakeHermes {
   }
 }
 
-async function proxyConfig(port: number, hermesBaseUrl: string) {
-  const directory = await mkdtemp(join(tmpdir(), "aos-proxy-shutdown-"))
+async function gatewayConfig(port: number, hermesBaseUrl: string) {
+  const directory = await mkdtemp(join(tmpdir(), "harness-gw-shutdown-"))
   cleanups.push(() => rm(directory, { recursive: true, force: true }))
   const tokenFile = join(directory, "hermes-token")
   await writeFile(tokenFile, "shutdown-spec-token", { mode: 0o600 })
-  const configFile = join(directory, "proxy.yaml")
+  const configFile = join(directory, "config.yaml")
   await writeFile(
     configFile,
     stringify({
@@ -135,12 +135,12 @@ async function waitFor(condition: () => boolean, timeoutMs: number) {
   return true
 }
 
-describe("proxy shutdown under SIGTERM", () => {
+describe("gateway shutdown under SIGTERM", () => {
   it("exits inside the grace with an ACP peer and a provider socket attached", async () => {
     const hermes = fakeHermes()
     cleanups.push(() => hermes.stop())
     const port = await freePort()
-    const { configFile } = await proxyConfig(port, hermes.baseUrl)
+    const { configFile } = await gatewayConfig(port, hermes.baseUrl)
 
     const child = Bun.spawn({
       cmd: [

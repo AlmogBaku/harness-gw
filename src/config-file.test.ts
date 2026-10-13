@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest"
 import { parseGatewayConfig } from "./config"
 import {
   loadGatewayConfig,
-  PROXY_ENV_OVERRIDES,
-  PROXY_ENV_PREFIX,
+  GATEWAY_ENV_OVERRIDES,
+  GATEWAY_ENV_PREFIX,
   GatewayConfigurationError,
   resolveGatewayConfigPath,
 } from "./config-file"
@@ -16,18 +16,18 @@ function env(values: Record<string, string | undefined>) {
   return (name: string) => values[name]
 }
 
-describe("proxy configuration path resolution", () => {
+describe("gateway configuration path resolution", () => {
   it("prefers the flag, then the environment, then the XDG default", () => {
     expect(
       resolveGatewayConfigPath({
-        flag: "/etc/aos-ui/flag.yaml",
+        flag: "/etc/harness-gw/flag.yaml",
         getenv: env({
           HARNESS_GW_CONFIG_FILE: "/etc/harness-gw/env.yaml",
           XDG_CONFIG_HOME: "/config",
           HOME: "/home/operator",
         }),
       })
-    ).toEqual({ path: "/etc/aos-ui/flag.yaml", explicit: true })
+    ).toEqual({ path: "/etc/harness-gw/flag.yaml", explicit: true })
 
     expect(
       resolveGatewayConfigPath({
@@ -227,7 +227,7 @@ const MINIMAL_CONFIG = {
   shutdownGraceMs: 5_000,
 }
 
-describe("proxy configuration file reading", () => {
+describe("gateway configuration file reading", () => {
   it("reads an explicit file the current user owns", async () => {
     await expect(
       loadGatewayConfig({
@@ -449,7 +449,7 @@ describe("proxy configuration file reading", () => {
   })
 })
 
-describe("proxy configuration defaults and merging", () => {
+describe("gateway configuration defaults and merging", () => {
   it("fills every default a minimal file leaves out", async () => {
     await expect(
       loadGatewayConfig({
@@ -563,7 +563,7 @@ const EVERY_OVERRIDE: Record<string, string> = {
   GUEST_LISTEN_EXPOSURE: "private-container",
   GUEST_PUBLIC_ORIGIN: "https://guest.example.test",
   GUEST_INVITATIONS_CLOCK_SKEW_SECONDS: "0",
-  PUSH_STATE_DIR: "/var/lib/aos-ui/push",
+  PUSH_STATE_DIR: "/var/lib/harness-gw/push",
   PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
   PUSH_VAPID_PRIVATE_KEY_FILE: "/run/secrets/vapid-private-key",
   VOICE_TRANSCRIPTION_PROVIDER: "openai-compatible",
@@ -585,7 +585,7 @@ const EVERY_OVERRIDE: Record<string, string> = {
   SHUTDOWN_GRACE_MS: "5000",
 }
 
-describe("proxy configuration environment overrides", () => {
+describe("gateway configuration environment overrides", () => {
   it("lets an override win over the file", async () => {
     await expect(
       loadGatewayConfig({
@@ -700,7 +700,7 @@ runtime:
       loadGatewayConfig({
         flag: CONFIG_PATH,
         getenv: env({
-          HARNESS_GW_PUSH_STATE_DIR: "/var/lib/aos-ui/push",
+          HARNESS_GW_PUSH_STATE_DIR: "/var/lib/harness-gw/push",
           HARNESS_GW_PUSH_VAPID_SUBJECT: "mailto:ops@example.test",
           HARNESS_GW_PUSH_VAPID_PRIVATE_KEY_FILE:
             "/run/secrets/vapid-private-key",
@@ -709,7 +709,7 @@ runtime:
       })
     ).resolves.toMatchObject({
       push: {
-        stateDir: "/var/lib/aos-ui/push",
+        stateDir: "/var/lib/harness-gw/push",
         vapid: {
           subject: "mailto:ops@example.test",
           privateKeyFile: "/run/secrets/vapid-private-key",
@@ -720,7 +720,7 @@ runtime:
     expect(
       await loadFailure({
         flag: CONFIG_PATH,
-        getenv: env({ HARNESS_GW_PUSH_STATE_DIR: "/var/lib/aos-ui/push" }),
+        getenv: env({ HARNESS_GW_PUSH_STATE_DIR: "/var/lib/harness-gw/push" }),
         ...access({ [CONFIG_PATH]: { source: MINIMAL_YAML } }),
       })
     ).toContain("push.vapid")
@@ -787,14 +787,14 @@ runtime:
 
   it("cannot complete a guest listener from the environment, because its keys are file-only", async () => {
     const values: Record<string, string> = {}
-    for (const row of PROXY_ENV_OVERRIDES) {
+    for (const row of GATEWAY_ENV_OVERRIDES) {
       if (row.appliesWhen !== undefined && row.appliesWhen === "opencode")
         continue
       if (row.appliesWhen !== undefined && row.appliesWhen === "openclaw")
         continue
       const value = EVERY_OVERRIDE[row.suffix]
       expect(value, `${row.suffix} needs a value in this test`).toBeDefined()
-      values[`${PROXY_ENV_PREFIX}${row.suffix}`] = value!
+      values[`${GATEWAY_ENV_PREFIX}${row.suffix}`] = value!
     }
 
     const message = await loadFailure({
@@ -852,7 +852,7 @@ runtime:
         },
       },
       push: {
-        stateDir: "/var/lib/aos-ui/push",
+        stateDir: "/var/lib/harness-gw/push",
         vapid: {
           subject: "mailto:ops@example.test",
           privateKeyFile: "/run/secrets/vapid-private-key",
@@ -896,7 +896,7 @@ runtime:
     }
 
     const rows = new Set(
-      PROXY_ENV_OVERRIDES.map((override) => override.path.join("."))
+      GATEWAY_ENV_OVERRIDES.map((override) => override.path.join("."))
     )
     const reachable = new Set<string>()
     for (const runtime of Object.values(runtimes))
@@ -917,21 +917,21 @@ runtime:
   it("never lets a secret-bearing field be set by value", () => {
     // Every credential leaf is reachable only as a file path, so a row whose
     // name ends in a secret word must be a *_FILE row.
-    for (const { suffix } of PROXY_ENV_OVERRIDES)
+    for (const { suffix } of GATEWAY_ENV_OVERRIDES)
       if (/(TOKEN|PASSWORD|SECRET|KEY|IDENTITY)$/u.test(suffix))
         expect(suffix).toMatch(/_FILE$/u)
   })
 
   it("claims no variable name the deployment already uses", () => {
-    const names = PROXY_ENV_OVERRIDES.map(
-      (override) => `${PROXY_ENV_PREFIX}${override.suffix}`
+    const names = GATEWAY_ENV_OVERRIDES.map(
+      (override) => `${GATEWAY_ENV_PREFIX}${override.suffix}`
     )
     expect(new Set(names).size).toBe(names.length)
     expect(names).not.toContain("HARNESS_GW_CONFIG_FILE")
   })
 })
 
-describe("proxy configuration reporting", () => {
+describe("gateway configuration reporting", () => {
   it("keeps a rejected value and a rejected key out of the message", async () => {
     const message = await loadFailure({
       flag: CONFIG_PATH,

@@ -13,7 +13,7 @@ import { createOpenCodeRuntime } from "./factory"
 import { CredentialValues } from "../../redaction"
 import { OpenCodeTurnEngine } from "./run"
 
-/** The services the proxy hands a runtime, logging to a capture. */
+/** The services the gateway hands a runtime, logging to a capture. */
 const services = () => ({
   logger: captureLogs().logger,
   credentials: new CredentialValues(),

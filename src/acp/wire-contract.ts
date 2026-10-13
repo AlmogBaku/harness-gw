@@ -180,9 +180,9 @@ const SUBSCRIBER_LIMITS: SubscriberLimits = {
   subscriberBytes: 2_097_152,
 }
 
-/** What one case holds: the proxy, the Agent, and whatever it opened. */
+/** What one case holds: the gateway, the Agent, and whatever it opened. */
 type WireHarness = Readonly<{
-  proxy: Gateway
+  gateway: Gateway
   agentId: string
   /** The Agent's folder, the one `cwd` its Sessions take. */
   folder: string
@@ -220,7 +220,7 @@ async function composeGateway(runtime: WireRuntime, limits: SubscriberLimits) {
   )
   const release = () => rm(directory, { recursive: true })
   try {
-    const proxy = await createConfiguredGateway(
+    const gateway = await createConfiguredGateway(
       {
         version: 1,
         deploymentId: "wire-contract",
@@ -249,7 +249,7 @@ async function composeGateway(runtime: WireRuntime, limits: SubscriberLimits) {
         credentials: new CredentialValues(),
       }
     )
-    return { proxy, release }
+    return { gateway, release }
   } catch (error) {
     await release()
     throw error
@@ -270,7 +270,7 @@ function connectClient(
   const timeline: TimelineEntry[] = []
   const updateWaiters = new Set<(update: SessionUpdate) => void>()
   const askWaiters = new Set<(ask: WireAsk) => void>()
-  /** Holds one request open until the case answers it or the proxy withdraws it. */
+  /** Holds one request open until the case answers it or the gateway withdraws it. */
   function hold<T>(signal: AbortSignal, params: unknown, reply: T) {
     timeline.push("asked")
     return new Promise<T>((resolve, reject) => {
@@ -382,11 +382,11 @@ function connectClient(
  */
 type TimelineEntry = SessionUpdate | "asked" | "answer"
 
-/** One request the proxy sent this client, held open until answered. */
+/** One request the gateway sent this client, held open until answered. */
 type WireAsk = Readonly<{
   /** The request's params, as the client read them. */
   params: unknown
-  /** Settles once the proxy withdraws the request with `$/cancel_request`. */
+  /** Settles once the gateway withdraws the request with `$/cancel_request`. */
   withdrawn: Promise<void>
   /** Answers "yes", or allows with the first option offered. */
   answer(): void
@@ -680,7 +680,7 @@ function questionsOf(turn: WireTurn): WireQuestions {
   }
 }
 
-/** One case over a freshly composed proxy, closing all it opened. */
+/** One case over a freshly composed gateway, closing all it opened. */
 function wireCase(
   createRuntime: () => WireRuntime,
   body: (harness: WireHarness) => Promise<void>,
@@ -689,7 +689,7 @@ function wireCase(
   return async () => {
     const clock = useFakeClock()
     const runtime = createRuntime()
-    const { proxy, release } = await composeGateway(runtime, limits)
+    const { gateway, release } = await composeGateway(runtime, limits)
     const clients: WireClient[] = []
     const connect: WireHarness["connect"] = (
       service,
@@ -709,7 +709,7 @@ function wireCase(
     }
     try {
       await body({
-        proxy,
+        gateway,
         agentId: runtime.agentId,
         folder: runtime.folder,
         turn: runtime.turn ?? NO_TURN,
@@ -717,7 +717,7 @@ function wireCase(
         connect,
         connectPlain: (options) =>
           connect(
-            proxy.acpService,
+            gateway.acpService,
             OPERATOR_ORIGIN,
             hgwAcpAgentPath(runtime.agentId),
             options
@@ -725,7 +725,7 @@ function wireCase(
       })
     } finally {
       for (const { connection } of clients) connection.close()
-      await until(clock, proxy.runtimeInstance.close())
+      await until(clock, gateway.runtimeInstance.close())
       await release()
     }
   }
@@ -1542,13 +1542,13 @@ export function runWireListenerContract(
     withTransportsStubbed(() => {
       it(
         "answers version 2 to an initialize asking for any version, alone or as a batch's only entry",
-        wireCase(createRuntime, async ({ proxy, clock }) => {
+        wireCase(createRuntime, async ({ gateway, clock }) => {
           const answers: unknown[] = []
           for (const version of [1, 3])
             for (const batched of [false, true]) {
               const raw = await until(
                 clock,
-                rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
+                rawSocket(gateway.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
               )
               const frame = rawInitialize(version)
               raw.send(JSON.stringify(batched ? [frame] : frame))
@@ -1569,11 +1569,11 @@ export function runWireListenerContract(
 
       it(
         "answers each malformed frame with the SDK's own error",
-        wireCase(createRuntime, async ({ proxy, clock }) => {
+        wireCase(createRuntime, async ({ gateway, clock }) => {
           const open = () =>
             until(
               clock,
-              rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
+              rawSocket(gateway.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
             )
           const answers: unknown[] = []
           for (const frame of [
@@ -1622,10 +1622,10 @@ export function runWireListenerContract(
 
       it(
         "refuses an initialize batched with other entries",
-        wireCase(createRuntime, async ({ proxy, clock }) => {
+        wireCase(createRuntime, async ({ gateway, clock }) => {
           const raw = await until(
             clock,
-            rawSocket(proxy.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
+            rawSocket(gateway.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
           )
           raw.send(
             JSON.stringify([
@@ -1646,7 +1646,7 @@ export function runWireListenerContract(
 
       it(
         "serves each Agent at its own address, and no address it does not know",
-        wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
+        wireCase(createRuntime, async ({ gateway, agentId, clock }) => {
           const answers: Record<string, unknown> = {}
           for (const path of [
             HGW_ACP_PATH,
@@ -1659,7 +1659,7 @@ export function runWireListenerContract(
           ]) {
             const upgrade = await until(
               clock,
-              proxy.acpService.authorizeUpgrade(
+              gateway.acpService.authorizeUpgrade(
                 new Request(`${OPERATOR_ORIGIN}${path}`, {
                   headers: { Origin: OPERATOR_ORIGIN },
                 })
@@ -1689,7 +1689,7 @@ export function runWireListenerContract(
         "scopes an Agent's address to that Agent, and asks the shared one to name it",
         wireCase(
           createRuntime,
-          async ({ proxy, agentId, clock, connect, connectPlain }) => {
+          async ({ gateway, agentId, clock, connect, connectPlain }) => {
             const plain = connectPlain()
             await until(clock, plain.initialize())
             const sessionId = await until(clock, newSession(plain))
@@ -1699,7 +1699,7 @@ export function runWireListenerContract(
               plain.connection.agent.request(methods.agent.session.list, {})
             )
             const shared = connect(
-              proxy.acpService,
+              gateway.acpService,
               OPERATOR_ORIGIN,
               HGW_ACP_PATH
             )
@@ -1876,8 +1876,8 @@ export function runWireListenerContract(
 
       it(
         "shows a guest each batched reply as its public code and name alone",
-        wireCase(createRuntime, async ({ proxy, agentId, clock }) => {
-          const guest = proxy.guest!
+        wireCase(createRuntime, async ({ gateway, agentId, clock }) => {
+          const guest = gateway.guest!
           const ref = "wire-contract"
           const { token } = await guest.invitations.issue({ agentId, ref })
           const raw = await until(
@@ -1946,8 +1946,8 @@ export function runWireListenerContract(
 
       it(
         "admits a guest on its own listener once it logs in with an invite",
-        wireCase(createRuntime, async ({ proxy, agentId, clock, connect }) => {
-          const guest = proxy.guest!
+        wireCase(createRuntime, async ({ gateway, agentId, clock, connect }) => {
+          const guest = gateway.guest!
           const extras = connect(guest.acpService, GUEST_ORIGIN, HGW_ACP_PATH)
           const { token } = await guest.invitations.issue({
             agentId,

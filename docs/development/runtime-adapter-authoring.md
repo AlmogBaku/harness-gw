@@ -58,7 +58,7 @@ Treat these as separate objects:
 1. The durable native Session and transcript.
 2. The adapter's live attachment, subscription, or process-local Session ID.
 3. The coordinator's logical execution.
-4. A proxy turn segment (a sequence of events with a stable `turnId`).
+4. A gateway turn segment (a sequence of events with a stable `turnId`).
 5. A downstream browser subscriber.
 
 A browser disconnect releases only its subscriber. It does not stop native

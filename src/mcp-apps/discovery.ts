@@ -36,7 +36,7 @@ export function reachableUrl(
   }
 }
 
-/** Every native server by name, with a URL only where the proxy may dial it. */
+/** Every native server by name, with a URL only where the gateway may dial it. */
 export function mcpServersFromNative(
   servers: readonly NativeMcpServer[],
   credentialed: (name: string) => boolean = () => false
