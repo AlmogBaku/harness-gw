@@ -932,7 +932,8 @@ export function createAcpConnection(
       // Every turn meta extends the chunk meta, and reads drop unknown keys,
       // so the chunk schema positions any of them.
       const position = HgwChunkMetaSchema.safeParse(meta)
-      if (position.success)
+      // A child's update between turns is no position in the turn it names.
+      if (position.success && !position.data.background)
         open.position = {
           turnId: position.data.turnId,
           after: position.data.sequence,

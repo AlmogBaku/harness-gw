@@ -2057,13 +2057,27 @@ export class SessionCoordinator {
    * Stops one child Session the live turn spawned, where its handle stops a
    * child alone; the turn itself runs on.
    */
-  async stopChild(
-    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
-    childSessionId: string
-  ) {
+  /**
+   * Stops one child's work alone: the live turn's own through its handle,
+   * and one that outlived the turn that spawned it through the runtime, as no
+   * turn carries it. Each ignores a child it does not hold.
+   */
+  async stopChild(scope: SessionScope, childSessionId: string) {
     const execution = this.#executions.get(scopeKey(scope))
-    if (!execution || execution.state === "idle") return
-    await execution.segment.handle.stopChild?.(childSessionId)
+    if (execution && execution.state !== "idle")
+      await execution.segment.handle.stopChild?.(childSessionId)
+    await this.options.engine.stopChild?.(scope, childSessionId)
+  }
+
+  /**
+   * Answers a request a child asked while no turn of its parent ran, which
+   * continues no turn. A runtime that reports no such child has none to
+   * answer.
+   */
+  async respondChild(scope: SessionScope, reply: RequestReply) {
+    const respond = this.options.engine.respondChild
+    if (!respond) throw new ServerRequestStaleError()
+    await respond(scope, reply)
   }
 
   async steer(

@@ -1,6 +1,8 @@
 import type {
+  ChildTurnEvent,
   ExecutionEvent,
   PendingRequest,
+  RequestReply,
   TurnEvent,
   TurnInput,
 } from "./events"
@@ -142,6 +144,17 @@ export type ServerTurnEngine = {
     | undefined
   >
   /**
+   * Answers a request a child asked while no turn of its parent ran
+   * (`ServerTurnListener.onChildRequest`), as a turn's own requests are
+   * answered by the turn that continues it.
+   */
+  respondChild?(scope: SessionScope, reply: RequestReply): Promise<void>
+  /**
+   * Stops one child's work while no turn of its parent runs, as
+   * `ServerTurnHandle.stopChild` does within one.
+   */
+  stopChild?(scope: SessionScope, childSessionId: string): Promise<void>
+  /**
    * Subscribes to one Session's turns that this adapter did not start: a
    * subagent result, a loop tick, a heartbeat, cron, or another native client.
    * Rules:
@@ -165,6 +178,17 @@ export type ServerTurnListener = {
   onTurn(): void
   onError(cause: unknown): void
   onNotice?(notice: SessionNotice): void
+  /**
+   * A child Session one of the Session's turns spawned, still at work after
+   * that turn ended: its reports and its own events, with `turnId` naming the
+   * turn that spawned it. As within a turn, a child is announced before
+   * anything of its own, and never under another Session's id.
+   */
+  onChild?(turnId: string, event: ChildTurnEvent): void
+  /** A request such a child asks, with `childSessionId` set. */
+  onChildRequest?(turnId: string, request: PendingRequest): void
+  /** A child's request ended, answered or not. */
+  onChildRequestEnded?(requestId: string): void
 }
 
 export type RuntimeInstance = {

@@ -149,6 +149,8 @@ export type HgwAcpAgentFactory = (context: AcpConnectionContext) => AgentApp
 export type TranslateContext = {
   turnId: string
   sequence: number
+  /** A child's update sent while no turn of its parent carries it. */
+  background?: true
   /** Stop was acknowledged for this turn and the provider has not settled. */
   stopping: boolean
   /** The clock a state update stamps itself with; the system clock by default. */

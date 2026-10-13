@@ -125,6 +125,12 @@ export type SessionEvent =
       sequence: number
       event: ChildTurnEvent
       replayed?: true
+      /**
+       * The child outlived the turn that spawned it, which `stream` names:
+       * this event reaches the member while no turn of the parent runs, so
+       * it is no position in that turn's stream.
+       */
+      background?: true
     }
   /**
    * The whole transcript of a child Session a history page named, addressed

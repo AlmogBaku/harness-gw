@@ -728,9 +728,15 @@ Later reports patch it.
 
 - `title` and `description` are the runtime's display text for the child, and
   `state` mirrors its work: `running`, `requires_action`, or `idle` with
-  `end_turn`, `cancelled` or `error`. A child still at work when its parent's
-  turn ends is followed no further: its last report is `unknown`, with
-  `capabilities` `{}`.
+  `end_turn`, `cancelled` or `error`.
+- A child still at work when its parent's turn ends is background activity,
+  as ACP's idle state allows: the parent goes idle and takes prompts, and the
+  child's reports, updates and requests keep arriving under its id between
+  turns. Each carries the `_meta.hgw` of the turn that spawned it, with
+  `background: true`, so no reader takes it as a position in that turn's
+  stream; its requests are answered, and its `cancel` honored, without any
+  turn. A runtime that cannot follow a child past its turn reports it
+  `unknown`, with `capabilities` `{}`.
 - `capabilities` is `{ cancel: {} }` only where the runtime stops the child
   alone, and `{}` otherwise; ACP replaces it whole.
 - `_meta.hgw` (`HgwChildSessionMetaSchema`, `protocol/acp.ts`) carries what ACP

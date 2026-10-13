@@ -406,6 +406,12 @@ export const HgwAgentUpdateResponseSchema = AgentUpdateResponseSchema
 const TurnMetaBase = {
   sequence: SequenceSchema,
   turnId: IdentifierSchema,
+  /**
+   * A child Session's update sent while no turn of its parent carries it, as
+   * for a child that outlived the turn that spawned it: `turnId` names that
+   * turn, and no reader takes this update as where its stream stands.
+   */
+  background: z.literal(true).optional(),
 }
 
 /**

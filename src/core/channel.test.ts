@@ -88,6 +88,9 @@ function member(
     notice(notice) {
       notices.push(notice)
     },
+    child: () => undefined,
+    offerChild: () => undefined,
+    withdrawChild: () => undefined,
   }
   return {
     fake,

@@ -604,6 +604,9 @@ export type HarnessOptions = {
   discover?: ServerTurnEngine["discover"]
   /** Stands for a runtime that reports the turns it starts by itself. */
   subscribeTurns?: ServerTurnEngine["subscribeTurns"]
+  /** A runtime that answers and stops a child between its parent's turns. */
+  respondChild?: ServerTurnEngine["respondChild"]
+  stopChild?: ServerTurnEngine["stopChild"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
@@ -689,6 +692,8 @@ export async function harness(options: HarnessOptions = {}) {
     ...(options.subscribeTurns
       ? { subscribeTurns: options.subscribeTurns }
       : {}),
+    ...(options.respondChild ? { respondChild: options.respondChild } : {}),
+    ...(options.stopChild ? { stopChild: options.stopChild } : {}),
   }
 
   const rows = new Map(

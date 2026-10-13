@@ -39,7 +39,11 @@ export const TodosSchema = HgwPlanMetaSchema.shape.todos
 type SessionTodos = z.infer<typeof TodosSchema>
 
 export function turnMeta(context: TranslateContext) {
-  return { sequence: context.sequence, turnId: context.turnId }
+  return {
+    sequence: context.sequence,
+    turnId: context.turnId,
+    ...(context.background ? { background: true as const } : {}),
+  }
 }
 
 export function update(value: Built<SessionUpdate>): AcpOutbound {
@@ -49,7 +53,7 @@ export function update(value: Built<SessionUpdate>): AcpOutbound {
 /** What a builder adds to the turn meta every update carries. */
 type ExtraMeta<Schema extends z.ZodObject> = Omit<
   z.input<Schema>,
-  "sequence" | "turnId"
+  "sequence" | "turnId" | "background"
 >
 
 /** A stop reason ACP names for a turn that did not fail. */

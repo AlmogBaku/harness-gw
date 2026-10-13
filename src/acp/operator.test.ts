@@ -18,12 +18,14 @@ import {
   type TurnEvent,
 } from "../core/events"
 import { providerSessionId, sessionId } from "../core/ids"
+import type { ServerTurnListener } from "../core/runtime"
 import { createActivityFeed } from "./activity-feed"
 import { createReadState } from "./read-state"
 import {
   AGENT,
   CAPABILITIES as HARNESS_CAPABILITIES,
   CREATED,
+  endedTurn,
   EventSource,
   NOW,
   SESSION,
@@ -135,6 +137,9 @@ type HarnessOptions = Pick<
   | "translation"
   | "childHistory"
   | "forks"
+  | "subscribeTurns"
+  | "respondChild"
+  | "stopChild"
 > & { history?: SessionHistoryResponse }
 
 async function harness({ history, ...options }: HarnessOptions = {}) {
@@ -746,6 +751,143 @@ describe("operator ACP listener", () => {
     expect(shown).not.toContain("subagent_update")
     source.finish()
     test.close()
+  })
+
+  // ACP's parent goes idle while background work goes on: a child still at
+  // work after its turn ended reports under its own id, between turns, and
+  // its requests and its cancel reach the runtime without any turn.
+  describe("a child that outlives its parent's turn", () => {
+    async function outlived() {
+      let listener: ServerTurnListener | undefined
+      const respondChild = vi.fn<
+        NonNullable<AcpHarnessOptions["respondChild"]>
+      >(async () => undefined)
+      const stopChild = vi.fn<NonNullable<AcpHarnessOptions["stopChild"]>>(
+        async () => undefined
+      )
+      const test = await harness({
+        subscribeTurns: (_scope, subscribed) => {
+          listener = subscribed
+          return () => undefined
+        },
+        respondChild,
+        stopChild,
+        permission: async () => ({
+          outcome: { outcome: "selected", optionId: "once" },
+        }),
+      })
+      const { source } = await runningTurn(test, "Review it")
+      source.emit(turnStarted())
+      source.emit({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        title: "Review the notes",
+        status: ChildSessionStatus.Running,
+        cancellable: true,
+      })
+      source.emit({ kind: TurnEventKind.TurnEnded })
+      source.finish()
+      await test.recorder.wait(endedTurn, "the parent turn's end")
+      await vi.waitFor(() => expect(listener).toBeDefined())
+      const turnId = z
+        .object({ turnId: z.string() })
+        .parse(test.start.mock.calls[0]?.[1]).turnId
+      return { test, listener: listener!, turnId, respondChild, stopChild }
+    }
+
+    it("streams its updates under its id while its parent is idle, at no position in the parent's turn", async () => {
+      const { test, listener, turnId } = await outlived()
+
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionEvent,
+        childSessionId: "child-1",
+        event: {
+          kind: TurnEventKind.MessageChunk,
+          messageId: "child-message",
+          text: "Still working.",
+        },
+      })
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Idle,
+      })
+      await test.recorder.wait(
+        (entry) =>
+          JSON.stringify(entry.params).includes('"state":"idle"') &&
+          JSON.stringify(entry.params).includes("subagent_update"),
+        "the child's final report"
+      )
+
+      const shown = updates(test.recorder)
+      const chunk = shown.find(
+        ({ sessionId, update }) =>
+          sessionId === "child-1" &&
+          update.sessionUpdate === "agent_message_chunk"
+      )
+      expect(chunk?.update._meta).toMatchObject({
+        [HGW_META_KEY]: { turnId, background: true },
+      })
+      expect(
+        shown
+          .filter(
+            ({ sessionId, update }) =>
+              sessionId === CREATED &&
+              update.sessionUpdate === "subagent_update"
+          )
+          .at(-1)?.update
+      ).toMatchObject({
+        sessionId: "child-1",
+        state: { state: "idle", stopReason: "end_turn" },
+      })
+      test.close()
+    })
+
+    it("asks its request on it between turns, and answers it through the runtime", async () => {
+      const { test, listener, turnId, respondChild } = await outlived()
+
+      listener.onChildRequest!(turnId, {
+        requestId: "late-approval",
+        kind: PendingRequestKind.Permission,
+        childSessionId: "child-1",
+        message: "Read the notes?",
+        responseSchema: { enum: ["once", "deny"] },
+      })
+
+      const asked = await test.recorder.wait(
+        (entry) => entry.method === methods.client.session.requestPermission,
+        "the child's late approval"
+      )
+      expect(asked.params).toMatchObject({ sessionId: "child-1" })
+      await vi.waitFor(() =>
+        expect(respondChild).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: sessionId(CREATED) }),
+          expect.objectContaining({
+            requestId: "late-approval",
+            status: "resolved",
+          })
+        )
+      )
+      // Its parent ran no turn for it.
+      expect(test.start).toHaveBeenCalledTimes(1)
+      test.close()
+    })
+
+    it("cancels it between turns through the runtime", async () => {
+      const { test, stopChild } = await outlived()
+
+      await test.agent.notify(methods.agent.session.cancel, {
+        sessionId: "child-1",
+      })
+
+      await vi.waitFor(() =>
+        expect(stopChild).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionId: sessionId(CREATED) }),
+          "child-1"
+        )
+      )
+      test.close()
+    })
   })
 
   // ACP replays a child through its parent's from-start resume: the child's

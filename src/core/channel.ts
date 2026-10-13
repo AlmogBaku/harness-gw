@@ -26,6 +26,7 @@ import {
   isRedialableFailure,
   ReplyStatus,
   TurnEventKind,
+  type ChildTurnEvent,
   type ExecutionEvent,
   type PendingRequest,
   type RequestReply,
@@ -100,6 +101,14 @@ export type MembershipDelivery = {
   report(cause: unknown): void
   /** Show the member a status the runtime announced, live only. */
   notice(notice: SessionNotice): void
+  /**
+   * Show the member one report or event of a child still at work after the
+   * turn that spawned it, `turnId`, ended; live only.
+   */
+  child(turnId: string, event: ChildTurnEvent): void
+  /** Offer the member a request such a child asks, or withdraw one. */
+  offerChild(request: PendingRequest): void
+  withdrawChild(requestId: string): void
 }
 
 export type Channels = ReturnType<typeof createChannels>
@@ -128,6 +137,11 @@ type Delivery = {
 type Channel = {
   turn?: ChannelTurn
   memberships: Map<MembershipDelivery, Delivery>
+  /**
+   * The open requests of children that outlived their turn, which no turn
+   * carries: each is offered to every member, one who joins later included.
+   */
+  childRequests: Map<string, PendingRequest>
   /** Ends the channel's turn subscription and its execution feed. */
   unsubscribe?: () => void
   /** One adoption runs at a time; a trigger meanwhile asks for one more. */
@@ -469,6 +483,13 @@ function createChannelTable({
     adoptLater(channel)
   }
 
+  /** A child's request ended: no member offers it any more. */
+  function endChildRequest(channel: Channel, requestId: string) {
+    if (!channel.childRequests.delete(requestId)) return
+    for (const member of channel.memberships.keys())
+      member.withdrawChild(requestId)
+  }
+
   function subscribe(scope: SessionScope, channel: Channel) {
     if (!adoption) return
     const unsubscribeExecutions = adoption.subscribeExecutions(scope, (event) =>
@@ -480,6 +501,16 @@ function createChannelTable({
       onNotice: (notice) => {
         for (const member of channel.memberships.keys()) member.notice(notice)
       },
+      onChild: (turnId, event) => {
+        for (const member of channel.memberships.keys())
+          member.child(turnId, event)
+      },
+      onChildRequest: (_turnId, request) => {
+        channel.childRequests.set(request.requestId, request)
+        for (const member of channel.memberships.keys())
+          member.offerChild(request)
+      },
+      onChildRequestEnded: (requestId) => endChildRequest(channel, requestId),
     })
     channel.unsubscribe = () => {
       unsubscribeTurns()
@@ -488,6 +519,17 @@ function createChannelTable({
   }
 
   return {
+    /** A request a child that outlived its turn asks, while it is open. */
+    childRequest(scope: ChannelScope, requestId: string) {
+      return channels.get(channelKey(scope))?.childRequests.get(requestId)
+    },
+
+    /** Ends one child's request, as its answer just did. */
+    endChildRequest(scope: ChannelScope, requestId: string) {
+      const channel = channels.get(channelKey(scope))
+      if (channel) endChildRequest(channel, requestId)
+    },
+
     add(
       scope: SessionScope,
       member: MembershipDelivery,
@@ -497,7 +539,12 @@ function createChannelTable({
       let channel = channels.get(key)
       const created = !channel
       if (!channel) {
-        channel = { memberships: new Map(), failures: 0, generation: 0 }
+        channel = {
+          memberships: new Map(),
+          childRequests: new Map(),
+          failures: 0,
+          generation: 0,
+        }
         channels.set(key, channel)
       }
       const joined = channel
@@ -510,6 +557,8 @@ function createChannelTable({
       }
       if (joined.memberships.has(member)) return remove
       join(joined, member, { scope, fromChannel: false }, options.hasPrompt)
+      for (const request of joined.childRequests.values())
+        member.offerChild(request)
       // Subscribed once the first member joins, so a turn already running
       // has someone to adopt it as.
       if (created) subscribe(scope, joined)
@@ -955,6 +1004,13 @@ class Membership {
   #rebuilding = false
   /** The notices that arrived while the view was rebuilt, shown after its page. */
   #heldNotices: SessionNotice[] = []
+  /** Background child events held, as notices are, while the view rebuilds. */
+  #heldChildren: { turnId: string; event: ChildTurnEvent }[] = []
+  /**
+   * The stream a background child event names, one per turn that spawned
+   * it, so a transport keys the child's state the same across its events.
+   */
+  readonly #backgroundStreams = new Map<string, TurnStream>()
   /** The last stream this member was shown, settling once it has shown all. */
   #streamed: { turnId: string; done: Promise<void> } | undefined
   /**
@@ -1021,6 +1077,12 @@ class Membership {
         if (this.#rebuilding) this.#heldNotices.push(notice)
         else this.#showNotice(notice)
       },
+      child: (turnId, event) => {
+        if (this.#rebuilding) this.#heldChildren.push({ turnId, event })
+        else this.#showBackgroundChild(turnId, event)
+      },
+      offerChild: (request) => this.#offerChild(request),
+      withdrawChild: (requestId) => this.#withdraw(requestId),
     }
   }
 
@@ -1397,6 +1459,7 @@ class Membership {
   async #recoverReplay(needsFollow: boolean) {
     // A view that was not rebuilt shows nothing it held for after its page.
     this.#heldNotices = []
+    this.#heldChildren = []
     this.#rebuilding = false
     if (needsFollow) {
       this.joinChannel(false, true)
@@ -1640,8 +1703,12 @@ class Membership {
     // The notices held while the view was rebuilt follow its page.
     const held = this.#heldNotices
     this.#heldNotices = []
+    const children = this.#heldChildren
+    this.#heldChildren = []
     if (this.detached) return
     for (const notice of held) this.#showNotice(notice)
+    for (const { turnId, event } of children)
+      this.#showBackgroundChild(turnId, event)
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
@@ -1837,7 +1904,8 @@ class Membership {
    */
   request(requestId: string) {
     const request = this.#delivered.has(requestId)
-      ? this.#openRequest(requestId)
+      ? (this.#openRequest(requestId) ??
+        this.#channels.childRequest(this.#scope, requestId))
       : undefined
     if (!request) throw new ServerRequestStaleError()
     return request
@@ -1877,6 +1945,13 @@ class Membership {
     // is not withdrawn its own request, and a second decline finds none.
     this.#offered.delete(reply.requestId)
     this.#delivered.delete(reply.requestId)
+    // A child that outlived its turn asks outside any turn: its runtime takes
+    // the answer, and no turn continues.
+    if (this.#channels.childRequest(this.#scope, reply.requestId)) {
+      await this.#coordinator.respondChild(this.#scope, reply)
+      this.#channels.endChildRequest(this.#scope, reply.requestId)
+      return
+    }
     const continued = await this.#coordinator.answer(this.#scope, reply)
     if (!continued) return
     this.#channels.continueTurn(this.#scope, continued.from, continued.turnId)
@@ -2012,6 +2087,37 @@ class Membership {
    */
   #deliver(event: SessionEvent) {
     return this.emit(event).catch((cause: unknown) => this.report(cause))
+  }
+
+  /**
+   * Shows one event of a child that outlived its turn: the child's own, under
+   * its id, at no position in the turn that spawned it.
+   */
+  #showBackgroundChild(turnId: string, event: ChildTurnEvent) {
+    let stream = this.#backgroundStreams.get(turnId)
+    if (!stream) {
+      stream = { turnId, replayedCorrections: 0, dropped: false }
+      this.#backgroundStreams.set(turnId, stream)
+    }
+    this.#deliver({
+      kind: "child",
+      parentSessionId: this.#addressed.sessionId,
+      stream,
+      sequence: 0,
+      event,
+      background: true,
+    }).catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.child.failed")
+    )
+  }
+
+  /** Asks this member a request a child that outlived its turn asks. */
+  #offerChild(request: PendingRequest) {
+    if (this.#offered.has(request.requestId)) return
+    this.#offered.add(request.requestId)
+    this.emit({ kind: "request-asked", request }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.request.offer.failed")
+    )
   }
 
   /** Shows one notice, which nothing awaits or retries. */

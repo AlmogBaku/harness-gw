@@ -474,7 +474,13 @@ export function createMemberEncoder({
    */
   async function child(event: Extract<MemberEvent, { kind: "child" }>) {
     const { parentSessionId, stream, sequence } = event
-    const context = { turnId: stream.turnId, sequence, stopping: false }
+    const context = {
+      turnId: stream.turnId,
+      sequence,
+      stopping: false,
+      // Between turns: no position in the turn that spawned the child.
+      ...(event.background ? { background: true as const } : {}),
+    }
     const reported = event.event
     if (reported.kind === TurnEventKind.ChildSessionUpdated)
       return reportChild(parentSessionId, reported, context)

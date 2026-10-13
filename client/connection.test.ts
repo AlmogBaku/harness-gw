@@ -1172,6 +1172,56 @@ describe("ACP connection", () => {
       connection.close()
     })
 
+    // A child still at work after its turn reports between turns: it is no
+    // position in that turn's stream, which a rejoin still resumes from.
+    it("gives the child listener a background child update, moving no rejoin position", async () => {
+      const clock = useFakeClock()
+      const gateway = createGatewayAgent()
+      const pipe = pipedSockets(() => gateway.app)
+      const connection = createAcpConnection({
+        clientInfo: CLIENT_INFO,
+        url: "ws://gateway.test/api/v1/acp",
+        socketConstructor: pipe.WebSocket,
+      })
+      connection.start()
+      await connection.initialized
+      const children: string[] = []
+      connection.subscribe(SESSION_ID, {
+        agentId: AGENT_ID,
+        child: (childSessionId, update) =>
+          children.push(`${childSessionId} ${update.sessionUpdate}`),
+      })
+      await connection.joined(SESSION_ID)
+      await gateway.pushUpdate(
+        { sessionUpdate: "subagent_update", sessionId: CHILD_ID },
+        { sequence: 4, turnId: "run-1" }
+      )
+
+      await gateway.pushUpdate(
+        {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "child-message",
+          content: { type: "text", text: "Still working." },
+        },
+        { sequence: 0, turnId: "run-1", background: true },
+        CHILD_ID
+      )
+
+      await vi.waitFor(() =>
+        expect(children).toEqual([`${CHILD_ID} agent_message_chunk`])
+      )
+      pipe.sockets[0]?.drop()
+      await clock.advance(250)
+      expect(
+        gateway.callsOf(methods.agent.session.resume).at(-1)
+      ).toHaveProperty("replayFrom", {
+        type: HGW_REPLAY_POSITION,
+        turnId: "run-1",
+        from: 5,
+      })
+      connection.close()
+    })
+
     it("fails a page whose reply carries no history", async () => {
       const gateway = createGatewayAgent({
         page: { updates: olderPage.updates },
