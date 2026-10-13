@@ -224,8 +224,10 @@ export class OpenClawServerAdapter implements ServerRuntime {
     create?: { readonly firstTurnInstruction?: string }
   ) {
     await this.#start()
-    // The pinned Gateway leaves do not prove equivalent native Session creation.
-    if (create) return undefined
+    // The pinned Gateway leaves do not prove equivalent native Session
+    // creation, so a Send that may create resolves only the reserved Session
+    // already there, as a read does.
+    void create
     return this.#workspace.resolveInvitedSession(agentId, ref)
   }
 
