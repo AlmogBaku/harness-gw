@@ -1946,24 +1946,27 @@ export function runWireListenerContract(
 
       it(
         "admits a guest on its own listener once it logs in with an invite",
-        wireCase(createRuntime, async ({ gateway, agentId, clock, connect }) => {
-          const guest = gateway.guest!
-          const extras = connect(guest.acpService, GUEST_ORIGIN, HGW_ACP_PATH)
-          const { token } = await guest.invitations.issue({
-            agentId,
-            ref: "wire-contract",
-          })
-          await until(clock, extras.initialize())
-
-          // The login verifies the token with real crypto, so stepping the
-          // fake clock meanwhile can pass the handshake deadline under load.
-          await expect(
-            extras.connection.agent.request(methods.agent.auth.login, {
-              methodId: HGW_AUTH_METHOD_INVITE,
-              _meta: { [HGW_META_KEY]: { token } },
+        wireCase(
+          createRuntime,
+          async ({ gateway, agentId, clock, connect }) => {
+            const guest = gateway.guest!
+            const extras = connect(guest.acpService, GUEST_ORIGIN, HGW_ACP_PATH)
+            const { token } = await guest.invitations.issue({
+              agentId,
+              ref: "wire-contract",
             })
-          ).resolves.toBeTypeOf("object")
-        })
+            await until(clock, extras.initialize())
+
+            // The login verifies the token with real crypto, so stepping the
+            // fake clock meanwhile can pass the handshake deadline under load.
+            await expect(
+              extras.connection.agent.request(methods.agent.auth.login, {
+                methodId: HGW_AUTH_METHOD_INVITE,
+                _meta: { [HGW_META_KEY]: { token } },
+              })
+            ).resolves.toBeTypeOf("object")
+          }
+        )
       )
     })
   )
