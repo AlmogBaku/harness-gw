@@ -448,9 +448,9 @@ While a connection's `_hgw/session/focus` names a Session, the gateway
 acknowledges it to the runtime, so activity there does not leave it unread.
 A Session the connection marks unread while it shows it stays unread until
 that connection's focus moves to another Session or to none and back, or the
-connection sends the Session a prompt or a steer. A report that changes only
-`foreground` or `idle` does not read it. Another connection that shows the
-Session still reads it.
+connection sends the Session a prompt or a steer or marks it read. A report
+that changes only `foreground` or `idle` does not read it. Another connection
+that shows the Session still reads it.
 
 #### Agent updates and mute
 

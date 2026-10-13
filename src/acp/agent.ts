@@ -452,7 +452,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         () => echoedParts(command.content, stage?.artifactIds?.() ?? []),
         { quota: command.quota, signal }
       )
-      readState?.prompted(scope.agentId, scope.sessionId)
+      readState?.resume(scope.agentId, scope.sessionId)
       return sent
     } finally {
       membership.joined()
@@ -842,12 +842,17 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         { sessionId: params.sessionId, patch },
         // The new row reaches each member of the Session; a connection that
         // is not one is not made one.
-        (command) => {
+        async (command) => {
           const scope = sessions.scope(command.sessionId)
+          const unread =
+            "unread" in command.patch ? command.patch.unread : undefined
           // Before the write, so no acknowledgement on its way reads it again.
-          if ("unread" in command.patch && command.patch.unread)
+          if (unread === true)
             readState?.keepUnread(scope.agentId, scope.sessionId)
-          return catalog.update(scope, command.patch)
+          await catalog.update(scope, command.patch)
+          // An explicit read ends what this connection kept unread.
+          if (unread === false)
+            readState?.resume(scope.agentId, scope.sessionId)
         },
         requestId
       )
@@ -876,7 +881,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             command.requestId,
             command.text
           )
-          readState?.prompted(
+          readState?.resume(
             membership.scope.agentId,
             membership.scope.sessionId
           )

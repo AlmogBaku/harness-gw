@@ -385,9 +385,9 @@ the gateway writes a read watermark to the provider. A floor of 5 000 ms
 (`REACK_FLOOR_MS`) prevents redundant writes. The provider's `sessionReadState`
 capability is checked once and cached. A Session the connection marks unread
 while it shows it is kept unread: no watermark is written for it until the
-connection's focus moves away and back or it sends the Session a prompt or a
-steer. Guest connections carry no read state (`src/acp/types.ts`); a guest's
-focus report is accepted and moves nothing
+connection's focus moves away and back, or it sends the Session a prompt or a
+steer or marks it read. Guest connections carry no read state
+(`src/acp/types.ts`); a guest's focus report is accepted and moves nothing
 (`src/guest/middleware/commands.ts`).
 
 **`SessionRows`** (`src/core/session-rows.ts`): the gateway-local row cache.

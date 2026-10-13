@@ -807,7 +807,7 @@ export async function harness(options: HarnessOptions = {}) {
   const readState = {
     focus: vi.fn(),
     keepUnread: vi.fn(),
-    prompted: vi.fn(),
+    resume: vi.fn(),
     blur: vi.fn(),
     onExecution: vi.fn(),
     close: vi.fn(),

@@ -167,7 +167,7 @@ export function createReadState({
       kept = true
     },
 
-    prompted(agentId, sessionId) {
+    resume(agentId, sessionId) {
       const target = { agentId, sessionId }
       if (keeps(target)) expose(target)
     },
