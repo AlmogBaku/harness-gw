@@ -856,6 +856,16 @@ export function createChannels(options: CreateChannelsOptions) {
       return coordinator.createSession(agentId, input, principalId)
     },
 
+    /** Whether the runtime forks Sessions. */
+    get forks() {
+      return coordinator.forks
+    },
+
+    /** Forks a Session into a new one, answered as `createSession` answers. */
+    forkSession(scope: SessionScope) {
+      return coordinator.forkSession(scope)
+    },
+
     /**
      * Switches the Session's model. Every member hears the switch, and the
      * `membership` that asked for it once its answer is written.

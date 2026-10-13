@@ -527,7 +527,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       capabilities: {
         // Text and resource links are every agent's baseline; no runtime port
         // takes an image or embedded context, so neither is advertised.
-        session: authentication ? {} : { delete: {} },
+        // A guest is bound to its one conversation, so it is offered no fork.
+        session: authentication
+          ? {}
+          : {
+              delete: {},
+              ...(context.channels.forks ? { fork: {} } : {}),
+            },
       },
       authMethods: authentication ? [...authentication.authMethods] : [],
       _meta: {
@@ -601,6 +607,37 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           )
           const sessionId = created.session.id
           sessions.remember([{ id: sessionId, agentId }])
+          // The row, capabilities and model options follow the answer as
+          // updates.
+          sessions.join(client, sessions.scope(sessionId)).joined()
+          return { sessionId }
+        },
+        requestId
+      )
+      return { sessionId }
+    }
+  )
+
+  // ACP's session/fork: a new Session holding the conversation so far, under
+  // session/new's folder rules, which the client joins as its creator would.
+  app.onRequest(
+    methods.agent.session.fork,
+    async ({ params, client, requestId }) => {
+      admit(methods.agent.session.fork, "fork")
+      // Only a runtime that forks is offered it.
+      if (!context.channels.forks)
+        throw RequestError.methodNotFound(methods.agent.session.fork)
+      const { sessionId } = await perform(
+        "fork",
+        { sessionId: params.sessionId },
+        async (command) => {
+          const scope = sessions.scope(command.sessionId)
+          await requireFolder(scope.agentId, params)
+          const forked = SessionCreateResponseSchema.parse(
+            await context.channels.forkSession(scope)
+          )
+          const sessionId = forked.session.id
+          sessions.remember([{ id: sessionId, agentId: scope.agentId }])
           // The row, capabilities and model options follow the answer as
           // updates.
           sessions.join(client, sessions.scope(sessionId)).joined()

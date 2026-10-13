@@ -184,7 +184,7 @@ invited conversation by its reference alone; any other Session id is
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
 | `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
 | `session/new`, `session/list` | `-31016` forbidden: the session capability promises both, so they exist, but not for a guest. |
-| `session/delete`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
+| `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded.                                                                            |
 
 `session/prompt` and `_hgw/session/steer` refuse, with `-32602`, text that
 starts with `/` (after any leading whitespace or zero-width characters) and
@@ -254,6 +254,14 @@ Agent's rows; a list on one Agent's address answers either as an error.
 `session/delete` on the shared address for a Session this connection never
 listed or resumed returns invalid params naming the per-Agent address; on an
 Agent's address a Session that is already gone deletes successfully.
+
+**`session/fork`** (operator listener only): answers `{ sessionId }` of a new
+Session holding the conversation so far, and joins the connection to it as
+`session/new` joins its creator; the original Session is left as it is. It
+follows `session/new`'s `cwd`, `mcpServers` and `additionalDirectories` rules,
+and a Session the connection was not told about answers `-32002`. `initialize`
+advertises `capabilities.session.fork` only where the runtime forks, and a fork
+elsewhere answers `-32601`. A guest is never offered it.
 
 **`session/list`** request (`HgwSessionListMetaSchema`): `{ agentId? }`
 

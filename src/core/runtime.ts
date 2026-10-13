@@ -372,6 +372,15 @@ export interface ServerRuntime {
     providerSessionId: ProviderSessionId
   ): Promise<Session>
   createSession(agentId: string, title?: string): Promise<unknown>
+  /**
+   * Forks a Session into a new one holding its conversation so far, and
+   * leaves the original as it is; answered as `createSession` answers. Absent
+   * when the runtime cannot fork.
+   */
+  forkSession?(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<unknown>
   updateSession(
     agentId: string,
     providerSessionId: ProviderSessionId,

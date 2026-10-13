@@ -69,6 +69,8 @@ export const PRINCIPAL = "operator"
 export const CONNECTION = "connection-1"
 export const SESSION = "session-1"
 export const CREATED = "session-created"
+/** The Session a fork of the seeded one makes, where the runtime forks. */
+export const FORKED = "session-forked"
 export const NOW = "2026-01-01T00:00:00.000Z"
 
 export function sessionRow(overrides: Partial<Session> = {}): Session {
@@ -606,6 +608,8 @@ export type HarnessOptions = {
   withoutCatalogChanges?: boolean
   /** Each Agent's working folder; defaults to `/` for every Agent. */
   agentFolder?: ServerRuntime["agentFolder"]
+  /** The runtime forks Sessions, into `FORKED`; it cannot by default. */
+  forks?: boolean
   /** The provider's Agent write; refuses as untested by default. */
   updateAgent?: ServerRuntime["updateAgent"]
   /**
@@ -720,6 +724,10 @@ export async function harness(options: HarnessOptions = {}) {
     )
     return { session: { id: CREATED, agentId } }
   })
+  const forkSession = vi.fn(async (agentId: string) => {
+    rows.set(FORKED, sessionRow({ id: FORKED, agentId, title: "Notes (fork)" }))
+    return { session: { id: FORKED, agentId } }
+  })
   const updateModel = vi.fn(
     async (_agentId: string, _sessionId: string, patch: unknown) => {
       models = { ...models, ...ModelPatchSchema.parse(patch) }
@@ -791,6 +799,7 @@ export async function harness(options: HarnessOptions = {}) {
     history,
     getSession,
     createSession,
+    ...(options.forks ? { forkSession } : {}),
     updateSession,
     deleteSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,
@@ -1020,6 +1029,7 @@ export async function harness(options: HarnessOptions = {}) {
     recover,
     discover,
     createSession,
+    forkSession,
     updateSession,
     deleteSession,
     updateModel,

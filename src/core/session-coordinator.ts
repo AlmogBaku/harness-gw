@@ -215,6 +215,7 @@ export type SessionCoordinatorOptions = {
     | "models"
     | "updateModel"
     | "createSession"
+    | "forkSession"
     | "publicError"
     | "link"
   >
@@ -1438,6 +1439,23 @@ export class SessionCoordinator {
     const created = create()
     this.#creates.remember(principalId, key, fingerprint, created)
     return created
+  }
+
+  /** Whether the runtime forks Sessions. */
+  get forks() {
+    return this.options.readings.forkSession !== undefined
+  }
+
+  /** Forks a Session into a new one, answered as `createSession` answers. */
+  async forkSession(scope: SessionScope): Promise<unknown> {
+    if (this.#closed) throw new Error("Session coordinator is closed")
+    const { forkSession } = this.options.readings
+    if (!forkSession) throw new Error("The runtime cannot fork Sessions")
+    return forkSession.call(
+      this.options.readings,
+      scope.agentId,
+      scope.providerSessionId
+    )
   }
 
   async start(

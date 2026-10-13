@@ -26,6 +26,7 @@ const GUEST_COMMANDS: Readonly<Record<CommandKind, boolean>> = {
   steer: true,
   list: false,
   new: false,
+  fork: false,
   delete: false,
   update: false,
   "set-config": false,

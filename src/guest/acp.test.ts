@@ -445,7 +445,10 @@ function harness(options: HarnessOptions = {}) {
   }))
   let catalogChanged: (() => void) | undefined
   let watcher: ServerTurnListener | undefined
+  // The runtime forks, which a guest is never offered.
+  const forkSession = vi.fn(unsupported)
   const runtime: ServerRuntime = {
+    forkSession,
     turns: engine,
     resolveInvitedSession,
     // A guest addresses its conversation by reference; no public id resolves.
@@ -564,6 +567,7 @@ function harness(options: HarnessOptions = {}) {
     deleteSession,
     runtimeInfo,
     resolveInvitedSession,
+    forkSession,
     listAllSessions,
     /** The runtime reports that its Session list changed. */
     changeCatalog() {
@@ -782,6 +786,7 @@ describe("guest ACP listener", () => {
       },
     })
     expect(initialize.capabilities?.session?.delete).toBeUndefined()
+    expect(initialize.capabilities?.session?.fork).toBeUndefined()
     // The deployment itself stays unnamed, before and after a redemption.
     expect(initialize.info?.title).toBeUndefined()
     expect(test.runtimeInfo).not.toHaveBeenCalled()
@@ -1105,11 +1110,13 @@ describe("guest ACP listener", () => {
       [HGW_METHODS.session.update, { sessionId: 5 }],
       [HGW_METHODS.agents.update, { sessionId: 5 }],
       [HGW_METHODS.sessions.search, { _meta: { hgw: { query: "notes" } } }],
+      [methods.agent.session.fork, { sessionId: REF, cwd: "/" }],
     ] as const)
       expect(await socket.request(method, params), method).toMatchObject({
         error: { code: METHOD_NOT_FOUND },
       })
     expect(test.updateSession).not.toHaveBeenCalled()
+    expect(test.forkSession).not.toHaveBeenCalled()
     socket.close()
   })
 

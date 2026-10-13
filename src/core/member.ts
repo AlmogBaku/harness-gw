@@ -262,6 +262,7 @@ export type MemberCommands = {
   search: { agentId?: string; query: string }
   /** A client id names a create its client may repeat. */
   new: { agentId: string; title?: string; clientId?: string }
+  fork: { sessionId: string }
   delete: { sessionId: string }
   /** `{ unread: false }` marks the Session read. */
   update: { sessionId: string; patch: SessionPatch }
@@ -293,6 +294,7 @@ export type CommandResults = {
   list: { rows: readonly SessionRow[]; nextOffset?: number }
   search: { rows: readonly SessionRow[] }
   new: { sessionId: string }
+  fork: { sessionId: string }
   delete: void
   update: void
   "set-config": { models: SessionModelsResponse }

@@ -49,6 +49,7 @@ import {
   AGENT,
   CONNECTION,
   CREATED,
+  FORKED,
   EventSource,
   NOW,
   PRINCIPAL,
@@ -232,6 +233,72 @@ describe("AOS ACP agent", () => {
         },
       },
     })
+    test.close()
+  })
+
+  // ACP's session/fork: a new Session holding the conversation so far, which
+  // the client is joined to as session/new joins its creator.
+  it("forks a Session for an operator, answering the new one's id and joining it", async () => {
+    const test = await harness({ forks: true })
+    await test.list()
+
+    const forked = await test.agent.request(methods.agent.session.fork, {
+      sessionId: SESSION,
+      cwd: "/",
+    })
+
+    expect(forked).toEqual({ sessionId: FORKED })
+    expect(test.forkSession).toHaveBeenCalledWith(AGENT, SESSION)
+    await test.recorder.wait(
+      (entry) =>
+        JSON.stringify(entry.params).includes(`"sessionId":"${FORKED}"`) &&
+        JSON.stringify(entry.params).includes("session_info_update"),
+      "the forked Session's row"
+    )
+    test.close()
+  })
+
+  it("advertises fork only where the runtime forks, and answers it nowhere else", async () => {
+    const forking = await harness({ forks: true })
+    const plain = await harness()
+
+    expect(forking.initialize.capabilities?.session).toMatchObject({
+      fork: {},
+    })
+    expect(plain.initialize.capabilities?.session).not.toHaveProperty("fork")
+    await plain.list()
+    await expect(
+      plain.agent.request(methods.agent.session.fork, {
+        sessionId: SESSION,
+        cwd: "/",
+      })
+    ).rejects.toMatchObject({ code: RequestError.methodNotFound("").code })
+    forking.close()
+    plain.close()
+  })
+
+  it("refuses a fork session/new would refuse, and one of a Session the connection does not know", async () => {
+    const test = await harness({ forks: true })
+    await test.list()
+    const fork = (params: Record<string, unknown>) =>
+      test.agent.request(methods.agent.session.fork, {
+        sessionId: SESSION,
+        cwd: "/",
+        ...params,
+      })
+
+    for (const params of [
+      { cwd: "/elsewhere" },
+      { mcpServers: [{ name: "x", command: "x", args: [], env: [] }] },
+      { additionalDirectories: ["/tmp"] },
+    ])
+      await expect(fork(params), JSON.stringify(params)).rejects.toMatchObject(
+        INVALID_PARAMS
+      )
+    await expect(fork({ sessionId: "unknown" })).rejects.toMatchObject({
+      code: notFound().code,
+    })
+    expect(test.forkSession).not.toHaveBeenCalled()
     test.close()
   })
 
