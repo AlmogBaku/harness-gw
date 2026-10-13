@@ -226,7 +226,8 @@ export interface ReadState {
   keepUnread(agentId: string, sessionId: string): void
   /**
    * The operator engaged with the Session it kept unread — a send, a steer,
-   * or an explicit read — so a fresh exposure starts.
+   * or an explicit read — or the runtime refused the unread write, so a fresh
+   * exposure starts.
    */
   reexpose(agentId: string, sessionId: string): void
   blur(): void
