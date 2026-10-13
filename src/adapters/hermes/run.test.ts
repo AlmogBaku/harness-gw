@@ -5862,6 +5862,15 @@ describe("Hermes child Sessions", () => {
     } = await outlived()
 
     expect(JSON.stringify(events)).not.toContain(ChildSessionStatus.Unknown)
+    // The Session hears first that the child outlives the turn.
+    expect(listener.onChild.mock.calls[0]).toEqual([
+      turn.turnId,
+      {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: CHILD,
+        status: ChildSessionStatus.Running,
+      },
+    ])
     mirrored(mirror.frame("message.start"))
     mirrored(mirror.delta("Still working."))
     await engine.stopChild(scope, CHILD)

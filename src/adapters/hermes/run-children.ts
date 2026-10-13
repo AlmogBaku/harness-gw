@@ -494,6 +494,20 @@ export function abandonChildren(host: TurnEngineHost, active: ActiveTurn) {
   }
 }
 
+/**
+ * Reports each child the turn spawned that outlives it, with its state, to the
+ * Session that follows it on. Hermes' children ask a client nothing, so each
+ * at work is running.
+ */
+export function restateChildren(host: TurnEngineHost, active: ActiveTurn) {
+  for (const child of active.children.values())
+    if (!child.done && child.parent === undefined)
+      report(host, active, child, {
+        childSessionId: child.childSessionId,
+        status: ChildSessionStatus.Running,
+      })
+}
+
 /** Closes every watch the run holds open: nothing reads its frames any more. */
 export function releaseChildren(active: ActiveTurn) {
   for (const child of active.children.values()) {

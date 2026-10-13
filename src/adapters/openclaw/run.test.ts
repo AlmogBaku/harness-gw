@@ -3004,6 +3004,15 @@ describe("OpenClaw run engine child Sessions", () => {
 
       expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
       expect(JSON.stringify(events)).not.toContain(ChildSessionStatus.Unknown)
+      // The Session hears first that the child outlives the turn.
+      expect(listener.onChild.mock.calls[0]).toEqual([
+        turnId,
+        {
+          kind: TurnEventKind.ChildSessionUpdated,
+          childSessionId: CHILD,
+          status: ChildSessionStatus.Running,
+        },
+      ])
       const child = childStream(subscriptions)
       child.agent("assistant", { delta: "Still working." })
       child.chat("final")

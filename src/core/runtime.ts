@@ -182,7 +182,9 @@ export type ServerTurnListener = {
    * A child Session one of the Session's turns spawned, still at work after
    * that turn ended: its reports and its own events, with `turnId` naming the
    * turn that spawned it. As within a turn, a child is announced before
-   * anything of its own, and never under another Session's id.
+   * anything of its own, and never under another Session's id. As the turn
+   * ends, each child that outlives it is reported first with its state, so the
+   * Session knows what it still follows.
    */
   onChild?(turnId: string, event: ChildTurnEvent): void
   /** A request such a child asks, with `childSessionId` set. */

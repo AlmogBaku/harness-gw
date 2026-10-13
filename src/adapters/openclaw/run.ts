@@ -3245,7 +3245,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     return false
   }
 
-  /** The ended run's children at work go on, reporting to the Session. */
+  /**
+   * The ended run's children at work go on, reporting to the Session, which
+   * hears of each first as running.
+   */
   #beginBackground(active: ActiveRun) {
     active.background = true
     const key = scopeKey(active.scope)
@@ -3253,6 +3256,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     this.#backgroundRuns.set(key, runs.add(active))
     for (const child of active.children.values())
       if (child.stream.terminal || child.unfollowed) this.#releaseChild(child)
+      else
+        this.#streamOf(active, child.parentKey).push({
+          kind: TurnEventKind.ChildSessionUpdated,
+          childSessionId: child.key,
+          status: ChildSessionStatus.Running,
+        })
   }
 
   /** Settles every tool the native run left open when the turn ends. */

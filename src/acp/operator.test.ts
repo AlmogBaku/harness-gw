@@ -18,7 +18,9 @@ import {
   type TurnEvent,
 } from "../core/events"
 import { providerSessionId, sessionId } from "../core/ids"
+import { CHILD_FOLLOW_GRACE_MS } from "../core/limits"
 import type { ServerTurnListener } from "../core/runtime"
+import { useFakeClock } from "../../test/support/fake-clock"
 import { createActivityFeed } from "./activity-feed"
 import { createReadState } from "./read-state"
 import {
@@ -759,6 +761,7 @@ describe("operator ACP listener", () => {
   describe("a child that outlives its parent's turn", () => {
     async function outlived() {
       let listener: ServerTurnListener | undefined
+      const unsubscribed = vi.fn()
       const respondChild = vi.fn<
         NonNullable<AcpHarnessOptions["respondChild"]>
       >(async () => undefined)
@@ -768,7 +771,7 @@ describe("operator ACP listener", () => {
       const test = await harness({
         subscribeTurns: (_scope, subscribed) => {
           listener = subscribed
-          return () => undefined
+          return unsubscribed
         },
         respondChild,
         stopChild,
@@ -792,7 +795,20 @@ describe("operator ACP listener", () => {
       const turnId = z
         .object({ turnId: z.string() })
         .parse(test.start.mock.calls[0]?.[1]).turnId
-      return { test, listener: listener!, turnId, respondChild, stopChild }
+      // The runtime reports the child that outlives the turn with its state.
+      listener!.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Running,
+      })
+      return {
+        test,
+        listener: listener!,
+        turnId,
+        respondChild,
+        stopChild,
+        unsubscribed,
+      }
     }
 
     it("streams its updates under its id while its parent is idle, at no position in the parent's turn", async () => {
@@ -870,6 +886,93 @@ describe("operator ACP listener", () => {
       )
       // Its parent ran no turn for it.
       expect(test.start).toHaveBeenCalledTimes(1)
+      test.close()
+    })
+
+    // A reload or a reconnect leaves the Session unwatched for a moment: the
+    // child is followed through it, and the browser back reads how it is now.
+    it("keeps following it while its only viewer reconnects, and restates it to the viewer back", async () => {
+      const { test, listener, turnId, unsubscribed } = await outlived()
+      test.close()
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Idle,
+        summary: "Notes reviewed.",
+      })
+
+      const asked = test.discover.mock.calls.length
+      const back = await test.connect("connection-2")
+      await back.list()
+      await back.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      // A turn the runtime started meanwhile had no member to adopt it as.
+      await vi.waitFor(() =>
+        expect(test.discover.mock.calls.length).toBeGreaterThan(asked)
+      )
+      const restated = await back.recorder.wait(
+        (entry) =>
+          JSON.stringify(entry.params).includes("subagent_update") &&
+          JSON.stringify(entry.params).includes('"state":"idle"'),
+        "the child's report restated"
+      )
+
+      expect(restated.params).toMatchObject({
+        sessionId: CREATED,
+        update: {
+          sessionUpdate: "subagent_update",
+          sessionId: "child-1",
+          state: { state: "idle", stopReason: "end_turn" },
+          _meta: {
+            [HGW_META_KEY]: {
+              turnId,
+              background: true,
+              summary: "Notes reviewed.",
+            },
+          },
+        },
+      })
+      expect(unsubscribed).not.toHaveBeenCalled()
+      back.close()
+    })
+
+    it("stops following it once nobody comes back within the grace", async () => {
+      const { test, unsubscribed } = await outlived()
+      const clock = useFakeClock()
+      test.close()
+      await clock.advance(CHILD_FOLLOW_GRACE_MS - 1)
+      expect(unsubscribed).not.toHaveBeenCalled()
+
+      await clock.advance(1)
+      expect(unsubscribed).toHaveBeenCalledTimes(1)
+    })
+
+    // Restating a child long over would announce it to a view that may not
+    // hold its turn, as if it had just been spawned.
+    it("tells a member who joins later of no child over for longer than the grace", async () => {
+      const { test, listener, turnId } = await outlived()
+      const clock = useFakeClock()
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Idle,
+      })
+      await clock.advance(CHILD_FOLLOW_GRACE_MS)
+
+      const later = await test.connect("connection-2")
+      await later.list()
+      await later.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      await clock.advance(0)
+
+      expect(JSON.stringify(later.recorder.entries)).not.toContain("child-1")
+      later.close()
       test.close()
     })
 

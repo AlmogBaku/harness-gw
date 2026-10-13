@@ -52,6 +52,7 @@ import {
   acceptSubagent,
   childrenAtWork,
   releaseChildren,
+  restateChildren,
   spawned,
   stopChild,
 } from "./run-children"
@@ -1512,6 +1513,7 @@ export class HermesTurnEngine {
     const key = sessionKey(active.scope)
     const turns = this.#backgroundTurns.get(key) ?? new Set<ActiveTurn>()
     this.#backgroundTurns.set(key, turns.add(active))
+    restateChildren(this.#host, active)
   }
 
   /** A background turn with no child at work follows none any longer. */

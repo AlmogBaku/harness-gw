@@ -14,6 +14,7 @@ import type {
   SessionModelUpdateRequest,
 } from "../../protocol"
 import {
+  CHILD_FOLLOW_GRACE_MS,
   JOIN_DEADLINE_MS,
   PAUSED_DEADLINE_MS,
   READING_BACKOFF,
@@ -24,6 +25,7 @@ import {
   isAwaitingStopFailure,
   isChildTurnEvent,
   isRedialableFailure,
+  ChildSessionStatus,
   ReplyStatus,
   TurnEventKind,
   type ChildTurnEvent,
@@ -31,6 +33,7 @@ import {
   type PendingRequest,
   type RequestReply,
   type TurnEvent,
+  type TurnEventOf,
 } from "./events"
 import {
   CommandRefusedError,
@@ -142,6 +145,13 @@ type Channel = {
    * carries: each is offered to every member, one who joins later included.
    */
   childRequests: Map<string, PendingRequest>
+  /**
+   * The latest report of each child that outlived its turn, under that turn,
+   * restated to every member who joins later.
+   */
+  children: Map<string, BackgroundChild>
+  /** The close of a channel nobody watches, held for its background children. */
+  lingering?: unknown
   /** Ends the channel's turn subscription and its execution feed. */
   unsubscribe?: () => void
   /** One adoption runs at a time; a trigger meanwhile asks for one more. */
@@ -157,7 +167,24 @@ type Channel = {
   generation: number
 }
 
+type ChildReport = TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>
+
+type BackgroundChild = {
+  turnId: string
+  report: ChildReport
+  /** When its reports first left it no longer at work, on the channels' clock. */
+  endedAt?: number
+}
+
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
+
+/** Whether a child's report leaves it at work. */
+function atWork(report: ChildReport) {
+  return (
+    report.status === ChildSessionStatus.Running ||
+    report.status === ChildSessionStatus.WaitingForInput
+  )
+}
 
 /**
  * How a declined permission is answered: the one-time refusal when the
@@ -460,6 +487,8 @@ function createChannelTable({
 
   /** Ends a memberless channel's feeds and its pending retry. */
   function close(channel: Channel) {
+    clock.clearTimeout(channel.lingering)
+    channel.lingering = undefined
     channel.generation += 1
     clock.clearTimeout(channel.retry)
     channel.retry = undefined
@@ -490,6 +519,48 @@ function createChannelTable({
       member.withdrawChild(requestId)
   }
 
+  /** Folds a background child's report into the one restated to a joiner. */
+  function noteChild(channel: Channel, turnId: string, report: ChildReport) {
+    const known = channel.children.get(report.childSessionId)
+    const merged = known ? { ...known.report, ...report } : report
+    channel.children.set(report.childSessionId, {
+      turnId,
+      report: merged,
+      ...(atWork(merged) ? {} : { endedAt: known?.endedAt ?? clock.now() }),
+    })
+  }
+
+  /**
+   * The background children a member who joins now is told of: each still at
+   * work, and each that ended within the grace, which a reload or a reconnect
+   * may have missed. One over for longer is forgotten.
+   */
+  function currentChildren(channel: Channel) {
+    const now = clock.now()
+    for (const [childSessionId, { endedAt }] of channel.children)
+      if (endedAt !== undefined && now - endedAt >= CHILD_FOLLOW_GRACE_MS)
+        channel.children.delete(childSessionId)
+    return [...channel.children.values()]
+  }
+
+  /**
+   * The last member left. A child that outlived its turn is still followed
+   * for a while, so a reload or a reconnect comes back to it followed, and
+   * reads how it ended if it ended meanwhile.
+   */
+  function vacate(key: string, channel: Channel) {
+    const retire = () => {
+      if (channel.memberships.size > 0 || channels.get(key) !== channel) return
+      channels.delete(key)
+      close(channel)
+    }
+    if (currentChildren(channel).length === 0) return retire()
+    channel.lingering = clock.setTimeout(() => {
+      channel.lingering = undefined
+      retire()
+    }, CHILD_FOLLOW_GRACE_MS)
+  }
+
   function subscribe(scope: SessionScope, channel: Channel) {
     if (!adoption) return
     const unsubscribeExecutions = adoption.subscribeExecutions(scope, (event) =>
@@ -502,6 +573,8 @@ function createChannelTable({
         for (const member of channel.memberships.keys()) member.notice(notice)
       },
       onChild: (turnId, event) => {
+        if (event.kind === TurnEventKind.ChildSessionUpdated)
+          noteChild(channel, turnId, event)
         for (const member of channel.memberships.keys())
           member.child(turnId, event)
       },
@@ -542,6 +615,7 @@ function createChannelTable({
         channel = {
           memberships: new Map(),
           childRequests: new Map(),
+          children: new Map(),
           failures: 0,
           generation: 0,
         }
@@ -550,13 +624,19 @@ function createChannelTable({
       const joined = channel
       const remove = () => {
         joined.memberships.delete(member)
-        if (joined.memberships.size === 0 && channels.get(key) === joined) {
-          channels.delete(key)
-          close(joined)
-        }
+        if (joined.memberships.size === 0 && channels.get(key) === joined)
+          vacate(key, joined)
       }
       if (joined.memberships.has(member)) return remove
+      const lingered = joined.lingering !== undefined
+      clock.clearTimeout(joined.lingering)
+      joined.lingering = undefined
       join(joined, member, { scope, fromChannel: false }, options.hasPrompt)
+      // A turn the runtime started while nobody watched found no member to
+      // adopt it as.
+      if (lingered) adoptLater(joined)
+      for (const { turnId, report } of currentChildren(joined))
+        member.child(turnId, report)
       for (const request of joined.childRequests.values())
         member.offerChild(request)
       // Subscribed once the first member joins, so a turn already running

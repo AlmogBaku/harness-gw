@@ -92,3 +92,10 @@ export const SPEECH_CALL_MS = 90_000
  * LINK_WAIT_MS + ADAPTER_CALL_MS ends inside ADMISSION_DEADLINE_MS.
  */
 export const LINK_WAIT_MS = 10_000
+
+/**
+ * How long a Session nobody watches any longer still follows a child that
+ * outlived its turn: a reload or a reconnect comes back within it, and finds
+ * the child followed.
+ */
+export const CHILD_FOLLOW_GRACE_MS = 60_000

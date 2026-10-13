@@ -735,8 +735,13 @@ Later reports patch it.
   turns. Each carries the `_meta.hgw` of the turn that spawned it, with
   `background: true`, so no reader takes it as a position in that turn's
   stream; its requests are answered, and its `cancel` honored, without any
-  turn. A child nobody watches past its turn, or one its runtime cannot
-  follow, is reported `unknown`, with `capabilities` `{}`.
+  turn. The parent first reports each child that outlives its turn as
+  `running`. A Session nobody watches any longer still follows its children
+  for a minute, so a reload or a reconnect comes back to them followed: a
+  connection that joins is told each one's latest report, and each open
+  request, including those of a child that ended in that minute. A child
+  nobody watches as its turn ends, or past that minute, or one its runtime
+  cannot follow, is reported `unknown`, with `capabilities` `{}`.
 - `capabilities` is `{ cancel: {} }` only where the runtime stops the child
   alone, and `{}` otherwise; ACP replaces it whole.
 - `_meta.hgw` (`HgwChildSessionMetaSchema`, `protocol/acp.ts`) carries what ACP
