@@ -574,6 +574,233 @@ describe("Hermes native submit outcomes", () => {
   })
 })
 
+describe("Hermes typed branch", () => {
+  /** Hermes' catalog lists `/branch` with its alias `/fork`. */
+  function branching(branch: RpcHandler) {
+    return runtime({
+      "commands.catalog": async () => ({
+        pairs: [["/branch", "Branch the current session"]],
+        canon: { "/fork": "/branch", "/branch": "/branch" },
+      }),
+      "session.branch": branch,
+      "session.close": async () => ({ closed: true }),
+    })
+  }
+  const branched = async () => ({
+    session_id: "live-branch",
+    stored_session_id: "stored-fork",
+    title: "Notes #2",
+    parent: "stored",
+    message_count: 2,
+    messages: [],
+    info: {},
+  })
+
+  it.each([
+    ["/branch", {}],
+    ["/fork", {}],
+    ["/FORK  Second try", { name: "Second try" }],
+  ])(
+    "forks %s in place of the slash worker, naming the new Session",
+    async (text, name) => {
+      const { native, router } = branching(branched)
+
+      await expect(
+        native.submit("live-secret", { scope, text, turnId: "run-1" })
+      ).resolves.toEqual({
+        acknowledgement: "accepted",
+        status: "streaming",
+        completion: {
+          output: 'Forked this Session into "Notes #2" (stored-fork).',
+        },
+      })
+      // The slash worker's `/branch` ends the original Session.
+      expect(router.calls("slash.exec")).toHaveLength(0)
+      expect(router.calls("command.dispatch")).toHaveLength(0)
+      expect(router.calls("prompt.submit")).toHaveLength(0)
+      expect(
+        router.calls("session.branch").map(({ params }) => params)
+      ).toEqual([{ session_id: "live-secret", ...name }])
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-branch" }]
+      )
+    }
+  )
+
+  it("reports a fork Hermes stored but could not start as uncertain", async () => {
+    const { native } = branching(async () => {
+      throw new HermesRpcRejectedError(5000, "agent init failed on branch")
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "/branch", turnId: "run-1" })
+    ).resolves.toEqual({ acknowledgement: "uncertain" })
+  })
+
+  it("refuses a branch of nothing with Hermes' own words", async () => {
+    const { native } = branching(async () => {
+      throw new HermesRpcRejectedError(
+        4008,
+        "nothing to branch — send a message first"
+      )
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "/branch", turnId: "run-1" })
+    ).resolves.toEqual({
+      acknowledgement: "rejected",
+      reason: "invalid",
+      detail: "nothing to branch — send a message first",
+    })
+  })
+
+  it("reports a live Session Hermes no longer holds as gone, so the run rebinds", async () => {
+    const { native, attachments } = branching(async () => {
+      throw new HermesRpcRejectedError(4001, "session not found")
+    })
+
+    await expect(
+      native.submit("live-secret", { scope, text: "/branch", turnId: "run-1" })
+    ).resolves.toEqual({ acknowledgement: "rejected", reason: "session-gone" })
+    expect(attachments.invalidate).toHaveBeenCalledWith("live-secret")
+  })
+
+  it("never forks a branch sent with attachments", async () => {
+    const { native, router } = branching(branched)
+
+    await expect(
+      native.submit("live-secret", {
+        scope,
+        text: "/branch",
+        turnId: "run-1",
+        hasAttachments: true,
+      })
+    ).resolves.toEqual({
+      acknowledgement: "rejected",
+      reason: "command-with-attachments",
+    })
+    expect(router.calls("session.branch")).toHaveLength(0)
+  })
+})
+
+describe("Hermes child watch", () => {
+  /** One frame Hermes mirrored into the watch `live-watch`. */
+  const mirrored = (seq: number, sessionId = "live-watch") => ({
+    type: "message.delta",
+    session_id: sessionId,
+    seq,
+    payload: { text: `part ${seq}` },
+  })
+  const seqs = (events: readonly unknown[]) =>
+    events.map((event) => (event as { seq: number }).seq)
+
+  it("opens a child's watch by a lazy resume and hears each frame once, from its first", async () => {
+    const { native, router } = runtime({
+      "session.resume": async () => ({ session_id: "live-watch" }),
+      "session.events.since": async () => ({
+        epoch: "e1",
+        latest_seq: 2,
+        events: [mirrored(1), mirrored(2)],
+      }),
+      "session.close": async () => ({ closed: true }),
+    })
+    const heard: unknown[] = []
+
+    const stop = await native.watchChild(scope, "child-1", (event) =>
+      heard.push(event)
+    )
+    router.publish(mirrored(2))
+    router.publish(mirrored(3))
+    router.publish(mirrored(4, "live-secret"))
+    stop()
+    stop()
+    router.publish(mirrored(5))
+
+    expect(seqs(heard)).toEqual([1, 2, 3])
+    expect(router.calls("session.resume").map(({ params }) => params)).toEqual([
+      { session_id: "child-1", profile: "researcher", lazy: true },
+    ])
+    expect(
+      router.calls("session.events.since").map(({ params }) => params)
+    ).toEqual([{ session_id: "live-watch", last_seen: 0 }])
+    await vi.waitFor(() =>
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-watch" }]
+      )
+    )
+  })
+
+  it("keeps a frame Hermes mirrored while the watch read its first frames", async () => {
+    const heard: unknown[] = []
+    const { native, router } = runtime({
+      "session.resume": async () => ({ session_id: "live-watch" }),
+      "session.events.since": async () => {
+        router.publish(mirrored(3))
+        return {
+          epoch: "e1",
+          latest_seq: 2,
+          events: [mirrored(1), mirrored(2)],
+        }
+      },
+    })
+
+    await native.watchChild(scope, "child-1", (event) => heard.push(event))
+
+    expect(seqs(heard)).toEqual([1, 2, 3])
+  })
+
+  it("reports a child Hermes cannot reach and hears nothing of it", async () => {
+    const heard: unknown[] = []
+    const { native, router } = runtime({
+      "session.resume": async () => {
+        throw new HermesRpcRejectedError(4007, "session not found")
+      },
+    })
+
+    await expect(
+      native.watchChild(scope, "child-1", (event) => heard.push(event))
+    ).rejects.toBeInstanceOf(HermesUnavailableError)
+    router.publish(mirrored(1))
+
+    expect(heard).toEqual([])
+  })
+
+  it("stops one child on the parent's live Session", async () => {
+    const { native, router } = runtime({
+      "subagent.interrupt": async () => ({ found: true, subagent_id: "sa-1" }),
+    })
+
+    await native.interruptChild("live-secret", "sa-1")
+
+    expect(
+      router.calls("subagent.interrupt").map(({ params }) => params)
+    ).toEqual([{ session_id: "live-secret", subagent_id: "sa-1" }])
+  })
+
+  it.each([
+    [
+      "a refusal as an outage",
+      () => new HermesRpcRejectedError(4001, "not owned"),
+      HermesUnavailableError,
+    ],
+    [
+      "a lost answer as uncertain",
+      () => new HermesRpcUncertainError(),
+      HermesRpcUncertainError,
+    ],
+  ])("reports %s of a child's stop", async (_case, failure, expected) => {
+    const { native } = runtime({
+      "subagent.interrupt": async () => {
+        throw failure()
+      },
+    })
+
+    await expect(
+      native.interruptChild("live-secret", "sa-1")
+    ).rejects.toBeInstanceOf(expected)
+  })
+})
+
 describe("Hermes native interrupt", () => {
   it("reports an acknowledged interrupt", async () => {
     const { native, router } = runtime({

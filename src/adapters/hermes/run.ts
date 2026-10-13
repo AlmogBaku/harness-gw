@@ -42,8 +42,10 @@ import {
   projectHermesToolCall,
   projectHermesToolOutcome,
 } from "./tool-data"
-import { hermesRowMessageId } from "./history"
+import { hermesCompactionId, hermesRowMessageId } from "./history"
 import type { HermesPublishedArtifacts } from "./published-artifacts"
+import type { HermesChildSessions } from "./child-sessions"
+import { acceptSubagent, releaseChildren, stopChild } from "./run-children"
 import type { HermesMediaOptions } from "./media-artifacts"
 import { boundedNativeBytes, publicReason, sessionKey } from "./native"
 import { startedTurnQueue } from "./event-queue"
@@ -69,7 +71,6 @@ import {
   persistedTurnRows,
   stableNativeId,
   statusNotice,
-  subagentPatch,
   terminalText,
   tokenUsage,
   usageCost,
@@ -184,6 +185,7 @@ export class HermesTurnEngine {
   readonly #lostInteractionGraceMs: number
   readonly #mcpToolNames?: McpToolNames
   readonly #publishedArtifacts?: HermesPublishedArtifacts
+  readonly #childSessions?: HermesChildSessions
   readonly #media: HermesMediaOptions
 
   constructor(
@@ -195,6 +197,8 @@ export class HermesTurnEngine {
       mcpToolNames?: McpToolNames
       /** Grants each MEDIA-line artifact before its assistant row persists. */
       publishedArtifacts?: HermesPublishedArtifacts
+      /** Keeps each child a turn announced, for a reload to announce again. */
+      childSessions?: HermesChildSessions
       /** Whether the media a turn delivers becomes Artifacts; on by default. */
       media?: HermesMediaOptions
       /** Without it, a watch retries every failure and logs nothing. */
@@ -204,6 +208,7 @@ export class HermesTurnEngine {
     this.#native = native
     this.#mcpToolNames = options.mcpToolNames
     this.#publishedArtifacts = options.publishedArtifacts
+    this.#childSessions = options.childSessions
     this.#media = options.media ?? {}
     this.#log = options.log ?? { warn: () => undefined }
     this.#watch = {
@@ -229,6 +234,9 @@ export class HermesTurnEngine {
       fail: (active, failure) => this.#fail(active, failure),
       detach: (active, failure) => this.#detach(active, failure),
       settle: (active) => this.#settle(active),
+      emit: (active, event) => this.#emit(active, event),
+      recordChild: (active, report, parent) =>
+        this.#childSessions?.record(active.scope, report, parent),
     }
   }
 
@@ -632,7 +640,7 @@ export class HermesTurnEngine {
       outcome = await this.#native.submit(active.liveSessionId, prompt, signal)
     } catch (error) {
       if (error instanceof HermesTurnRewindConflictError) {
-        this.#fail(active, TURN_FAILURES.rewindConflict)
+        this.#refuse(active, TURN_FAILURES.rewindConflict)
         return
       }
       // Nothing was written, so this run never began: it settles silently and
@@ -683,9 +691,9 @@ export class HermesTurnEngine {
       throw new ServerTurnConflictError()
     }
     if (outcome.reason === "command-with-attachments")
-      return this.#fail(active, TURN_FAILURES.commandWithAttachments)
+      return this.#refuse(active, TURN_FAILURES.commandWithAttachments)
     if (outcome.reason !== "session-gone")
-      return this.#fail(
+      return this.#refuse(
         active,
         withDetail(REFUSAL_FAILURES[outcome.reason], outcome.detail)
       )
@@ -714,6 +722,8 @@ export class HermesTurnEngine {
       events: active.queue,
       settled: active.settled,
       stop: () => stopTurn(this.#host, active),
+      stopChild: (childSessionId) =>
+        stopChild(this.#host, active, childSessionId),
       // Gap: Hermes answers `session.redirect` with `{status, text}` alone
       // (tui_gateway/methods_session.py:2171 at v2026.9.24) and no push names
       // the correction's row, so a live steer keeps its `requestId` while a
@@ -862,10 +872,9 @@ export class HermesTurnEngine {
         return this.#acceptTerminal(active, event.type, payload)
       case "status.update":
         return this.#acceptStatus(active, payload)
-      case "subagent.spawn_requested":
       case "subagent.start":
       case "subagent.complete":
-        return this.#acceptSubagent(active, event.type, payload)
+        return acceptSubagent(this.#host, active, event.type, payload)
       case "error": {
         // Hermes also uses `error` for advisory failures (a rejected pending
         // model switch): reconcile liveness before any terminal turn event.
@@ -982,13 +991,18 @@ export class HermesTurnEngine {
    * `compacted`; it reports no failure of its own, and only status text. Its
    * gateway also tags any lifecycle notice that mentions compaction as
    * `compacting` (a threshold notice on a Session's first turn), and Hermes'
-   * own client clears that indicator when the turn ends.
+   * own client clears that indicator when the turn ends. Hermes names no
+   * compaction, so one is named as history names the carrier it stores: by
+   * the prompt's row, where Hermes named it, and its count within the turn.
    */
   #acceptStatus(active: ActiveTurn, payload: Record<string, unknown>) {
     const { compaction } = active
     if (payload.kind === "compacting" && !compaction.open) {
       compaction.count += 1
-      compaction.open = `${active.turnId}:compaction:${compaction.count}`
+      compaction.open = hermesCompactionId(
+        active.messageBase ?? active.turnId,
+        compaction.count
+      )
       this.#emit(active, {
         kind: TurnEventKind.CompactionUpdated,
         compactionId: compaction.open,
@@ -1014,36 +1028,6 @@ export class HermesTurnEngine {
       status: CompactionStatus.Cancelled,
     })
     compaction.open = undefined
-  }
-
-  /**
-   * Hermes names no call on a subagent frame, and `delegate_task` runs its
-   * children while the call is open: a subagent belongs to the latest open
-   * delegation when first seen, and to that call from then on.
-   */
-  #acceptSubagent(
-    active: ActiveTurn,
-    type: string,
-    payload: Record<string, unknown>
-  ) {
-    const subagent = subagentPatch(type, payload)
-    if (!subagent) return
-    const toolCallId =
-      active.subagents.get(subagent.id) ?? this.#openDelegation(active)
-    if (!toolCallId) return
-    active.subagents.set(subagent.id, toolCallId)
-    this.#emit(active, {
-      kind: TurnEventKind.SubagentUpdated,
-      toolCallId,
-      subagent,
-    })
-  }
-
-  #openDelegation(active: ActiveTurn) {
-    let open: string | undefined
-    for (const [toolCallId, tool] of active.tools)
-      if (tool.name === "delegate_subagent" && !tool.ended) open = toolCallId
-    return open
   }
 
   #acceptUsage(active: ActiveTurn, value: unknown) {
@@ -1350,13 +1334,32 @@ export class HermesTurnEngine {
     this.#emit(active, { kind: TurnEventKind.TurnStarted })
   }
 
-  #fail(active: ActiveTurn, failure: TurnFailure) {
+  /**
+   * `written.unstored`: the run ends knowing Hermes stored nothing of its
+   * prompt, so its receipt says so.
+   */
+  #fail(
+    active: ActiveTurn,
+    failure: TurnFailure,
+    written: { unstored?: boolean } = {}
+  ) {
     if (active.terminal) return
     this.#closeGeneration(active)
     this.#settleCompaction(active)
     const failed = this.#failed(active, failure)
     this.#emit(active, failed)
-    this.#settle(active, failed)
+    this.#settle(active, failed, written)
+  }
+
+  /**
+   * The prompt was refused before Hermes stored any of it: by Hermes, which
+   * refuses a submit before it writes its row, or by this run before sending
+   * it. The run fails, and its receipt says nothing was stored, so the prompt
+   * is answered with an error rather than as accepted.
+   */
+  #refuse(active: ActiveTurn, failure: TurnFailure) {
+    if (active.promptMessageId) active.stored ??= storageReceipt()
+    this.#fail(active, failure, { unstored: true })
   }
 
   /**
@@ -1374,6 +1377,7 @@ export class HermesTurnEngine {
     active.catchUp = undefined
     active.queue.close()
     safelyUnsubscribe(active.unsubscribe)
+    releaseChildren(active)
   }
 
   /** A public failure, on the model the Session last reported. */
@@ -1416,14 +1420,19 @@ export class HermesTurnEngine {
   }
 
   /** `ending` is the event that ended the run, when one did. */
-  #settle(active: ActiveTurn, ending?: TurnEvent) {
+  #settle(
+    active: ActiveTurn,
+    ending?: TurnEvent,
+    written: { unstored?: boolean } = {}
+  ) {
     if (active.terminal) return
     active.terminal = true
-    active.stored?.end(ending)
+    active.stored?.end(ending, written)
     // A settling watcher keeps the native observation until Hermes reports the
     // Session idle; without one nothing observes this Session any more.
     if (this.#settling.get(sessionKey(active.scope))?.active !== active)
       safelyUnsubscribe(active.unsubscribe)
+    releaseChildren(active)
     active.queue.close()
     active.resolveSettled()
     const key = sessionKey(active.scope)

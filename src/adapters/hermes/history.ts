@@ -1,4 +1,8 @@
-import type { SessionMessage } from "../../../protocol"
+import type {
+  SessionChildActivityMessage,
+  SessionCompactionActivityMessage,
+  SessionMessage,
+} from "../../../protocol"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { StopReason } from "../../core/events"
 import type { SessionNotice } from "../../core/member"
@@ -205,6 +209,47 @@ export function hermesRowMessageId(rowId: number) {
 }
 
 /**
+ * The id of a turn's `count`-th compaction, named after the message its turn
+ * opened with. Hermes names neither the compaction nor the summary carrier it
+ * stores while the turn runs, but it does name the prompt's row on admission,
+ * so live and history agree on this one where they agree on the turn's
+ * messages.
+ */
+export function hermesCompactionId(turnBase: string, count: number) {
+  return `${turnBase}:compaction:${count}`
+}
+
+/** A stored row of Session activity the projection places among messages. */
+export type HermesActivityMessage =
+  | SessionCompactionActivityMessage
+  | SessionChildActivityMessage
+
+/** What the projection makes of durable rows: messages and activity. */
+export type HermesHistoryMessage = SessionMessage | HermesActivityMessage
+
+/**
+ * The messages with each activity row placed after the `before` messages that
+ * preceded it, in the order the rows were read.
+ */
+function interleaved(
+  messages: readonly SessionMessage[],
+  activities: readonly { before: number; message: HermesActivityMessage }[]
+): HermesHistoryMessage[] {
+  // A row read later can still belong after an earlier message, as a call of
+  // a reply its later rows continue does; the sort is stable.
+  const ordered = [...activities].sort((a, b) => a.before - b.before)
+  const placed: HermesHistoryMessage[] = []
+  let next = 0
+  messages.forEach((message, index) => {
+    while (next < ordered.length && ordered[next]!.before <= index)
+      placed.push(ordered[next++]!.message)
+    placed.push(message)
+  })
+  for (; next < ordered.length; next += 1) placed.push(ordered[next]!.message)
+  return placed
+}
+
+/**
  * The index of the oldest row that opens a turn: the first user row the
  * projection opens a turn at, prompt or automation. `-1` when the rows hold no
  * turn start.
@@ -228,13 +273,41 @@ function leadOf(
   return notice ? [{ type: "data", name: "hgw-notice", data: notice }] : []
 }
 
-/** Converts provider-native durable rows into the strict public history shape. */
+/**
+ * A reply `session.branch` copied into its fork: Hermes copies a reply's text
+ * alone, without the calls or the `finish_reason` of the model call that made
+ * it (`tui_gateway/methods_session.py` `_BRANCH_COPY_FIELDS`), so nothing but
+ * the row itself bounds the response it was.
+ */
+function isCopiedReply(value: JsonRecord, prose: boolean) {
+  return (
+    prose &&
+    value.finish_reason == null &&
+    !(Array.isArray(value.tool_calls) && value.tool_calls.length > 0)
+  )
+}
+
+/**
+ * Converts provider-native durable rows into the strict public history shape.
+ * `branched`: the rows are a fork's, whose copied replies each stand alone.
+ * `children`: the child Sessions a call spawned, each placed after the message
+ * that made the call.
+ */
 export function projectHermesHistory(
   rows: readonly unknown[],
   resolve?: McpToolNameResolver,
-  media: HermesMediaOptions = {}
-): SessionMessage[] {
+  media: HermesMediaOptions = {},
+  {
+    branched = false,
+    children,
+  }: {
+    branched?: boolean
+    children?: (toolCallId: string) => readonly SessionChildActivityMessage[]
+  } = {}
+): HermesHistoryMessage[] {
   const messages: SessionMessage[] = []
+  /** Activity rows, each after the messages that preceded it. */
+  const activities: { before: number; message: HermesActivityMessage }[] = []
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
   /** The media each turn's calls returned, keyed by the turn's first row. */
   const mediaReferences = new Map<number, Set<string>>()
@@ -245,10 +318,13 @@ export function projectHermesHistory(
    * as live numbers them, and how many it opened. Rows before any prompt keep
    * their own row ids.
    */
-  let turn: { base?: string; responses: number; index: number } = {
-    responses: 0,
-    index: -1,
-  }
+  let turn: {
+    base?: string
+    responses: number
+    index: number
+    /** The summary carriers read since the turn opened. */
+    compactions: number
+  } = { responses: 0, index: -1, compactions: 0 }
   /** The model response the next assistant row may continue. */
   let response: number | undefined
   /** A call finished since that response opened. */
@@ -336,6 +412,26 @@ export function projectHermesHistory(
             value.id > 0
           ? hermesRowMessageId(value.id)
           : (trimmedText(value.id) ?? `hermes-history-${index}`)
+    // A summary carrier is where Hermes compacted the context: it is stored as
+    // that compaction, with no summary because no live compaction carries one,
+    // and whatever the carrier still shows follows it.
+    if (value._compressed_summary === true) {
+      turn.compactions += 1
+      activities.push({
+        before: messages.length,
+        message: {
+          id: rowMessageId,
+          role: "activity",
+          activityType: "COMPACTION",
+          content: {
+            compactionId:
+              turn.base === undefined
+                ? rowMessageId
+                : hermesCompactionId(turn.base, turn.compactions),
+          },
+        },
+      })
+    }
     const rawContent = parseRowJson(value.content)
     // `rowText` only reads Hermes' display projection on a persisted compaction
     // carrier, so provider-only fields cannot replace a Session's durable
@@ -350,7 +446,7 @@ export function projectHermesHistory(
     if (role !== "assistant") {
       response = undefined
       if (role === "user" && !correction) {
-        turn = { base: rowMessageId, responses: 0, index }
+        turn = { base: rowMessageId, responses: 0, index, compactions: 0 }
         toolSince = false
         automated = undefined
       }
@@ -384,7 +480,10 @@ export function projectHermesHistory(
       reasoning || visibleText || assistantContent?.artifacts.length
     )
     const previousAssistant =
-      role === "assistant" && response !== undefined && !(toolSince && prose)
+      role === "assistant" &&
+      response !== undefined &&
+      !(toolSince && prose) &&
+      !(branched && isCopiedReply(value, prose))
         ? messages[response]
         : undefined
     let id = rowMessageId
@@ -474,6 +573,8 @@ export function projectHermesHistory(
           ...(locations ? { locations } : {}),
         })
         calls.set(toolCallId, { messageIndex, partIndex })
+        for (const child of children?.(toolCallId) ?? [])
+          activities.push({ before: messageIndex + 1, message: child })
       }
     }
     // Only an assistant message spans more than one row, so only its end is
@@ -509,12 +610,13 @@ export function projectHermesHistory(
   })
   // Stamped last because the rows that finish an assistant turn arrive after the
   // row that opened it.
-  return messages.map((message, index) => {
+  const stamped = messages.map((message, index) => {
     const ms = completions.get(index)
     return ms === undefined
       ? message
       : { ...message, completedAt: new Date(ms).toISOString() }
   })
+  return interleaved(stamped, activities)
 }
 
 /** Every raw tool name the rows carry, so their MCP names load before projection. */

@@ -50,6 +50,65 @@ const REDIRECT_SCAFFOLD = "[Context from the interrupted assistant response]"
 type Fault = "none" | "native" | "refused" | "down"
 type Reply = { result: unknown } | { error: { code: number; message: string } }
 
+/**
+ * A stored Session besides the one the fake runs: a fork Hermes branched, or
+ * a child a turn delegated to.
+ */
+type OtherSession = {
+  rows: Record<string, unknown>[]
+  title: string
+  parent: string
+  /**
+   * `subagent` for a delegated child, which Hermes leaves out of its list
+   * (`tools/delegate_tool.py` builds the child with `platform="subagent"`).
+   */
+  source: string
+  /** The live Session a resume or a branch bound it to. */
+  liveId?: string
+}
+
+/** The fields `session.branch` copies of a row (`_BRANCH_COPY_FIELDS`). */
+const BRANCH_COPY_FIELDS = ["reasoning", "display_kind", "timestamp"] as const
+
+/**
+ * `_visible_branch_history`: the user and assistant rows with visible text,
+ * which a branch copies and nothing else, tool rows and calls included.
+ */
+function branchedRows(rows: readonly unknown[]) {
+  return rows.flatMap((row) => {
+    const value = row as Record<string, unknown>
+    if (value.role !== "user" && value.role !== "assistant") return []
+    if (typeof value.content !== "string" || !value.content.trim()) return []
+    return [
+      {
+        role: value.role,
+        content: value.content,
+        ...Object.fromEntries(
+          BRANCH_COPY_FIELDS.flatMap((field) =>
+            value[field] === undefined ? [] : [[field, value[field]]]
+          )
+        ),
+      },
+    ]
+  })
+}
+
+/** One `order=latest` page of `rows`, as `hermes_state_messages.py:1063` reads it. */
+function messagesPage(storedId: string, rows: readonly unknown[], url: URL) {
+  const limit = Number(url.searchParams.get("limit"))
+  const offset = Number(url.searchParams.get("offset"))
+  const end =
+    url.searchParams.get("order") === "latest"
+      ? rows.length - offset
+      : offset + limit
+  const page = rows.slice(Math.max(0, end - limit), Math.max(0, end))
+  return {
+    session_id: storedId,
+    messages: page,
+    pagination: { limit, offset, returned: page.length, total: rows.length },
+  }
+}
+
 /** A socket that answers every request frame the way Hermes would. */
 class HermesFakeSocket extends FakeSocket {
   constructor(
@@ -128,6 +187,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   let nextRowId = 1
   /** The rows the running turn stored, its prompt's first. */
   let turnRows: number[] = []
+  /** How many compactions the running turn ran. */
+  let compactions = 0
   let inflight: Record<string, unknown> | undefined
   /** The server request the running turn blocks on, as `server_requests` holds it. */
   let open:
@@ -151,8 +212,25 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   /** Every dashboard request, as Hermes received it. */
   const httpRequests: { url: URL; headers: Headers }[] = []
 
+  /** The stored Sessions besides the one this fake runs, by stored id. */
+  const others = new Map<string, OtherSession>()
+  let nextOther = 1
+  /** Every `session.branch` Hermes received, as its params. */
+  const branches: Record<string, unknown>[] = []
+  /** Every live Session `session.close` tore down. */
+  const closed: string[] = []
+  /** Every socket method Hermes received, in order. */
+  const received: string[] = []
+  /** Every truncation a submit asked for. */
+  const truncations: Record<string, unknown>[] = []
+  /** The child Sessions waiting for a watch, each told its live id once open. */
+  const watchers = new Map<string, (liveId: string) => void>()
+  let nextChild = 1
+
   const socket = () => sockets.at(-1)
-  const latestSeq = () => frames.at(-1)?.seq ?? 0
+  /** Each live Session numbers its own frames (`event_replay._stamp_event`). */
+  const latestSeq = (liveId = LIVE_ID) =>
+    frames.findLast(({ session_id }) => session_id === liveId)?.seq ?? 0
   /** `_open_requests`: what a resume or a replay re-delivers. */
   const openRequests = () =>
     open ? [{ id: open.id, method: open.method, params: open.params }] : []
@@ -260,6 +338,45 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     emit(turn.idle())
   }
 
+  /**
+   * The stored rows a submit leaves, as `_truncate_history_for_submit` cuts
+   * them for an Edit or a Retry: everything from the user row it names is
+   * dropped, and the survivors are stored again as new rows. Truncation needs
+   * `confirm_truncate` (4029), a row Hermes holds (4018), and its own consent
+   * to drop every row (4028).
+   */
+  function truncated(
+    params: Record<string, unknown>
+  ): { rows: unknown[] } | Extract<Reply, { error: unknown }> {
+    const target = params.truncate_before_row_id
+    if (target === undefined) return { rows }
+    truncations.push({
+      truncate_before_row_id: target,
+      confirm_truncate: params.confirm_truncate,
+      confirm_empty_truncate: params.confirm_empty_truncate,
+    })
+    if (params.confirm_truncate !== true)
+      return {
+        error: { code: 4029, message: "truncation requires confirm_truncate" },
+      }
+    const index = rows.findIndex((row) => {
+      const value = row as Record<string, unknown>
+      return value.id === target && value.role === "user"
+    })
+    if (index < 0)
+      return { error: { code: 4018, message: "stale truncation target" } }
+    if (index === 0 && params.confirm_empty_truncate !== true)
+      return {
+        error: { code: 4028, message: "truncation would erase the transcript" },
+      }
+    return {
+      rows: rows.slice(0, index).map((row) => ({
+        ...(row as Record<string, unknown>),
+        id: nextRowId++,
+      })),
+    }
+  }
+
   function rpc(method: string, params: Record<string, unknown>): Reply {
     switch (method) {
       // A row's `path` is the profile's home, never where its Sessions run
@@ -273,8 +390,29 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         return params.key === "project" && params.profile === PROFILE
           ? { result: { cwd: PROJECT_FOLDER, branch: null } }
           : { error: NATIVE_FAILURE }
-      case "session.resume":
-        if (deleted) return { error: SESSION_NOT_FOUND }
+      case "session.resume": {
+        const other = others.get(String(params.session_id))
+        if (other) {
+          other.liveId ??= `live-${String(params.session_id)}`
+          // A lazy resume opens the watch Hermes mirrors a child into, once
+          // its answer is out (`_resume_lazy`).
+          const watching = watchers.get(String(params.session_id))
+          if (params.lazy === true && watching) {
+            watchers.delete(String(params.session_id))
+            const liveId = other.liveId
+            setImmediate(() => watching(liveId))
+          }
+          return {
+            result: {
+              session_id: other.liveId,
+              stored_session_id: params.session_id,
+              running: false,
+              open_requests: [],
+            },
+          }
+        }
+        if (deleted || params.session_id !== STORED_ID)
+          return { error: SESSION_NOT_FOUND }
         // A live draft with no stored row reattaches lazy
         // (`tui_gateway/methods_session.py:628`).
         if (!saved)
@@ -300,16 +438,66 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
             open_requests: openRequests(),
           },
         }
-      case "session.events.since":
+      }
+      case "session.events.since": {
+        const liveId = String(params.session_id)
         return {
           result: {
             epoch: EPOCH,
-            latest_seq: latestSeq(),
+            latest_seq: latestSeq(liveId),
             truncated: false,
-            events: frames.filter(({ seq }) => seq > Number(params.last_seen)),
-            open_requests: openRequests(),
+            events: frames.filter(
+              ({ session_id, seq }) =>
+                session_id === liveId && seq > Number(params.last_seen)
+            ),
+            open_requests: liveId === LIVE_ID ? openRequests() : [],
           },
         }
+      }
+      // `_with_live_session`: only a live Session branches; its stored
+      // conversation is copied into a new listed Session, and the original is
+      // left as it was (`tui_gateway/methods_session.py:1985`).
+      case "session.branch": {
+        branches.push(params)
+        if (params.session_id !== LIVE_ID)
+          return { error: { code: 4001, message: "session not found" } }
+        const copied = branchedRows(rows)
+        if (copied.length === 0)
+          return {
+            error: {
+              code: 4008,
+              message: "nothing to branch — send a message first",
+            },
+          }
+        const n = nextOther++
+        const storedId = `fork-${n}`
+        const title =
+          typeof params.name === "string" && params.name
+            ? params.name
+            : `Contract Session #${n + 1}`
+        others.set(storedId, {
+          rows: copied.map((row) => ({
+            ...row,
+            id: nextRowId++,
+            session_id: storedId,
+          })),
+          title,
+          parent: STORED_ID,
+          source: "aos-ui",
+          liveId: `live-${storedId}`,
+        })
+        return {
+          result: {
+            session_id: `live-${storedId}`,
+            stored_session_id: storedId,
+            title,
+            parent: STORED_ID,
+            message_count: copied.length,
+            messages: [],
+            info: { model: "contract-model" },
+          },
+        }
+      }
       case "session.active_list":
         return {
           result: {
@@ -337,8 +525,12 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         interrupted?.()
         return { result: { status: "interrupted" } }
       case "prompt.submit": {
+        const cut = truncated(params)
+        if ("error" in cut) return cut
+        rows = cut.rows
         running = true
         turnRows = []
+        compactions = 0
         const text = typeof params.text === "string" ? params.text : ""
         const userRowId = store({ role: "user", content: text })
         return { result: { status: "streaming", user_row_id: userRowId } }
@@ -394,8 +586,22 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
             },
           },
         }
-      case "session.close":
-        return { result: {} }
+      // `/branch` and its alias `/fork`, as `commands.catalog` lists them
+      // (`hermes_cli/commands.py:74`).
+      case "commands.catalog":
+        return {
+          result: {
+            pairs: [["/branch", "Branch the current session"]],
+            canon: { "/branch": "/branch", "/fork": "/branch" },
+          },
+        }
+      case "session.close": {
+        const liveId = String(params.session_id)
+        closed.push(liveId)
+        for (const other of others.values())
+          if (other.liveId === liveId) other.liveId = undefined
+        return { result: { closed: true } }
+      }
       default:
         return { error: { code: -32601, message: "method not found" } }
     }
@@ -405,19 +611,52 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     if (TRANSPORT_METHODS.has(method))
       return { result: method === "gateway.ping" ? { ok: true } : {} }
     calls += 1
+    received.push(method)
     return fault === "native" ? { error: NATIVE_FAILURE } : rpc(method, params)
   }
 
   function route(url: URL) {
     const base = `/api/sessions/${encodeURIComponent(STORED_ID)}`
     const listed = saved && !deleted
-    if (url.pathname === "/api/sessions")
-      return json(200, {
-        sessions: listed
+    if (url.pathname === "/api/sessions") {
+      // A fork stays listed by its `_branched_from` marker, and a delegated
+      // child is left out (`db.session_count(exclude_children=True)`).
+      const sessions = [
+        ...(listed
           ? [{ id: STORED_ID, profile: PROFILE, title: "Contract Session" }]
-          : [],
-        total: listed ? 1 : 0,
-      })
+          : []),
+        ...[...others].flatMap(([id, { title, parent, source }]) =>
+          source === "subagent"
+            ? []
+            : [{ id, profile: PROFILE, title, parent_session_id: parent }]
+        ),
+      ]
+      return json(200, { sessions, total: sessions.length })
+    }
+    const [, otherId, messages] =
+      /^\/api\/sessions\/([^/]+)(\/messages)?$/u.exec(url.pathname) ?? []
+    const other =
+      otherId === undefined
+        ? undefined
+        : others.get(decodeURIComponent(otherId))
+    if (other) {
+      const storedId = decodeURIComponent(otherId!)
+      return messages
+        ? json(200, messagesPage(storedId, other.rows, url))
+        : json(200, {
+            id: storedId,
+            profile: PROFILE,
+            title: other.title,
+            parent_session_id: other.parent,
+            source: other.source,
+            // `db.get_session` serves the row's JSON column as stored.
+            model_config: JSON.stringify(
+              other.source === "subagent"
+                ? { _delegate_from: other.parent }
+                : { _branched_from: other.parent }
+            ),
+          })
+    }
     // A listing names no Session; each entry carries the real path Hermes
     // resolved it to, and one it cannot resolve fails the whole listing
     // (`hermes_cli/web_routers/files.py:367`, `web_server_files.py:181`).
@@ -491,25 +730,8 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       })
     // `order=latest` pages back from the newest row, each page in order
     // (`hermes_state_messages.py:1063`).
-    if (url.pathname === `${base}/messages`) {
-      const limit = Number(url.searchParams.get("limit"))
-      const offset = Number(url.searchParams.get("offset"))
-      const end =
-        url.searchParams.get("order") === "latest"
-          ? rows.length - offset
-          : offset + limit
-      const page = rows.slice(Math.max(0, end - limit), Math.max(0, end))
-      return json(200, {
-        session_id: STORED_ID,
-        messages: page,
-        pagination: {
-          limit,
-          offset,
-          returned: page.length,
-          total: rows.length,
-        },
-      })
-    }
+    if (url.pathname === `${base}/messages`)
+      return json(200, messagesPage(STORED_ID, rows, url))
     return json(404)
   }
 
@@ -542,6 +764,18 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       if (fault === "native") return json(NATIVE_FAILURE_STATUS)
       return route(url)
     }) as unknown as typeof fetch,
+
+    /** Every `session.branch` Hermes received, as its params. */
+    branches: () => [...branches],
+
+    /** Every live Session `session.close` tore down, in order. */
+    closedSessions: () => [...closed],
+
+    /** Every socket method Hermes received, in order. */
+    received: () => [...received],
+
+    /** Every truncating `prompt.submit`, as its truncation params. */
+    truncations: () => [...truncations],
 
     /** The dashboard requests Hermes received for `pathname`. */
     httpRequests: (pathname: string) =>
@@ -692,6 +926,137 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
      */
     async quiet() {
       toolProgress = false
+    },
+
+    /**
+     * A `delegate_task` call inside the running turn, whose one child says
+     * "Child at work." and completes, all stored: the child's Session under
+     * its own stored id, with its parent and Hermes' `subagent` source, as
+     * `tools/delegate_tool.py` stores it. Hermes mirrors a child only into a
+     * watch a lazy resume opened, so the child streams once one has. Resolves
+     * with the child's stored id, the one the adapter reports it under.
+     */
+    async spawnChild() {
+      startStreaming()
+      const n = nextChild++
+      const childId = `20261013_120000_c${String(n).padStart(5, "0")}`
+      const callId = `call-delegate-${n}`
+      const goal = "Inspect the notes"
+      emit(turn.toolStart(callId, "delegate_task", { goal }))
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: callId,
+            type: "function",
+            function: {
+              name: "delegate_task",
+              arguments: JSON.stringify({ goal }),
+            },
+          },
+        ],
+      })
+      const child: OtherSession = {
+        rows: [],
+        title: goal,
+        parent: STORED_ID,
+        source: "subagent",
+      }
+      others.set(childId, child)
+      const storeChild = (row: Record<string, unknown>) =>
+        child.rows.push({
+          id: nextRowId++,
+          session_id: childId,
+          timestamp: Date.now() / 1000,
+          ...row,
+        })
+      // `_identity_kwargs` rides on every relayed frame of the child.
+      const identity = {
+        subagent_id: `sa-0-${n}`,
+        child_session_id: childId,
+        goal,
+        depth: 0,
+        task_index: 0,
+        task_count: 1,
+        model: "contract-model",
+      }
+      const watched = new Promise<string>((resolve) =>
+        watchers.set(childId, resolve)
+      )
+      emit(turn.frame("subagent.start", identity))
+      storeChild({ role: "user", content: goal })
+      const mirror = nativeTurn(await watched)
+      emit(mirror.frame("message.start"))
+      emit(mirror.delta("Child at work."))
+      storeChild({
+        role: "assistant",
+        content: "Child at work.",
+        finish_reason: "stop",
+      })
+      emit(
+        turn.frame("subagent.complete", {
+          ...identity,
+          status: "completed",
+          summary: "Child at work.",
+          duration_seconds: 1.5,
+          input_tokens: 12,
+          output_tokens: 4,
+        })
+      )
+      emit(mirror.frame("message.complete", { text: "Child at work." }))
+      const result = {
+        results: [
+          {
+            task_index: 0,
+            status: "completed",
+            summary: "Child at work.",
+            duration_seconds: 1.5,
+          },
+        ],
+        total_duration_seconds: 1.5,
+      }
+      emit(turn.toolComplete(callId, "delegate_task", result))
+      store({
+        role: "tool",
+        tool_call_id: callId,
+        tool_name: "delegate_task",
+        content: JSON.stringify(result),
+      })
+      return childId
+    },
+
+    /**
+     * A compaction inside the running turn, as Hermes runs one: `compacting`,
+     * the summary carrier it stores in place, then `compacted`. Resolves with
+     * the id the adapter names it by: the prompt's row and its count in the
+     * turn, as history names the carrier.
+     */
+    async compact() {
+      startStreaming()
+      compactions += 1
+      emit(
+        turn.frame("status.update", {
+          kind: "compacting",
+          text: "Compacting the context",
+        })
+      )
+      // `_project_for_display` hides a carrier with no recovered ask
+      // (`hermes_cli/web_routers/sessions.py:503`).
+      store({
+        role: "user",
+        content: "Synthetic summary of the turn so far",
+        display_kind: "hidden",
+        _compressed_summary: true,
+      })
+      emit(
+        turn.frame("status.update", {
+          kind: "compacted",
+          text: "Context compression complete",
+        })
+      )
+      return `hermes-row-${turnRows[0]}:compaction:${compactions}`
     },
 
     /** The wire contract's second model response: the final text. */

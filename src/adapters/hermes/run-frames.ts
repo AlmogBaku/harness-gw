@@ -5,12 +5,7 @@
  * answers with a value the run may act on or with nothing at all. Nothing in
  * this module knows what a run does with a frame, and nothing in it can emit.
  */
-import {
-  SubagentStatus,
-  type Cost,
-  type Subagent,
-  type TokenUsage,
-} from "../../core/events"
+import type { Cost, TokenUsage } from "../../core/events"
 import type { SessionNotice } from "../../core/member"
 
 import {
@@ -20,7 +15,6 @@ import {
   utf8BytesWithin,
 } from "./native"
 import { parseJsonOrValue } from "../todos"
-import { publicPath } from "./tool-data"
 
 const MAX_NATIVE_TEXT_DELTA_BYTES = 1_048_576
 const MAX_PREACTIVE_EVENTS = 4_096
@@ -210,71 +204,6 @@ const ANSI_SEQUENCES = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/gu
 /** A terminal chunk as the plain text it prints. */
 export function terminalText(chunk: string) {
   return chunk.replace(ANSI_SEQUENCES, "")
-}
-
-/** Hermes' subagent lifecycle, as AOS subagent status. */
-const SUBAGENT_STATUSES: Record<string, SubagentStatus> = {
-  queued: SubagentStatus.Running,
-  running: SubagentStatus.Running,
-  completed: SubagentStatus.Completed,
-  failed: SubagentStatus.Failed,
-  error: SubagentStatus.Failed,
-  timeout: SubagentStatus.Failed,
-  interrupted: SubagentStatus.Cancelled,
-}
-
-function count(value: unknown) {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : undefined
-}
-
-/** A subagent's goal or summary, bounded; the credentials middleware reads it. */
-function publicProse(value: unknown) {
-  return boundedText(value)
-}
-
-function publicPaths(value: unknown) {
-  return Array.isArray(value) ? value.filter(publicPath) : undefined
-}
-
-/**
- * The patch a `subagent.*` frame reports about a subagent the turn itself
- * spawned. Hermes counts depth from 0 for such a child; a deeper one was spawned
- * by a call inside another subagent, which this turn never saw start.
- */
-export function subagentPatch(
-  type: string,
-  payload: Record<string, unknown>
-): Subagent | undefined {
-  const id = stableNativeId(payload.subagent_id)
-  if (!id || (payload.depth ?? 0) !== 0) return undefined
-  const input = count(payload.input_tokens)
-  const output = count(payload.output_tokens)
-  const status =
-    SUBAGENT_STATUSES[String(payload.status)] ??
-    (type === "subagent.start" ? SubagentStatus.Running : undefined)
-  const patch = {
-    id,
-    goal: publicProse(payload.goal),
-    model: stableNativeId(payload.model),
-    depth: 1,
-    status,
-    // Hermes' own readouts total a Session as its input and output tokens.
-    tokens:
-      input === undefined && output === undefined
-        ? undefined
-        : (input ?? 0) + (output ?? 0),
-    filesRead: publicPaths(payload.files_read),
-    filesWritten: publicPaths(payload.files_written),
-    durationMs: durationMs(payload.duration_seconds),
-    childSessionId: stableNativeId(payload.child_session_id),
-    summary: publicProse(payload.summary),
-  }
-  // Every report restates only what this frame carries.
-  return Object.fromEntries(
-    Object.entries(patch).filter(([, value]) => value !== undefined)
-  ) as Subagent
 }
 
 export function nativeEventBuffer(): BufferedNativeEvents {
