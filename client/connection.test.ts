@@ -494,8 +494,8 @@ describe("ACP connection", () => {
     const gateway = createGatewayAgent()
     const connection = connectInProcess(gateway)
     await connection.initialized
-    const pending = vi.fn()
-    connection.subscribePendingRequests(pending)
+    const pending: AcpPendingRequest[] = []
+    connection.subscribePendingRequests((request) => pending.push(request))
     connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
     await connection.joined(SESSION_ID)
     await gateway.pushUpdate(
@@ -503,17 +503,21 @@ describe("ACP connection", () => {
       { sequence: 1, turnId: "run-1" }
     )
 
-    void gateway.askPermission(undefined, CHILD_ID)
+    const answered = gateway.askPermission(undefined, CHILD_ID)
+    await vi.waitFor(() => expect(pending).toHaveLength(1))
+    const [request] = pending
+    expect(request).toMatchObject({
+      kind: "permission",
+      sessionId: CHILD_ID,
+      parentSessionId: SESSION_ID,
+    })
+    if (request?.kind !== "permission") throw new Error("expected permission")
+    request.respond({ outcome: { outcome: "selected", optionId: "allow" } })
 
-    await vi.waitFor(() =>
-      expect(pending).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "permission",
-          sessionId: CHILD_ID,
-          parentSessionId: SESSION_ID,
-        })
-      )
-    )
+    // The answer reaches the gateway as the child's.
+    await expect(answered).resolves.toMatchObject({
+      outcome: { outcome: "selected", optionId: "allow" },
+    })
     connection.close()
   })
 
