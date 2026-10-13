@@ -231,9 +231,11 @@ export function createOpenCodeWorkspaceOperations(input: {
 
   /** One authoritative read that both projects and proves exact ownership. */
   async function readSession(agentId: string, sessionId: string) {
-    const parsed = parseOpenCodeSession(
-      await input.client.sessions.get(sessionId)
-    )
+    const row = await input.client.sessions.get(sessionId)
+    // A child belongs to the Session that spawned it, so no Agent holds it
+    // as one of its own, as no list shows it.
+    if (isOpenCodeChildSession(row)) throw new OpenCodeWorkspaceScopeError()
+    const parsed = parseOpenCodeSession(row)
     if (!parsed.success) throw new OpenCodeWorkspaceUnavailableError()
     return {
       native: parsed.data,

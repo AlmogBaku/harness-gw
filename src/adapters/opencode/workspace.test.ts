@@ -186,6 +186,30 @@ describe("OpenCode workspace operations", () => {
     expect(logs.records()).toEqual([])
   })
 
+  // A child named by id is as out of reach as an unlisted one.
+  it("refuses a child Session named by id before any native mutation", async () => {
+    const update = vi.fn(async () => {})
+    const remove = vi.fn(async () => {})
+    const operations = createOpenCodeWorkspaceOperations({
+      client: stubClient({
+        get: async () => session({ id: "child", parentID: "parent" }),
+        update,
+        delete: remove,
+      }),
+    })
+
+    for (const refused of [
+      operations.getSession("research", "child"),
+      operations.updateSession("research", "child", { title: "Renamed" }),
+      operations.deleteSession("research", "child"),
+    ])
+      await expect(refused).rejects.toMatchObject({
+        name: "OpenCodeWorkspaceScopeError",
+      })
+    expect(update).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+  })
+
   it("lists the other Sessions past a malformed row across cursor pages, and fails only when none can be read", async () => {
     const at = (id: string, updated: number) =>
       session({ id, time: { created: 1, updated } })
