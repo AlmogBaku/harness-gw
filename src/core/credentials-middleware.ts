@@ -32,6 +32,8 @@ import { answeredChoice, askText, distinctChoices } from "./request-text"
 
 /** The canonical name of the tool a runtime asks its operator questions with. */
 const QUESTION_TOOL = "question"
+/** The most question calls one Session keeps noted; past it the oldest goes. */
+const QUESTION_CALLS_PER_SESSION = 10
 
 /** The most of a terminal's output a browser keeps: its last 256 KiB. */
 const TERMINAL_TAIL = 262_144
@@ -268,23 +270,38 @@ function maskedOnce(event: TurnEvent) {
 export function createCredentialsMiddleware({
   guest = false,
 }: { guest?: boolean } = {}): Middleware {
-  /** The question tool's calls this member saw start and not yet finish. */
-  const questionCalls = new Set<string>()
+  /**
+   * Each Session's question calls this member saw start and not yet finish. A
+   * call is forgotten when it finishes, every one when its turn ends cleanly,
+   * and the oldest past `QUESTION_CALLS_PER_SESSION`; a forgotten call is
+   * masked, never shown. A failed turn forgets none, since it can resume.
+   */
+  const questionCalls = new Map<string, Set<string>>()
 
   /** Whether `event` is part of a question tool's call, which the operator reads as written. */
-  function askedByTool(event: TurnEvent) {
+  function askedByTool(sessionId: string, event: TurnEvent) {
+    const calls = questionCalls.get(sessionId)
     switch (event.kind) {
-      case TurnEventKind.ToolCallStarted:
+      case TurnEventKind.ToolCallStarted: {
         if (event.name !== QUESTION_TOOL) return false
-        questionCalls.add(event.toolCallId)
+        const noted = calls ?? new Set<string>()
+        const [oldest] = noted
+        if (noted.size >= QUESTION_CALLS_PER_SESSION && oldest !== undefined)
+          noted.delete(oldest)
+        questionCalls.set(sessionId, noted.add(event.toolCallId))
         return true
+      }
       case TurnEventKind.ToolCallInputChunk:
       case TurnEventKind.ToolCallOutputChunk:
-        return questionCalls.has(event.toolCallId)
-      case TurnEventKind.ToolCallFinished:
-        return (
-          questionCalls.delete(event.toolCallId) || event.name === QUESTION_TOOL
-        )
+        return calls?.has(event.toolCallId) ?? false
+      case TurnEventKind.ToolCallFinished: {
+        const asked = calls?.delete(event.toolCallId) ?? false
+        if (calls?.size === 0) questionCalls.delete(sessionId)
+        return asked || event.name === QUESTION_TOOL
+      }
+      case TurnEventKind.TurnEnded:
+        questionCalls.delete(sessionId)
+        return false
       default:
         return false
     }
@@ -294,7 +311,7 @@ export function createCredentialsMiddleware({
     event(event: MemberEvent): MemberEvent {
       switch (event.kind) {
         case "turn":
-          return !guest && askedByTool(event.event)
+          return !guest && askedByTool(event.sessionId, event.event)
             ? event
             : { ...event, event: maskedOnce(event.event) }
         case "history":

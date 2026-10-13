@@ -22,11 +22,11 @@ const guest = [createCredentialsMiddleware({ guest: true })]
 const decline = () => undefined
 
 /** One turn event as a member is shown it through `stack`. */
-function shownTurn(event: TurnEvent, stack = operator) {
+function shownTurn(event: TurnEvent, stack = operator, sessionId = "s1") {
   const shown = runEvents(
     stack,
     {
-      sessionId: "s1",
+      sessionId,
       kind: "turn",
       stream: { turnId: "turn-1", replayedCorrections: 0, dropped: false },
       sequence: 1,
@@ -369,6 +369,47 @@ describe("credentials middleware: questions", () => {
         shown(history, guest),
       ])
     ).not.toContain(SECRET)
+  })
+
+  // Each eviction masks: a call forgotten too early shows its answers masked, never a credential.
+  it("forgets a Session's question calls when its turn ends and the oldest past ten, never another Session's", () => {
+    const stack = [createCredentialsMiddleware()]
+    const ask = (sessionId: string, toolCallId: string) =>
+      shownTurn(
+        {
+          kind: TurnEventKind.ToolCallStarted,
+          toolCallId,
+          title: "question",
+          name: "question",
+        },
+        stack,
+        sessionId
+      )
+    const answered = (sessionId: string, toolCallId: string) =>
+      JSON.stringify(
+        shownTurn(
+          {
+            kind: TurnEventKind.ToolCallFinished,
+            toolCallId,
+            output: assigned("token"),
+            failed: false,
+          },
+          stack,
+          sessionId
+        )
+      ).includes(SECRET)
+
+    ask("s2", "kept")
+    for (let index = 0; index <= 10; index += 1) ask("s1", `q${index}`)
+    ask("s3", "ended")
+    shownTurn({ kind: TurnEventKind.TurnEnded }, stack, "s3")
+
+    expect([
+      answered("s1", "q0"),
+      answered("s1", "q1"),
+      answered("s2", "kept"),
+      answered("s3", "ended"),
+    ]).toEqual([false, true, true, false])
   })
 
   it("shows a guest a question masked, its choices still telling which", () => {
