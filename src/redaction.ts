@@ -62,10 +62,11 @@ const SAFE_NAMES = new Set([
 /** Names that are credentials though no word of theirs is a term. */
 const SECRET_NAMES = new Set(["npmconfiguserconfig"])
 /**
- * Whole names that spell a term and are no credential: a shell's working
- * directory, which `env` prints. Only the whole name, so `MYSQL_PWD` still is.
+ * Names, exactly as a shell spells them, that spell a term and are no
+ * credential: its working directory, which `env` prints. Only these exact
+ * names, so `MYSQL_PWD` and a lowercase `pwd:` field still are.
  */
-const PLAIN_NAMES = new Set(["pwd", "oldpwd"])
+const PLAIN_NAMES = new Set(["PWD", "OLDPWD"])
 /** The longest run of words a `SECRET_TERMS` or `SAFE_NAMES` entry spans. */
 const MAX_RUN = 3
 /** The longest name read: past it a name is no field anyone writes, and reading it costs more. */
@@ -105,7 +106,7 @@ export function isSecretName(name: string) {
   const read = name.slice(0, MAX_NAME)
   const letters = read.toLowerCase().replace(/[^a-z0-9]+/gu, "")
   if (SECRET_NAMES.has(letters)) return true
-  if (PLAIN_NAMES.has(letters)) return false
+  if (PLAIN_NAMES.has(name)) return false
   if (!SECRET_TERMS.some((term) => letters.includes(term))) return false
   const words = nameWords(read)
   const joined = words.join("")

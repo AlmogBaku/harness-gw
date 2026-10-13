@@ -195,6 +195,11 @@ describe("maskCredentials", () => {
       `${assigned("user", "a")}&${assigned("token", M)}`,
     ],
     [assigned("id_hint", JWT), assigned("id_hint", M)],
+    // A shell's working directory is no credential; a field named `pwd` is.
+    [
+      `db.createUser({ user: "app", pwd: "${SAMPLE}" })`,
+      `db.createUser({ user: "app", pwd: "${M}" })`,
+    ],
     // A value that only names a secret stays readable.
     [
       `export ${assigned("TOKEN", "$TOKEN")}`,

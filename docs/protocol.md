@@ -557,8 +557,8 @@ by key and by value, a secret-named key keeping its name and losing any value
 but a boolean or `null`; JSON with nothing to mask is sent as written, and
 streamed output is masked as plain text, never re-encoded. A terminal's output
 keeps its last 262,144 UTF-16 units, the most a browser keeps of one, without
-the word the cut lands in; nothing else is cut. Each event is masked once,
-however many members are shown it. An MCP App view's files are served from
+the word the cut lands in; nothing else is cut. Each turn event is masked
+once, however many members are shown it. An MCP App view's files are served from
 the stored call, never from its masked input.
 
 Masking finds a credential by its name, URL position, or known shape. One with
