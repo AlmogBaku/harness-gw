@@ -8,7 +8,7 @@ export type GatewayCliDependencies = Omit<
   "logger"
 > &
   Partial<GatewayConfigFileAccess> & {
-    /** Builds the proxy log once the configuration has named its level. */
+    /** Builds the gateway log once the configuration has named its level. */
     createLogger: (
       level: GatewayLogLevel
     ) => ConfiguredGatewayDependencies["logger"]

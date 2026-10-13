@@ -7,7 +7,7 @@ for other harnesses.
 Read the [runtime adapter authoring guide](../../../../docs/development/runtime-adapter-authoring.md)
 for shared obligations. [`UPSTREAM.md`](UPSTREAM.md) records the pinned MIT
 sources and attribution. [`TURN-LIFECYCLE.md`](TURN-LIFECYCLE.md) defines the
-native `/api/ws` turn boundaries and their mapping to the proxy-owned turn vocabulary.
+native `/api/ws` turn boundaries and their mapping to the gateway-owned turn vocabulary.
 The ACP layer translates that vocabulary to the browser.
 
 ## Package map
@@ -33,7 +33,7 @@ The ACP layer translates that vocabulary to the browser.
   applies running-aware warm-idle release.
 - `run-native.ts` defines typed native outcomes and the Hermes rejection-code
   table used to classify turn errors.
-- `run.ts` converts native execution frames into ordered proxy-owned turn
+- `run.ts` converts native execution frames into ordered gateway-owned turn
   events: the single attach path, per-Session contiguity and catch-up,
   discovery by open-turn ring scan, one turn outcome, the settlement watcher,
   and the failure catalogue.

@@ -32,7 +32,7 @@ export type AcpApprovalOption = {
 
 export type AcpApproval = {
   readonly id: string
-  /** The tool call the request guards, when the proxy knows it. */
+  /** The tool call the request guards, when the gateway knows it. */
   readonly toolCallId?: string
   /** The operation asked for, which is the request's title. */
   readonly action: string
@@ -97,7 +97,7 @@ function guardedToolCallId(request: RequestPermissionRequest) {
 export const isSettledApproval = (approval: AcpApproval) =>
   approval.optionId !== undefined || approval.resolution !== undefined
 
-/** `setTimeout` fires at once past this; the proxy withdraws such a request. */
+/** `setTimeout` fires at once past this; the gateway withdraws such a request. */
 const MAX_TIMER_DELAY = 2 ** 31 - 1
 
 export function createAcpApprovals({

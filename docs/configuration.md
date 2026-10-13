@@ -2,7 +2,7 @@
 
 The gateway reads one YAML file. Every field below maps directly to the Zod
 schema in `src/config.ts`; the environment variables table maps to
-`PROXY_ENV_OVERRIDES` in `src/config-file.ts`.
+`GATEWAY_ENV_OVERRIDES` in `src/config-file.ts`.
 
 ## File location
 

@@ -37,7 +37,7 @@ export type WorkspaceCapabilities = z.infer<
   typeof SessionWorkspaceCapabilitiesResponseSchema
 >
 
-/** What the proxy knows about one accepted WebSocket connection. */
+/** What the gateway knows about one accepted WebSocket connection. */
 type AcpConnectionBase = {
   connectionId: string
   principalId: string
@@ -54,7 +54,7 @@ type AcpConnectionBase = {
   publicError(cause: unknown): PublicFailure | undefined
   /** The runtime's `ServerRuntimeTranslation.steerAck`, a static hint. */
   steerAck?: ServerRuntimeTranslation["steerAck"]
-  /** The one workspace catalog per proxy process, which both listeners share. */
+  /** The one workspace catalog per gateway process, which both listeners share. */
   catalog: Catalog
   translators: Translators
   /** Server-staged attachment batches, shared with the REST upload route. */

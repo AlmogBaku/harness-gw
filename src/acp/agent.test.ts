@@ -3564,7 +3564,7 @@ describe("History pages", () => {
     test.close()
   })
 
-  it("reports history past the proxy's or the runtime's reach as truncated", async () => {
+  it("reports history past the gateway's or the runtime's reach as truncated", async () => {
     const test = await harness({
       historyReach: REACH,
       transcript: conversation(26),

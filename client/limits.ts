@@ -38,5 +38,5 @@ export const STABLE_AFTER_MS = 60_000
  */
 export const PART_GRACE_MS = 2_000
 
-/** The window a reopen waits in after the proxy closes at capacity. */
+/** The window a reopen waits in after the gateway closes at capacity. */
 export const CAPACITY_BACKOFF = { minMs: 30_000, maxMs: 60_000 }

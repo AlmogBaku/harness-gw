@@ -1,7 +1,7 @@
 import { validateChatSendParams } from "@openclaw/gateway-protocol"
 import type { ServerAttachmentStage } from "../../core/runtime"
 
-export const OPENCLAW_ATTACHMENT_PROXY_LIMITS = Object.freeze({
+export const OPENCLAW_ATTACHMENT_GATEWAY_LIMITS = Object.freeze({
   maxMimeTypeBytes: 256,
   maxFilenameBytes: 255,
   maxCount: 16,
@@ -46,11 +46,11 @@ const id = (v: unknown) => {
   return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
 }
 const filename = (v: unknown) => {
-  const x = text(v, OPENCLAW_ATTACHMENT_PROXY_LIMITS.maxFilenameBytes)
+  const x = text(v, OPENCLAW_ATTACHMENT_GATEWAY_LIMITS.maxFilenameBytes)
   return x && !/[\\/\0\r\n]/u.test(x) ? x : undefined
 }
 const mime = (v: unknown) => {
-  const x = text(v, OPENCLAW_ATTACHMENT_PROXY_LIMITS.maxMimeTypeBytes)
+  const x = text(v, OPENCLAW_ATTACHMENT_GATEWAY_LIMITS.maxMimeTypeBytes)
   return x && MIME.test(x) ? x : undefined
 }
 function validPolicy(
@@ -90,7 +90,7 @@ function prepareAttachments(
 ) {
   if (
     !validPolicy(policy) ||
-    attachments.length > OPENCLAW_ATTACHMENT_PROXY_LIMITS.maxCount
+    attachments.length > OPENCLAW_ATTACHMENT_GATEWAY_LIMITS.maxCount
   )
     throw new OpenClawContentPublicError()
   const publicAttachments: Array<

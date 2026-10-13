@@ -49,7 +49,7 @@ export type AcpPendingRequest =
       sessionId: string
       request: RequestPermissionRequest
       respond(response: RequestPermissionResponse): void
-      /** Aborts when the proxy withdraws the request, which needs no answer. */
+      /** Aborts when the gateway withdraws the request, which needs no answer. */
       signal: AbortSignal
     }
   | {

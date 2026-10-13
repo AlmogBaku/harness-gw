@@ -23,7 +23,7 @@ const clock = defaultClock
 
 /** Each machine, and whether it ends by itself rather than on dispose. */
 const MACHINES: [string, () => AnyStateMachine, boolean][] = [
-  ["proxy-connection", () => connectionMachine(logger, clock), true],
+  ["gateway-connection", () => connectionMachine(logger, clock), true],
   ["membership", () => membershipMachine(logger, clock), true],
   [
     "turn",
@@ -72,7 +72,7 @@ const MACHINES: [string, () => AnyStateMachine, boolean][] = [
   ],
 ]
 
-describe("state×event coverage of the proxy owner machines", () => {
+describe("state×event coverage of the gateway owner machines", () => {
   for (const [name, machine, ends] of MACHINES)
     describe(name, () => {
       it("leaves every non-final state by some transition", () => {

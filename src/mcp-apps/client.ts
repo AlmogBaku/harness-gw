@@ -52,7 +52,7 @@ export type McpServerOverride = {
 /** Operator overrides keyed by the server name the runtime reports. */
 export type McpServerOverrides = ReadonlyMap<string, McpServerOverride>
 
-/** The proxy's own MCP client, one pooled connection per server and URL. */
+/** The gateway's own MCP client, one pooled connection per server and URL. */
 export type McpAppClient = {
   /** Whether the operator configured headers for this server name. */
   credentialed(server: string): boolean

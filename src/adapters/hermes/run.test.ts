@@ -1674,7 +1674,7 @@ describe("HermesRunEngine", () => {
     })
   })
 
-  it("reconstructs an active run from authoritative Hermes recovery after proxy restart", async () => {
+  it("reconstructs an active run from authoritative Hermes recovery after gateway restart", async () => {
     const t = nativeTurn("live-secret", 1)
     let submissions = 0
     const { engine, attachment } = liveEngine({
@@ -2061,7 +2061,7 @@ describe("HermesRunEngine", () => {
     }
   })
 
-  it("discovers and reattaches a running Hermes Session after proxy restart", async () => {
+  it("discovers and reattaches a running Hermes Session after gateway restart", async () => {
     let observations = 0
     const engine = new HermesTurnEngine(
       runtime({

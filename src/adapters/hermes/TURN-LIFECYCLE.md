@@ -1,7 +1,7 @@
 # Hermes turn lifecycle
 
 This document explains how the Hermes `/api/ws` protocol represents one model
-turn and how the AOS Hermes adapter maps that turn to the proxy-owned turn
+turn and how the AOS Hermes adapter maps that turn to the gateway-owned turn
 vocabulary defined in `src/core/events.ts`. The ACP layer then
 delivers those events to the browser. This is a reference for contributors
 changing `gateway.ts`, `gateway-socket.ts`, `run.ts`, recovery, or history.
@@ -20,7 +20,7 @@ The layers have separate responsibilities:
    `gateway.ts` / `gateway-socket.ts` wrap it with the token dial, bounded
    decoding, error classification, and one event fan-out.
 2. `run.ts` validates events for one attached Session and maps their semantics
-   to a proxy-owned turn segment.
+   to a gateway-owned turn segment.
 3. The shared turn coordinator owns subscriber replay and terminal settlement.
 4. Authoritative Hermes HTTP history reconciles durable transcript state.
 
@@ -107,9 +107,9 @@ to `TurnFailed`.
 ## Turn vocabulary mapping rules
 
 The Hermes adapter applies these rules (the ACP layer translates the
-proxy-owned vocabulary for the browser):
+gateway-owned vocabulary for the browser):
 
-- `message.interim` ends only the current text segment in the proxy-owned
+- `message.interim` ends only the current text segment in the gateway-owned
   vocabulary. It emits neither `TurnEnded` nor `TurnFailed`. The adapter
   rotates its own message id at that boundary, but the ACP translation pins every chunk and tool call of the AOS turn to
   the segment's first id, so the browser streams the one assistant turn that

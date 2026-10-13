@@ -109,7 +109,7 @@ describe("ACP runtime interactions", () => {
     expect(respond).not.toHaveBeenCalled()
   })
 
-  it("carries the proxy's elicitation questions losslessly", () => {
+  it("carries the gateway's elicitation questions losslessly", () => {
     const { interactions, emit } = harness()
     emit(elicitation().pending)
 

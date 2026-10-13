@@ -122,7 +122,7 @@ const stageRequest = {
   }),
 }
 
-describe("AOS V1 proxy", () => {
+describe("gateway", () => {
   it("serves runtime discovery without application authentication", async () => {
     const request = vi.fn(async (method: string) =>
       method === "profiles.list" ? { profiles: [nativeProfile()] } : undefined
@@ -152,7 +152,7 @@ describe("AOS V1 proxy", () => {
     })
 
     // Room for exactly one batch's bytes, so a second one is over the cap.
-    const proxy = app(runtime, {
+    const gateway = app(runtime, {
       attachmentStages: new AttachmentStageRegistry(
         256,
         300_000,
@@ -161,7 +161,7 @@ describe("AOS V1 proxy", () => {
     })
     const path = `${origin}/api/v1/agents/researcher/sessions/stored/attachments/stage`
 
-    const response = await proxy.request(path, stageRequest)
+    const response = await gateway.request(path, stageRequest)
 
     expect(response.status).toBe(201)
     await expect(response.json()).resolves.toMatchObject({
@@ -172,7 +172,7 @@ describe("AOS V1 proxy", () => {
     })
     expect(cleanup).not.toHaveBeenCalled()
 
-    expect((await proxy.request(path, stageRequest)).status).toBe(503)
+    expect((await gateway.request(path, stageRequest)).status).toBe(503)
     expect(cleanup).toHaveBeenCalledOnce()
   })
 
@@ -204,9 +204,9 @@ describe("AOS V1 proxy", () => {
 
   it("does not expose invitation signing when the guest surface is disabled", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
-    const proxy = app(runtime)
+    const gateway = app(runtime)
 
-    const response = await proxy.request(`${origin}/api/v1/guest-invitations`, {
+    const response = await gateway.request(`${origin}/api/v1/guest-invitations`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
       body: JSON.stringify({ agentId: "researcher", ref: "guest-ref" }),
@@ -217,7 +217,7 @@ describe("AOS V1 proxy", () => {
 
   it("serves no browser wire beside runtime discovery and content", async () => {
     const runtime = new HermesServerAdapter({ request: vi.fn() })
-    const proxy = app(runtime)
+    const gateway = app(runtime)
     const session = `${origin}/api/v1/agents/researcher/sessions/stored`
 
     // Sessions, history, models, context, visibility, runs, and the
@@ -238,7 +238,7 @@ describe("AOS V1 proxy", () => {
       `${session}/interactions/pending`,
       `${session}/audio`,
     ])
-      expect((await proxy.request(path)).status, path).toBe(404)
+      expect((await gateway.request(path)).status, path).toBe(404)
   })
 
   it("reports rejected credentials and keeps an unreachable provider discoverable", async () => {
@@ -326,10 +326,10 @@ describe("AOS V1 proxy", () => {
         throw new Error("offline")
       }),
     })
-    const proxy = app(runtime)
+    const gateway = app(runtime)
 
-    expect((await proxy.request(`${origin}/api/v1/healthz`)).status).toBe(200)
-    expect((await proxy.request(`${origin}/api/v1/readyz`)).status).toBe(503)
+    expect((await gateway.request(`${origin}/api/v1/healthz`)).status).toBe(200)
+    expect((await gateway.request(`${origin}/api/v1/readyz`)).status).toBe(503)
   })
 
   it("logs the request path without its query on a completed and a failed request", async () => {
@@ -339,7 +339,7 @@ describe("AOS V1 proxy", () => {
       }),
     })
     const logs = captureLogs()
-    const proxy = createGatewayApp({
+    const gateway = createGatewayApp({
       runtimeInstance: runtimeInstance(runtime),
       logger: logs.logger,
       health,
@@ -348,7 +348,7 @@ describe("AOS V1 proxy", () => {
     // An artifact read is a REST route that reaches the provider, so an outage
     // there is the failure a log line has to name its path for.
     const path = "/api/v1/agents/researcher/sessions/stored/artifacts/art-1"
-    expect((await proxy.request(`${origin}${path}?token=secret`)).status).toBe(
+    expect((await gateway.request(`${origin}${path}?token=secret`)).status).toBe(
       503
     )
 
@@ -390,13 +390,13 @@ describe("AOS V1 proxy", () => {
       readResource: vi.fn(async () => ({ contents: [] })),
     }
     Object.defineProperty(runtime, "mcpApps", { value: mcpApps })
-    const proxy = app(runtime)
+    const gateway = app(runtime)
     const view = (sessionId: string) =>
       `${origin}/api/v1/agents/researcher/sessions/${sessionId}/tool-calls/call-1/app`
 
-    expect((await proxy.request(view("stored"))).status).toBe(200)
-    expect((await proxy.request(view("other"))).status).toBe(404)
-    const call = await proxy.request(`${view("other")}/tools/call`, {
+    expect((await gateway.request(view("stored"))).status).toBe(200)
+    expect((await gateway.request(view("other"))).status).toBe(404)
+    const call = await gateway.request(`${view("other")}/tools/call`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
       body: JSON.stringify({ name: "refresh", arguments: {} }),
@@ -537,13 +537,13 @@ function fileGateway(
     logger: logs.logger,
     ...setup.files,
   }
-  const proxy = app(runtime, {
+  const gateway = app(runtime, {
     files,
     logger: logs.logger,
     ...(setup.clock ? { clock: setup.clock } : {}),
   })
   return {
-    proxy,
+    gateway,
     getSession,
     toolCall,
     open,
@@ -556,8 +556,8 @@ function fileGateway(
 }
 
 /** Opens `call-1`'s view in `sessionId`, as the workspace does. */
-async function openView(proxy: ReturnType<typeof app>, sessionId = "stored") {
-  const response = await proxy.request(`${origin}${appPath(sessionId)}`)
+async function openView(gateway: ReturnType<typeof app>, sessionId = "stored") {
+  const response = await gateway.request(`${origin}${appPath(sessionId)}`)
   expect(response.status).toBe(200)
   return (await response.json()) as McpAppView
 }
@@ -618,11 +618,11 @@ describe("MCP App files", () => {
       404,
     ],
   ])("gives %s only the files it may read", async (_, setup, files, status) => {
-    const { proxy } = fileGateway(setup)
+    const { gateway } = fileGateway(setup)
 
-    expect((await openView(proxy)).files).toEqual(files)
+    expect((await openView(gateway)).files).toEqual(files)
     expect(
-      (await proxy.request(`${origin}${appPath()}/files/path`)).status
+      (await gateway.request(`${origin}${appPath()}/files/path`)).status
     ).toBe(status)
   })
 
@@ -637,11 +637,11 @@ describe("MCP App files", () => {
       parent: "/srv/agent/../agent/report.pdf",
       nul: "/srv/agent/report.pdf\u0000.txt",
     }
-    const { proxy, getSession, read } = fileGateway({
+    const { gateway, getSession, read } = fileGateway({
       call: { ...reportCall, input },
     })
     const file = async (argument: string) =>
-      observed(await proxy.request(`${origin}${appPath()}/files/${argument}`))
+      observed(await gateway.request(`${origin}${appPath()}/files/${argument}`))
 
     // The folders refuse this one by its written path alone, so it says so;
     // every other refusal answers alike.
@@ -702,17 +702,17 @@ describe("MCP App files", () => {
       416,
     ],
   ])("answers %s with an empty %i", async (_, read, status) => {
-    const { proxy } = fileGateway({ reader: { read } })
+    const { gateway } = fileGateway({ reader: { read } })
 
     expect(
-      await observed(await proxy.request(`${origin}${appPath()}/files/path`))
+      await observed(await gateway.request(`${origin}${appPath()}/files/path`))
     ).toEqual({ status, ...REFUSAL })
   })
 
   it("masks a view's input and result, and still serves the file its call names", async () => {
     const secret = "abcdefgh1234"
     const note = `use ${["token", secret].join("=")}`
-    const { proxy, open } = fileGateway({
+    const { gateway, open } = fileGateway({
       call: { ...reportCall, input: { path: REPORT, note } },
     })
     open.mockResolvedValueOnce({
@@ -721,7 +721,7 @@ describe("MCP App files", () => {
       toolResult: { content: [{ type: "text", text: note }] },
     })
 
-    const view = await openView(proxy)
+    const view = await openView(gateway)
 
     expect(JSON.stringify(view)).not.toContain(secret)
     expect(view).toMatchObject({
@@ -734,12 +734,12 @@ describe("MCP App files", () => {
       },
     })
     expect(
-      (await proxy.request(`${origin}${view.files?.addresses.path}`)).status
+      (await gateway.request(`${origin}${view.files?.addresses.path}`)).status
     ).toBe(200)
   })
 
   it("passes on only the runtime headers a file needs, and lets only a view that sent a pass read the answer", async () => {
-    const { proxy, read } = fileGateway({
+    const { gateway, read } = fileGateway({
       call: {
         ...reportCall,
         input: { path: REPORT, notes: "/srv/agent/notes.txt" },
@@ -762,12 +762,12 @@ describe("MCP App files", () => {
           },
         })
     )
-    const { files } = await openView(proxy)
+    const { files } = await openView(gateway)
     const passed = { "accept-ranges": "bytes", "content-length": "4" }
 
     // A browser renders no sandboxed PDF, so a PDF keeps the listener's policy.
     expect(
-      await observed(await proxy.request(`${origin}${files?.addresses.path}`))
+      await observed(await gateway.request(`${origin}${files?.addresses.path}`))
     ).toEqual({
       status: 200,
       headers: {
@@ -781,7 +781,7 @@ describe("MCP App files", () => {
       body: "body",
     })
     expect(
-      await observed(await proxy.request(`${origin}${appPath()}/files/notes`))
+      await observed(await gateway.request(`${origin}${appPath()}/files/notes`))
     ).toEqual({
       status: 200,
       headers: {
@@ -819,14 +819,14 @@ describe("MCP App files", () => {
   ])(
     "serves %s, reported as %s, as %s",
     async (name, reported, served, filename) => {
-      const { proxy, read } = fileGateway({
+      const { gateway, read } = fileGateway({
         call: { ...reportCall, input: { path: `/srv/agent/${name}` } },
       })
       read.mockResolvedValue(
         new Response("x", { headers: { "content-type": reported } })
       )
 
-      const response = await proxy.request(`${origin}${appPath()}/files/path`)
+      const response = await gateway.request(`${origin}${appPath()}/files/path`)
 
       expect(response.headers.get("content-type")).toBe(served)
       expect(response.headers.get("content-disposition")).toBe(
@@ -836,7 +836,7 @@ describe("MCP App files", () => {
   )
 
   it("streams one byte range and stops the read once the client leaves", async () => {
-    const { proxy, read } = fileGateway()
+    const { gateway, read } = fileGateway()
     const url = `${origin}${appPath()}/files/path`
     read.mockResolvedValueOnce(
       new Response("PD", {
@@ -849,13 +849,13 @@ describe("MCP App files", () => {
       })
     )
 
-    const ranged = await proxy.request(url, { headers: { range: "bytes=1-2" } })
+    const ranged = await gateway.request(url, { headers: { range: "bytes=1-2" } })
     expect(ranged.status).toBe(206)
     expect(ranged.headers.get("content-range")).toBe("bytes 1-2/6")
     expect(await ranged.text()).toBe("PD")
     expect(read.mock.lastCall?.[2]).toMatchObject({ range: "bytes=1-2" })
     // Several ranges are more than a runtime reads, so the file is read whole.
-    await proxy.request(url, { headers: { range: "bytes=0-1,4-5" } })
+    await gateway.request(url, { headers: { range: "bytes=0-1,4-5" } })
     expect(read.mock.lastCall?.[2]).not.toHaveProperty("range")
 
     const cancelled = vi.fn()
@@ -871,7 +871,7 @@ describe("MCP App files", () => {
         )
     )
     const client = new AbortController()
-    const streamed = await proxy.request(url, { signal: client.signal })
+    const streamed = await gateway.request(url, { signal: client.signal })
     const body = streamed.body!.getReader()
     // The first bytes arrive while the runtime still holds the file open.
     expect((await body.read()).value).toEqual(first)
@@ -890,14 +890,14 @@ describe("MCP App files", () => {
           headers: { "content-type": "application/pdf" },
         })
     )
-    expect((await proxy.request(url, { method: "HEAD" })).status).toBe(200)
+    expect((await gateway.request(url, { method: "HEAD" })).status).toBe(200)
     expect(dropped).toHaveBeenCalled()
   })
 
   it("renews a call's addresses only for a call the Session holds", async () => {
-    const { proxy } = fileGateway()
+    const { gateway } = fileGateway()
     const renew = (from: string, path = appPath()) =>
-      proxy.request(`${origin}${path}/files`, {
+      gateway.request(`${origin}${path}/files`, {
         method: "POST",
         headers: { origin: from },
       })
@@ -908,32 +908,32 @@ describe("MCP App files", () => {
     const files = (await renewed.json()) as McpAppFiles
     expect(files).toEqual(offer)
     expect(
-      (await proxy.request(`${origin}${files.addresses.path}`)).status
+      (await gateway.request(`${origin}${files.addresses.path}`)).status
     ).toBe(200)
   })
 
   it("limits file reads and renewals apart from the view's own requests", async () => {
     // One instant, so every request falls in one window.
-    const { proxy } = fileGateway({
+    const { gateway } = fileGateway({
       files: { ratePerSecond: 11 },
       clock: () => Date.UTC(2026, 0, 1),
     })
-    const file = () => proxy.request(`${origin}${appPath()}/files/path`)
+    const file = () => gateway.request(`${origin}${appPath()}/files/path`)
 
     for (let count = 0; count < 10; count += 1)
       expect((await file()).status).toBe(200)
-    const renewal = await proxy.request(`${origin}${appPath()}/files`, {
+    const renewal = await gateway.request(`${origin}${appPath()}/files`, {
       method: "POST",
       headers: { origin },
     })
     expect(renewal.status).toBe(200)
     // Eleven file requests spent none of the view's own ten.
-    expect((await proxy.request(`${origin}${appPath()}`)).status).toBe(200)
+    expect((await gateway.request(`${origin}${appPath()}`)).status).toBe(200)
     expect((await file()).status).toBe(429)
   })
 
   it("keeps a call's paths and passes out of its view, its refusals, and the log", async () => {
-    const { proxy, toolCall, open, read, logs } = fileGateway()
+    const { gateway, toolCall, open, read, logs } = fileGateway()
     // Two Sessions whose calls share one id, each naming its own file.
     const paths: Record<string, string> = {
       stored: REPORT,
@@ -955,30 +955,30 @@ describe("MCP App files", () => {
       toolInput: { ...input(scope), path: `file://${input(scope).path}` },
     }))
 
-    const stored = await openView(proxy, "stored")
-    const other = await openView(proxy, "other")
+    const stored = await openView(gateway, "stored")
+    const other = await openView(gateway, "other")
     expect(stored.toolInput).toEqual({ title: "Q3" })
-    await proxy.request(`${origin}${stored.files?.addresses.path}`)
+    await gateway.request(`${origin}${stored.files?.addresses.path}`)
     expect(read.mock.lastCall?.[1]).toBe(REPORT)
-    await proxy.request(`${origin}${other.files?.addresses.path}`)
+    await gateway.request(`${origin}${other.files?.addresses.path}`)
     expect(read.mock.lastCall?.[1]).toBe(paths.other)
 
     // One Session's pass opens no other Session's call.
     const storedPass = passOf(stored.files?.addresses.path ?? "")
     expect(
       (
-        await proxy.request(
+        await gateway.request(
           `${origin}${appPath("other")}/files/path?pass=${storedPass}`
         )
       ).status
     ).toBe(401)
     // Neither a refusal nor an outage names a path, in its answer or the log.
-    const refused = await proxy.request(
+    const refused = await gateway.request(
       `${origin}${appPath()}/files/title?pass=${storedPass}`
     )
     expect(await refused.text()).toBe("")
     read.mockRejectedValueOnce(new Error(`cannot read ${REPORT}`))
-    const failed = await proxy.request(
+    const failed = await gateway.request(
       `${origin}${stored.files?.addresses.path}`
     )
     expect(await failed.text()).toBe("")
@@ -1006,11 +1006,11 @@ describe("MCP App files", () => {
         (await files.passes.issue({ ...pass, role: "guest" })).pass,
     ],
   ])("refuses a %s pass with an empty 401", async (_, forge) => {
-    const { proxy, read, files } = fileGateway()
-    await openView(proxy)
+    const { gateway, read, files } = fileGateway()
+    await openView(gateway)
     const forged = await forge(files)
 
-    const response = await proxy.request(
+    const response = await gateway.request(
       `${origin}${appPath()}/files/path?pass=${forged}`
     )
 
@@ -1033,17 +1033,17 @@ describe("Published Artifact views", () => {
     sessionId: "stored",
     artifactId: "artifact-1",
   }
-  const post = (proxy: ReturnType<typeof app>, path: string, body?: unknown) =>
-    proxy.request(`${origin}${path}`, {
+  const post = (gateway: ReturnType<typeof app>, path: string, body?: unknown) =>
+    gateway.request(`${origin}${path}`, {
       method: "POST",
       headers: { origin, "content-type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
 
   it("opens an Artifact in the viewer with its server-side name and type, and serves its bytes", async () => {
-    const { proxy, serverResource, logs } = fileGateway()
+    const { gateway, serverResource, logs } = fileGateway()
 
-    const response = await proxy.request(`${origin}${artifactPath()}`)
+    const response = await gateway.request(`${origin}${artifactPath()}`)
     expect(response.status).toBe(200)
     const view = (await response.json()) as McpAppView
     expect(view).toEqual({
@@ -1079,7 +1079,7 @@ describe("Published Artifact views", () => {
     )
     const address = view.files?.addresses.path ?? ""
 
-    expect(await observed(await proxy.request(`${origin}${address}`))).toEqual({
+    expect(await observed(await gateway.request(`${origin}${address}`))).toEqual({
       status: 200,
       headers: {
         ...LISTENER_HEADERS,
@@ -1092,7 +1092,7 @@ describe("Published Artifact views", () => {
       body: "# Notes",
     })
     // Its view's own reads reach the viewer's server alone.
-    const read = await post(proxy, `${artifactPath()}/resources/read`, {
+    const read = await post(gateway, `${artifactPath()}/resources/read`, {
       uri: "ui://aos-ui/pdfjs/pdf.worker.js",
     })
     expect(read.status).toBe(200)
@@ -1102,12 +1102,12 @@ describe("Published Artifact views", () => {
     ])
     // ...and only its `ui://` views, whatever the adapter would read.
     const reads = serverResource.mock.calls.length
-    const outside = await post(proxy, `${artifactPath()}/resources/read`, {
+    const outside = await post(gateway, `${artifactPath()}/resources/read`, {
       uri: "file:///srv/agent/notes.md",
     })
     expect(outside.status).toBe(403)
     expect(serverResource).toHaveBeenCalledTimes(reads)
-    const renewed = await post(proxy, `${artifactPath()}/files`)
+    const renewed = await post(gateway, `${artifactPath()}/files`)
     expect(await renewed.json()).toEqual(view.files)
     expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
   })
@@ -1135,12 +1135,12 @@ describe("Published Artifact views", () => {
       "get",
     ],
   ])("answers %s with 404", async (_, setup, path, method) => {
-    const { proxy, serverResource } = fileGateway(setup)
+    const { gateway, serverResource } = fileGateway(setup)
 
     const response =
       method === "get"
-        ? await proxy.request(`${origin}${path}`)
-        : await post(proxy, path, { name: "refresh", arguments: {} })
+        ? await gateway.request(`${origin}${path}`)
+        : await post(gateway, path, { name: "refresh", arguments: {} })
 
     expect(response.status).toBe(404)
     if (setup.viewer !== null) expect(serverResource).not.toHaveBeenCalled()
@@ -1163,11 +1163,11 @@ describe("Published Artifact views", () => {
   ])(
     "answers an Artifact that is there with 503, not 404, under %s",
     async (_, setup, answer) => {
-      const { proxy, serverResource } = fileGateway(setup)
+      const { gateway, serverResource } = fileGateway(setup)
       if (answer instanceof Error) serverResource.mockRejectedValue(answer)
       else if (answer) serverResource.mockResolvedValue(answer)
 
-      const response = await proxy.request(`${origin}${artifactPath()}`)
+      const response = await gateway.request(`${origin}${artifactPath()}`)
 
       expect(response.status).toBe(503)
     }
@@ -1182,10 +1182,10 @@ describe("Published Artifact views", () => {
   ])(
     "refuses %s pass with an empty 401 and no bytes",
     async (_, other, path) => {
-      const { proxy, files, artifact, read } = fileGateway()
+      const { gateway, files, artifact, read } = fileGateway()
       const forged = (await files.passes.issue({ ...pass, ...other })).pass
 
-      const response = await proxy.request(
+      const response = await gateway.request(
         `${origin}${path}/files/path?pass=${forged}`
       )
 
@@ -1200,7 +1200,7 @@ describe("Published Artifact views", () => {
   )
 
   it("refuses a tool call's pass on the Artifact of the same id", async () => {
-    const { proxy, files, artifact } = fileGateway()
+    const { gateway, files, artifact } = fileGateway()
     const { role, agentId, sessionId } = pass
     const forged = (
       await files.passes.issue({
@@ -1211,7 +1211,7 @@ describe("Published Artifact views", () => {
       })
     ).pass
 
-    const response = await proxy.request(
+    const response = await gateway.request(
       `${origin}${artifactPath()}/files/path?pass=${forged}`
     )
 

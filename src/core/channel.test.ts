@@ -605,7 +605,7 @@ describe("createChannel adopting runtime-started turns", () => {
     expect(runtime.discovered).toEqual([GUEST_SCOPE])
   })
 
-  it("skips a conflict silently and adopts at the proxy turn's end", async () => {
+  it("skips a conflict silently and adopts at the gateway turn's end", async () => {
     const runtime = adoptingHarness()
     const first = member()
     runtime.channels.add(SCOPE, first.fake, { hasPrompt: false })

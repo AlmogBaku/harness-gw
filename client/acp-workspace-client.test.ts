@@ -237,7 +237,7 @@ function createFakeConnection() {
   ) => {
     for (const listener of updates.get(sessionId) ?? []) listener(update, meta)
   }
-  /** What the proxy sends right behind its `session/new` or `session/resume` answer. */
+  /** What the gateway sends right behind its `session/new` or `session/resume` answer. */
   const follow = (
     sessionId: string,
     agentId: string,
@@ -459,20 +459,20 @@ function createFakeRest() {
 }
 
 function createClient() {
-  const proxy = createFakeConnection()
+  const gateway = createFakeConnection()
   const rest = createFakeRest()
   const client = createAcpWorkspaceClient({
-    connection: proxy.connection,
+    connection: gateway.connection,
     rest,
     now: () => Date.parse(UPDATED_AT),
   })
   /** Holds the Session as a bound thread does, then replays it as its runtime does. */
   const join = async (sessionId = SESSION_ID) => {
     const release = client.subscribeSession(sessionId)
-    await proxy.connection.replay(sessionId)
+    await gateway.connection.replay(sessionId)
     return release
   }
-  return { client, rest, join, ...proxy }
+  return { client, rest, join, ...gateway }
 }
 
 async function settle() {
@@ -1287,7 +1287,7 @@ describe("ACP workspace client", () => {
     // A reading this build cannot read the meta of still reports its counts.
     emitUpdate(
       { sessionUpdate: "usage_update", used: 5_000, size: 200_000 },
-      { source: "from-a-newer-proxy" }
+      { source: "from-a-newer-gateway" }
     )
 
     expect(client.context(SESSION_ID)).toEqual({
@@ -1365,7 +1365,7 @@ describe("ACP workspace client", () => {
     ])
   })
 
-  it("invalidates the Agent catalog from its proxy notification", async () => {
+  it("invalidates the Agent catalog from its gateway notification", async () => {
     const { client, emitNotification } = createClient()
     let catalogInvalidations = 0
     client.subscribeAgentCatalog(() => {

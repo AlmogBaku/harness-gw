@@ -5,7 +5,7 @@ import type { LogCapture } from "./log-capture"
 /**
  * The subset of the test harness the leak oracle reads: log capture,
  * coordinator gauges, channel membership count, and observer count. The
- * proxy harness satisfies this directly; a browser-side row passes its
+ * gateway harness satisfies this directly; a browser-side row passes its
  * `connectBrowser(await harness()).test`.
  */
 type LeakTarget = {

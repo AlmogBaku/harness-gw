@@ -53,7 +53,7 @@ function modelOption(currentValue: string): SessionConfigOption {
   }
 }
 
-/** The Agent's folder, the `cwd` the proxy lists its Sessions in. */
+/** The Agent's folder, the `cwd` the gateway lists its Sessions in. */
 const FOLDER = "/srv/research"
 
 function catalogEntry() {
@@ -73,7 +73,7 @@ type AgentCall = { method: string; params: unknown }
 /** Recorded once the fake has answered a plain resume, for ordering checks. */
 const RESUME_REPLIED = "session/resume:replied"
 
-/** An in-process proxy: the AOS agent side of the connection under test. */
+/** An in-process gateway: the AOS agent side of the connection under test. */
 function createGatewayAgent(
   options: {
     refuseLoginAfter?: number
@@ -312,21 +312,21 @@ function createGatewayAgent(
   }
 }
 
-function connectInProcess(proxy: ReturnType<typeof createGatewayAgent>) {
+function connectInProcess(gateway: ReturnType<typeof createGatewayAgent>) {
   const connection = createAcpConnection({
     clientInfo: CLIENT_INFO,
-    connectAgent: proxy.app,
+    connectAgent: gateway.app,
   })
   connection.start()
   return connection
 }
 
-/** A connection to `proxy` over piped sockets, started; `pipe` faults them. */
-function connectOverSockets(proxy: ReturnType<typeof createGatewayAgent>) {
-  const pipe = pipedSockets(() => proxy.app)
+/** A connection to `gateway` over piped sockets, started; `pipe` faults them. */
+function connectOverSockets(gateway: ReturnType<typeof createGatewayAgent>) {
+  const pipe = pipedSockets(() => gateway.app)
   const connection = createAcpConnection({
     clientInfo: CLIENT_INFO,
-    url: "ws://proxy.test/api/v1/acp",
+    url: "ws://gateway.test/api/v1/acp",
     socketConstructor: pipe.WebSocket,
   })
   connection.start()
@@ -335,11 +335,11 @@ function connectOverSockets(proxy: ReturnType<typeof createGatewayAgent>) {
 
 describe("ACP connection", () => {
   it("constructs no transport until it is started, and only one", async () => {
-    const proxy = createGatewayAgent()
-    const pipe = pipedSockets(() => proxy.app)
+    const gateway = createGatewayAgent()
+    const pipe = pipedSockets(() => gateway.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/v1/acp",
+      url: "ws://gateway.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
 
@@ -356,11 +356,11 @@ describe("ACP connection", () => {
   })
 
   it("stays closed when a connection is closed before it starts", async () => {
-    const proxy = createGatewayAgent()
-    const pipe = pipedSockets(() => proxy.app)
+    const gateway = createGatewayAgent()
+    const pipe = pipedSockets(() => gateway.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/v1/acp",
+      url: "ws://gateway.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
 
@@ -386,15 +386,15 @@ describe("ACP connection", () => {
   })
 
   it("initializes with the negotiated AOS extension metadata", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
 
     await expect(connection.initialized).resolves.toEqual({
       version: 1,
       role: "operator",
       extensions: expect.objectContaining({ readState: true, focus: true }),
     })
-    expect(proxy.paramsOf("initialize")).toMatchObject({
+    expect(gateway.paramsOf("initialize")).toMatchObject({
       protocolVersion: 2,
       info: CLIENT_INFO,
       // The question composer answers form elicitations.
@@ -406,12 +406,12 @@ describe("ACP connection", () => {
   })
 
   it("ends without reconnecting when the gateway speaks another version", async () => {
-    const proxy = createGatewayAgent({ version: 2 })
+    const gateway = createGatewayAgent({ version: 2 })
     const statuses: string[] = []
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://gateway.test/api/v1/acp",
-      socketConstructor: pipedSockets(() => proxy.app).WebSocket,
+      socketConstructor: pipedSockets(() => gateway.app).WebSocket,
     })
     connection.subscribeStatus((status) => statuses.push(status))
     connection.start()
@@ -423,7 +423,7 @@ describe("ACP connection", () => {
     await vi.waitFor(() => expect(connection.status).toBe("closed"))
     expect(statuses).not.toContain("ready")
     expect(statuses).not.toContain("reconnecting")
-    expect(proxy.callsOf("initialize")).toHaveLength(1)
+    expect(gateway.callsOf("initialize")).toHaveLength(1)
   })
 
   it("keeps the readable Agent entries and search results, and rejects when none can be read", async () => {
@@ -477,19 +477,19 @@ describe("ACP connection", () => {
   })
 
   it("redeems an invitation with the AOS login metadata, never logging it", async () => {
-    const proxy = createGatewayAgent()
+    const gateway = createGatewayAgent()
     const logs = captureLogs()
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/v1/acp",
-      socketConstructor: pipedSockets(() => proxy.app).WebSocket,
+      socketConstructor: pipedSockets(() => gateway.app).WebSocket,
       logger: logs.logger,
     })
     connection.start()
 
     await connection.login("invitation-token")
 
-    expect(proxy.paramsOf(methods.agent.auth.login)).toEqual({
+    expect(gateway.paramsOf(methods.agent.auth.login)).toEqual({
       methodId: HGW_AUTH_METHOD_INVITE,
       _meta: { [HGW_META_KEY]: { token: "invitation-token" } },
     })
@@ -507,15 +507,15 @@ describe("ACP connection", () => {
   })
 
   it("creates, lists, resumes, and prompts Sessions with AOS metadata", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
 
     const created = await connection.newSession({
       agentId: AGENT_ID,
       title: "Weekly report",
     })
     expect(created).toEqual({ sessionId: SESSION_ID })
-    expect(proxy.paramsOf(methods.agent.session.new)).toMatchObject({
+    expect(gateway.paramsOf(methods.agent.session.new)).toMatchObject({
       cwd: "",
       _meta: { [HGW_META_KEY]: { agentId: AGENT_ID, title: "Weekly report" } },
     })
@@ -526,7 +526,7 @@ describe("ACP connection", () => {
     )
     expect(listed.sessions[0]?.sessionId).toBe(SESSION_ID)
     expect(listed.nextCursor).toBe("cursor-2")
-    expect(proxy.paramsOf(methods.agent.session.list)).toMatchObject({
+    expect(gateway.paramsOf(methods.agent.session.list)).toMatchObject({
       cursor: "cursor-1",
       _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
     })
@@ -535,7 +535,7 @@ describe("ACP connection", () => {
     expect(searched.sessions.map(({ title }) => title)).toEqual([
       "Weekly report",
     ])
-    expect(proxy.paramsOf(HGW_METHODS.sessions.search)).toEqual({
+    expect(gateway.paramsOf(HGW_METHODS.sessions.search)).toEqual({
       _meta: { [HGW_META_KEY]: { query: "weekly" } },
     })
 
@@ -543,8 +543,8 @@ describe("ACP connection", () => {
     // Agent it was created in travels on every later resume.
     connection.subscribe(SESSION_ID, {})
     await connection.replay(SESSION_ID)
-    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
-    expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
+    expect(gateway.callsOf(methods.agent.session.resume)).toHaveLength(1)
+    expect(gateway.paramsOf(methods.agent.session.resume)).toMatchObject({
       sessionId: SESSION_ID,
       replayFrom: { type: "start" },
       _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
@@ -555,7 +555,7 @@ describe("ACP connection", () => {
         attachmentStageId: "stage-1",
       })
     ).resolves.toEqual({ messageId: "message-7" })
-    expect(proxy.paramsOf(methods.agent.session.prompt)).toMatchObject({
+    expect(gateway.paramsOf(methods.agent.session.prompt)).toMatchObject({
       sessionId: SESSION_ID,
       prompt: [{ type: "text", text: "Hello" }],
       _meta: { [HGW_META_KEY]: { attachmentStageId: "stage-1" } },
@@ -564,8 +564,8 @@ describe("ACP connection", () => {
   })
 
   it("refuses a prompt or steer whose frame the gateway would not take, sending nothing", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     await connection.initialized
     const tooLarge = expect.objectContaining({
       code: HGW_JSONRPC_ERRORS.requestTooLarge,
@@ -586,14 +586,14 @@ describe("ACP connection", () => {
         text: "א".repeat(600_000),
       })
     ).rejects.toEqual(tooLarge)
-    expect(proxy.callsOf(methods.agent.session.prompt)).toHaveLength(0)
-    expect(proxy.callsOf(HGW_METHODS.session.steer)).toHaveLength(0)
+    expect(gateway.callsOf(methods.agent.session.prompt)).toHaveLength(0)
+    expect(gateway.callsOf(HGW_METHODS.session.steer)).toHaveLength(0)
     connection.close()
   })
 
   it("replays a Session from the start when asked", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     const replaySettled = vi.fn()
     const dropTranscript = vi.fn(() => replaySettled)
     connection.subscribe(SESSION_ID, {
@@ -607,8 +607,8 @@ describe("ACP connection", () => {
     await replayed
     expect(replaySettled).toHaveBeenCalledTimes(1)
 
-    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
-    expect(proxy.paramsOf(methods.agent.session.resume)).toMatchObject({
+    expect(gateway.callsOf(methods.agent.session.resume)).toHaveLength(1)
+    expect(gateway.paramsOf(methods.agent.session.resume)).toMatchObject({
       replayFrom: { type: "start" },
       _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
     })
@@ -619,8 +619,8 @@ describe("ACP connection", () => {
   })
 
   it("writes Session config, lifecycle, and AOS extension requests", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
 
     const options = await connection.setConfigOption(
       SESSION_ID,
@@ -628,7 +628,7 @@ describe("ACP connection", () => {
       "opus"
     )
     expect(options[0]).toMatchObject({ currentValue: "opus" })
-    expect(proxy.paramsOf(methods.agent.session.setConfigOption)).toMatchObject(
+    expect(gateway.paramsOf(methods.agent.session.setConfigOption)).toMatchObject(
       {
         sessionId: SESSION_ID,
         configId: "model",
@@ -639,7 +639,7 @@ describe("ACP connection", () => {
 
     await connection.deleteSession(SESSION_ID)
     await connection.updateSession({ sessionId: SESSION_ID, unread: false })
-    expect(proxy.paramsOf(HGW_METHODS.session.update)).toEqual({
+    expect(gateway.paramsOf(HGW_METHODS.session.update)).toEqual({
       sessionId: SESSION_ID,
       unread: false,
     })
@@ -661,7 +661,7 @@ describe("ACP connection", () => {
       revision: "revision-1",
     })
     expect(updated.revision).toBe("revision-2")
-    expect(proxy.paramsOf(HGW_METHODS.agents.update)).toEqual({
+    expect(gateway.paramsOf(HGW_METHODS.agents.update)).toEqual({
       agentId: AGENT_ID,
       visibility: "hidden",
       avatar: null,
@@ -676,8 +676,8 @@ describe("ACP connection", () => {
   ] as const)(
     "names an Agent update refused with code %i as %s",
     async (refusal, code) => {
-      const proxy = createGatewayAgent({ refuseAgentUpdate: refusal })
-      const connection = connectInProcess(proxy)
+      const gateway = createGatewayAgent({ refuseAgentUpdate: refusal })
+      const connection = connectInProcess(gateway)
       await connection.initialized
 
       const failure = await connection
@@ -691,10 +691,10 @@ describe("ACP connection", () => {
   )
 
   it("leaves any other Agent update failure as it came", async () => {
-    const proxy = createGatewayAgent({
+    const gateway = createGatewayAgent({
       refuseAgentUpdate: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
     })
-    const connection = connectInProcess(proxy)
+    const connection = connectInProcess(gateway)
     await connection.initialized
 
     const failure = await connection
@@ -709,18 +709,18 @@ describe("ACP connection", () => {
   })
 
   it("sends cancel as a notification and focus as a request", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     await connection.initialized
 
     connection.cancel(SESSION_ID)
     connection.focus(null, { foreground: true, idle: false })
 
     await vi.waitFor(() => {
-      expect(proxy.paramsOf(methods.agent.session.cancel)).toEqual({
+      expect(gateway.paramsOf(methods.agent.session.cancel)).toEqual({
         sessionId: SESSION_ID,
       })
-      expect(proxy.paramsOf(HGW_METHODS.session.focus)).toEqual({
+      expect(gateway.paramsOf(HGW_METHODS.session.focus)).toEqual({
         sessionId: null,
         foreground: true,
         idle: false,
@@ -730,15 +730,15 @@ describe("ACP connection", () => {
   })
 
   it("dispatches Session updates with their AOS metadata to the Session's listeners", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     await connection.initialized
     const seen: { update: SessionUpdate; meta?: Record<string, unknown> }[] = []
     const unsubscribe = connection.subscribe(SESSION_ID, {
       update: (update, meta) => seen.push({ update, meta }),
     })
 
-    await proxy.pushUpdate(
+    await gateway.pushUpdate(
       {
         sessionUpdate: "state_update",
         state: "idle",
@@ -754,7 +754,7 @@ describe("ACP connection", () => {
     unsubscribe()
     const stayed = vi.fn()
     connection.subscribe(SESSION_ID, { update: stayed })
-    await proxy.pushUpdate(
+    await gateway.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
       { sequence: 8, turnId: "run-1" }
     )
@@ -765,8 +765,8 @@ describe("ACP connection", () => {
 
   it("keeps a Session joined while any subscription of a listener stays", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     const listener = { agentId: AGENT_ID }
     const leave = connection.subscribe(SESSION_ID, listener)
     connection.subscribe(SESSION_ID, listener)
@@ -774,13 +774,13 @@ describe("ACP connection", () => {
 
     leave()
     await clock.advance(PART_GRACE_MS)
-    expect(proxy.callsOf(methods.agent.session.close)).toHaveLength(0)
+    expect(gateway.callsOf(methods.agent.session.close)).toHaveLength(0)
     connection.close()
   })
 
   it("dispatches AOS extension notifications by method", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     await connection.initialized
     const activity: unknown[] = []
     let catalogInvalidations = 0
@@ -794,14 +794,14 @@ describe("ACP connection", () => {
       }
     )
 
-    await proxy.notify(HGW_METHODS.notify.activity, {
+    await gateway.notify(HGW_METHODS.notify.activity, {
       agentId: AGENT_ID,
       sessionId: SESSION_ID,
       occurredAt: UPDATED_AT,
       type: "turn-started",
       turnId: "lifecycle-1",
     })
-    await proxy.notify(HGW_METHODS.notify.catalogInvalidated, undefined)
+    await gateway.notify(HGW_METHODS.notify.catalogInvalidated, undefined)
 
     await vi.waitFor(() => {
       expect(activity).toHaveLength(1)
@@ -812,13 +812,13 @@ describe("ACP connection", () => {
   })
 
   it("answers a pending permission request with the operator's response", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
     connection.subscribePendingRequests((request) => pending.push(request))
 
-    const answered = proxy.askPermission()
+    const answered = gateway.askPermission()
     await vi.waitFor(() => expect(pending).toHaveLength(1))
     const request = pending[0]
     expect(request?.kind).toBe("permission")
@@ -834,16 +834,16 @@ describe("ACP connection", () => {
   })
 
   it.each(["askPermission", "askQuestion"] as const)(
-    "releases a request the proxy withdraws as cancelled (%s)",
+    "releases a request the gateway withdraws as cancelled (%s)",
     async (ask) => {
-      const proxy = createGatewayAgent()
-      const connection = connectInProcess(proxy)
+      const gateway = createGatewayAgent()
+      const connection = connectInProcess(gateway)
       await connection.initialized
       const pending: AcpPendingRequest[] = []
       connection.subscribePendingRequests((request) => pending.push(request))
       const withdrawal = new AbortController()
 
-      const answered = proxy[ask](withdrawal.signal)
+      const answered = gateway[ask](withdrawal.signal)
       await vi.waitFor(() => expect(pending).toHaveLength(1))
       withdrawal.abort()
 
@@ -854,8 +854,8 @@ describe("ACP connection", () => {
   )
 
   it("keeps a pending request answerable when one consumer cannot show it", async () => {
-    const proxy = createGatewayAgent()
-    const connection = connectInProcess(proxy)
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
     await connection.initialized
     const pending: AcpPendingRequest[] = []
     connection.subscribePendingRequests(() => {
@@ -863,7 +863,7 @@ describe("ACP connection", () => {
     })
     connection.subscribePendingRequests((request) => pending.push(request))
 
-    const answered = proxy.askPermission()
+    const answered = gateway.askPermission()
     await vi.waitFor(() => expect(pending).toHaveLength(1))
     const request = pending[0]
     if (request?.kind !== "permission") throw new Error("expected permission")
@@ -903,8 +903,8 @@ describe("ACP connection", () => {
 
     it("keeps the latest history a resume reports, and a rejoin without one leaves it", async () => {
       const clock = useFakeClock()
-      const proxy = createGatewayAgent({ history: { nextCursor: "cursor-1" } })
-      const { pipe, connection } = connectOverSockets(proxy)
+      const gateway = createGatewayAgent({ history: { nextCursor: "cursor-1" } })
+      const { pipe, connection } = connectOverSockets(gateway)
 
       expect(connection.history(SESSION_ID)).toBeUndefined()
       connection.subscribe(SESSION_ID, {})
@@ -914,14 +914,14 @@ describe("ACP connection", () => {
       // A rejoin replays nothing and reports no history: the cursor stands.
       pipe.sockets[0]?.drop()
       await clock.advance(250)
-      expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
+      expect(gateway.callsOf(methods.agent.session.resume)).toHaveLength(2)
       expect(connection.history(SESSION_ID)).toEqual({ nextCursor: "cursor-1" })
       connection.close()
     })
 
     it("reads a page as tagged updates that reach no live listener or position", async () => {
-      const proxy = createGatewayAgent({ page: olderPage })
-      const connection = connectInProcess(proxy)
+      const gateway = createGatewayAgent({ page: olderPage })
+      const connection = connectInProcess(gateway)
       await connection.initialized
       const live: SessionUpdate[] = []
       connection.subscribe(SESSION_ID, {
@@ -929,7 +929,7 @@ describe("ACP connection", () => {
         update: (update) => live.push(update),
       })
       await connection.joined(SESSION_ID)
-      await proxy.pushUpdate(
+      await gateway.pushUpdate(
         { sessionUpdate: "state_update", state: "running" },
         { sequence: 4, turnId: "run-1" }
       )
@@ -937,7 +937,7 @@ describe("ACP connection", () => {
 
       const page = await connection.resumePage(SESSION_ID, "cursor-1")
 
-      expect(proxy.callsOf(methods.agent.session.resume).at(-1)).toEqual({
+      expect(gateway.callsOf(methods.agent.session.resume).at(-1)).toEqual({
         sessionId: SESSION_ID,
         cwd: "",
         replayFrom: { type: HGW_REPLAY_BEFORE, cursor: "cursor-1" },
@@ -958,7 +958,7 @@ describe("ACP connection", () => {
       expect(connection.history(SESSION_ID)).toBeUndefined()
 
       // The live stream is unaffected once the page is in.
-      await proxy.pushUpdate(
+      await gateway.pushUpdate(
         { sessionUpdate: "state_update", state: "idle" },
         { sequence: 5, turnId: "run-1" }
       )
@@ -967,8 +967,8 @@ describe("ACP connection", () => {
     })
 
     it("fails a page whose reply carries no history", async () => {
-      const proxy = createGatewayAgent({ page: { updates: olderPage.updates } })
-      const connection = connectInProcess(proxy)
+      const gateway = createGatewayAgent({ page: { updates: olderPage.updates } })
+      const connection = connectInProcess(gateway)
 
       await expect(
         connection.resumePage(SESSION_ID, "cursor-1")
@@ -978,8 +978,8 @@ describe("ACP connection", () => {
 
     it("waits for a recovering transport to rejoin before reading a page", async () => {
       const clock = useFakeClock()
-      const proxy = createGatewayAgent({ page: olderPage, slowResume: true })
-      const { pipe, connection } = connectOverSockets(proxy)
+      const gateway = createGatewayAgent({ page: olderPage, slowResume: true })
+      const { pipe, connection } = connectOverSockets(gateway)
       await connection.initialized
       connection.subscribe(SESSION_ID, {})
       const joined = connection.joined(SESSION_ID)
@@ -997,7 +997,7 @@ describe("ACP connection", () => {
       await clock.advance(300)
       await page
 
-      const order = proxy.calls.flatMap(({ method, params }) =>
+      const order = gateway.calls.flatMap(({ method, params }) =>
         method === RESUME_REPLIED
           ? ["rejoined"]
           : method === methods.agent.session.resume &&
@@ -1012,8 +1012,8 @@ describe("ACP connection", () => {
 
     it("reads a page its socket fails under again, whole, once the Session rejoins", async () => {
       const clock = useFakeClock()
-      const proxy = createGatewayAgent({ page: olderPage, slowResume: true })
-      const { pipe, connection } = connectOverSockets(proxy)
+      const gateway = createGatewayAgent({ page: olderPage, slowResume: true })
+      const { pipe, connection } = connectOverSockets(gateway)
       connection.subscribe(SESSION_ID, {})
       const joined = connection.joined(SESSION_ID)
       await clock.advance(20)
@@ -1030,7 +1030,7 @@ describe("ACP connection", () => {
         "user_message",
         "state_update",
       ])
-      const pageReads = proxy
+      const pageReads = gateway
         .callsOf(methods.agent.session.resume)
         .filter(
           (params) =>
@@ -1044,41 +1044,41 @@ describe("ACP connection", () => {
 
   it("delivers no request over a half-open transport", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent()
-    const { pipe, connection } = connectOverSockets(proxy)
+    const gateway = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(gateway)
     await connection.initialized
 
     pipe.sockets[0]?.halfOpen()
     void connection.listAgents().catch(() => {})
     await clock.advance(1_000)
 
-    expect(proxy.callsOf(HGW_METHODS.agents.list)).toEqual([])
+    expect(gateway.callsOf(HGW_METHODS.agents.list)).toEqual([])
     connection.close()
   })
 
   it("reconnects a dropped transport and rejoins every resumed Session", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent()
-    const { pipe, connection } = connectOverSockets(proxy)
+    const gateway = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(gateway)
     await connection.initialized
     const seen = vi.fn()
     connection.subscribe(SESSION_ID, { agentId: AGENT_ID, update: seen })
     await connection.joined(SESSION_ID)
     connection.focus(SESSION_ID, { foreground: true, idle: true })
-    await proxy.pushUpdate(
+    await gateway.pushUpdate(
       { sessionUpdate: "state_update", state: "running" },
       { sequence: 4, turnId: "run-1" }
     )
     // A drop loses whatever is still in flight, so the first report lands first.
     await clock.advance(0)
     expect(seen).toHaveBeenCalledTimes(1)
-    expect(proxy.callsOf(HGW_METHODS.session.focus)).toHaveLength(1)
+    expect(gateway.callsOf(HGW_METHODS.session.focus)).toHaveLength(1)
 
     pipe.sockets[0]?.drop()
     await clock.advance(250)
 
-    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
-    expect(proxy.callsOf(methods.agent.session.resume)[1]).toMatchObject({
+    expect(gateway.callsOf(methods.agent.session.resume)).toHaveLength(2)
+    expect(gateway.callsOf(methods.agent.session.resume)[1]).toMatchObject({
       _meta: {
         [HGW_META_KEY]: { agentId: AGENT_ID, after: 4, turnId: "run-1" },
       },
@@ -1087,7 +1087,7 @@ describe("ACP connection", () => {
     // the report goes out again ahead of the rejoin it would otherwise
     // contradict. The wire order is the browser's to keep; the order the agent
     // runs its handlers in is not.
-    expect(proxy.callsOf(HGW_METHODS.session.focus)).toEqual([
+    expect(gateway.callsOf(HGW_METHODS.session.focus)).toEqual([
       { sessionId: SESSION_ID, foreground: true, idle: true },
       { sessionId: SESSION_ID, foreground: true, idle: true },
     ])
@@ -1105,8 +1105,8 @@ describe("ACP connection", () => {
 
   it("reports the outage from a drop until the transport is ready, leaving a rejoin to its Session", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent({ slowResume: true })
-    const { pipe, connection } = connectOverSockets(proxy)
+    const gateway = createGatewayAgent({ slowResume: true })
+    const { pipe, connection } = connectOverSockets(gateway)
     connection.subscribe(SESSION_ID, {})
     const joined = connection.joined(SESSION_ID)
     await clock.advance(20)
@@ -1130,11 +1130,11 @@ describe("ACP connection", () => {
 
   it("keeps a transport whose probe reply is held while its frames keep arriving", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent({ holdFocus: true })
-    const pipe = pipedSockets(() => proxy.app)
+    const gateway = createGatewayAgent({ holdFocus: true })
+    const pipe = pipedSockets(() => gateway.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
-      url: "ws://proxy.test/api/v1/acp",
+      url: "ws://gateway.test/api/v1/acp",
       socketConstructor: pipe.WebSocket,
     })
     connection.start()
@@ -1147,7 +1147,7 @@ describe("ACP connection", () => {
     // The probe's reply waits behind one Session's long replay, whose frames
     // keep arriving: the transport is alive, so it stays.
     for (let waited = 0; waited <= REQUEST_DEADLINE_MS.probe; waited += 5_000) {
-      await proxy.pushUpdate(
+      await gateway.pushUpdate(
         { sessionUpdate: "state_update", state: "running" },
         { sequence: waited + 1, turnId: "run-1" }
       )
@@ -1161,8 +1161,8 @@ describe("ACP connection", () => {
 
   it("answers a read its socket fails under, or one made while it reconnects, once a transport recovers", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent()
-    const { pipe, connection } = connectOverSockets(proxy)
+    const gateway = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(gateway)
     await connection.initialized
 
     // In flight as its socket fails.
@@ -1195,14 +1195,14 @@ describe("ACP connection", () => {
       methods.agent.session.list,
       HGW_METHODS.sessions.search,
     ])
-      expect(proxy.callsOf(method)).toHaveLength(1)
+      expect(gateway.callsOf(method)).toHaveLength(1)
     connection.close()
   })
 
   it("fails a Session create its socket fails under as a closed connection, and never sends it again", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent()
-    const { pipe, connection } = connectOverSockets(proxy)
+    const gateway = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(gateway)
     await connection.initialized
 
     pipe.sockets[0]!.holdOutbound()
@@ -1217,7 +1217,7 @@ describe("ACP connection", () => {
     expect(failure).toMatchObject({ cause: expect.any(Event) })
     await clock.advance(250)
     expect(connection.status).toBe("ready")
-    expect(proxy.callsOf(methods.agent.session.new)).toEqual([])
+    expect(gateway.callsOf(methods.agent.session.new)).toEqual([])
     connection.close()
   })
 
@@ -1238,8 +1238,8 @@ describe("ACP connection", () => {
 
   it("redeems the invitation again before replaying a recovered transport", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent()
-    const pipe = pipedSockets(() => proxy.app)
+    const gateway = createGatewayAgent()
+    const pipe = pipedSockets(() => gateway.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/v1/acp",
@@ -1254,9 +1254,9 @@ describe("ACP connection", () => {
     pipe.sockets[0]?.drop()
     await clock.advance(250)
 
-    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(2)
+    expect(gateway.callsOf(methods.agent.session.resume)).toHaveLength(2)
     expect(
-      proxy.calls
+      gateway.calls
         .map(({ method }) => method)
         .filter(
           (method) =>
@@ -1274,8 +1274,8 @@ describe("ACP connection", () => {
 
   it("ends the connection when the invitation can no longer be redeemed", async () => {
     const clock = useFakeClock()
-    const proxy = createGatewayAgent({ refuseLoginAfter: 1 })
-    const pipe = pipedSockets(() => proxy.app)
+    const gateway = createGatewayAgent({ refuseLoginAfter: 1 })
+    const pipe = pipedSockets(() => gateway.app)
     const connection = createAcpConnection({
       clientInfo: CLIENT_INFO,
       url: "ws://guest.test/api/v1/acp",
@@ -1292,8 +1292,8 @@ describe("ACP connection", () => {
 
     expect(connection.status).toBe("closed")
     // A refused invitation stops the reconnect loop instead of replaying.
-    expect(proxy.callsOf(methods.agent.auth.login)).toHaveLength(2)
-    expect(proxy.callsOf(methods.agent.session.resume)).toHaveLength(1)
+    expect(gateway.callsOf(methods.agent.auth.login)).toHaveLength(2)
+    expect(gateway.callsOf(methods.agent.session.resume)).toHaveLength(1)
     expect(pipe.sockets).toHaveLength(2)
   })
 })

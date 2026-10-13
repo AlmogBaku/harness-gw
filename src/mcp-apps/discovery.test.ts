@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 import { mcpServersFromNative } from "./discovery"
 
 describe("mcpServersFromNative", () => {
-  it("gives a server a URL only where the proxy may dial it", () => {
+  it("gives a server a URL only where the gateway may dial it", () => {
     const server = {
       dialable: true,
       url: "https://apps.example.test/mcp",

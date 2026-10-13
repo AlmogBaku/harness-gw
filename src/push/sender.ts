@@ -19,7 +19,7 @@ export type PushSendResult = {
   status?: number
 }
 
-/** What one device the proxy sends to is addressed by. */
+/** What one device the gateway sends to is addressed by. */
 export type PushTarget = Pick<PushRegistration, "subscription">
 
 export interface PushSender {

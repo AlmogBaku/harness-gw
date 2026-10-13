@@ -31,7 +31,7 @@ afterEach(async () => {
 })
 
 async function secretFile(name: string, contents: string) {
-  const directory = await mkdtemp(join(tmpdir(), "aos-configured-proxy-"))
+  const directory = await mkdtemp(join(tmpdir(), "harness-gw-configured-"))
   directories.push(directory)
   const path = join(directory, name)
   await writeFile(path, `${contents}\n`, { mode: 0o600 })
@@ -134,7 +134,7 @@ function hermesRuntimeFactory(
   }
 }
 
-describe("configured proxy composition", () => {
+describe("configured gateway composition", () => {
   it("uses an injected provider-neutral runtime factory without reading adapter secrets", async () => {
     const input = await configuration(true)
     input.runtime.tokenFile = "/missing/provider-private-secret"
@@ -470,7 +470,7 @@ describe("configured proxy composition", () => {
     const { runtimeInstance } = observableRuntime()
     const input = {
       ...(await configuration()),
-      push: await pushConfiguration("/var/lib/aos-ui/missing-push-state"),
+      push: await pushConfiguration("/var/lib/harness-gw/missing-push-state"),
     }
 
     await expect(

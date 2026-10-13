@@ -293,7 +293,7 @@ function openHandle(events: readonly TurnEvent[]): ServerTurnHandle {
   }
 }
 
-/** One run segment whose reasoning, file edit, App, and prose all reach the proxy. */
+/** One run segment whose reasoning, file edit, App, and prose all reach the gateway. */
 const RUN_EVENTS: TurnEvent[] = [
   { kind: TurnEventKind.TurnStarted },
   {

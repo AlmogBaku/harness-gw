@@ -4,8 +4,8 @@ import { z } from "zod"
 import { isUiResourceUri } from "./mcp-apps/policy"
 
 /** The gateway log's levels, quietest last; `info` is the default. */
-export const PROXY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
-export type GatewayLogLevel = (typeof PROXY_LOG_LEVELS)[number]
+export const GATEWAY_LOG_LEVELS = ["debug", "info", "warn", "error"] as const
+export type GatewayLogLevel = (typeof GATEWAY_LOG_LEVELS)[number]
 
 const AbsoluteSecretFileSchema = z
   .string()
@@ -272,7 +272,7 @@ const HeaderNameSchema = z
 
 /**
  * How the MCP Apps fallback reaches one MCP server, keyed by the server name
- * the runtime reports. `url` replaces the URL the runtime reports, for a proxy
+ * the runtime reports. `url` replaces the URL the runtime reports, for a gateway
  * that reaches the server at a different address than the harness does, such
  * as a Compose service name. Each header value is the whole contents of its
  * file, so a credential never sits in configuration.
@@ -371,7 +371,7 @@ export const GatewayConfigSchema = z
     voice: VoiceSchema.optional(),
     mcpApps: McpAppsSchema.optional(),
     log: z
-      .strictObject({ level: z.enum(PROXY_LOG_LEVELS).default("info") })
+      .strictObject({ level: z.enum(GATEWAY_LOG_LEVELS).default("info") })
       .default({ level: "info" }),
     shutdownGraceMs: z.number().int().min(100).max(300_000),
   })
@@ -417,6 +417,6 @@ export type VoiceSpeechConfig = NonNullable<VoiceConfig["speech"]>
 /** Parser issues are hidden because rejected input may contain secrets. */
 export function parseGatewayConfig(input: unknown): GatewayConfig {
   const result = GatewayConfigSchema.safeParse(input)
-  if (!result.success) throw new Error("Invalid proxy configuration")
+  if (!result.success) throw new Error("Invalid gateway configuration")
   return result.data
 }

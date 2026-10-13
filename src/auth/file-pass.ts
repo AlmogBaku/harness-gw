@@ -12,7 +12,7 @@ import { z } from "zod"
 
 const ALGORITHM = "HS256"
 const TOKEN_TYPE = "aos-file-pass+jwt"
-const TOKEN_ISSUER = "aos-proxy"
+const TOKEN_ISSUER = "harness-gw"
 const TOKEN_AUDIENCE = "aos-app-files"
 const MAX_TOKEN_BYTES = 4 * 1_024
 const MAX_UNIX_SECONDS = 4_102_444_800

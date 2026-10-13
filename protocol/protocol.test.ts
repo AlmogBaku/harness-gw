@@ -712,7 +712,7 @@ describe("AOS v1 normalized protocol", () => {
     ).toThrow()
   })
 
-  it("reads a turn meta a later proxy extended, keeping its known keys", () => {
+  it("reads a turn meta a later gateway extended, keeping its known keys", () => {
     const meta = HgwToolCallMetaSchema.parse({
       sequence: 3,
       turnId: "turn-1",
@@ -939,7 +939,7 @@ describe("AOS v1 normalized protocol", () => {
     })
   })
 
-  it("reads an older proxy's extensions as offering no history pages", () => {
+  it("reads an older gateway's extensions as offering no history pages", () => {
     const extensions = {
       steer: true,
       rewind: true,

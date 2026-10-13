@@ -17,7 +17,7 @@ afterEach(async () => {
 })
 
 async function tempDir() {
-  const dir = await mkdtemp(join(tmpdir(), "aos-proxy-handlers-"))
+  const dir = await mkdtemp(join(tmpdir(), "harness-gw-handlers-"))
   cleanups.push(() => rm(dir, { recursive: true, force: true }))
   return dir
 }

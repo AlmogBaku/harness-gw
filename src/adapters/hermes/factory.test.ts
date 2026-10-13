@@ -119,7 +119,7 @@ describe("Hermes runtime shutdown", () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it("hands the proxy a turn engine that watches for turns Hermes starts by itself, and re-reads and masks the token on every dial", async () => {
+  it("hands the gateway a turn engine that watches for turns Hermes starts by itself, and re-reads and masks the token on every dial", async () => {
     const lines: string[] = []
     const credentials = new CredentialValues()
     const logger = createGatewayLogger({

@@ -43,7 +43,7 @@ export function connectBrowser<T extends Harness>(test: T) {
   const pipe = pipedSockets(test.agentApp)
   const connection = createAcpConnection({
     clientInfo: { name: "aos-ui", version: "1" },
-    url: "ws://proxy.test/api/v1/acp",
+    url: "ws://gateway.test/api/v1/acp",
     socketConstructor: pipe.WebSocket,
   })
   onTestFinished(() => {

@@ -1,5 +1,5 @@
 /**
- * Compile-time proof that the two Session ids do not mix. `tsconfig.proxy.json`
+ * Compile-time proof that the two Session ids do not mix. `tsconfig.gateway.json`
  * typechecks this file; nothing imports or runs it.
  */
 import * as ids from "./ids"

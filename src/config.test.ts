@@ -50,7 +50,7 @@ function validConfig(tokenFile = "/run/secrets/hermes-token") {
 /** The push block the deployment examples ship, paths only. */
 function validPush() {
   return {
-    stateDir: "/var/lib/aos-ui/push",
+    stateDir: "/var/lib/harness-gw/push",
     vapid: {
       subject: "mailto:ops@example.com",
       privateKeyFile: "/run/secrets/vapid-private-key",
@@ -58,7 +58,7 @@ function validPush() {
   }
 }
 
-describe("proxy configuration and secret boundary", () => {
+describe("gateway configuration and secret boundary", () => {
   it("accepts the minimal server-token-only V1 configuration, turning native media into Artifacts unless told not to", () => {
     const config = validConfig()
     const parsed = {
@@ -146,7 +146,7 @@ describe("proxy configuration and secret boundary", () => {
       },
     ])
       expect(() => parseGatewayConfig({ ...validConfig(), runtime })).toThrow(
-        "Invalid proxy configuration"
+        "Invalid gateway configuration"
       )
   })
 
@@ -157,7 +157,7 @@ describe("proxy configuration and secret boundary", () => {
       { runtimeAuth: { callbackUrl: "https://aos.example.test/callback" } },
     ])
       expect(() => parseGatewayConfig({ ...validConfig(), ...legacy })).toThrow(
-        "Invalid proxy configuration"
+        "Invalid gateway configuration"
       )
   })
 
@@ -171,7 +171,7 @@ describe("proxy configuration and secret boundary", () => {
       { ...validConfig(), extra: true },
     ])
       expect(() => parseGatewayConfig(candidate)).toThrow(
-        "Invalid proxy configuration"
+        "Invalid gateway configuration"
       )
   })
 
@@ -220,7 +220,7 @@ describe("proxy configuration and secret boundary", () => {
             },
           },
         })
-      ).toThrow("Invalid proxy configuration")
+      ).toThrow("Invalid gateway configuration")
   })
 
   const guestOn = (allowedOrigins?: string[]) => ({
@@ -259,7 +259,7 @@ describe("proxy configuration and secret boundary", () => {
   ])("rejects %s as an allowed origin", (_name, override) => {
     expect(() =>
       parseGatewayConfig({ ...validConfig(), guest: guestOn(), ...override })
-    ).toThrow("Invalid proxy configuration")
+    ).toThrow("Invalid gateway configuration")
   })
 
   it("accepts plain HTTP only for exact loopback application origins", () => {
@@ -280,7 +280,7 @@ describe("proxy configuration and secret boundary", () => {
         ...validConfig(),
         publicOrigin: "http://192.168.1.4:3000",
       })
-    ).toThrow("Invalid proxy configuration")
+    ).toThrow("Invalid gateway configuration")
   })
 
   it("accepts an optional push deployment, and a deployment without one", () => {
@@ -309,7 +309,7 @@ describe("proxy configuration and secret boundary", () => {
       { ...validPush(), extra: true },
     ])
       expect(() => parseGatewayConfig({ ...validConfig(), push })).toThrow(
-        "Invalid proxy configuration"
+        "Invalid gateway configuration"
       )
   })
 
@@ -319,7 +319,7 @@ describe("proxy configuration and secret boundary", () => {
         ...validConfig(),
         limits: { ...validConfig().limits, guestActiveExecutions: 257 },
       })
-    ).toThrow("Invalid proxy configuration")
+    ).toThrow("Invalid gateway configuration")
   })
 
   it("reads a bounded owner-only secret and trims its trailing newline", async () => {
@@ -450,7 +450,7 @@ describe("voice configuration", () => {
     ],
   ])("rejects %s", (_case, voice) => {
     expect(() => parseGatewayConfig({ ...validConfig(), voice })).toThrow(
-      "Invalid proxy configuration"
+      "Invalid gateway configuration"
     )
   })
 
@@ -462,7 +462,7 @@ describe("voice configuration", () => {
           transcription: { ...validTranscription(), language: "english" },
         },
       })
-    ).toThrow("Invalid proxy configuration")
+    ).toThrow("Invalid gateway configuration")
     for (const language of ["he", "en-US"]) {
       expect(
         parseGatewayConfig({
@@ -487,7 +487,7 @@ describe("voice configuration", () => {
           },
         },
       })
-    ).toThrow("Invalid proxy configuration")
+    ).toThrow("Invalid gateway configuration")
 
     // http loopback with key → accepted
     expect(
@@ -554,7 +554,7 @@ describe("MCP Apps fallback credentials", () => {
       { "Bad Header": { file: "/run/secrets/weather-mcp" } },
     ])
       expect(() => parseGatewayConfig(withHeaders(headers))).toThrow(
-        "Invalid proxy configuration"
+        "Invalid gateway configuration"
       )
   })
   const withServer = (server: Record<string, unknown>) => ({
@@ -591,7 +591,7 @@ describe("MCP Apps fallback credentials", () => {
       {},
     ])
       expect(() => parseGatewayConfig(withServer(server))).toThrow(
-        "Invalid proxy configuration"
+        "Invalid gateway configuration"
       )
   })
 })
@@ -608,7 +608,7 @@ describe("MCP App files", () => {
     ).toEqual({ allow: ["/srv/shared"], deny: ["/srv/shared"] })
     for (const folder of ["srv/shared", "~/shared"])
       expect(() => parseGatewayConfig(withFolder(folder))).toThrow(
-        "Invalid proxy configuration"
+        "Invalid gateway configuration"
       )
   })
 })
@@ -637,7 +637,7 @@ describe("the Artifact viewer", () => {
     ["no resource", { server: "aos-ui" }],
   ])("rejects %s", (_, viewer) => {
     expect(() => parseGatewayConfig(withViewer(viewer))).toThrow(
-      "Invalid proxy configuration"
+      "Invalid gateway configuration"
     )
   })
 })

@@ -18,7 +18,7 @@ import {
   stubOpenClawClient,
 } from "./test-utils/fake-openclaw"
 
-/** The services the proxy hands a runtime, logging to a capture. */
+/** The services the gateway hands a runtime, logging to a capture. */
 const services = () => ({
   logger: captureLogs().logger,
   credentials: new CredentialValues(),

@@ -81,7 +81,7 @@ export const TURN_FAILURES = {
   HGW_OUTCOME_UNKNOWN: { kind: "uncertain" },
 } as const satisfies FailureTable
 
-/** The failure a proxy-core error is, whatever the runtime behind it. */
+/** The failure a gateway-core error is, whatever the runtime behind it. */
 export function coreFailure(cause: unknown): PublicFailure | undefined {
   if (cause instanceof ServerSessionNotFoundError)
     return failureOf("gone", cause)

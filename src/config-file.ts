@@ -67,7 +67,7 @@ export function resolveGatewayConfigPath({
   if (explicitPath !== undefined) return { path: explicitPath, explicit: true }
   if (!discover)
     throw new GatewayConfigurationError(
-      `No proxy configuration file: ${EXPLICIT_PATH_HINT}`
+      `No gateway configuration file: ${EXPLICIT_PATH_HINT}`
     )
   const configHome = trimmed(getenv("XDG_CONFIG_HOME"))
   if (configHome !== undefined && !isAbsolute(configHome))
@@ -79,7 +79,7 @@ export function resolveGatewayConfigPath({
     configHome ?? (home === undefined ? undefined : join(home, ".config"))
   if (searchRoot === undefined)
     throw new GatewayConfigurationError(
-      `No proxy configuration file: ${EXPLICIT_PATH_HINT}, or set XDG_CONFIG_HOME or HOME so the default configuration path can be resolved`
+      `No gateway configuration file: ${EXPLICIT_PATH_HINT}, or set XDG_CONFIG_HOME or HOME so the default configuration path can be resolved`
     )
   return {
     path: join(searchRoot, "harness-gw", "config.yaml"),
@@ -229,7 +229,7 @@ function assertSafeKeys(path: string, value: unknown) {
  * Built-in defaults, deep-merged under the file and the environment. They are
  * never mutated, because every merge writes into a fresh object.
  */
-const DEFAULT_PROXY_CONFIG: Record<string, unknown> = {
+const DEFAULT_GATEWAY_CONFIG: Record<string, unknown> = {
   version: 1,
   listen: { host: "127.0.0.1", port: 4_100 },
   limits: {
@@ -259,7 +259,7 @@ function deepMerge(
   return merged
 }
 
-export const PROXY_ENV_PREFIX = "HARNESS_GW_"
+export const GATEWAY_ENV_PREFIX = "HARNESS_GW_"
 
 const RUNTIME_KINDS = ["hermes", "opencode", "openclaw"] as const
 
@@ -283,7 +283,7 @@ export type GatewayEnvOverride = {
  * the whole `mcpApps` block are file-only, and `HARNESS_GW_CONFIG_FILE` names
  * the file itself.
  */
-export const PROXY_ENV_OVERRIDES: readonly GatewayEnvOverride[] = [
+export const GATEWAY_ENV_OVERRIDES: readonly GatewayEnvOverride[] = [
   { path: ["deploymentId"], suffix: "DEPLOYMENT_ID", type: "string" },
   { path: ["publicOrigin"], suffix: "PUBLIC_ORIGIN", type: "string" },
   { path: ["listen", "host"], suffix: "LISTEN_HOST", type: "string" },
@@ -490,7 +490,7 @@ function resolveRuntimeKind(
   getenv: GatewayEnvReader
 ): RuntimeKind | undefined {
   const configured =
-    trimmed(getenv(`${PROXY_ENV_PREFIX}RUNTIME_KIND`)) ??
+    trimmed(getenv(`${GATEWAY_ENV_PREFIX}RUNTIME_KIND`)) ??
     (isRecord(document.runtime) ? document.runtime.kind : undefined)
   return RUNTIME_KINDS.find((kind) => kind === configured)
 }
@@ -564,8 +564,8 @@ function applyEnvOverrides(
   guestConfigured: boolean
 ) {
   const sources = new Map<string, string>()
-  for (const override of PROXY_ENV_OVERRIDES) {
-    const variable = `${PROXY_ENV_PREFIX}${override.suffix}`
+  for (const override of GATEWAY_ENV_OVERRIDES) {
+    const variable = `${GATEWAY_ENV_PREFIX}${override.suffix}`
     const raw = trimmed(getenv(variable))
     if (raw === undefined) continue
     assertOverrideApplies(override, variable, runtimeKind, guestConfigured)
@@ -610,7 +610,7 @@ function invalidConfiguration(
     return `  ${path}: ${message}${variable === undefined ? "" : ` (set by ${variable})`}`
   })
   return new GatewayConfigurationError(
-    `Invalid proxy configuration in ${location}:\n${[...new Set(reported)].join("\n")}`
+    `Invalid gateway configuration in ${location}:\n${[...new Set(reported)].join("\n")}`
   )
 }
 
@@ -624,10 +624,10 @@ export async function loadGatewayConfig(
   const runtimeKind = resolveRuntimeKind(document, options.getenv)
   const defaults =
     runtimeKind === "hermes"
-      ? deepMerge(DEFAULT_PROXY_CONFIG, {
+      ? deepMerge(DEFAULT_GATEWAY_CONFIG, {
           runtime: { sessionIdleMs: DEFAULT_HERMES_SESSION_IDLE_MS },
         })
-      : DEFAULT_PROXY_CONFIG
+      : DEFAULT_GATEWAY_CONFIG
   const merged = deepMerge(defaults, document)
   // `guest:` with no value is not a listener the file opened.
   const sources = applyEnvOverrides(

@@ -78,7 +78,7 @@ const STEP_MS = 100
 const FAILURE_KINDS = ["gone", "unavailable", "uncertain"] as const
 const RESOLVED = Symbol("resolved")
 
-/** What the proxy reads a rejection as, whichever layer raised it. */
+/** What the gateway reads a rejection as, whichever layer raised it. */
 function classify(runtime: ServerRuntime, error: unknown) {
   return coreFailure(error) ?? runtime.publicError(error)
 }

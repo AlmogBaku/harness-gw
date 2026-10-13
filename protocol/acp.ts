@@ -397,7 +397,7 @@ export const HgwAgentUpdateResponseSchema = AgentUpdateResponseSchema
 // turn stream `_meta.hgw`
 // ---------------------------------------------------------------------------
 
-/** Base for every `session/update` the proxy emits from a turn segment. */
+/** Base for every `session/update` the gateway emits from a turn segment. */
 const TurnMetaBase = {
   sequence: SequenceSchema,
   turnId: IdentifierSchema,

@@ -1983,7 +1983,7 @@ describe("SessionCoordinator", () => {
       expect(sessions.state(scope)).toBe("idle")
     })
 
-    it("refuses to adopt while the proxy's own start is in flight", async () => {
+    it("refuses to adopt while the gateway's own start is in flight", async () => {
       let admit!: (handle: ServerTurnHandle) => void
       const { engine, sessions } = await afterOneTurn(async () => ({
         handle: new EventSource(),

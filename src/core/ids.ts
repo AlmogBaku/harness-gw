@@ -1,7 +1,7 @@
 /** The public Session id: what the browser names a Session by on the wire. */
 export type SessionId = string & { readonly __brand: "SessionId" }
 
-/** The provider's own id for a Session; it never leaves the proxy. */
+/** The provider's own id for a Session; it never leaves the gateway. */
 export type ProviderSessionId = string & {
   readonly __brand: "ProviderSessionId"
 }

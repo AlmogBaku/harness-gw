@@ -48,7 +48,7 @@ export type HgwContext = z.infer<typeof SessionContextResponseSchema>
 export type HgwClientFailure =
   | "connection-interrupted"
   | "provider-unavailable"
-  | "proxy-failure"
+  | "gateway-failure"
   /** The provider no longer holds the bytes a published receipt points at. */
   | "artifact-missing"
 
@@ -58,9 +58,9 @@ export type McpAppSubject = { toolCallId: string } | { artifactId: string }
 export class HgwClientError extends Error {
   constructor(
     readonly kind: HgwClientFailure,
-    message = "AOS proxy request failed",
+    message = "Gateway request failed",
     readonly code?: string,
-    /** The proxy's HTTP status, when it answered. */
+    /** The gateway's HTTP status, when it answered. */
     readonly status?: number
   ) {
     super(message)
@@ -119,7 +119,7 @@ export class HgwRemoteClient {
     schema: Schema<T>,
     init?: RequestInit,
     /** How this route reads an absent resource; 503 always stays an outage. */
-    notFound: HgwClientFailure = "proxy-failure"
+    notFound: HgwClientFailure = "gateway-failure"
   ): Promise<T> {
     let response: Response
     try {
@@ -141,7 +141,7 @@ export class HgwRemoteClient {
           ? "provider-unavailable"
           : response.status === 404
             ? notFound
-            : "proxy-failure",
+            : "gateway-failure",
         error?.description,
         error?.code,
         response.status
@@ -151,11 +151,11 @@ export class HgwRemoteClient {
     try {
       payload = await response.json()
     } catch {
-      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("gateway-failure", "Invalid gateway response")
     }
     const parsed = schema.safeParse(payload)
     if (!parsed.success)
-      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("gateway-failure", "Invalid gateway response")
     return parsed.data
   }
 
@@ -176,7 +176,7 @@ export class HgwRemoteClient {
   async deletePushSubscription(endpoint: string) {
     const request = PushUnregistrationSchema.safeParse({ endpoint })
     if (!request.success || !endpoint.trim())
-      throw new HgwClientError("proxy-failure", "Invalid push subscription")
+      throw new HgwClientError("gateway-failure", "Invalid push subscription")
     await this.#write("/push/subscriptions", "DELETE", request.data)
   }
 
@@ -208,7 +208,7 @@ export class HgwRemoteClient {
     })
     if (!request.success)
       throw new HgwClientError(
-        "proxy-failure",
+        "gateway-failure",
         "Invalid attachment staging request"
       )
     return this.#read(
@@ -228,7 +228,7 @@ export class HgwRemoteClient {
     signal?: AbortSignal
   ) {
     if (!artifactId.trim() || artifactId.length > 512)
-      throw new HgwClientError("proxy-failure", "Invalid artifact reference")
+      throw new HgwClientError("gateway-failure", "Invalid artifact reference")
     return this.#readBlob(
       this.#sessionPath(
         sessionId,
@@ -254,7 +254,7 @@ export class HgwRemoteClient {
       this.#mcpAppPath(sessionId, subject),
       McpAppViewSchema,
       { signal },
-      "artifactId" in subject ? "artifact-missing" : "proxy-failure"
+      "artifactId" in subject ? "artifact-missing" : "gateway-failure"
     )
     return view.files
       ? { ...view, files: this.#absoluteFiles(view.files) }
@@ -286,7 +286,7 @@ export class HgwRemoteClient {
     }
   }
 
-  /** A tool call the App view makes, answered by the proxy's MCP server. */
+  /** A tool call the App view makes, answered by the gateway's MCP server. */
   async callMcpAppTool(
     sessionId: string,
     toolCallId: string,
@@ -301,7 +301,7 @@ export class HgwRemoteClient {
     )
   }
 
-  /** A resource read the App view makes, answered by the proxy's MCP server. */
+  /** A resource read the App view makes, answered by the gateway's MCP server. */
   async readMcpAppResource(
     sessionId: string,
     subject: McpAppSubject,
@@ -322,13 +322,13 @@ export class HgwRemoteClient {
 
   async transcribeForAgent(agentId: string, audio: Blob, signal?: AbortSignal) {
     if (!audio.size || !audio.type)
-      throw new HgwClientError("proxy-failure", "Invalid audio recording")
+      throw new HgwClientError("gateway-failure", "Invalid audio recording")
     const request = SessionTranscriptionRequestSchema.safeParse({
       dataUrl: await dataUrl(audio),
       mimeType: audio.type,
     })
     if (!request.success)
-      throw new HgwClientError("proxy-failure", "Invalid audio recording")
+      throw new HgwClientError("gateway-failure", "Invalid audio recording")
     const path = `/agents/${encodeURIComponent(agentId)}/audio/transcribe`
     const response = await this.#read(
       path,
@@ -350,7 +350,7 @@ export class HgwRemoteClient {
   async speakForAgent(agentId: string, text: string, signal?: AbortSignal) {
     const request = SessionSpeechRequestSchema.safeParse({ text })
     if (!request.success)
-      throw new HgwClientError("proxy-failure", "Invalid speech input")
+      throw new HgwClientError("gateway-failure", "Invalid speech input")
     const path = `/agents/${encodeURIComponent(agentId)}/audio/speak`
     return this.#readBlob(path, {
       method: "POST",
@@ -378,7 +378,7 @@ export class HgwRemoteClient {
     if (!response.ok) {
       const error = await normalizedError(response)
       throw new HgwClientError(
-        response.status === 503 ? "provider-unavailable" : "proxy-failure",
+        response.status === 503 ? "provider-unavailable" : "gateway-failure",
         error?.description,
         error?.code,
         response.status
@@ -392,7 +392,7 @@ export class HgwRemoteClient {
         ? ["tool-calls", subject.toolCallId]
         : ["artifacts", subject.artifactId]
     if (!id.trim() || id.length > 512)
-      throw new HgwClientError("proxy-failure", "Invalid MCP App reference")
+      throw new HgwClientError("gateway-failure", "Invalid MCP App reference")
     return this.#sessionPath(
       sessionId,
       `/${collection}/${encodeURIComponent(id)}/app${suffix}`
@@ -407,7 +407,7 @@ export class HgwRemoteClient {
     schema: Schema<T>
   ) {
     if (!request.success)
-      throw new HgwClientError("proxy-failure", "Invalid MCP App request")
+      throw new HgwClientError("gateway-failure", "Invalid MCP App request")
     return this.#read(this.#mcpAppPath(sessionId, subject, suffix), schema, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -424,7 +424,7 @@ export class HgwRemoteClient {
     path: string,
     init?: RequestInit,
     /** How this route reads an absent resource; 503 always stays an outage. */
-    notFound: HgwClientFailure = "proxy-failure"
+    notFound: HgwClientFailure = "gateway-failure"
   ) {
     let response: Response
     try {
@@ -446,7 +446,7 @@ export class HgwRemoteClient {
           ? "provider-unavailable"
           : response.status === 404
             ? notFound
-            : "proxy-failure",
+            : "gateway-failure",
         error?.description,
         error?.code,
         response.status
@@ -454,11 +454,11 @@ export class HgwRemoteClient {
     }
     const contentType = response.headers.get("content-type")
     if (!contentType || /[\r\n]/u.test(contentType))
-      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("gateway-failure", "Invalid gateway response")
     try {
       return await response.blob()
     } catch {
-      throw new HgwClientError("proxy-failure", "Invalid AOS proxy response")
+      throw new HgwClientError("gateway-failure", "Invalid gateway response")
     }
   }
 

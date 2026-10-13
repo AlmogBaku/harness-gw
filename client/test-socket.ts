@@ -80,7 +80,7 @@ export class PipedSocket extends EventTarget {
     this.#end(code, reason, true)
   }
 
-  /** The network drops: an abnormal close, and the proxy loses its end. */
+  /** The network drops: an abnormal close, and the gateway loses its end. */
   drop() {
     this.#end(1006, "", false)
   }
@@ -95,7 +95,7 @@ export class PipedSocket extends EventTarget {
     this.drop()
   }
 
-  /** The proxy closes the socket with `code`. */
+  /** The gateway closes the socket with `code`. */
   closeFromGateway(code: number, reason = "") {
     this.#end(code, reason, true)
   }

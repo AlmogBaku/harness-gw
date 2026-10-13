@@ -185,12 +185,12 @@ function codeOf(error: unknown) {
     : undefined
 }
 
-/** Whether the proxy refused an invitation it cannot redeem. */
+/** Whether the gateway refused an invitation it cannot redeem. */
 export function isAuthenticationRequired(error: unknown) {
   return codeOf(error) === AUTHENTICATION_REQUIRED
 }
 
-/** Whether the proxy answered that the Session no longer exists. */
+/** Whether the gateway answered that the Session no longer exists. */
 function isGone(error: unknown) {
   return codeOf(error) === RESOURCE_NOT_FOUND
 }
@@ -290,7 +290,7 @@ function trackedInbound(
 /** One opened transport; a reconnect replaces it with another. */
 type Transport = {
   connection: ClientConnection
-  /** Settles once the proxy answers `initialize`. */
+  /** Settles once the gateway answers `initialize`. */
   ready: Promise<void>
 }
 
@@ -894,7 +894,7 @@ export function createAcpConnection(
       )
     })
 
-  /** An opened Session the proxy reports as not found is gone for good. */
+  /** An opened Session the gateway reports as not found is gone for good. */
   function noticeGone(params: unknown) {
     const notice = HgwErrorNotificationSchema.safeParse(params).data
     if (notice?.code !== NOT_FOUND_NOTICE || notice.sessionId === undefined)

@@ -777,7 +777,7 @@ describe("Hermes workspace operations", () => {
             todos: [
               {
                 id: "one",
-                content: "Ship proxy",
+                content: "Ship gateway",
                 status: "in_progress",
                 path: "/srv/private",
               },
@@ -791,7 +791,7 @@ describe("Hermes workspace operations", () => {
     await expect(
       operations.todos("research", "hermes:research:stored-1")
     ).resolves.toEqual([
-      { id: "one", label: "Ship proxy", status: "active" },
+      { id: "one", label: "Ship gateway", status: "active" },
       { id: "two", label: "Verify", status: "pending" },
     ])
     expect(history).toHaveBeenCalledWith(scope)
