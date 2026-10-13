@@ -36,6 +36,18 @@ export type PromptPart =
   | { kind: "text"; text: string }
   | { kind: "attachment"; uri: string; name: string; mimeType?: string }
 
+/** Whitespace, and the invisible characters `trim` keeps. */
+const PADDING = /[\s\u200B\u2060\uFEFF]/gu
+
+/**
+ * Whether a send carries no text of its own, however padded. One that names a
+ * rewound turn is a Retry, which sends that turn's own text again; every layer
+ * reads a Retry by this alone, so none takes padding for an Edit.
+ */
+export function isBlankText(text: string | undefined) {
+  return text === undefined || text.replace(PADDING, "") === ""
+}
+
 /** A prompt's text parts joined the way the normalized wire carries a turn. */
 export function promptText(prompt: readonly PromptPart[]) {
   return prompt

@@ -12,6 +12,7 @@ import {
 } from "../../auth/guest-runtime-projection"
 import {
   CommandRefusedError,
+  isBlankText,
   unhandledKind,
   type MemberEvent,
   type Middleware,
@@ -174,8 +175,9 @@ export function createHistoryMiddleware({
         const { rewindSourceId, text } = command
         if (rewindSourceId === undefined) return next(command)
         const refused = shown.get(rewindSourceId)
-        // An Edit sends its own text, which the commands layer checked.
-        if (refused === undefined || (refused && !text))
+        // An Edit sends its own text, which the commands layer checked; a
+        // Retry sends its source's again.
+        if (refused === undefined || (refused && isBlankText(text)))
           throw new CommandRefusedError("invalid")
         return next(command)
       },

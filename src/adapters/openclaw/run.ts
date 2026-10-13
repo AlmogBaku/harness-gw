@@ -39,6 +39,7 @@ import {
   type ServerTurnListener,
   type SessionScope,
 } from "../../core/runtime"
+import { isBlankText } from "../../core/member"
 import { storageReceipt } from "../../core/storage-receipt"
 import * as ids from "../../core/ids"
 import { createLink, type LinkOptions } from "../../core/link"
@@ -1239,7 +1240,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       ? undefined
       : input.rewindSourceId
     // A Retry is an empty prompt that sends the turn it rewinds again.
-    const retry = rewindSourceId !== undefined && !text?.trim()
+    const retry = rewindSourceId !== undefined && isBlankText(text)
     const stagedAttachments = readOpenClawChatAttachments(attachmentStage)
     if (attachmentStage && !stagedAttachments)
       throw new Error(

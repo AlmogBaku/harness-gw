@@ -31,6 +31,7 @@ import {
   type ServerTurnHandle,
   type ServerTurnListener,
 } from "../../core/runtime"
+import { isBlankText } from "../../core/member"
 import { storageReceipt } from "../../core/storage-receipt"
 import type { AttachmentSignal } from "./attachment-registry"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
@@ -256,8 +257,12 @@ export class HermesTurnEngine {
     const prompt = isRepliesTurn(input) ? undefined : input
     // Staged files arrive appended to the prompt as text; staged images are
     // already attached to the live Session, so a turn of images alone is empty.
-    const text = prompt?.prompt.trim()
     const rewindSourceId = prompt?.rewindSourceId
+    // A rewind with no text of its own, however padded, is a Retry.
+    const text =
+      rewindSourceId !== undefined && isBlankText(prompt?.prompt)
+        ? ""
+        : prompt?.prompt.trim()
     if (
       rewindSourceId !== undefined &&
       (rewindSourceId.length === 0 ||

@@ -1895,6 +1895,49 @@ describe("guest scope and commands", () => {
     test.close()
   })
 
+  // A runtime reads padding alone as no text and resends a Retry's source as
+  // written, so a padded "Edit" of a slash command would run it as the operator.
+  it("refuses a Retry of a slash command it was shown, its text empty or padding alone, before the runtime starts anything", async () => {
+    const user = (id: string, text: string) => ({
+      id,
+      role: "user" as const,
+      content: [{ type: "text" as const, text }],
+      createdAt: "2026-09-15T00:00:00.000Z",
+    })
+    const test = harness({
+      existing: true,
+      history: () => ({
+        sessionId: REF,
+        messages: [user("slash-1", "/compact"), user("plain-1", "Hello")],
+        total: 2,
+        limit: 500,
+        offset: 0,
+        nextOffset: 0,
+      }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+    await test.resume(REF, true)
+    await settled()
+    const retry = (rewindSourceId: string, text: string) =>
+      test.agent.request(methods.agent.session.prompt, {
+        sessionId: REF,
+        prompt: text ? [{ type: "text", text }] : [],
+        _meta: { [HGW_META_KEY]: { rewindSourceId } },
+      })
+
+    for (const text of ["", " ", "\n", "\u00A0", "\u200B", "\uFEFF"])
+      await expect(
+        retry("slash-1", text),
+        JSON.stringify(text)
+      ).rejects.toMatchObject({ code: INVALID_PARAMS })
+    expect(test.start).not.toHaveBeenCalled()
+
+    await retry("plain-1", " ")
+    await vi.waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+    test.close()
+  })
+
   it("keeps unknown parameters and metadata from the runtime", async () => {
     const test = harness({ existing: true })
     const socket = await redeemedWire(

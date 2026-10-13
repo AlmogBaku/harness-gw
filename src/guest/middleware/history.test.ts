@@ -524,9 +524,14 @@ function guarded() {
       return middleware.commands?.send?.(command, next)
     },
     /** A Retry sends no text of its own: the runtime resends its source's. */
-    retry: (rewindSourceId: string) =>
+    retry: (rewindSourceId: string, text = "") =>
       middleware.commands?.send?.(
-        { sessionId: "ref", content: [], text: "", rewindSourceId },
+        {
+          sessionId: "ref",
+          content: text ? [{ kind: "text", text }] : [],
+          text,
+          rewindSourceId,
+        },
         next
       ),
     next,
@@ -582,6 +587,33 @@ describe("guest Edit and Retry", () => {
     expect(test.next).not.toHaveBeenCalled()
     await expect(test.retry("plain")).resolves.toEqual({ messageId: "sent" })
     await expect(test.rewind("branch")).resolves.toEqual({ messageId: "sent" })
+  })
+
+  // A runtime reads text that trims to nothing as no text, and resends the
+  // source as written, so padding alone is a Retry too.
+  it("refuses an Edit of a slash command whose text is padding alone, as the Retry a runtime reads it as", async () => {
+    const test = guarded()
+    test.show({
+      sessionId: "ref",
+      kind: "history",
+      sequence: 0,
+      page: page([
+        { id: "branch", role: "user", text: "/branch" },
+        { id: "plain", role: "user", text: "Hello" },
+      ]),
+    })
+    const padding = [" ", "\n", "\t", "\u00A0", "\u200B", "\u2060", "\uFEFF"]
+
+    for (const text of padding)
+      await expect(
+        test.retry("branch", text),
+        JSON.stringify(text)
+      ).rejects.toBeInstanceOf(CommandRefusedError)
+    expect(test.next).not.toHaveBeenCalled()
+    for (const text of padding)
+      await expect(test.retry("plain", text)).resolves.toEqual({
+        messageId: "sent",
+      })
   })
 
   it("runs on a message the guest was shown in history or as a prompt", async () => {
