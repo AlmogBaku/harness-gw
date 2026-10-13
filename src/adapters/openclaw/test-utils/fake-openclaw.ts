@@ -476,7 +476,12 @@ export function fakeOpenClaw() {
   function complete(target: FakeSession, text: string) {
     agentEvent(target, "lifecycle", { phase: "end" })
     emit(target, "chat", { seq: 0, state: "final" })
-    store(target, { role: "assistant", content: [{ type: "text", text }] })
+    // The reply's row names the run that wrote it.
+    store(
+      target,
+      { role: "assistant", content: [{ type: "text", text }] },
+      target.run ? { runId: target.run.id } : {}
+    )
     target.run = undefined
   }
 

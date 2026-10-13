@@ -341,9 +341,17 @@ export class OpenClawInteractions {
     }
   }
   /** An approval the Session raised while the run `scope` names runs. */
-  accept(scope: OpenClawInteractionDiscoveryScope, approval: unknown) {
+  accept(
+    scope: OpenClawInteractionDiscoveryScope,
+    approval: unknown,
+    childSessionId?: string
+  ) {
     const { nativeRunId, ...session } = scope
-    return this.acceptApproval({ ...session, runId: nativeRunId }, approval)
+    return this.acceptApproval(
+      { ...session, runId: nativeRunId },
+      approval,
+      childSessionId
+    )
   }
   acceptQuestion(scope: OpenClawInteractionScope, raw: unknown) {
     const r = record(scope, raw),
@@ -366,7 +374,16 @@ export class OpenClawInteractions {
       request,
     })
   }
-  acceptApproval(scope: OpenClawInteractionScope, raw: unknown) {
+  /**
+   * One pending approval `scope`'s Session raised, under the turn's own Agent.
+   * A child Session's approval is raised under the child's key and reported
+   * as the child's, `childSessionId`.
+   */
+  acceptApproval(
+    scope: OpenClawInteractionScope,
+    raw: unknown,
+    childSessionId?: string
+  ) {
     if (!validateApprovalGetResult({ approval: raw })) bad()
     const r = raw as {
       id: string
@@ -405,6 +422,7 @@ export class OpenClawInteractions {
         type: "string",
         enum: normalizedDecisions,
       },
+      ...(childSessionId === undefined ? {} : { childSessionId }),
     }
     return this.remember({
       kind: "approval",

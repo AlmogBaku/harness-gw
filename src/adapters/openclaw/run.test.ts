@@ -65,6 +65,10 @@ class ControlledNative implements OpenClawRunRequestClient {
   patchError?: unknown
   /** More fields of the Session's own `sessions.list` row. */
   sessionRow: Record<string, unknown> = {}
+  /** Another Session's whole `sessions.list` row, by key. */
+  sessionRows: Record<string, Record<string, unknown>> = {}
+  /** Another Session's `chat.history`, by key. */
+  histories: Record<string, unknown> = {}
   rewindResult: unknown = { editorText: "Investigate this" }
   rewindError?: unknown
   /** The history a rewind moves the Session to, read from then on. */
@@ -92,19 +96,22 @@ class ControlledNative implements OpenClawRunRequestClient {
             }
       ) as T
     if (method === "sessions.messages.unsubscribe") return {} as T
-    if (method === "sessions.list")
+    if (method === "sessions.list") {
+      const own = this.sessionRows[String(params.search)]
       return {
         sessions: [
           {
             key: params.search,
             agentId: params.agentId,
-            ...(this.toolOverrides
+            ...(this.toolOverrides && !own
               ? { toolOverrides: structuredClone(this.toolOverrides) }
               : {}),
-            ...this.sessionRow,
+            ...(own ?? this.sessionRow),
           },
         ],
       } as T
+    }
+    if (method === "sessions.subscribe") return {} as T
     if (method === "sessions.patch") {
       if (this.patchError) throw this.patchError
       this.toolOverrides = structuredClone(
@@ -116,7 +123,9 @@ class ControlledNative implements OpenClawRunRequestClient {
       return (
         this.historyRequest
           ? await this.historyRequest()
-          : structuredClone(this.history)
+          : structuredClone(
+              this.histories[String(params.sessionKey)] ?? this.history
+            )
       ) as T
     if (method === "sessions.abort") {
       options?.onSent?.()
@@ -2467,5 +2476,452 @@ describe("OpenClaw run engine rewind", () => {
     // Something may have landed, so the prompt is never answered unstored.
     await expect(receipt).resolves.toMatchObject({ unstored: false })
     expect(native.sent("chat.send")).toHaveLength(sends)
+  })
+})
+
+const CHILD = "agent:research:subagent:child-a"
+const GRANDCHILD = "agent:research:subagent:child-b"
+
+/** One native event pushed to the connection, as the Gateway frames it. */
+function push(
+  subscriptions: OpenClawSessionSubscriptions,
+  frame: number,
+  event: string,
+  payload: Record<string, unknown>
+) {
+  subscriptions.accept(
+    { type: "event", event, seq: frame, payload },
+    subscriptions.generation
+  )
+}
+
+/** `key`'s own run, `runId`, as its Session's stream carries it. */
+function childStream(
+  subscriptions: OpenClawSessionSubscriptions,
+  key = CHILD,
+  runId = "child-run"
+) {
+  let frame = 500
+  let seq = 0
+  const common = { runId, sessionKey: key, agentId: scope.agentId }
+  return {
+    agent(stream: string, data: Record<string, unknown>) {
+      push(subscriptions, frame++, "agent", {
+        ...common,
+        seq: seq++,
+        stream,
+        ts: 2_000 + seq,
+        data,
+      })
+    },
+    chat(state: "final" | "aborted", text?: string) {
+      push(subscriptions, frame++, "chat", {
+        ...common,
+        seq: 0,
+        state,
+        ...(text ? { message: { content: [{ type: "text", text }] } } : {}),
+      })
+    },
+  }
+}
+
+/** The `sessions_spawn` call's start and accepted result, on a run's stream. */
+function spawnEvents(
+  emit: (stream: string, data: Record<string, unknown>) => void,
+  key = CHILD,
+  toolCallId = "call-spawn",
+  childRun = "child-run"
+) {
+  const details = { status: "accepted", childSessionKey: key, runId: childRun }
+  emit("tool", {
+    phase: "start",
+    toolCallId,
+    name: "sessions_spawn",
+    args: { task: "Count the names.", label: "Counter" },
+  })
+  emit("tool", {
+    phase: "result",
+    toolCallId,
+    name: "sessions_spawn",
+    result: {
+      content: [{ type: "text", text: JSON.stringify(details) }],
+      details,
+    },
+    isError: false,
+  })
+}
+
+/** A native Gateway where `key` is a child `parentKey` spawned, running. */
+function spawning(
+  native = new ControlledNative(),
+  key = CHILD,
+  parentKey: string = scope.providerSessionId,
+  row: Record<string, unknown> = {}
+) {
+  native.sessionRows[key] = {
+    spawnedBy: parentKey,
+    parentSessionKey: parentKey,
+    spawnDepth: 1,
+    ...row,
+  }
+  native.histories[key] = {
+    sessionKey: key,
+    sessionId: `${key}:transcript`,
+    messages: [],
+    sessionInfo: { hasActiveRun: true, activeRunIds: ["child-run"] },
+  }
+  return native
+}
+
+/** Settles once the engine read `key`'s transcript to follow it. */
+function followed(native: ControlledNative, key = CHILD) {
+  return vi.waitFor(() =>
+    expect(
+      native.calls.some(
+        ({ method, params }) =>
+          method === "chat.history" && params.sessionKey === key
+      )
+    ).toBe(true)
+  )
+}
+
+/** Lets the engine's reads of a child settle. */
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 10))
+}
+
+/** Each event, by kind and the child it is of, with what tells it apart. */
+function outline(events: unknown[]) {
+  return (events as Array<Record<string, unknown>>).map((event) => {
+    if (event.kind === TurnEventKind.ChildSessionEvent) {
+      const own = event.event as Record<string, unknown>
+      return `${String(event.childSessionId)}> ${String(own.kind)}${
+        own.kind === TurnEventKind.ChildSessionUpdated
+          ? ` ${String(own.childSessionId)} ${String(own.status ?? "")}`
+          : own.text
+            ? ` ${String(own.text)}`
+            : ""
+      }`
+    }
+    if (event.kind === TurnEventKind.ChildSessionUpdated)
+      return `${String(event.kind)} ${String(event.childSessionId)} ${String(event.status ?? "")}`
+    return String(event.kind)
+  })
+}
+
+describe("OpenClaw run engine child Sessions", () => {
+  it("announces a spawned child once its row names this Session, before anything names it, then streams the child under its id", async () => {
+    const native = spawning()
+    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+    const child = childStream(subscriptions)
+    child.agent("assistant", { delta: "Child at work." })
+    child.chat("final")
+    chat(subscriptions, "run-a", { state: "final" })
+    const events = await drain(handle.events)
+
+    expect(outline(events)).toEqual([
+      TurnEventKind.TurnStarted,
+      TurnEventKind.ToolCallStarted,
+      TurnEventKind.ToolCallInputChunk,
+      `${TurnEventKind.ChildSessionUpdated} ${CHILD} running`,
+      `${CHILD}> ${TurnEventKind.TurnStarted}`,
+      // The call's result names the child, so it follows the announcement.
+      TurnEventKind.ToolCallInputEnded,
+      TurnEventKind.ToolCallFinished,
+      `${CHILD}> ${TurnEventKind.MessageChunk} Child at work.`,
+      `${CHILD}> ${TurnEventKind.TurnEnded}`,
+      `${TurnEventKind.ChildSessionUpdated} ${CHILD} idle`,
+      TurnEventKind.TurnEnded,
+    ])
+    expect(events[3]).toEqual({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: CHILD,
+      toolCallId: "call-spawn",
+      title: "Counter",
+      description: "Count the names.",
+      status: "running",
+      cancellable: true,
+    })
+    expect(native.sent("sessions.list")).toContainEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({ agentId: "research", search: CHILD }),
+      })
+    )
+    expect(native.sent("sessions.messages.subscribe")).toContainEqual(
+      expect.objectContaining({
+        params: expect.objectContaining({ key: CHILD }),
+      })
+    )
+    // A child's tool events reach only a connection subscribed to them.
+    expect(native.sent("sessions.subscribe")).toHaveLength(1)
+    // The parent's turn ended, so nothing of the child is followed on.
+    await vi.waitFor(() =>
+      expect(native.sent("sessions.messages.unsubscribe")).toContainEqual(
+        expect.objectContaining({
+          params: expect.objectContaining({ key: CHILD }),
+        })
+      )
+    )
+  })
+
+  it.each([
+    ["names another parent", { spawnedBy: "agent:research:other" }],
+    ["is a top-level Session", { spawnedBy: undefined, spawnDepth: 0 }],
+    ["is deeper than OpenClaw nests", { spawnDepth: 6 }],
+    ["belongs to another Agent", { agentId: "other" }],
+  ])(
+    "registers nothing of a spawn result whose child's own row %s",
+    async (_case, row) => {
+      const log = captureLogs()
+      const native = spawning(
+        new ControlledNative(),
+        CHILD,
+        scope.providerSessionId,
+        row
+      )
+      const subscriptions = new OpenClawSessionSubscriptions(native, logger)
+      const engine = new OpenClawTurnEngine({
+        watch: { ...watch, logger: log.logger },
+        client: native,
+        subscriptions,
+        toolEvents: true,
+      })
+      const handle = await engine.start(scope, input())
+      let parentSeq = 0
+      spawnEvents((stream, data) =>
+        agent(subscriptions, "run-a", parentSeq++, stream, data)
+      )
+      await vi.waitFor(() =>
+        expect(log.records().map(({ message }) => message)).toContain(
+          "openclaw.child.dropped"
+        )
+      )
+      chat(subscriptions, "run-a", { state: "final" })
+      const events = await drain(handle.events)
+
+      expect(outline(events)).toEqual([
+        TurnEventKind.TurnStarted,
+        TurnEventKind.ToolCallStarted,
+        TurnEventKind.ToolCallInputChunk,
+        TurnEventKind.ToolCallInputEnded,
+        TurnEventKind.ToolCallFinished,
+        TurnEventKind.TurnEnded,
+      ])
+      expect(
+        native
+          .sent("sessions.messages.subscribe")
+          .map(({ params }) => params.key)
+      ).not.toContain(CHILD)
+      // Only the reason is told, never the key or the row.
+      expect(
+        log
+          .records()
+          .find(({ message }) => message === "openclaw.child.dropped")?.fields
+      ).toEqual({ code: expect.any(String) })
+    }
+  )
+
+  it("accepts an approval only from a child it registered, naming that child, and answers it under the child's key", async () => {
+    const log = captureLogs()
+    const native = spawning()
+    const childApproval = {
+      ...pendingApproval,
+      id: "approval-child",
+      sourceSessionKey: CHILD,
+    }
+    const request = vi.fn(async (method: string) => {
+      if (method === "approval.get") return { approval: childApproval }
+      if (method === "approval.resolve")
+        return {
+          applied: true,
+          approval: {
+            ...childApproval,
+            status: "allowed",
+            decision: "allow-once",
+            resolvedAtMs: 2,
+            reason: "user",
+          },
+        }
+      throw new Error(`Unexpected interaction method ${method}`)
+    })
+    const subscriptions = new OpenClawSessionSubscriptions(native, logger)
+    const engine = new OpenClawTurnEngine({
+      watch: { ...watch, logger: log.logger },
+      client: native,
+      subscriptions,
+      toolEvents: true,
+      replies: new OpenClawInteractions({ request }),
+    })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+    const approval = (id: string, source: string) =>
+      push(subscriptions, 700, "session.approval", {
+        sessionKey: scope.providerSessionId,
+        sourceSessionKey: source,
+        updatedAtMs: 1,
+        phase: "pending",
+        approval: { ...pendingApproval, id, sourceSessionKey: source },
+      })
+    approval("approval-stranger", "agent:research:subagent:stranger")
+    approval("approval-child", CHILD)
+
+    const events: unknown[] = []
+    for await (const event of handle.events) {
+      events.push(event)
+      if ((event as { kind: string }).kind === TurnEventKind.TurnRequiresAction)
+        break
+    }
+
+    expect(outline(events).slice(-2)).toEqual([
+      `${TurnEventKind.ChildSessionUpdated} ${CHILD} waiting-for-input`,
+      TurnEventKind.TurnRequiresAction,
+    ])
+    expect(events.at(-1)).toMatchObject({
+      requests: [{ requestId: "approval-child", childSessionId: CHILD }],
+    })
+    expect(
+      log
+        .records()
+        .filter(({ message }) => message === "openclaw.approval.dropped")
+    ).toEqual([
+      expect.objectContaining({ fields: { code: "unregistered-source" } }),
+    ])
+
+    await engine.start(
+      scope,
+      repliesInput([
+        { requestId: "approval-child", status: "resolved", payload: "once" },
+      ])
+    )
+    expect(request.mock.calls).toContainEqual([
+      "approval.resolve",
+      { id: "approval-child", kind: "plugin", decision: "allow-once" },
+    ])
+  })
+
+  it("stops one child alone through sessions.abort on its key, which its own stream confirms", async () => {
+    const native = spawning()
+    native.abortResult = {
+      ok: true,
+      status: "aborted",
+      abortedRunId: "child-run",
+    }
+    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+
+    await handle.stopChild!("agent:research:subagent:unknown")
+    await handle.stopChild!(CHILD)
+    childStream(subscriptions).chat("aborted")
+    chat(subscriptions, "run-a", { state: "final" })
+    const events = await drain(handle.events)
+
+    expect(native.sent("sessions.abort")).toMatchObject([
+      { params: { key: CHILD, agentId: "research", runId: "child-run" } },
+    ])
+    expect(outline(events).slice(-3)).toEqual([
+      `${CHILD}> ${TurnEventKind.TurnEnded}`,
+      `${TurnEventKind.ChildSessionUpdated} ${CHILD} cancelled`,
+      TurnEventKind.TurnEnded,
+    ])
+    expect(events).toContainEqual({
+      kind: TurnEventKind.ChildSessionEvent,
+      childSessionId: CHILD,
+      event: {
+        kind: TurnEventKind.TurnEnded,
+        stopReason: StopReason.Cancelled,
+      },
+    })
+  })
+
+  it("shows a child that finished before it was followed from its stored reply", async () => {
+    const native = spawning()
+    native.histories[CHILD] = {
+      sessionKey: CHILD,
+      sessionId: "child-transcript",
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done early." }],
+          __openclaw: { id: "child-reply", seq: 2, runId: "child-run" },
+        },
+      ],
+      sessionInfo: { hasActiveRun: false, activeRunIds: [] },
+    }
+    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+    chat(subscriptions, "run-a", { state: "final" })
+    const events = await drain(handle.events)
+
+    expect(outline(events)).toContain(
+      `${CHILD}> ${TurnEventKind.MessageChunk} Done early.`
+    )
+    expect(outline(events)).toContain(
+      `${TurnEventKind.ChildSessionUpdated} ${CHILD} idle`
+    )
+  })
+
+  it("announces a grandchild in its parent child's stream, and streams it under its own id", async () => {
+    const native = spawning()
+    spawning(native, GRANDCHILD, CHILD, { spawnDepth: 2 })
+    const { subscriptions, engine } = engineOver(native, { toolEvents: true })
+    const handle = await engine.start(scope, input())
+    let parentSeq = 0
+    spawnEvents((stream, data) =>
+      agent(subscriptions, "run-a", parentSeq++, stream, data)
+    )
+    await followed(native)
+    await settle()
+    const child = childStream(subscriptions)
+    spawnEvents(child.agent, GRANDCHILD, "call-grand", "child-run")
+    await followed(native, GRANDCHILD)
+    await settle()
+    const grandchild = childStream(subscriptions, GRANDCHILD, "child-run")
+    grandchild.agent("assistant", { delta: "Grandchild at work." })
+    grandchild.chat("final")
+    child.chat("final")
+    chat(subscriptions, "run-a", { state: "final" })
+    const events = await drain(handle.events)
+
+    const lines = outline(events)
+    const announced = lines.indexOf(
+      `${CHILD}> ${TurnEventKind.ChildSessionUpdated} ${GRANDCHILD} running`
+    )
+    expect(announced).toBeGreaterThan(-1)
+    expect(
+      lines.findIndex((line) => line.startsWith(`${GRANDCHILD}>`))
+    ).toBeGreaterThan(announced)
+    expect(lines).toContain(
+      `${GRANDCHILD}> ${TurnEventKind.MessageChunk} Grandchild at work.`
+    )
+    expect(lines).toContain(
+      `${CHILD}> ${TurnEventKind.ChildSessionUpdated} ${GRANDCHILD} idle`
+    )
+    expect(
+      native.sent("sessions.list").map(({ params }) => params.search)
+    ).toContain(GRANDCHILD)
   })
 })

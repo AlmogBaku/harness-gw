@@ -150,6 +150,85 @@ describe("OpenClaw Session subscriptions", () => {
     expect(writing).not.toHaveBeenCalled()
   })
 
+  it("drops an approval another Agent's child raised on a Session's audience, telling only why", async () => {
+    const { client } = requestClient()
+    const log = captureLogs()
+    const subscriptions = new OpenClawSessionSubscriptions(client, log.logger)
+    const research = vi.fn()
+    await subscriptions.acquire(
+      { agentId: "research", sessionKey: "agent:research:main" },
+      research
+    )
+    const approval = (agentId: string) =>
+      subscriptions.accept(
+        {
+          type: "event",
+          event: "session.approval",
+          seq: 1,
+          payload: {
+            sessionKey: "agent:research:main",
+            sourceSessionKey: `agent:${agentId}:subagent:child`,
+            updatedAtMs: 1,
+            phase: "pending",
+            approval: {
+              id: `approval-${agentId}`,
+              urlPath: `/approvals/approval-${agentId}`,
+              createdAtMs: 1,
+              expiresAtMs: 2,
+              status: "pending",
+              sourceSessionKey: `agent:${agentId}:subagent:child`,
+              presentation: {
+                kind: "plugin",
+                title: "Proceed?",
+                description: "Proceed?",
+                severity: "info",
+                agentId,
+                allowedDecisions: ["allow-once", "deny"],
+              },
+            },
+          },
+        },
+        subscriptions.generation
+      )
+
+    approval("writing")
+    approval("research")
+
+    expect(research).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          approval: expect.objectContaining({ id: "approval-research" }),
+        }),
+      })
+    )
+    expect(log.records()).toEqual([
+      expect.objectContaining({
+        message: "openclaw.approval.dropped",
+        fields: { code: "foreign-agent" },
+      }),
+    ])
+  })
+
+  it("subscribes every Session's events once per generation, and again after a reconnect", async () => {
+    const { calls, client } = requestClient()
+    const subscriptions = new OpenClawSessionSubscriptions(client, logger)
+    await subscriptions.acquire(
+      { agentId: "research", sessionKey: "agent:research:subagent:child" },
+      vi.fn()
+    )
+
+    await subscriptions.sessionEvents()
+    await subscriptions.sessionEvents()
+    await subscriptions.replaceGeneration("reconnect")
+
+    expect(
+      calls.filter(({ method }) => method === "sessions.subscribe")
+    ).toEqual([
+      { method: "sessions.subscribe", params: {} },
+      { method: "sessions.subscribe", params: {} },
+    ])
+  })
+
   it("fences acquisition with exact scoped approval transitions before the replay acknowledgement", async () => {
     const acknowledgement = deferred<unknown>()
     const request = vi.fn(
