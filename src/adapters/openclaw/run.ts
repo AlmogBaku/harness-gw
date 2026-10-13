@@ -2,6 +2,7 @@ import { z } from "zod"
 
 import {
   ChildSessionStatus,
+  isChildTurnEvent,
   isRepliesTurn,
   StopReason,
   TurnEventKind,
@@ -29,6 +30,7 @@ import {
   type McpToolNameResolver,
 } from "../../core/aos-tool-names"
 import {
+  ServerRequestStaleError,
   ServerSessionNotFoundError,
   ServerTurnConflictError,
   ServerTurnStopNotDispatchedError,
@@ -310,6 +312,12 @@ type ActiveRun = {
   resumed?: () => void
   terminal: boolean
   stopping: boolean
+  /**
+   * The run ended with children still at work, which go on as the Session's
+   * background activity while someone watches it: their events and asks
+   * reach the Session's turn listeners, no longer the turn.
+   */
+  background?: true
   uncertain: boolean
   lastSeen: number
   lastAgentSeq: number
@@ -387,6 +395,8 @@ type ChildRun = {
   lease?: OpenClawSessionLease
   /** Its live events while its transcript is read, replayed after it. */
   pending?: EventFrame[]
+  /** Nothing streams its run any more. */
+  unfollowed?: true
 }
 
 function settlement() {
@@ -1190,6 +1200,10 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   readonly #watch: OpenClawTurnWatch
   readonly #active = new Map<string, ActiveRun>()
   readonly #waiting = new Map<string, WaitingRun>()
+  /** Each Session's turn listeners, which background children report to. */
+  readonly #turnListeners = new Map<string, Set<ServerTurnListener>>()
+  /** Each Session's ended runs whose children still work in the background. */
+  readonly #backgroundRuns = new Map<string, Set<ActiveRun>>()
   /** Every native run a segment was bound to, oldest first. */
   readonly #admitted = new Set<string>()
   /**
@@ -1877,6 +1891,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
   subscribeTurns(scope: SessionScope, listener: ServerTurnListener) {
     let stopped = false
     let announced: string | undefined
+    const key = scopeKey(scope)
+    const listeners = this.#turnListeners.get(key) ?? new Set()
+    this.#turnListeners.set(key, listeners.add(listener))
     const announce = (runId: string | undefined, again: boolean) => {
       if (
         stopped ||
@@ -1901,7 +1918,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         let dropped: { cause: unknown } | undefined
         const acquired = await this.#subscriptions.acquire(
           { agentId: scope.agentId, sessionKey: scope.providerSessionId },
-          (event) => announce(progressRunId(event), false),
+          (event) => {
+            // A child that outlived its run asks on its parent's Session.
+            if (event.event === "session.approval")
+              this.#backgroundApproval(scope, event)
+            announce(progressRunId(event), false)
+          },
           // The subscription outlives a Gateway reconnect; a recheck that
           // fails after one, or a re-subscribe that fails, takes the watch
           // down to subscribe again.
@@ -1943,7 +1965,50 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       if (stopped) return
       stopped = true
       watch.dispose()
+      listeners.delete(listener)
+      if (listeners.size > 0) return
+      // Nobody watches the Session: nothing reads its children any more.
+      this.#turnListeners.delete(key)
+      for (const run of [...(this.#backgroundRuns.get(key) ?? [])])
+        this.#endBackground(run)
     }
+  }
+
+  /** An approval on the parent's Session, from a child an ended run spawned. */
+  #backgroundApproval(scope: SessionScope, event: EventFrame) {
+    const source = record(record(event.payload)?.approval)?.sourceSessionKey
+    const run = validId(source)
+      ? this.#backgroundRunFor(scope, source)
+      : undefined
+    if (run) this.#acceptApproval(run, event)
+  }
+
+  /**
+   * Answers an approval a child asked after the run that spawned it ended,
+   * on the child's Session as the approval names it.
+   */
+  async respondChild(scope: SessionScope, reply: RequestReply) {
+    let raisedBy: string | undefined
+    let run: ActiveRun | undefined
+    for (const candidate of this.#backgroundRuns.get(scopeKey(scope)) ?? [])
+      if (candidate.waitingOn?.has(reply.requestId)) {
+        run = candidate
+        raisedBy = candidate.approvalKeys.get(reply.requestId)
+      }
+    if (!run || !raisedBy || !this.#replies) throw new ServerRequestStaleError()
+    const interactionScope = {
+      ...scope,
+      providerSessionId: ids.providerSessionId(raisedBy),
+    }
+    await this.#replies.validate(interactionScope, [reply])
+    await this.#replies.dispatch(interactionScope, [reply])
+    this.#withdrawn(run, reply.requestId)
+  }
+
+  /** Stops a child an ended run spawned, through `sessions.abort` on its key. */
+  async stopChild(scope: SessionScope, childSessionId: string) {
+    const run = this.#backgroundRunFor(scope, childSessionId)
+    if (run) await this.#stopChild(run, childSessionId)
   }
 
   async #history(
@@ -2125,8 +2190,8 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
    * its calls, stream and observer: the stream pauses here and, read on once
    * the wait ends, starts the turn's next segment.
    */
-  #acceptApproval(active: ActiveRun, event: EventFrame) {
-    if (active.terminal || !this.#replies?.accept) return
+  #acceptApproval(active: ActiveRun, event: EventFrame): void {
+    if (this.#ended(active) || !this.#replies?.accept) return
     const payload = record(event.payload)
     const approval = record(payload?.approval)
     if (!approval || !validId(approval.id)) return
@@ -2134,6 +2199,11 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       return this.#withdrawn(active, approval.id)
     const sessionKey = approval.sourceSessionKey
     if (!validId(sessionKey) || active.waitingOn?.has(approval.id)) return
+    // A child that outlived an earlier run asks through that run.
+    const outlived = active.background
+      ? undefined
+      : this.#backgroundRunFor(active.scope, sessionKey)
+    if (outlived) return this.#acceptApproval(outlived, event)
     // A child's approval reaches its parent's audience: only a child this run
     // registered may ask, under the turn's own Agent, which `accept` checks.
     const child = active.children.get(sessionKey)
@@ -2168,6 +2238,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         childSessionId: child.key,
         status: ChildSessionStatus.WaitingForInput,
       })
+    // In the background no turn waits: the Session asks it.
+    if (active.background) {
+      for (const listener of this.#listenersOf(active.scope))
+        listener.onChildRequest?.(active.turnId, request)
+      return
+    }
     active.queue.push({
       kind: TurnEventKind.TurnRequiresAction,
       requests: [request],
@@ -2187,6 +2263,12 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const raisedBy = active.approvalKeys.get(approvalId)
     active.approvalKeys.delete(approvalId)
     this.#childRunsAgain(active, raisedBy)
+    if (active.background) {
+      if (waiting.size === 0) active.waitingOn = undefined
+      for (const listener of this.#listenersOf(active.scope))
+        listener.onChildRequestEnded?.(approvalId)
+      return
+    }
     if (waiting.size > 0) return
     active.waitingOn = undefined
     active.resumed?.()
@@ -2742,8 +2824,72 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
           }
     return {
       wrap,
-      push: (event: OwnTurnEvent) => active.queue.push(wrap(event)),
+      push: (event: OwnTurnEvent) => this.#deliver(active, wrap(event)),
     }
+  }
+
+  /**
+   * One event of the run: on its turn, or, once the run went on as background
+   * activity, a child's own to the Session's turn listeners.
+   */
+  #deliver(active: ActiveRun, event: TurnEvent) {
+    if (!active.background) return active.queue.push(event)
+    if (!isChildTurnEvent(event)) return
+    for (const listener of this.#listenersOf(active.scope))
+      listener.onChild?.(active.turnId, event)
+  }
+
+  #listenersOf(scope: SessionScope) {
+    return this.#turnListeners.get(scopeKey(scope)) ?? new Set()
+  }
+
+  /** Whether the run follows its children no more: ended, and not in the background. */
+  #ended(active: ActiveRun) {
+    return active.terminal && !active.background
+  }
+
+  /** Whether a child this run follows is still at work. */
+  #childrenAtWork(active: ActiveRun) {
+    for (const child of active.children.values())
+      if (!child.stream.terminal && !child.unfollowed) return true
+    return false
+  }
+
+  /** The background run whose child `key` is, if any. */
+  #backgroundRunFor(scope: SessionScope, key: string) {
+    for (const run of this.#backgroundRuns.get(scopeKey(scope)) ?? [])
+      if (run.children.has(key)) return run
+    return undefined
+  }
+
+  /** A child stopped working: a background run with none left at work ends. */
+  #childEnded(active: ActiveRun) {
+    if (active.background && !this.#childrenAtWork(active))
+      this.#endBackground(active)
+  }
+
+  /** Nothing follows `child` any more, which no listener can be told of. */
+  #unfollow(active: ActiveRun, child: ChildRun) {
+    child.unfollowed = true
+    if (active.background)
+      this.#streamOf(active, child.parentKey).push({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: child.key,
+        status: ChildSessionStatus.Unknown,
+        cancellable: false,
+      })
+    this.#childEnded(active)
+  }
+
+  /** A background run ends: none of its children is followed any longer. */
+  #endBackground(active: ActiveRun) {
+    if (!active.background) return
+    active.background = undefined
+    const key = scopeKey(active.scope)
+    const runs = this.#backgroundRuns.get(key)
+    runs?.delete(active)
+    if (runs?.size === 0) this.#backgroundRuns.delete(key)
+    for (const child of active.children.values()) this.#releaseChild(child)
   }
 
   /**
@@ -2768,7 +2914,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       .then((child) => {
         const waiting = active.held.get(held)
         // A run that ended has already finished the call, announcing nothing.
-        if (!waiting || active.terminal) return
+        if (!waiting || this.#ended(active)) return
         active.held.delete(held)
         if (child) {
           stream.push({
@@ -2783,7 +2929,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
             kind: TurnEventKind.TurnStarted,
           })
         }
-        for (const event of waiting) active.queue.push(event)
+        for (const event of waiting) this.#deliver(active, event)
         return child && this.#followChild(active, child)
       })
       .catch(() =>
@@ -2837,7 +2983,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     const depth = row.spawnDepth ?? parent.depth + 1
     const refusal = childRowRefusal(row, parent.key, agentId, depth)
     if (refusal) return drop(refusal)
-    if (active.terminal || active.children.has(key)) return undefined
+    if (this.#ended(active) || active.children.has(key)) return undefined
     const child: ChildRun = {
       key,
       agentId,
@@ -2845,12 +2991,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
       depth,
       stream: new ChildStream(spawned.runId, {
         emit: (event) => this.#streamOf(active, key).push(event),
-        ended: (status) =>
+        ended: (status) => {
           this.#streamOf(active, parent.key).push({
             kind: TurnEventKind.ChildSessionUpdated,
             childSessionId: key,
             status,
-          }),
+          })
+          this.#childEnded(active)
+        },
         spawned: (toolCallId, grandchild, args, finish) =>
           this.#spawned(
             active,
@@ -2953,9 +3101,9 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         },
         // A child whose subscription is lost streams no more; its transcript
         // is still read whole on a reload.
-        () => undefined
+        () => this.#unfollow(active, child)
       )
-      if (active.terminal) return this.#releaseChild(child)
+      if (this.#ended(active)) return this.#releaseChild(child)
       await this.#subscriptions
         .sessionEvents()
         .catch(() =>
@@ -2971,6 +3119,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         { code: "child-unfollowed" },
         "openclaw.child.dropped"
       )
+      this.#unfollow(active, child)
     }
   }
 
@@ -2992,18 +3141,18 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         child.agentId
       )
       if (!history) throw new Error("Invalid OpenClaw chat.history response")
-      if (!active.terminal) child.stream.catchUp(history)
+      if (!this.#ended(active)) child.stream.catchUp(history)
     } finally {
       const pending = child.pending ?? []
       child.pending = undefined
-      if (!active.terminal)
+      if (!this.#ended(active))
         for (const event of pending) child.stream.accept(event)
     }
   }
 
   /** One event of a child's Session: its own stream, or a grandchild's ask. */
   #observeChild(active: ActiveRun, child: ChildRun, event: EventFrame) {
-    if (active.terminal) return
+    if (this.#ended(active)) return
     // A grandchild's approval reaches its parent child's audience.
     if (event.event === "session.approval")
       return this.#acceptApproval(active, event)
@@ -3021,7 +3170,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
    */
   async #stopChild(active: ActiveRun, childSessionId: string) {
     const child = active.children.get(childSessionId)
-    if (!child || active.terminal || child.stream.terminal) return
+    if (!child || this.#ended(active) || child.stream.terminal) return
     const params = {
       key: child.key,
       agentId: child.agentId,
@@ -3075,6 +3224,14 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     for (const events of active.held.values())
       for (const event of events) active.queue.push(event)
     active.held.clear()
+    // Where someone watches the Session, a child still at work goes on as
+    // its background activity once the turn ended, as ACP's idle state
+    // allows: nothing of it is ended here.
+    if (
+      this.#childrenAtWork(active) &&
+      this.#listenersOf(active.scope).size > 0
+    )
+      return true
     for (const child of active.children.values()) {
       if (!child.stream.terminal)
         this.#streamOf(active, child.parentKey).push({
@@ -3085,6 +3242,17 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
         })
       this.#releaseChild(child)
     }
+    return false
+  }
+
+  /** The ended run's children at work go on, reporting to the Session. */
+  #beginBackground(active: ActiveRun) {
+    active.background = true
+    const key = scopeKey(active.scope)
+    const runs = this.#backgroundRuns.get(key) ?? new Set<ActiveRun>()
+    this.#backgroundRuns.set(key, runs.add(active))
+    for (const child of active.children.values())
+      if (child.stream.terminal || child.unfollowed) this.#releaseChild(child)
   }
 
   /** Settles every tool the native run left open when the turn ends. */
@@ -3277,7 +3445,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
 
   #finish(active: ActiveRun, stopReason?: StopReason) {
     if (active.terminal) return
-    this.#endChildren(active)
+    const background = this.#endChildren(active)
     active.terminal = true
     this.#endOpenTools(
       active,
@@ -3292,6 +3460,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     }
     active.queue.terminal(ended)
     active.stored?.end(ended)
+    if (background) this.#beginBackground(active)
     this.#active.delete(scopeKey(active.scope))
     active.lease
       .release()
@@ -3308,7 +3477,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     origin: { provider?: string; model?: string } = {}
   ) {
     if (active.terminal) return
-    this.#endChildren(active)
+    const background = this.#endChildren(active)
     active.terminal = true
     this.#endOpenTools(active, safeJson({ status: "error" }), true)
     const failed: TurnEvent = {
@@ -3319,6 +3488,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
     }
     active.queue.terminal(failed)
     active.stored?.end(failed)
+    if (background) this.#beginBackground(active)
     this.#active.delete(scopeKey(active.scope))
     active.lease
       .release()

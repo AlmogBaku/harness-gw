@@ -20,6 +20,7 @@ import {
   ServerTurnStopNotDispatchedError,
   type SessionScope,
 } from "../../core/runtime"
+import type { ServerTurnListener } from "../../core/runtime"
 import { SessionCoordinator } from "../../core/session-coordinator"
 import { READY_LINK } from "../../core/link"
 import { openClawPublicError } from "./adapter"
@@ -2923,6 +2924,150 @@ describe("OpenClaw run engine child Sessions", () => {
     expect(events.indexOf(reports.at(-1)!)).toBeLessThan(
       events.findIndex((event) => event.kind === TurnEventKind.TurnEnded)
     )
+  })
+
+  // Someone watches the Session, so a child that outlives its parent's run
+  // goes on as background activity: the turn ends, the parent is idle, and
+  // the child's reports and asks reach the Session's turn listener.
+  describe("a child that outlives its parent's run, while someone watches", () => {
+    const approvalRecord = {
+      id: "approval-late",
+      urlPath: "/approvals/approval-late",
+      createdAtMs: 1,
+      expiresAtMs: 1_900_000_000_000,
+      presentation: pendingApproval.presentation,
+    }
+    const childApproval = {
+      ...approvalRecord,
+      status: "pending",
+      sourceSessionKey: CHILD,
+    }
+
+    async function outlived() {
+      const native = spawning()
+      const request = vi.fn(async (method: string) => {
+        if (method === "approval.get") return { approval: childApproval }
+        if (method === "approval.resolve")
+          return {
+            applied: true,
+            approval: {
+              ...approvalRecord,
+              status: "allowed",
+              decision: "allow-once",
+              resolvedAtMs: 2,
+              reason: "user",
+              resolver: { kind: "device", id: "reviewer-a" },
+            },
+          }
+        throw new Error(`Unexpected interaction method ${method}`)
+      })
+      const { subscriptions, engine } = engineOver(native, {
+        toolEvents: true,
+        replies: new OpenClawInteractions({ request }),
+      })
+      const listener = {
+        onTurn: vi.fn(),
+        onError: vi.fn(),
+        onChild: vi.fn<NonNullable<ServerTurnListener["onChild"]>>(),
+        onChildRequest:
+          vi.fn<NonNullable<ServerTurnListener["onChildRequest"]>>(),
+        onChildRequestEnded:
+          vi.fn<NonNullable<ServerTurnListener["onChildRequestEnded"]>>(),
+      }
+      engine.subscribeTurns(scope, listener)
+      const turnInput = input()
+      const handle = await engine.start(scope, turnInput)
+      let parentSeq = 0
+      spawnEvents((stream, data) =>
+        agent(subscriptions, "run-a", parentSeq++, stream, data)
+      )
+      await followed(native)
+      await settle()
+      chat(subscriptions, "run-a", { state: "final" })
+      // The turn ends with its own run, its child still at work.
+      const events = (await drain(handle.events)) as Array<
+        Record<string, unknown>
+      >
+      return {
+        native,
+        subscriptions,
+        engine,
+        listener,
+        request,
+        events,
+        turnId: turnInput.turnId,
+      }
+    }
+
+    it("ends the turn with its own run, then streams the child through the Session", async () => {
+      const { subscriptions, listener, events, turnId } = await outlived()
+
+      expect(events.at(-1)).toMatchObject({ kind: TurnEventKind.TurnEnded })
+      expect(JSON.stringify(events)).not.toContain(ChildSessionStatus.Unknown)
+      const child = childStream(subscriptions)
+      child.agent("assistant", { delta: "Still working." })
+      child.chat("final")
+      await settle()
+
+      expect(listener.onChild).toHaveBeenCalledWith(turnId, {
+        kind: TurnEventKind.ChildSessionEvent,
+        childSessionId: CHILD,
+        event: expect.objectContaining({
+          kind: TurnEventKind.MessageChunk,
+          text: "Still working.",
+        }),
+      })
+      expect(listener.onChild.mock.calls.at(-1)).toEqual([
+        turnId,
+        {
+          kind: TurnEventKind.ChildSessionUpdated,
+          childSessionId: CHILD,
+          status: ChildSessionStatus.Idle,
+        },
+      ])
+    })
+
+    it("asks the child's approval through the Session and answers it without a turn", async () => {
+      const { engine, subscriptions, listener, request, turnId } =
+        await outlived()
+
+      push(subscriptions, 700, "session.approval", {
+        sessionKey: scope.providerSessionId,
+        sourceSessionKey: CHILD,
+        updatedAtMs: 1,
+        phase: "pending",
+        approval: childApproval,
+      })
+      await vi.waitFor(() =>
+        expect(listener.onChildRequest).toHaveBeenCalledWith(
+          turnId,
+          expect.objectContaining({
+            requestId: "approval-late",
+            childSessionId: CHILD,
+          })
+        )
+      )
+      await engine.respondChild!(scope, {
+        requestId: "approval-late",
+        status: "resolved",
+        payload: "once",
+      })
+
+      expect(request.mock.calls).toContainEqual([
+        "approval.resolve",
+        { id: "approval-late", kind: "plugin", decision: "allow-once" },
+      ])
+    })
+
+    it("stops the child without a turn", async () => {
+      const { engine, native } = await outlived()
+
+      await engine.stopChild!(scope, CHILD)
+
+      expect(native.sent("sessions.abort")).toMatchObject([
+        { params: { key: CHILD, agentId: "research", runId: "child-run" } },
+      ])
+    })
   })
 
   it("shows a child that finished before it was followed from its stored reply", async () => {
