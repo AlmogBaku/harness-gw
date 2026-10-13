@@ -1,6 +1,8 @@
-import { vi } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
+import { captureLogs } from "../../../test/support/log-capture"
 import { runWireContract } from "../../acp/wire-contract"
+import { openClawInviteSessionKey } from "../../core/invite-key"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeOpenClawRuntime } from "./factory"
 import {
@@ -53,6 +55,15 @@ runWireContract(
       agentId: openclaw.scope.agentId,
       folder: AGENT_WORKSPACE,
       turn: openclaw.turn,
+      // OpenClaw keys an invited Session under its Agent, and names it
+      // publicly by that key.
+      async invite(ref, said) {
+        const key = openClawInviteSessionKey(openclaw.scope.agentId, ref)
+        openclaw.storeSession(key, said)
+        return key
+      },
+      rewinds: () => openclaw.requested("sessions.rewind"),
+      childReads: (childId) => openclaw.historyReads(childId),
     }
   },
   {
@@ -87,3 +98,38 @@ runWireContract(
     },
   }
 )
+
+/**
+ * Why the guest rows fail here: every guest Send resolves its invitation with
+ * `create`, and the adapter answers none for any resolution that may create
+ * before it looks (`adapter.ts`, `resolveInvitedSession`), so a guest is
+ * refused "not found" on the reserved Session it can resume and read.
+ * `docs/runtimes/openclaw.md` says an invitation resolves a pre-existing
+ * reserved Session.
+ */
+describe("OpenClaw invitation", () => {
+  it("resolves the reserved Session for a Send that may create, as for a read", async () => {
+    const openclaw = fakeOpenClaw()
+    const key = openClawInviteSessionKey(openclaw.scope.agentId, "wire-guest")
+    openclaw.storeSession(key)
+    const { runtime, close } = composeOpenClawRuntime({
+      ...fakeOpenClawClient(openclaw),
+      baseUrl: "ws://127.0.0.1:18789",
+      logger: captureLogs().logger,
+    })
+    try {
+      const resolve = (create?: { firstTurnInstruction?: string }) =>
+        runtime.resolveInvitedSession(
+          openclaw.scope.agentId,
+          "wire-guest",
+          create
+        )
+      const found = { providerSessionId: key, created: false }
+
+      await expect(resolve()).resolves.toEqual(found)
+      await expect(resolve({})).resolves.toEqual(found)
+    } finally {
+      await close()
+    }
+  })
+})

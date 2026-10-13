@@ -131,6 +131,15 @@ export function fakeOpenCode() {
     | undefined
   let nextQuestion = 1
   let interrupted: (() => void) | undefined
+  /** The Session's title, which an invitation's lookup finds it by. */
+  let title = SESSION.title
+  /** How many requests reached one of OpenCode's revert routes. */
+  let reverts = 0
+  /** How many turns `storeSession` stored. */
+  let storedTurns = 0
+
+  /** The Session as OpenCode answers it. */
+  const sessionRow = () => ({ ...SESSION, title })
 
   function append(type: string, data: Record<string, unknown>) {
     const seq = log.length
@@ -401,9 +410,9 @@ export function fakeOpenCode() {
       case "/api/session":
         // The release answers a create with the new Session; this fake's one
         // Session stands for it.
-        if (request.method === "POST") return json({ data: SESSION })
+        if (request.method === "POST") return json({ data: sessionRow() })
         return json({
-          data: deleted ? [] : [SESSION, CHILD_SESSION],
+          data: deleted ? [] : [sessionRow(), CHILD_SESSION],
           cursor: {},
         })
       case "/api/session/active":
@@ -416,7 +425,7 @@ export function fakeOpenCode() {
     if (deleted) return json({}, 404)
     switch (url.pathname) {
       case session:
-        return json({ data: SESSION })
+        return json({ data: sessionRow() })
       case `${session}/message`:
         return json({ data: messages, cursor: {} })
       case `/session/${SESSION_ID}/todo`:
@@ -470,6 +479,9 @@ export function fakeOpenCode() {
       if (fault === "down") throw new TypeError("fetch failed")
       if (fault === "refused") return json({}, refusal)
       if (fault === "native") return json({}, NATIVE_FAILURE_STATUS)
+      // `…/revert/stage`, `…/revert/commit`, `…/revert/clear` and the older
+      // `/session/{id}/revert`, which this fake serves none of.
+      if (/\/revert(?:\/|$)/u.test(new URL(request.url).pathname)) reverts += 1
       return route(request)
     }) as typeof fetch,
 
@@ -485,6 +497,45 @@ export function fakeOpenCode() {
     finish,
 
     compact,
+
+    /**
+     * The Session titled `named`, holding a turn for each of `said`: a user
+     * message with that text as written, and a reply. OpenCode ran none of
+     * them, so a slash command among them is stored as text.
+     */
+    storeSession(named: string, said: readonly string[] = []) {
+      title = named
+      for (const text of said) {
+        storedTurns += 1
+        const time = Date.now()
+        messages.push(
+          {
+            id: `user-stored-${storedTurns}`,
+            type: "user",
+            text,
+            time: { created: time },
+          },
+          {
+            id: `assistant-stored-${storedTurns}`,
+            type: "assistant",
+            agent: AGENT_ID,
+            model: MODEL,
+            content: [
+              {
+                id: `text-stored-${storedTurns}`,
+                type: "text",
+                text: "Noted.",
+              },
+            ],
+            finish: "stop",
+            time: { created: time, completed: time },
+          }
+        )
+      }
+    },
+
+    /** How many requests reached one of OpenCode's revert routes. */
+    reverts: () => reverts,
 
     /** The wire contract's turn: two model responses, each its own step. */
     turn: {

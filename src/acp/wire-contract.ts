@@ -5,7 +5,9 @@
  * runtime it composes; the real gateway is built around it by
  * `createConfiguredGateway`, and the SDK's own client reaches its ACP services
  * through `acpBridge`, the calls the network listener makes. A row the runtime
- * cannot express is named in `gaps` with its reason and listed as skipped.
+ * cannot express is named in `gaps` with its reason and listed as skipped,
+ * unless the gateway reports that reason itself: then the case checks the
+ * report in its place.
  *
  * The client is plain: it reaches the Agent at the Agent's own address,
  * sends no `_meta` of its own, registers no `_hgw/*` handler, and reads
@@ -41,6 +43,7 @@ import {
   HGW_ACP_AGENTS_PATH,
   HGW_ACP_PATH,
   HGW_AUTH_METHOD_INVITE,
+  HgwAvailableCommandsMetaSchema,
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
   HGW_METHODS,
@@ -78,6 +81,9 @@ export type WireContractRow =
   | "forkJoinsNewSession"
   | "childAnnouncedBeforeItsEvents"
   | "compactionReplaysAsLive"
+  | "rewindReplacesTurn"
+  | "guestRetryOfSlashRefused"
+  | "childHiddenFromGuest"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -160,6 +166,26 @@ export type WireRuntime = Readonly<{
   folder: string
   /** Absent only when every row that plays a turn is a gap. */
   turn?: WireTurn
+  /**
+   * Stores the Session the invitation `ref` names on the Agent, as the
+   * runtime finds the one an invitation reserved, and makes it the Session
+   * `turn` plays. Each of `said` is stored in it in order as a user message
+   * holding that text as written, with a reply: the runtime ran none of them,
+   * a slash command among them. Resolves with the id an operator names that
+   * Session by. Absent only when every guest row is a gap.
+   */
+  invite?(ref: string, said?: readonly string[]): Promise<string>
+  /**
+   * How many writes the runtime received so far that rewind or truncate a
+   * stored conversation. Absent only when every row that counts them is a gap.
+   */
+  rewinds?(): number
+  /**
+   * How many times the runtime was asked so far for the transcript of the
+   * child Session `childId`. Absent only when every row that counts them is a
+   * gap.
+   */
+  childReads?(childId: string): number
 }>
 
 export type WireContractOptions = {
@@ -187,6 +213,10 @@ type WireHarness = Readonly<{
   /** The Agent's folder, the one `cwd` its Sessions take. */
   folder: string
   turn: WireTurn
+  /** The runtime's hooks, each failing the row that calls it if absent. */
+  invite: NonNullable<WireRuntime["invite"]>
+  rewinds: NonNullable<WireRuntime["rewinds"]>
+  childReads: NonNullable<WireRuntime["childReads"]>
   clock: Clock
   /** Connects a client to `service`, closed with the case. */
   connect(
@@ -445,6 +475,72 @@ async function operatorSession({ clock, connectPlain }: WireHarness) {
   await until(clock, plain.initialize())
   const sessionId = await until(clock, newSession(plain))
   return { plain, sessionId }
+}
+
+/** A fresh operator client that joined `sessionId` from the start. */
+async function reload({ clock, connectPlain }: WireHarness, sessionId: string) {
+  const reader = connectPlain()
+  await until(clock, reader.initialize())
+  await until(clock, resumeFromStart(reader, sessionId))
+  return reader
+}
+
+/**
+ * An Edit of the user message `rewindSourceId` with `text`, or with none a
+ * Retry, which sends that message's own text again; answers as the prompt did.
+ */
+function rewindPrompt(
+  { connection }: WireClient,
+  sessionId: string,
+  rewindSourceId: string,
+  text: string
+) {
+  return connection.agent.request(methods.agent.session.prompt, {
+    sessionId,
+    prompt: text ? [{ type: "text", text }] : [],
+    _meta: { [HGW_META_KEY]: { rewindSourceId } },
+  })
+}
+
+/**
+ * A new Session `plain` made, and what it reports of Edit and Retry in the
+ * capabilities that follow its creation.
+ */
+async function rewindReported({ clock }: WireHarness, plain: WireClient) {
+  const reported = plain.next(SessionUpdate.isAvailableCommandsUpdate)
+  const sessionId = await until(clock, newSession(plain))
+  const { capabilities } = HgwAvailableCommandsMetaSchema.parse(
+    (await until(clock, reported))._meta?.[HGW_META_KEY]
+  )
+  return { sessionId, rewind: capabilities.interactions.rewind }
+}
+
+/** Where a guest names the Session its invitation reserved. */
+const GUEST_REF = "wire-guest"
+
+/**
+ * A guest on its own listener, logged in with a fresh invitation to the
+ * `GUEST_REF` Session of the Agent.
+ */
+async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
+  const guest = gateway.guest!
+  const client = connect(guest.acpService, GUEST_ORIGIN, HGW_ACP_PATH)
+  const { token } = await guest.invitations.issue({ agentId, ref: GUEST_REF })
+  await until(clock, client.initialize())
+  // The login verifies the token with real crypto, so stepping the fake
+  // clock meanwhile can pass the handshake deadline under load.
+  await client.connection.agent.request(methods.agent.auth.login, {
+    methodId: HGW_AUTH_METHOD_INVITE,
+    _meta: { [HGW_META_KEY]: { token } },
+  })
+  return client
+}
+
+/** Every frame the gateway sent `client` that names `id` anywhere in it. */
+function framesNaming(client: WireClient, id: string) {
+  return client.bridge
+    .sockets()
+    .flatMap(({ frames }) => frames.filter((raw) => raw.includes(id)))
 }
 
 /**
@@ -707,12 +803,27 @@ function wireCase(
       clients.push(opened)
       return opened
     }
+    /** A fake without the hook fails the row that needs it, never skips it. */
+    const lacks = (hook: string) =>
+      new Error(`this fake has no ${hook}; name the row a gap`)
     try {
       await body({
         gateway,
         agentId: runtime.agentId,
         folder: runtime.folder,
         turn: runtime.turn ?? NO_TURN,
+        invite: (ref, said) =>
+          runtime.invite
+            ? runtime.invite(ref, said)
+            : Promise.reject(lacks("invited Session")),
+        rewinds: () => {
+          if (!runtime.rewinds) throw lacks("count of rewinds")
+          return runtime.rewinds()
+        },
+        childReads: (childId) => {
+          if (!runtime.childReads) throw lacks("count of child reads")
+          return runtime.childReads(childId)
+        },
         clock,
         connect,
         connectPlain: (options) =>
@@ -746,14 +857,33 @@ export function runWireContract(
   createRuntime: () => WireRuntime,
   { gaps = {} }: WireContractOptions = {}
 ) {
+  /**
+   * One row. Where the runtime names it a gap whose reason the gateway itself
+   * reports, `gapCheck` runs in its place and checks that report.
+   */
   function row(
     id: WireContractRow,
     title: string,
     body: (harness: WireHarness) => Promise<void>,
-    limits?: SubscriberLimits
+    {
+      limits,
+      gapCheck,
+    }: {
+      limits?: SubscriberLimits
+      gapCheck?: Readonly<{
+        title: string
+        body: (harness: WireHarness) => Promise<void>
+      }>
+    } = {}
   ) {
-    if (gaps[id] !== undefined) it.skip(`${title} (gap: ${gaps[id]})`)
-    else it(title, wireCase(createRuntime, body, limits))
+    const gap = gaps[id]
+    if (gap === undefined) it(title, wireCase(createRuntime, body, limits))
+    else if (gapCheck)
+      it(
+        `${gapCheck.title} (gap: ${gap})`,
+        wireCase(createRuntime, gapCheck.body, limits)
+      )
+    else it.skip(`${title} (gap: ${gap})`)
   }
 
   describe(
@@ -1141,6 +1271,145 @@ export function runWireContract(
       )
 
       row(
+        "rewindReplacesTurn",
+        "replaces the turn an Edit names with its new text, and a Retry's with its own text again, where the Session reports rewind",
+        async (harness) => {
+          const { clock, turn } = harness
+          const plain = harness.connectPlain()
+          await until(clock, plain.initialize())
+          const { sessionId, rewind } = await rewindReported(harness, plain)
+          expect(rewind).toMatchObject({ status: "available" })
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          /** The Session as a reload reads it now, ids aside. */
+          const stored = async () => {
+            const { updates } = await reload(harness, sessionId)
+            return {
+              users: userSide(updates),
+              agent: agentSide(updates).messages.map(({ text }) => text),
+            }
+          }
+          /** Rewinds the user message, plays its turn, and reads again. */
+          const rewound = async (
+            { users }: Awaited<ReturnType<typeof stored>>,
+            text: string
+          ) => {
+            const idle = plain.nextIdle()
+            await until(
+              clock,
+              rewindPrompt(plain, sessionId, users[0]!.id, text)
+            )
+            await until(clock, turn.firstResponse())
+            await until(clock, turn.secondResponse())
+            await until(clock, idle)
+            return stored()
+          }
+          const played = await stored()
+          const edited = await rewound(played, "list the folders")
+          const retried = await rewound(edited, "")
+
+          const texts = ({ users }: typeof played) =>
+            users.map(({ text }) => text)
+          expect(texts(edited)).toEqual(["list the folders"])
+          expect(texts(retried)).toEqual(["list the folders"])
+          // The rewound turn's replies go with it, so one turn is stored.
+          expect(edited.agent).toEqual(played.agent)
+          expect(retried.agent).toEqual(played.agent)
+        },
+        {
+          gapCheck: {
+            title: "reports Edit and Retry unavailable on its Session",
+            async body(harness) {
+              const plain = harness.connectPlain()
+              await until(harness.clock, plain.initialize())
+              const { rewind } = await rewindReported(harness, plain)
+              expect(rewind).toMatchObject({ status: "unavailable" })
+            },
+          },
+        }
+      )
+
+      row(
+        "guestRetryOfSlashRefused",
+        "refuses a guest's Retry of a slash command it was shown, its text empty or padding alone, and writes no rewind",
+        async (harness) => {
+          const { clock, invite, rewinds } = harness
+          const said = ["/compact", "  /compact", "\u200B/compact"]
+          await until(clock, invite(GUEST_REF, said))
+          const guest = await invitedGuest(harness)
+          await until(clock, resumeFromStart(guest, GUEST_REF))
+          const shown = userSide(guest.updates)
+          const answers: unknown[] = []
+          for (const { id } of shown)
+            for (const text of ["", " \u200B "])
+              answers.push(
+                await until(
+                  clock,
+                  rewindPrompt(guest, GUEST_REF, id, text)
+                ).then(
+                  () => "sent",
+                  (error: { code?: unknown }) => error.code
+                )
+              )
+
+          // A runtime may read the stored text back without its leading
+          // spaces; each is still the slash command it was stored as, and
+          // the invisible padding reaches the guest as written.
+          const bare = (text: string) => text.replace(/^[\s\u200B]+/u, "")
+          expect(shown.map(({ text }) => bare(text))).toEqual(said.map(bare))
+          expect(shown.map(({ text }) => text)).toContain(said.at(-1))
+          expect(answers).toEqual(
+            Array.from(
+              { length: said.length * 2 },
+              () => RequestError.invalidParams().code
+            )
+          )
+          expect(rewinds()).toBe(0)
+        }
+      )
+
+      row(
+        "childHiddenFromGuest",
+        "shows a guest nothing of a child Session its own turn spawned, live or on a reload, and reads no child transcript for it",
+        async (harness) => {
+          const { clock, turn, invite, childReads } = harness
+          const operatorId = await until(clock, invite(GUEST_REF))
+          const guest = await invitedGuest(harness)
+          await until(clock, resumeFromStart(guest, GUEST_REF))
+          const idle = guest.nextIdle()
+          await until(clock, prompt(guest, GUEST_REF, "list the files"))
+          await until(clock, turn.firstResponse())
+          const child = await until(clock, turn.spawnChild!())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const readBefore = childReads(child)
+          const reloaded = await invitedGuest(harness)
+          await until(clock, resumeFromStart(reloaded, GUEST_REF))
+          const guestReads = childReads(child) - readBefore
+          // An operator's reload reads the child's transcript, so the count
+          // is one a reload moves.
+          const operator = await reload(harness, operatorId)
+
+          for (const client of [guest, reloaded]) {
+            expect(
+              client.updates.filter(SessionUpdate.isSubagentUpdate)
+            ).toEqual([])
+            expect(framesNaming(client, child)).toEqual([])
+          }
+          // The guest read its own turn, the parent's side of it.
+          expect(
+            agentSide(guest.updates)
+              .messages.map(({ text }) => text)
+              .join("\n")
+          ).toContain("The file lists three names.")
+          expect(guestReads).toBe(0)
+          expect(childReads(child)).toBeGreaterThan(readBefore)
+          expect(
+            operator.addressed.some(({ sessionId }) => sessionId === child)
+          ).toBe(true)
+        }
+      )
+
+      row(
         "reloadMidTurn",
         "rebuilds a turn waiting on a question from history, then its state and question, then answers",
         async (harness) => {
@@ -1214,7 +1483,7 @@ export function runWireContract(
             expect(rebuildNotices(client)).toEqual([])
           }
         },
-        TIGHT_LIMITS
+        { limits: TIGHT_LIMITS }
       )
 
       row(

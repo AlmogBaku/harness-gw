@@ -1,4 +1,5 @@
 import { runWireContract } from "../../acp/wire-contract"
+import { inviteSessionKey } from "../../core/invite-key"
 import { coordinatedRuntime } from "../create-coordinator"
 import { composeOpenCodeRuntime } from "./factory"
 import {
@@ -34,6 +35,12 @@ runWireContract(
       agentId: opencode.scope.agentId,
       folder: PROJECT_DIRECTORY,
       turn: opencode.turn,
+      // OpenCode finds an invited Session by its title.
+      async invite(ref, said) {
+        opencode.storeSession(inviteSessionKey(ref), said)
+        return opencode.scope.sessionId
+      },
+      rewinds: () => opencode.reverts(),
     }
   },
   {
@@ -44,6 +51,12 @@ runWireContract(
       // the fake cannot honestly spawn a child through a gateway turn.
       childAnnouncedBeforeItsEvents:
         "pending: whether gateway turns spawn children needs the live OpenCode check",
+      childHiddenFromGuest:
+        "pending: whether gateway turns spawn children needs the live OpenCode check",
+      // The Session reports rewind unavailable (`native-rewind-unproven`),
+      // which the row checks in its place.
+      rewindReplacesTurn:
+        "pending: rewind through OpenCode's revert needs the live OpenCode check",
       // Every question and permission carries a presentable form, so the
       // adapter holds none back, and OpenCode lists each pending one
       // (`GET /api/session/{sessionID}/question` and `…/permission`), so a

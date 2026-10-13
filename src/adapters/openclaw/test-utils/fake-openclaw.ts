@@ -243,6 +243,8 @@ export function fakeOpenClaw() {
   let calls = 0
   /** Every method the runtime called, in order, refused calls included. */
   const methods: string[] = []
+  /** The Session key each `chat.history` named, in order. */
+  const historyKeys: unknown[] = []
   let seq = 0
   let nextRow = 1
   let nextSession = 1
@@ -931,6 +933,8 @@ export function fakeOpenClaw() {
         ) {
           calls += 1
           methods.push(method)
+          if (method === "chat.history")
+            historyKeys.push((params as Row | undefined)?.sessionKey)
           if (!dialed.up) throw new Error("gateway not connected")
           if (fault === "native") throw failure
           return (await answer(
@@ -978,6 +982,32 @@ export function fakeOpenClaw() {
 
     /** Settles once the runtime subscribed `key`, and for `tools` its tool events. */
     subscribed,
+
+    /**
+     * A Session of the Agent the Gateway stores under `key`, with the
+     * gateway's tools on as the Agent's own Session has them, holding a turn
+     * for each of `said`: a user entry with that text as written, and a
+     * reply. OpenClaw ran none of them, so a slash command among them is
+     * stored as text.
+     */
+    storeSession(key: string, said: readonly string[] = []) {
+      const stored = addSession({
+        key,
+        agentId: AGENT_ID,
+        toolOverrides: { mcpServers: { "aos-ui": true } },
+      })
+      for (const text of said) {
+        store(stored, { role: "user", content: [{ type: "text", text }] })
+        store(stored, {
+          role: "assistant",
+          content: [{ type: "text", text: "Noted." }],
+        })
+      }
+    },
+
+    /** How many times the runtime read Session `key`'s transcript. */
+    historyReads: (key: string) =>
+      historyKeys.filter((named) => named === key).length,
 
     /** The Session `key` as the Gateway stores it, for a test to read back. */
     stored(key: string) {
