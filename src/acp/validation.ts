@@ -54,11 +54,14 @@ export function notFound() {
   return RequestError.resourceNotFound()
 }
 
-/** The JSON-RPC error a member stack's refusal travels as. */
-export function refusalError(refusal: CommandRefusal) {
+/**
+ * The JSON-RPC error a member stack's refusal travels as; an invalid one
+ * carries the refusal's `hint`.
+ */
+export function refusalError(refusal: CommandRefusal, hint?: string) {
   switch (refusal) {
     case "invalid":
-      return invalidParams()
+      return invalidParams(hint)
     case "not-found":
       return notFound()
     case "authentication-required":

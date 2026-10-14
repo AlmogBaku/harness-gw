@@ -1,4 +1,5 @@
 import { createCredentialsMiddleware } from "../../core/credentials-middleware"
+import { createLifecycleCommandGuard } from "../../core/lifecycle-command-guard"
 import type { Middleware } from "../../core/member"
 import { createCommandsMiddleware } from "./commands"
 import { createFeedsMiddleware } from "./feeds"
@@ -42,6 +43,7 @@ export function createGuestMiddleware(
 ): readonly Middleware[] {
   return [
     createCommandsMiddleware(),
+    createLifecycleCommandGuard(),
     createScopeMiddleware(options),
     createHistoryMiddleware(options),
     createTurnsMiddleware(options),

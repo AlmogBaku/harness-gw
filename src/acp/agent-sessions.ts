@@ -22,6 +22,7 @@ import {
   type WorkspaceEvent,
 } from "../core/member"
 import { createCredentialsMiddleware } from "../core/credentials-middleware"
+import { createLifecycleCommandGuard } from "../core/lifecycle-command-guard"
 import type { AcpConnectionContext } from "./types"
 import {
   authenticationRequired,
@@ -165,7 +166,10 @@ export function createSessions(
       ? context.authentication.member()
       : {
           principal: { id: context.principalId, role: context.role },
-          middleware: [createCredentialsMiddleware()],
+          middleware: [
+            createCredentialsMiddleware(),
+            createLifecycleCommandGuard(),
+          ],
         }
   }
 

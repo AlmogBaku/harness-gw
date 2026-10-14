@@ -272,7 +272,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     } catch (cause) {
       const error =
         cause instanceof CommandRefusedError
-          ? refusalError(cause.refusal)
+          ? refusalError(cause.refusal, cause.hint)
           : publicRequestError(context.publicError, cause)
       const { sessionId } = command as { sessionId?: string | null }
       context.logger.warn(
