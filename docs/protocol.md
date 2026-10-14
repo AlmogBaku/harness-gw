@@ -340,7 +340,7 @@ characters stripped) is refused with `-32602`, message `Invalid params: Session
 commands run in the client, not as a prompt.` A client runs those itself, so
 `available_commands_update` never lists them. `/branch` and `/fork` are not
 refused: on Hermes the gateway runs them as the fork. The guest listener refuses
-every prompt or steer whose text starts with `/`, however padded, with `-32602`
+every prompt or steer any of whose text blocks starts with `/`, however padded, with `-32602`
 before this rule applies.
 
 ### Response `_meta.hgw` shapes
