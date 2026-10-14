@@ -333,14 +333,15 @@ prompt capability, so an `image`, `audio` or `resource` block answers `-32602`
 invalid params. A block of a type ACP has not defined, an `_`-prefixed extension
 or a later variant, is skipped and the rest of the prompt is sent.
 
-On the operator listener, a prompt or steer whose text opens with one of the
-Session commands `/new`, `/reset`, `/clear`, `/resume`, `/sessions`, `/quit`, or
-`/exit` (case-insensitive, leading whitespace and invisible characters stripped)
-is refused with `-32602` and the message `Session commands run in the client, not
-as a prompt.` A client runs those itself, so `available_commands_update` never
-lists them. `/branch` and `/fork` are not refused: on Hermes the gateway runs them
-as the fork. The guest listener refuses every slash command a guest sends, as
-described under the guest listener, and these with it.
+On the operator listener, a prompt or steer any of whose text blocks opens with
+one of the Session commands `/new`, `/reset`, `/clear`, `/resume`, `/sessions`,
+`/quit`, or `/exit` (case-insensitive, leading whitespace and invisible
+characters stripped) is refused with `-32602`, message `Invalid params: Session
+commands run in the client, not as a prompt.` A client runs those itself, so
+`available_commands_update` never lists them. `/branch` and `/fork` are not
+refused: on Hermes the gateway runs them as the fork. The guest listener refuses
+every prompt or steer whose text starts with `/`, however padded, with `-32602`
+before this rule applies.
 
 ### Response `_meta.hgw` shapes
 
@@ -472,7 +473,8 @@ none). The provider's own words travel only as `_meta.hgw.message`, beside the
 same `code`. Codes include `HGW_COMMAND_WITH_ATTACHMENTS` ("Slash commands cannot
 be sent with attachments.") for a Hermes command sent with file or image
 attachments, and `HGW_COMMAND_UNSUPPORTED` ("This command is not available here.")
-for a Hermes command that only works in a terminal or messaging client.
+for a Hermes command Hermes reserves for other clients: one it marks with any
+desktop reason other than hidden, or one of the TUI's own commands.
 
 A turn the gateway can no longer observe, after a lost connection or an
 uncertain send, Stop or answer, reports ACP's `state_update { state: "unknown"

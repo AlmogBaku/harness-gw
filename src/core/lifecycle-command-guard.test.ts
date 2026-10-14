@@ -1,9 +1,7 @@
-import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 
 import { SessionWorkspaceCapabilitiesResponseSchema } from "../../protocol"
 import { CAPABILITIES } from "../acp/test-harness"
-import { refusalError } from "../acp/validation"
 import { createLifecycleCommandGuard } from "./lifecycle-command-guard"
 import {
   CommandRefusedError,
@@ -120,13 +118,5 @@ describe("the lifecycle command guard", () => {
         },
       },
     })
-  })
-
-  it("answers a refusal with ACP's invalid params, carrying its hint", () => {
-    const error = refusalError("invalid", HINT)
-
-    expect(error).toBeInstanceOf(RequestError)
-    expect(error.code).toBe(-32602)
-    expect(error.message).toContain(HINT)
   })
 })

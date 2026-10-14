@@ -166,9 +166,11 @@ export function createSessions(
       ? context.authentication.member()
       : {
           principal: { id: context.principalId, role: context.role },
+          // Credentials innermost, as on the guest stack: every event is
+          // masked before another layer reads it.
           middleware: [
-            createCredentialsMiddleware(),
             createLifecycleCommandGuard(),
+            createCredentialsMiddleware(),
           ],
         }
   }

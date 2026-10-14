@@ -120,8 +120,8 @@ const DISPOSED_CATALOG = {
     "/login": surface("settings"),
     "/voice": surface("composer-voice"),
     "/model": surface("hidden"),
+    // No entry for the alias `/exit`: it is dropped through `canon` alone.
     "/quit": surface("terminal"),
-    "/exit": surface("terminal"),
   },
   categories: [
     { name: "Info", pairs: [["/help", "Help"]] },

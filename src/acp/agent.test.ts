@@ -2775,6 +2775,22 @@ describe("Session rooms", () => {
     test.close()
   })
 
+  it("refuses a Session command sent as a prompt, saying the client runs it", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+
+    await expect(
+      prompt(test, [{ type: "text", text: "/reset" }])
+    ).rejects.toMatchObject({
+      ...INVALID_PARAMS,
+      message: expect.stringContaining(
+        "Session commands run in the client, not as a prompt."
+      ),
+    })
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+  })
+
   // ACP reserves `_` types for extensions and the rest for later variants, so
   // a prompt carrying one is the prompt it was without it.
   it("sends a prompt without the items ACP has not defined", async () => {
