@@ -333,12 +333,14 @@ prompt capability, so an `image`, `audio` or `resource` block answers `-32602`
 invalid params. A block of a type ACP has not defined, an `_`-prefixed extension
 or a later variant, is skipped and the rest of the prompt is sent.
 
-A prompt or steer whose text is one of the bare Session commands `/new`, `/reset`,
-`/clear`, `/resume`, `/sessions`, `/quit`, or `/exit` (case-insensitive, leading
-whitespace and invisible characters stripped) is refused on both listeners with
-`-32602` and the message `Session commands run in the client, not as a prompt.`
-A client runs those itself. `/branch` and `/fork` are not refused: on Hermes the
-gateway runs them as the fork.
+On the operator listener, a prompt or steer whose text opens with one of the
+Session commands `/new`, `/reset`, `/clear`, `/resume`, `/sessions`, `/quit`, or
+`/exit` (case-insensitive, leading whitespace and invisible characters stripped)
+is refused with `-32602` and the message `Session commands run in the client, not
+as a prompt.` A client runs those itself, so `available_commands_update` never
+lists them. `/branch` and `/fork` are not refused: on Hermes the gateway runs them
+as the fork. The guest listener refuses every slash command a guest sends, as
+described under the guest listener, and these with it.
 
 ### Response `_meta.hgw` shapes
 

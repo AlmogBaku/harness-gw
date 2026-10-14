@@ -36,10 +36,32 @@ function refuseLifecycleCommand(texts: readonly string[]) {
 
 /**
  * Refuses a send or a steer whose text, or any text part, opens with a command
- * that ends or switches the Session. Every other command passes unchanged.
+ * that ends or switches the Session, and keeps those commands out of the list a
+ * client is offered, so it is never offered one it would be refused. Every
+ * other command passes unchanged.
  */
 export function createLifecycleCommandGuard(): Middleware {
   return {
+    event(event) {
+      if (event.kind !== "commands") return event
+      const { slashCommands } = event.capabilities.workspace
+      if (slashCommands.status !== "available") return event
+      return {
+        ...event,
+        capabilities: {
+          ...event.capabilities,
+          workspace: {
+            ...event.capabilities.workspace,
+            slashCommands: {
+              ...slashCommands,
+              commands: slashCommands.commands.filter(
+                ({ name }) => !LIFECYCLE_COMMANDS.has(`/${name.toLowerCase()}`)
+              ),
+            },
+          },
+        },
+      }
+    },
     commands: {
       send: async (command, next) => {
         refuseLifecycleCommand([

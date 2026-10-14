@@ -1,9 +1,16 @@
 import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
 import { describe, expect, it, vi } from "vitest"
 
+import { SessionWorkspaceCapabilitiesResponseSchema } from "../../protocol"
+import { CAPABILITIES } from "../acp/test-harness"
 import { refusalError } from "../acp/validation"
 import { createLifecycleCommandGuard } from "./lifecycle-command-guard"
-import { CommandRefusedError, runCommand, type MemberCommands } from "./member"
+import {
+  CommandRefusedError,
+  runCommand,
+  runEvents,
+  type MemberCommands,
+} from "./member"
 
 const HINT = "Session commands run in the client, not as a prompt."
 
@@ -83,6 +90,36 @@ describe("the lifecycle command guard", () => {
       expect(outcome).toBeUndefined()
       expect(next).toHaveBeenCalledExactlyOnceWith(entry.command)
     }
+  })
+
+  it("offers no command it would refuse, and every other one as listed", () => {
+    const commands = [
+      { name: "new", description: "Start a new session" },
+      { name: "Resume", description: "Resume a session" },
+      { name: "branch", description: "Branch the session" },
+      { name: "compress", description: "Compress the context" },
+    ]
+    const capabilities = SessionWorkspaceCapabilitiesResponseSchema.parse({
+      ...CAPABILITIES,
+      workspace: {
+        ...CAPABILITIES.workspace,
+        slashCommands: { status: "available", scope: "session", commands },
+      },
+    })
+
+    const shown = runEvents(
+      [createLifecycleCommandGuard()],
+      { sessionId: "session-1", kind: "commands", capabilities },
+      { decline: () => undefined }
+    )
+
+    expect(shown).toMatchObject({
+      capabilities: {
+        workspace: {
+          slashCommands: { commands: [commands[2], commands[3]] },
+        },
+      },
+    })
   })
 
   it("answers a refusal with ACP's invalid params, carrying its hint", () => {
