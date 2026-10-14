@@ -96,6 +96,7 @@ export type HermesSubmitStatus =
 
 export type HermesSubmitRejection =
   | "command-with-attachments"
+  | "command-unsupported"
   | "session-gone"
   | "busy"
   | "in-use"
@@ -483,6 +484,11 @@ export class HermesNativeRuntime implements HermesTurnNative {
     // the catalog resolves is caught, not a user's own quick command.
     if (invocation?.name.toLowerCase() === BRANCH_COMMAND)
       return this.#branch(liveSessionId, invocation.args)
+
+    // A command whose surface Hermes puts elsewhere, such as the terminal,
+    // never runs from here.
+    if (invocation?.disposition === "dropped")
+      return { acknowledgement: "rejected", reason: "command-unsupported" }
 
     if (invocation) {
       let execution: HermesSlashExecution

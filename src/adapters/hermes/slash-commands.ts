@@ -13,30 +13,76 @@ import { isRecord } from "./native"
 const MAX_CATALOG_RESPONSE_BYTES = 2_097_152
 const MAX_COMMAND_RESPONSE_BYTES = 1_048_576
 
-async function nativeCommandPairs(
+/** The catalog category holding the TUI's own extras, which run only there. */
+const TUI_CATEGORY = "TUI"
+
+/** Where AOS takes a native command: listed, typed only, or not at all. */
+type SlashDisposition = "offered" | "hidden" | "dropped"
+
+/**
+ * What AOS reads of Hermes' `commands.catalog`. `commands` holds each
+ * command's surface by its `/name`, aliases included; a skill or a quick
+ * command may have none. `tui` names the TUI category's commands. A catalog
+ * without either says nothing about where a command runs.
+ */
+type NativeCatalog = {
+  pairs: readonly unknown[]
+  canon: Readonly<Record<string, unknown>> | undefined
+  commands: Readonly<Record<string, unknown>>
+  tui: ReadonlySet<string>
+}
+
+async function nativeCatalog(
   transport: HermesRpcTransport,
   params: Readonly<Record<string, unknown>>
-) {
+): Promise<NativeCatalog> {
   const value = await transport.request("commands.catalog", params, {
     maxResponseBytes: MAX_CATALOG_RESPONSE_BYTES,
   })
-  if (
-    !value ||
-    typeof value !== "object" ||
-    !("pairs" in value) ||
-    !Array.isArray(value.pairs)
-  )
+  if (!isRecord(value) || !Array.isArray(value.pairs))
     throw new Error("Invalid Hermes command catalog")
-  const canon = "canon" in value ? value.canon : undefined
-  if (
-    canon !== undefined &&
-    (!canon || typeof canon !== "object" || Array.isArray(canon))
-  )
+  const { canon, commands, categories } = value
+  if (canon !== undefined && !isRecord(canon))
     throw new Error("Invalid Hermes command catalog")
   return {
     pairs: value.pairs,
-    canon: canon as Readonly<Record<string, unknown>> | undefined,
+    canon,
+    commands: isRecord(commands) ? commands : {},
+    tui: tuiCommands(categories),
   }
+}
+
+/** The command names the catalog's TUI category lists, if it has one. */
+function tuiCommands(categories: unknown): ReadonlySet<string> {
+  const tui = Array.isArray(categories)
+    ? categories.find(
+        (category) => isRecord(category) && category.name === TUI_CATEGORY
+      )
+    : undefined
+  const pairs = isRecord(tui) && Array.isArray(tui.pairs) ? tui.pairs : []
+  return new Set(
+    pairs.flatMap((pair) =>
+      Array.isArray(pair) && typeof pair[0] === "string" ? [pair[0]] : []
+    )
+  )
+}
+
+/**
+ * Where AOS takes the command `name`, by Hermes' own `desktop` disposition: a
+ * command whose surface is elsewhere (`terminal`, `messaging`, `advanced`,
+ * `settings`, `composer-voice`) or that the TUI adds of its own is dropped; a
+ * `hidden` one runs when typed but is not listed. A name the catalog says
+ * nothing about, such as a skill, is offered.
+ */
+function disposition(catalog: NativeCatalog, name: string): SlashDisposition {
+  const key = `/${name}`
+  if (catalog.tui.has(key)) return "dropped"
+  const entry = Object.hasOwn(catalog.commands, key)
+    ? catalog.commands[key]
+    : undefined
+  const desktop = isRecord(entry) ? entry.desktop : undefined
+  if (desktop === "hidden") return "hidden"
+  return typeof desktop === "string" ? "dropped" : "offered"
 }
 
 function parsedSlashInvocation(text: string) {
@@ -45,14 +91,15 @@ function parsedSlashInvocation(text: string) {
   return { name: match[1]!, args: match[2]?.trim() ?? "" }
 }
 
+/** The commands AOS lists: every offered one, in catalog order. */
 export async function nativeSlashCommands(
   transport: HermesRpcTransport,
   params: Readonly<Record<string, unknown>>
 ): Promise<SlashCommand[]> {
-  const { pairs } = await nativeCommandPairs(transport, params)
+  const catalog = await nativeCatalog(transport, params)
   const commands: SlashCommand[] = []
   const seen = new Set<string>()
-  for (const pair of pairs) {
+  for (const pair of catalog.pairs) {
     if (
       !Array.isArray(pair) ||
       pair.length !== 2 ||
@@ -64,7 +111,12 @@ export async function nativeSlashCommands(
       description:
         typeof pair[1] === "string" ? pair[1].slice(0, 4_096) : pair[1],
     })
-    if (!parsed.success || seen.has(parsed.data.name)) continue
+    if (
+      !parsed.success ||
+      seen.has(parsed.data.name) ||
+      disposition(catalog, parsed.data.name) !== "offered"
+    )
+      continue
     seen.add(parsed.data.name)
     commands.push(parsed.data)
     if (commands.length === MAX_SLASH_COMMANDS) break
@@ -72,6 +124,10 @@ export async function nativeSlashCommands(
   return commands
 }
 
+/**
+ * The native command `text` invokes, under its catalog name, or `undefined`
+ * when it names none. A `dropped` one is recognized only to be refused.
+ */
 export async function nativeSlashInvocation(
   transport: HermesRpcTransport,
   params: Readonly<Record<string, unknown>>,
@@ -79,7 +135,13 @@ export async function nativeSlashInvocation(
 ) {
   const invocation = parsedSlashInvocation(text)
   if (!invocation) return undefined
-  const { pairs, canon } = await nativeCommandPairs(transport, params)
+  const catalog = await nativeCatalog(transport, params)
+  const { pairs, canon } = catalog
+  const invoking = (name: string) => ({
+    ...invocation,
+    name,
+    disposition: disposition(catalog, name),
+  })
   const canonicalKey = `/${invocation.name}`.toLowerCase()
   const canonicalValue =
     canon && Object.hasOwn(canon, canonicalKey)
@@ -93,9 +155,9 @@ export async function nativeSlashInvocation(
           : canonicalValue,
     })
     if (!canonical.success) throw new Error("Invalid Hermes command catalog")
-    return { ...invocation, name: canonical.data.name }
+    return invoking(canonical.data.name)
   }
-  const recognized = pairs.find((pair) => {
+  const recognized = pairs.find((pair): pair is [string, ...unknown[]] => {
     if (!Array.isArray(pair) || typeof pair[0] !== "string") return false
     const command = SlashCommandSchema.safeParse({
       name: pair[0].replace(/^\//u, ""),
@@ -106,7 +168,7 @@ export async function nativeSlashInvocation(
     )
   })
   if (!recognized) return undefined
-  return { ...invocation, name: recognized[0].replace(/^\//u, "") }
+  return invoking(recognized[0].replace(/^\//u, ""))
 }
 
 /**

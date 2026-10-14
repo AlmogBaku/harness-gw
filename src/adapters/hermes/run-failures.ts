@@ -125,6 +125,10 @@ export const TURN_FAILURES = {
     code: "HGW_COMMAND_WITH_ATTACHMENTS",
     message: "Slash commands cannot be sent with attachments.",
   },
+  commandUnsupported: {
+    code: "HGW_COMMAND_UNSUPPORTED",
+    message: "This command is not available here.",
+  },
   commandRejected: {
     code: "HGW_PROVIDER_RUN_FAILED",
     message: "Hermes rejected this command.",

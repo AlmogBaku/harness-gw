@@ -1143,6 +1143,12 @@ describe("HermesRunEngine", () => {
       "HGW_COMMAND_WITH_ATTACHMENTS",
       "Slash commands cannot be sent with attachments.",
     ],
+    [
+      // A native command whose surface is elsewhere, such as the terminal.
+      "command-unsupported",
+      "HGW_COMMAND_UNSUPPORTED",
+      "This command is not available here.",
+    ],
   ] as const)(
     "terminalizes a definitive %s rejection without marking delivery uncertain",
     async (reason, code, message) => {

@@ -135,6 +135,7 @@ const REFUSAL_FAILURES: Record<
   >,
   TurnFailure
 > = {
+  "command-unsupported": TURN_FAILURES.commandUnsupported,
   "in-use": TURN_FAILURES.sessionInUse,
   "session-limit": TURN_FAILURES.sessionLimit,
   storage: TURN_FAILURES.commandRejected,
