@@ -23,12 +23,22 @@ export type TurnFailure = {
   readonly message: string
 }
 
+/** The shared turn-failure codes core keeps a turn alive for: the uncertain. */
+type UncertainTurnFailureCode = {
+  [
+    Code in keyof typeof SHARED_TURN_FAILURES
+  ]: (typeof SHARED_TURN_FAILURES)[Code]["kind"] extends "uncertain"
+    ? Code
+    : never
+}[keyof typeof SHARED_TURN_FAILURES]
+
 /**
  * A failure that may leave the turn alive in Hermes. Its code is one the shared
- * turn-failure table names, so core keeps the turn for the browser to redial.
+ * turn-failure table names uncertain, so core keeps the turn for the browser to
+ * redial.
  */
 export type DetachedTurnFailure = TurnFailure & {
-  readonly code: keyof typeof SHARED_TURN_FAILURES
+  readonly code: UncertainTurnFailureCode
 }
 
 /**
