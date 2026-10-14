@@ -470,11 +470,15 @@ A failed turn ends with ACP's `state_update { state: "idle", stopReason:
 "error" }`. Its `error` is the public error: `-32603` and, as its `message`,
 the failure's machine code (`internal_error` for a stored failure that kept
 none). The provider's own words travel only as `_meta.hgw.message`, beside the
-same `code`. Codes include `HGW_COMMAND_WITH_ATTACHMENTS` ("Slash commands cannot
-be sent with attachments.") for a Hermes command sent with file or image
-attachments, and `HGW_COMMAND_UNSUPPORTED` ("This command is not available here.")
-for a Hermes command Hermes reserves for other clients: one it marks with any
-desktop reason other than hidden, or one of the TUI's own commands.
+same `code`.
+
+Two refusals end a prompt before anything is stored, so `session/prompt` itself
+answers `-32602` with the refusal's code as the error's `data.code`, for the
+client to word: `HGW_COMMAND_WITH_ATTACHMENTS` ("Slash commands cannot be sent
+with attachments.") for a Hermes command sent with file or image attachments,
+and `HGW_COMMAND_UNSUPPORTED` ("This command is not available here.") for a
+Hermes command Hermes reserves for other clients: one it marks with any desktop
+reason other than hidden, or one of the TUI's own commands.
 
 A turn the gateway can no longer observe, after a lost connection or an
 uncertain send, Stop or answer, reports ACP's `state_update { state: "unknown"

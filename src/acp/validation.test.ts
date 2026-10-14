@@ -19,7 +19,25 @@ describe("a prompt whose turn ended before its storage receipt", () => {
       new ServerTurnEndedError("failed", "HGW_CONNECTION_INTERRUPTED"),
       "uncertain_mutation",
     ],
+    [
+      "a command the runtime refused",
+      new ServerTurnEndedError("failed", "HGW_COMMAND_UNSUPPORTED", {
+        unstored: true,
+      }),
+      "invalid_request",
+    ],
   ])("answers %s as what happened", (_, cause, reply) => {
     expect(replyOf(cause)).toBe(reply)
+  })
+
+  it("names a refused command's code, so a client can word it", () => {
+    const reply = publicRequestError(
+      () => undefined,
+      new ServerTurnEndedError("failed", "HGW_COMMAND_UNSUPPORTED", {
+        unstored: true,
+      })
+    )
+
+    expect(reply).toMatchObject({ data: { code: "HGW_COMMAND_UNSUPPORTED" } })
   })
 })

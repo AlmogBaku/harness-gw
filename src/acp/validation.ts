@@ -193,7 +193,11 @@ export function publicRequestError(
   if (cause instanceof ServerTurnEndedError && cause.ending === "stopped")
     return RequestError.requestCancelled()
   const failure = channelFailure(cause) ?? publicError(cause)
-  return failure ? KIND_ERRORS[failure.kind]() : cause
+  if (!failure) return cause
+  // A refusal the gateway names carries its code, so a client can word it.
+  if (failure.kind === "invalid_request" && failure.code.startsWith("HGW_"))
+    return RequestError.invalidParams({ code: failure.code })
+  return KIND_ERRORS[failure.kind]()
 }
 
 /** The machine name a public reply carries `error` as, or `internal_error`. */
