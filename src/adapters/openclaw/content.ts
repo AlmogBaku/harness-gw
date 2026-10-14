@@ -177,6 +177,7 @@ export function prepareOpenClawChatAttachments(
     message: input.message,
     idempotencyKey: input.idempotencyKey,
     attachments: attachments.native,
+    suppressCommandInterpretation: true,
   }
   if (
     !validateChatSendParams(native) ||
