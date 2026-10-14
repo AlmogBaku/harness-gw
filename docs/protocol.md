@@ -333,6 +333,13 @@ prompt capability, so an `image`, `audio` or `resource` block answers `-32602`
 invalid params. A block of a type ACP has not defined, an `_`-prefixed extension
 or a later variant, is skipped and the rest of the prompt is sent.
 
+A prompt or steer whose text is one of the bare Session commands `/new`, `/reset`,
+`/clear`, `/resume`, `/sessions`, `/quit`, or `/exit` (case-insensitive, leading
+whitespace and invisible characters stripped) is refused on both listeners with
+`-32602` and the message `Session commands run in the client, not as a prompt.`
+A client runs those itself. `/branch` and `/fork` are not refused: on Hermes the
+gateway runs them as the fork.
+
 ### Response `_meta.hgw` shapes
 
 **`session/new`** response: `{ sessionId }` as a top-level result field, with no
@@ -460,7 +467,10 @@ A failed turn ends with ACP's `state_update { state: "idle", stopReason:
 "error" }`. Its `error` is the public error: `-32603` and, as its `message`,
 the failure's machine code (`internal_error` for a stored failure that kept
 none). The provider's own words travel only as `_meta.hgw.message`, beside the
-same `code`.
+same `code`. Codes include `HGW_COMMAND_WITH_ATTACHMENTS` ("Slash commands cannot
+be sent with attachments.") for a Hermes command sent with file or image
+attachments, and `HGW_COMMAND_UNSUPPORTED` ("This command is not available here.")
+for a Hermes command that only works in a terminal or messaging client.
 
 A turn the gateway can no longer observe, after a lost connection or an
 uncertain send, Stop or answer, reports ACP's `state_update { state: "unknown"
