@@ -393,7 +393,11 @@ export function unhandledKind(kind: never): undefined {
 export type CommandRefusal = "invalid" | "not-found" | "authentication-required"
 
 export class CommandRefusedError extends Error {
-  constructor(readonly refusal: CommandRefusal) {
+  /** `hint` says what a valid command looks like, for an operator client. */
+  constructor(
+    readonly refusal: CommandRefusal,
+    readonly hint?: string
+  ) {
     super(`The command was refused: ${refusal}`)
     this.name = "CommandRefusedError"
   }

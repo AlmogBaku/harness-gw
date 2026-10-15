@@ -83,6 +83,73 @@ it("includes skill commands that follow the first 256 catalog entries", async ()
   })
 })
 
+/**
+ * A catalog as current Hermes writes it: beside the pairs, each command's
+ * surface by its name and aliases, and the TUI's own extras in their category.
+ * A skill has no entry.
+ */
+const PAIRS = [
+  ["/help", "Help"],
+  ["/redraw", "Redraw the screen"],
+  ["/approve", "Approve a request"],
+  ["/insights", "Usage insights"],
+  ["/login", "Log in"],
+  ["/voice", "Voice mode"],
+  ["/model", "Switch model"],
+  ["/quit", "Quit"],
+  ["/density", "Toggle compact display"],
+  ["/writing-plans", "Write an implementation plan"],
+]
+const CANON = {
+  "/help": "/help",
+  "/redraw": "/redraw",
+  "/model": "/model",
+  "/quit": "/quit",
+  "/exit": "/quit",
+  "/density": "/density",
+}
+const surface = (desktop: string | null) => ({ argument_mode: null, desktop })
+const DISPOSED_CATALOG = {
+  pairs: PAIRS,
+  canon: CANON,
+  commands: {
+    "/help": surface(null),
+    "/redraw": surface("terminal"),
+    "/approve": surface("messaging"),
+    "/insights": surface("advanced"),
+    "/login": surface("settings"),
+    "/voice": surface("composer-voice"),
+    "/model": surface("hidden"),
+    // No entry for the alias `/exit`: it is dropped through `canon` alone.
+    "/quit": surface("terminal"),
+  },
+  categories: [
+    { name: "Info", pairs: [["/help", "Help"]] },
+    { name: "TUI", pairs: [["/density", "Toggle compact display"]] },
+  ],
+}
+/** The same catalog as an older Hermes writes it, saying nothing of surfaces. */
+const OLDER_CATALOG = { pairs: PAIRS, canon: CANON }
+
+it.each([
+  ["with each command's surface", DISPOSED_CATALOG, ["help", "writing-plans"]],
+  [
+    "without surfaces, as an older Hermes",
+    OLDER_CATALOG,
+    PAIRS.map(([name]) => name!.slice(1)),
+  ],
+])(
+  "lists only the commands AOS runs from a catalog %s",
+  async (_, catalog, names) => {
+    const commands = await nativeSlashCommands(
+      { request: async () => catalog },
+      {}
+    )
+
+    expect(commands.map(({ name }) => name)).toEqual(names)
+  }
+)
+
 it("keeps the capability response usable when the native catalog is unavailable", async () => {
   const adapter = new HermesServerAdapter({
     request: vi.fn(async () => {
@@ -240,6 +307,48 @@ it.each([
     ).toBe(false)
   }
 )
+
+it.each([
+  ["a hidden command", DISPOSED_CATALOG, "/model fast", "model fast"],
+  [
+    "a terminal command, from an older catalog",
+    OLDER_CATALOG,
+    "/redraw",
+    "redraw",
+  ],
+  ["a terminal command", DISPOSED_CATALOG, "/redraw", undefined],
+  ["a terminal command's alias", DISPOSED_CATALOG, "/exit", undefined],
+  ["a TUI-only command", DISPOSED_CATALOG, "/density", undefined],
+])("runs %s typed only if AOS takes it", async (_, catalog, text, command) => {
+  const request = vi.fn(async (method: string) => {
+    if (method === "commands.catalog") return catalog
+    if (method === "slash.exec") return { output: "Done" }
+    throw new Error("unexpected RPC")
+  })
+
+  const outcome = await nativeFor(request).submit("live", {
+    scope,
+    text,
+    turnId: "run",
+  })
+
+  if (command === undefined) {
+    expect(outcome).toEqual({
+      acknowledgement: "rejected",
+      reason: "command-unsupported",
+    })
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "commands.catalog",
+    ])
+  } else {
+    expect(outcome).toMatchObject({ acknowledgement: "accepted" })
+    expect(request).toHaveBeenCalledWith(
+      "slash.exec",
+      { command, session_id: "live" },
+      { maxResponseBytes: expect.any(Number) }
+    )
+  }
+})
 
 it("keeps commands whose native descriptions exceed the public limit", async () => {
   const commands = await nativeSlashCommands(

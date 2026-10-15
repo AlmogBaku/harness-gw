@@ -9,6 +9,7 @@ import {
   type Middleware,
   type WorkspaceCapabilities,
 } from "../../core/member"
+import { LEADING_PADDING } from "../../core/lifecycle-command-guard"
 
 /**
  * What a guest may ask at all. The guest listener holds one invited
@@ -40,9 +41,6 @@ const OPERATOR_ONLY = {
   status: "unavailable",
   reason: "operator-session-controls-required",
 } as const
-
-/** Leading whitespace, and the invisible characters `trimStart` keeps. */
-const LEADING_PADDING = /^[\s\u200B\u2060\uFEFF]+/u
 
 /**
  * Text a guest may not send or steer with: a slash command, which the runtime

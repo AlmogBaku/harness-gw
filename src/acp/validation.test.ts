@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { ServerTurnEndedError } from "../core/runtime"
-import { publicCodeOf, publicRequestError } from "./validation"
+import { invalidParams, publicCodeOf, publicRequestError } from "./validation"
 
 const replyOf = (cause: unknown) =>
   publicCodeOf(publicRequestError(() => undefined, cause))
@@ -21,5 +21,19 @@ describe("a prompt whose turn ended before its storage receipt", () => {
     ],
   ])("answers %s as what happened", (_, cause, reply) => {
     expect(replyOf(cause)).toBe(reply)
+  })
+
+  it("names a refused command's code, so a client can word it", () => {
+    const reply = publicRequestError(
+      () => undefined,
+      new ServerTurnEndedError("failed", "HGW_COMMAND_UNSUPPORTED", {
+        unstored: true,
+      })
+    )
+
+    expect(reply).toMatchObject({
+      code: invalidParams().code,
+      data: { code: "HGW_COMMAND_UNSUPPORTED" },
+    })
   })
 })

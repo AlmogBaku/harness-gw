@@ -184,6 +184,7 @@ uses it as the required `cwd` for `session/new` and `session/resume`.
 - Device identity and tokens are server-only. Treat pairing/authentication failures as private gateway configuration problems, never as client credentials.
 - The gateway requests device token scopes `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, and `operator.admin`. Admin scope is what lets it enable the `aos-ui` MCP server per Session; pair the gateway device with it.
 - A `pairing-required` error is terminal unless the Gateway responds with `pauseReconnect: false` or `recommendedNextStep: "wait_then_retry"`, in which case the adapter retries.
+- Every turn is sent with `suppressCommandInterpretation: true`, so OpenClaw never interprets typed text as one of its own chat commands. AOS runs its own commands in the browser.
 
 ## Verify
 

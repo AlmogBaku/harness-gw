@@ -79,6 +79,9 @@ export const TURN_FAILURES = {
   HGW_RESET_REQUIRED: { kind: "uncertain" },
   // No reconcile confirmed the turn before its deadline: it may have run.
   HGW_OUTCOME_UNKNOWN: { kind: "uncertain" },
+  // A command the runtime refused before storing anything: the caller's to fix.
+  HGW_COMMAND_WITH_ATTACHMENTS: { kind: "invalid_request" },
+  HGW_COMMAND_UNSUPPORTED: { kind: "invalid_request" },
 } as const satisfies FailureTable
 
 /** The failure a gateway-core error is, whatever the runtime behind it. */

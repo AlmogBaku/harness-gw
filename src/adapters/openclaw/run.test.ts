@@ -376,6 +376,7 @@ describe("OpenClaw run engine", () => {
           agentId: "research",
           message: "Investigate this",
           idempotencyKey: "run-a",
+          suppressCommandInterpretation: true,
         },
       },
     ])
@@ -415,6 +416,7 @@ describe("OpenClaw run engine", () => {
               fileName: "note.txt",
             },
           ],
+          suppressCommandInterpretation: true,
         },
       },
     ])

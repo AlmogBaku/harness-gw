@@ -1373,6 +1373,7 @@ export class OpenClawTurnEngine implements ServerTurnEngine {
               agentId: scope.agentId,
               message,
               idempotencyKey: input.turnId,
+              suppressCommandInterpretation: true,
             }
         if (
           encoder.encode(message).byteLength > MAX_TURN_BYTES ||

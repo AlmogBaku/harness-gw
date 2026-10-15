@@ -54,11 +54,14 @@ export function notFound() {
   return RequestError.resourceNotFound()
 }
 
-/** The JSON-RPC error a member stack's refusal travels as. */
-export function refusalError(refusal: CommandRefusal) {
+/**
+ * The JSON-RPC error a member stack's refusal travels as; an invalid one
+ * carries the refusal's `hint`.
+ */
+export function refusalError(refusal: CommandRefusal, hint?: string) {
   switch (refusal) {
     case "invalid":
-      return invalidParams()
+      return invalidParams(hint)
     case "not-found":
       return notFound()
     case "authentication-required":
@@ -190,7 +193,11 @@ export function publicRequestError(
   if (cause instanceof ServerTurnEndedError && cause.ending === "stopped")
     return RequestError.requestCancelled()
   const failure = channelFailure(cause) ?? publicError(cause)
-  return failure ? KIND_ERRORS[failure.kind]() : cause
+  if (!failure) return cause
+  // A refusal the gateway names carries its code, so a client can word it.
+  if (failure.kind === "invalid_request" && failure.code.startsWith("HGW_"))
+    return RequestError.invalidParams({ code: failure.code })
+  return KIND_ERRORS[failure.kind]()
 }
 
 /** The machine name a public reply carries `error` as, or `internal_error`. */
