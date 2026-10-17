@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { appliedMcpAppCsp, mcpAppSandboxPolicy } from "./mcp-apps"
+import {
+  appliedMcpAppCsp,
+  isMcpAppPolicyOrigin,
+  mcpAppSandboxPolicy,
+} from "./mcp-apps"
 
 const LANE = "https://aos.example.invalid"
 const LOOPBACK_LANE = "http://127.0.0.1:3000"
@@ -82,6 +86,7 @@ describe("MCP App sandbox policy", () => {
     ["the opaque origin", "null"],
     ["a socket origin", "wss://aos.example.invalid"],
   ])("refuses %s as a framing page or the sandbox origin", (_, origin) => {
+    expect(isMcpAppPolicyOrigin(origin)).toBe(false)
     expect(() =>
       mcpAppSandboxPolicy({
         frameAncestors: [LANE, origin],
@@ -91,6 +96,18 @@ describe("MCP App sandbox policy", () => {
     expect(() =>
       mcpAppSandboxPolicy({ frameAncestors: [LANE], sandboxOrigin: origin })
     ).toThrow(origin)
+  })
+
+  it("refuses a sandbox origin that is one of the framing pages', as the spec requires", () => {
+    for (const sandboxOrigin of ORIGINS.frameAncestors) {
+      expect(isMcpAppPolicyOrigin(sandboxOrigin)).toBe(true)
+      expect(() => mcpAppSandboxPolicy({ ...ORIGINS, sandboxOrigin })).toThrow(
+        sandboxOrigin
+      )
+      expect(() => appliedMcpAppCsp({ ...ORIGINS, sandboxOrigin })).toThrow(
+        sandboxOrigin
+      )
+    }
   })
 
   it("applies only the declared domains the shared rule admits, never one naming a framing page's or the sandbox's host", () => {
@@ -146,11 +163,16 @@ describe("MCP App sandbox policy", () => {
     ).toBeUndefined()
   })
 
-  it("names a file only by its exact path on a framing page's origin, and drops every other location", () => {
+  it("names a file only by its exact path on a framing page's origin, CSP syntax encoded, and drops every other location", () => {
     const kept = [
       FILE,
       `${LOOPBACK_LANE}/files/r%C3%A9sum%C3%A9.pdf`,
       `${LANE}/files/a%2Fb.pdf`,
+      `${FILE}%3B%20frame-ancestors%20*`,
+      `${FILE}%20https%3A//evil.example.invalid`,
+      `${FILE}%2C`,
+      `${LANE}/files/it%27s.pdf`,
+      `${LANE}/files/%22q%22.pdf`,
     ]
 
     const policy = mcpAppSandboxPolicy({
@@ -159,7 +181,7 @@ describe("MCP App sandbox policy", () => {
         `${FILE}?pass=p#page=2`,
         `${LOOPBACK_LANE}/files/résumé.pdf`,
         `${LANE}/files/a%2Fb.pdf`,
-        // CSP syntax.
+        // CSP syntax, which reaches the header only encoded.
         `${FILE}; frame-ancestors *`,
         `${FILE} https://evil.example.invalid`,
         `${FILE},`,

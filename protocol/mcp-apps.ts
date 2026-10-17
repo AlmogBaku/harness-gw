@@ -162,8 +162,13 @@ export type McpAppSandboxPolicyInput = {
  */
 const POLICY_ORIGIN = new RegExp(`^https?://${HOST}${PORT}$`, "u")
 
-/** Whether `value` is such an origin exactly as `URL` writes it. */
-function isPolicyOrigin(value: string) {
+/**
+ * Whether a sandbox policy can name `value` as a framing page or as the
+ * sandbox: an `http(s)` origin exactly as `URL` writes it, whose host is a name
+ * or an IPv4 address. `mcpAppSandboxPolicy` throws for any other, so a host
+ * checks its settings with this once, before it serves a view.
+ */
+export function isMcpAppPolicyOrigin(value: string): boolean {
   try {
     return POLICY_ORIGIN.test(value) && new URL(value).origin === value
   } catch {
@@ -173,16 +178,20 @@ function isPolicyOrigin(value: string) {
 
 /**
  * The hosts no declared domain may name: each framing page's and the
- * sandbox's own. Throws for an origin no policy can name.
+ * sandbox's own. Throws for an origin no policy can name, and for a sandbox
+ * origin among the framing pages'.
  */
 function ownHosts({
   frameAncestors,
   sandboxOrigin,
 }: Pick<McpAppSandboxPolicyInput, "frameAncestors" | "sandboxOrigin">) {
   const origins = [...frameAncestors, sandboxOrigin]
-  const invalid = origins.find((origin) => !isPolicyOrigin(origin))
+  const invalid = origins.find((origin) => !isMcpAppPolicyOrigin(origin))
   if (invalid !== undefined)
     throw new Error(`Not an exact origin a sandbox policy can name: ${invalid}`)
+  // The spec: "The Host and the Sandbox MUST have different origins".
+  if (frameAncestors.includes(sandboxOrigin))
+    throw new Error(`The sandbox origin is one of the host's: ${sandboxOrigin}`)
   return new Set(origins.map((origin) => new URL(origin).host))
 }
 
@@ -202,8 +211,8 @@ const CSP_LISTS = McpUiCspSchema.keyof().options
  * host reports them in `hostCapabilities.sandbox.csp`: those
  * `isMcpAppCspDomain` admits, lowercased and once each, without any that names
  * the host and port of a framing page or of the sandbox itself, whatever its
- * scheme. `undefined` when it applies none. Throws for an origin no policy can
- * name.
+ * scheme. `undefined` when it applies none. Throws as `mcpAppSandboxPolicy`
+ * does for the origins.
  */
 export function appliedMcpAppCsp({
   csp,
@@ -224,20 +233,13 @@ export function appliedMcpAppCsp({
 }
 
 /**
- * Text that ends a source, a directive, or a policy in a CSP header, or quotes
- * a keyword.
- */
-const POLICY_SYNTAX = /[\s;,'"]/u
-
-/**
  * A file location as a policy names it: its origin, one of `origins`, and its
- * path with every segment percent-encoded, without the query that carries its
- * pass. `undefined` for anything but an `http(s)` URL on one of `origins`, for
- * one carrying CSP syntax, and for a path ending in `/`, which would name every
- * path below it.
+ * path with every segment percent-encoded, a quote too, so no CSP syntax
+ * reaches the header; without the query that carries its pass. `undefined` for
+ * anything but an `http(s)` URL on one of `origins`, and for a path ending in
+ * `/`, which would name every path below it.
  */
 function policyFileLocation(value: string, origins: readonly string[]) {
-  if (POLICY_SYNTAX.test(value)) return undefined
   try {
     const url = new URL(value)
     if (
@@ -248,7 +250,9 @@ function policyFileLocation(value: string, origins: readonly string[]) {
       return undefined
     const path = url.pathname
       .split("/")
-      .map((segment) => encodeURIComponent(decodeURIComponent(segment)))
+      .map((segment) =>
+        encodeURIComponent(decodeURIComponent(segment)).replaceAll("'", "%27")
+      )
       .join("/")
     return `${url.origin}${path}`
   } catch {
@@ -269,8 +273,9 @@ const sources = (base: readonly string[], domains: readonly string[] = []) =>
  *
  * Anyone can ask for a sandbox page with any query, so every value is checked
  * before it is written: an ancestor or a sandbox origin that is no exact
- * origin throws, and a domain or a file location its rule refuses is dropped.
- * A file location is kept only on a framing page's origin.
+ * origin (`isMcpAppPolicyOrigin`) throws, as does a sandbox origin among the
+ * ancestors, and a domain or a file location its rule refuses is dropped. A
+ * file location is kept only on a framing page's origin.
  */
 export function mcpAppSandboxPolicy({
   fileLocations = [],
