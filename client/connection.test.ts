@@ -530,7 +530,7 @@ describe("ACP connection", () => {
     const connection = connectInProcess(gateway)
 
     await expect(connection.initialized).resolves.toEqual({
-      version: 2,
+      version: 3,
       role: "operator",
       extensions: expect.objectContaining({ readState: true, focus: true }),
     })
@@ -559,7 +559,7 @@ describe("ACP connection", () => {
 
     const refusal = await connection.initialized.catch((error: Error) => error)
     expect(refusal).toBeInstanceOf(Error)
-    expect((refusal as Error).message).toMatch(/version 2\b/)
+    expect((refusal as Error).message).toMatch(/version 3\b/)
     expect((refusal as Error).message).toMatch(/version 1\b/)
     await vi.waitFor(() => expect(connection.status).toBe("closed"))
     expect(statuses).not.toContain("ready")

@@ -98,6 +98,7 @@ import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { loggedId } from "../../core/identifier"
+import type { JsonValue } from "../json-value"
 import { inviteSessionKey } from "../../core/invite-key"
 import { sessionPlatform } from "../../core/session-platform"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -330,10 +331,9 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
   const revisions = nativeRevisions(profile)
   const visibility =
     bots.hidden === true ? ("hidden" as const) : ("visible" as const)
-  const creator = aos.role === "creator"
   // A stored value that is not a token reads as no avatar, never as a bad row.
   const avatar = AgentAvatarSchema.safeParse(aos.avatar)
-  const editable = revisions !== undefined && !creator
+  const editable = revisions !== undefined
   return {
     summary: {
       kind: "ready",
@@ -343,12 +343,16 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
         ? { description: trimmedText(profile.description) }
         : {}),
       visibility,
-      ...(creator ? { role: "creator" as const } : {}),
       ...(avatar.success ? { avatar: avatar.data } : {}),
       ...(aos.muted === true ? { muted: true as const } : {}),
+      // The namespace of a JSON row as stored, unread, under its own key so no
+      // stored key reaches the `_meta` root.
+      ...(Object.keys(aos).length > 0
+        ? { _meta: { aos: aos as JsonValue } }
+        : {}),
     },
     visibility,
-    selectable: visibility === "visible" && !creator,
+    selectable: visibility === "visible",
     editable,
     avatarEditable: editable,
     muteEditable: editable,
@@ -1294,8 +1298,7 @@ export class HermesServerAdapter implements ServerRuntime {
     try {
       const catalog = await this.listAgents()
       visibilityAvailable = catalog.agents.every(
-        ({ summary, revision }) =>
-          summary.role === "creator" || revision !== "unavailable"
+        ({ revision }) => revision !== "unavailable"
       )
     } catch (error) {
       if (error instanceof HermesAuthenticationError) throw error
@@ -1436,8 +1439,9 @@ export class HermesServerAdapter implements ServerRuntime {
         hidden: patch.visibility === "hidden",
       }
     if (patch.avatar !== undefined || patch.muted !== undefined) {
-      // One write from the stored keys, so `role` survives and an avatar and
-      // a mute in one patch both land; null drops the avatar, unmute the key.
+      // One write from the stored keys, so every other key survives and an
+      // avatar and a mute in one patch both land; null drops the avatar,
+      // unmute the key.
       const aos = { ...nativeNamespace(profile, "aos") }
       if (patch.avatar === null) delete aos.avatar
       else if (patch.avatar !== undefined) aos.avatar = patch.avatar

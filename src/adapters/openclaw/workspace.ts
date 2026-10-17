@@ -117,12 +117,6 @@ function agentName(agent: OpenClawAgent) {
   return agent.identity?.name ?? agent.name ?? agent.id
 }
 
-/**
- * OpenClaw's closed Agent summary has no field for a role, so the operator
- * installs the gateway's creator under this reserved Agent id.
- */
-export const OPENCLAW_CREATOR_AGENT_ID = "aos-agent-creator"
-
 function isVisiblePrimaryAgent(
   agent: OpenClawAgent,
   hidden: ReadonlySet<string>
@@ -136,8 +130,6 @@ function isVisiblePrimaryAgent(
 }
 
 function projectAgent(agent: OpenClawAgent, configured: ReadonlySet<string>) {
-  const creator = agent.id === OPENCLAW_CREATOR_AGENT_ID
-  const visibility = creator ? ("hidden" as const) : ("visible" as const)
   // A stored value that is not a token (a file path, a URL) reads as none.
   const avatar = AgentAvatarSchema.safeParse(agent.identity?.avatar)
   return {
@@ -146,14 +138,13 @@ function projectAgent(agent: OpenClawAgent, configured: ReadonlySet<string>) {
       id: agent.id,
       name: agentName(agent),
       ...(avatar.success ? { avatar: avatar.data } : {}),
-      ...(creator ? { visibility, role: "creator" as const } : {}),
     },
-    visibility,
-    selectable: !creator,
+    visibility: "visible" as const,
+    selectable: true,
     editable: false,
     // Only an Agent with its own authored entry can take a merge-by-id patch;
     // the implicit default Agent has none.
-    avatarEditable: !creator && configured.has(agent.id),
+    avatarEditable: configured.has(agent.id),
     // OpenClaw has no native place to keep a mute.
     muteEditable: false,
     revision: revision(agent),
@@ -513,8 +504,6 @@ export function createOpenClawWorkspace(input: {
       )
         throw new ServerAgentUpdateUnsupportedError()
       const agent = await requireVisibleAgent(agentId)
-      if (agent.id === OPENCLAW_CREATOR_AGENT_ID)
-        throw new ServerAgentUpdateUnsupportedError()
       if (revision(agent) !== observedRevision)
         throw new OpenClawWorkspaceRevisionConflictError()
       const configured = await readConfiguredAgents()

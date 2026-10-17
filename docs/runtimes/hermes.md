@@ -233,29 +233,17 @@ To look up the call's input when the App opens, the gateway pages the stored raw
 rows with `GET /api/sessions/:id/messages`. Hermes stores a call's row before
 the tool runs, so a call whose turn is still live is found.
 
-## Creator profile
+## Agent metadata
 
-The creator behind **New Agent** is an ordinary profile, conventionally
-`aos-agent-creator`, that loads the `aos-agent-creator` skill. Its marker lives
-in its `profile.yaml`, and no `hermes` command sets it; the gateway keeps the
-marked profile out of the Agent roster and management surfaces:
+The catalog passes each profile's `ui_meta.aos` namespace, as stored, as the
+Agent summary's `_meta.aos`; a profile with no such namespace, or an empty one,
+carries no `_meta`. The gateway reads nothing inside it and gives no key a
+meaning: a client reads its own keys there, such as the `role: creator` marker
+AOS UI looks for, and the profile's visibility, editability, and pushes follow
+the same rules as every other profile's.
 
-```yaml
-ui_meta:
-  aos:
-    role: creator
-  hermes-bots:
-    hidden: true
-```
-
-The marker grants no authority. After the user confirms a definition, the
-creator writes the new profile with `hermes profile create` and the other
-steps in the skill's `reference/harness-hermes.md`, so it needs Hermes's
-terminal tool. AOS shows the new Agent once Hermes lists it, and the draft
-**New Agent** row resolves into it. A freshly provisioned profile has no
-credentials for its model: Hermes copies a new profile's model block but not
-its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
-another profile's tokens into it.
+Every key in `ui_meta.aos` reaches the operator's browser, so it must never hold
+a path, a token, or any other private value.
 
 ## Agent icons and mute
 
@@ -272,13 +260,13 @@ that `profiles.list` returns in `ui_meta_revisions`.
 `_hgw/agents/update` writes the avatar, the mute, and visibility with one
 `profiles.configure` call. That call sends only the `ui_meta` namespaces the
 patch touches, each paired with its current `ui_meta_expected_revisions` entry.
-The `aos` namespace is written whole from the stored keys, so `role` survives
-and a patch carrying both an avatar and a mute writes both. Passing `null` for
-the avatar removes that key, and `muted: false` removes `muted`. The update
-re-lists the profiles and fails unless they show every field it wrote.
+The `aos` namespace is written whole from the stored keys, so every other key
+in it survives and a patch carrying both an avatar and a mute writes both.
+Passing `null` for the avatar removes that key, and `muted: false` removes
+`muted`. The update re-lists the profiles and fails unless they show every field
+it wrote.
 
-`avatarEditable` and `muteEditable` equal `editable` for every profile. The
-creator profile is never writable.
+`avatarEditable` and `muteEditable` equal `editable` for every profile.
 
 Session `createdAt` comes from the Session row's `started_at` (epoch seconds).
 

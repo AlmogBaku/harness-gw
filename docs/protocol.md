@@ -20,7 +20,7 @@ Native runtimes keep their own transports behind the gateway (`src/adapters/`);
 
 `initialize` answers ACP's `protocolVersion: 2` and, in its top-level
 `_meta.hgw.version`, the version of this extension (`HGW_EXTENSION_VERSION`,
-now `2`). A breaking change to anything in this document raises it; an
+now `3`). A breaking change to anything in this document raises it; an
 addition (a new method, notification, field or extension flag a client may
 ignore) does not. A client that speaks another version must refuse the
 connection rather than guess: the SDK client fails `initialized` with an error
@@ -111,7 +111,7 @@ The `initialize` response's `_meta.hgw` (`HgwInitializeMetaSchema`):
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "role": "operator | guest",
   "extensions": {
     "steer": true,
@@ -560,6 +560,14 @@ store a mute for that Agent, beside `editable` and `avatarEditable`. Its
 when it is not. Only Hermes stores a mute; see
 [the runtime notes](runtimes/hermes.md#agent-icons-and-mute).
 
+A `summary` may also carry `_meta`, the harness's native metadata for the
+Agent, passed through unread: the gateway neither checks nor interprets
+anything inside it. It is unvalidated harness data, so a client must not trust
+it as it trusts `avatar`, which the gateway checks is a token. Hermes sends
+`_meta.aos`, the profile's `ui_meta.aos` as stored (see
+[the runtime notes](runtimes/hermes.md#agent-metadata)); OpenClaw and OpenCode
+send no `_meta`.
+
 A successful update tells every operator connection
 `_hgw/catalog_invalidated`, and push delivery applies it from the next
 notification (see [Web Push payload](#web-push-payload)).
@@ -957,16 +965,15 @@ category, which named no Session when it counted several.
   characters removed, whitespace collapsed, credentials masked (see
   [Credential masking](#credential-masking)), and cut at a code-point
   boundary ending in `…`. An Agent's name travels only for a visible,
-  selectable Agent that is not the creator.
-- **Quiet Agents.** No message is sent for an Agent that is muted, or hidden
-  and not the creator. A creator's Session, and an Agent the catalog does not
-  hold, still send, unnamed. The gateway learns this from the Agent catalog on
-  every delivery: one read answers for 60 s, a delivery waits at most 1 s for
-  a new one, and a slow or failed read leaves the last read that succeeded to
-  answer, however old. With no read ever succeeded, the message goes without
-  a name. An Agent update made through the gateway applies from the next
-  delivery, even while reads fail. A skipped Session is logged with its count
-  only, never its Agent.
+  selectable Agent.
+- **Quiet Agents.** A muted or hidden Agent sends no push. An Agent the
+  catalog does not hold still sends, unnamed. The gateway learns this from the
+  Agent catalog on every delivery: one read answers for 60 s, a delivery waits
+  at most 1 s for a new one, and a slow or failed read leaves the last read that
+  succeeded to answer, however old. With no read ever succeeded, the message
+  goes without a name. An Agent update made through the gateway applies from
+  the next delivery, even while reads fail. A skipped Session is logged with its
+  count only, never its Agent.
 - **Fresh devices.** Only a registration stored in the last 30 days receives
   `agentName`, `sessionTitle`, `requestText` and `requestMore`; an older one
   receives the ids alone until the browser registers it again with

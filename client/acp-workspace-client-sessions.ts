@@ -41,8 +41,6 @@ type MetadataSubscription = {
 export type AcpSessionStoreOptions = {
   connection: AcpConnection
   now?: () => number
-  /** A live turn of a subscribed Session just stopped, however it ended. */
-  onTurnFinished?: (sessionId: string) => void
   /** Where a listener that throws is told; the others still hear. */
   logger?: Logger
 }
@@ -127,7 +125,6 @@ function sameRow(left: SessionMetadata | undefined, right: SessionMetadata) {
 export function createAcpSessionStore({
   connection,
   now = Date.now,
-  onTurnFinished,
   logger = SILENT_LOGGER,
 }: AcpSessionStoreOptions) {
   const rows = new Map<string, SessionMetadata>()
@@ -268,13 +265,7 @@ export function createAcpSessionStore({
     if (SessionUpdate.isStateUpdate(update)) {
       const status = statusFromState(update)
       if (replaying.has(sessionId)) return void replaying.set(sessionId, status)
-      const previous = rows.get(sessionId)?.status
       patch(sessionId, { status })
-      if (
-        (previous === "running" || previous === "waiting-for-input") &&
-        (status === "idle" || status === "failed")
-      )
-        onTurnFinished?.(sessionId)
       return
     }
     if (SessionUpdate.isSessionInfoUpdate(update)) {
@@ -438,8 +429,6 @@ export function createAcpSessionStore({
         if (!listeners.size) todoListeners.delete(sessionId)
       }
     },
-
-    emitActivity,
 
     subscribeActivity(listener: (event: WorkspaceActivityEvent) => void) {
       activityListeners.add(listener)

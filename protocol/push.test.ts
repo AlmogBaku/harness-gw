@@ -20,9 +20,7 @@ describe("push contract", () => {
   it("maps lifecycle events to the three categories and ignores the rest", () => {
     expect(categoryOf("attention-requested")).toBe("input")
     expect(categoryOf("turn-failed")).toBe("failure")
-    expect(categoryOf("agent-activation-failed")).toBe("failure")
     expect(categoryOf("turn-finished")).toBe("completion")
-    expect(categoryOf("agent-ready")).toBe("completion")
     expect(categoryOf("turn-started")).toBeUndefined()
     expect(categoryOf("attention-resolved")).toBeUndefined()
   })

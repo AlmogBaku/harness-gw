@@ -72,7 +72,7 @@ export interface PushDispatcher {
  * Turns the coordinator's execution events into device pushes: one window per
  * principal and category, gated by what the workspace already shows, then one
  * push per Session to every device that asked for that category. A quiet
- * Agent, muted or hidden and not the creator, sends none. A device registered
+ * Agent, muted or hidden, sends none. A device registered
  * in the last 30 days is also told the Agent's name, the Session's title, and
  * what is asked; the lines this writes name none of them, and no Agent,
  * device, or Session either.

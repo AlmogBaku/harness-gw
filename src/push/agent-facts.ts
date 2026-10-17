@@ -14,21 +14,20 @@ const LOOKUP_TIMEOUT_MS = 1_000
 export type AgentFacts = {
   /** The name a lock screen may show, when the Agent has one to show. */
   name?: string
-  /** The Agent sends no push: it is muted, or hidden and not the creator. */
+  /** The Agent sends no push: it is muted or hidden. */
   quiet: boolean
 }
 
 /**
  * An Agent the catalog does not hold, or a catalog never read: its push goes,
- * unnamed. A creator's Session, or one an Agent being created holds, does too.
+ * unnamed.
  */
 function factsOf(entry: AgentCatalogEntry | undefined): AgentFacts {
   if (!entry) return { quiet: false }
   const { visibility, selectable, summary } = entry
-  const creator = summary.role === "creator"
-  const quiet = summary.muted === true || (visibility === "hidden" && !creator)
+  const quiet = summary.muted === true || visibility === "hidden"
   const name =
-    !quiet && visibility === "visible" && selectable && !creator
+    !quiet && selectable
       ? previewText(summary.name, PUSH_TEXT_LIMITS.agentName)
       : undefined
   return name ? { name, quiet } : { quiet }

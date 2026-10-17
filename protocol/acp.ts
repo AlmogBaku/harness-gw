@@ -68,7 +68,7 @@ export function hgwAcpAgentPath(agentId: string) {
   return `${HGW_ACP_AGENTS_PATH}/${encodeURIComponent(agentId)}`
 }
 export const HGW_META_KEY = "hgw" as const
-export const HGW_EXTENSION_VERSION = 2 as const
+export const HGW_EXTENSION_VERSION = 3 as const
 export const HGW_AUTH_METHOD_INVITE = "hgw-invite" as const
 export const HGW_ATTACHMENT_URI_SCHEME = "hgw-attachment:" as const
 export const HGW_ARTIFACT_URI_SCHEME = "artifact:" as const

@@ -380,22 +380,10 @@ describe("push dispatcher", () => {
 
   it.each<[string, AgentCatalogEntry, "quiet" | "unnamed"]>([
     ["muted", muted(entry(AGENT, "Researcher")), "quiet"],
-    [
-      "hidden and not the creator",
-      entry(AGENT, "Researcher", { visibility: "hidden" }),
-      "quiet",
-    ],
+    ["hidden", entry(AGENT, "Researcher", { visibility: "hidden" }), "quiet"],
     [
       "not selectable",
       entry(AGENT, "Researcher", { selectable: false }),
-      "unnamed",
-    ],
-    [
-      "the creator",
-      entry(AGENT, "Creator", {
-        visibility: "hidden",
-        summary: { kind: "ready", id: AGENT, name: "Creator", role: "creator" },
-      }),
       "unnamed",
     ],
     ["not in the catalog", entry("writer", "Writer"), "unnamed"],

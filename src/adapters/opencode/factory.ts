@@ -32,13 +32,12 @@ export type OpenCodeRuntimeParts = Pick<
 > &
   Readonly<{
     client: OpenCodeAdapterClient
-    creatorAgentId?: string
     /** Test-only override; production builds exactly one native turn engine. */
     turns?: ServerTurnEngine
   }>
 
 export type OpenCodeRuntimeFactoryDependencies = RuntimeServices &
-  Pick<OpenCodeRuntimeParts, "creatorAgentId" | "turns"> &
+  Pick<OpenCodeRuntimeParts, "turns"> &
   Readonly<{
     clientFactory?: (options: OpenCodeClientOptions) => OpenCodeAdapterClient
   }>
@@ -51,7 +50,6 @@ export function composeOpenCodeRuntime({
   client,
   logger,
   mcpServerOverrides,
-  creatorAgentId,
   turns: turnsOverride,
 }: OpenCodeRuntimeParts) {
   const interactions = new OpenCodeInteractions({
@@ -81,7 +79,6 @@ export function composeOpenCodeRuntime({
         client,
         turns,
         interactions,
-        creatorAgentId,
         logger,
         ...(engine ? { link: engine.link } : {}),
         ...(mcp ? { mcp } : {}),
@@ -127,7 +124,6 @@ export async function createOpenCodeRuntime(
       client,
       logger,
       mcpServerOverrides: dependencies.mcpServerOverrides,
-      creatorAgentId: dependencies.creatorAgentId,
       turns: dependencies.turns,
     }),
     limits,

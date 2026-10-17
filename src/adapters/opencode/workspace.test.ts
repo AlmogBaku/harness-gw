@@ -35,55 +35,29 @@ function stubClient(
 }
 
 describe("OpenCode workspace operations", () => {
-  it("hides the creator and returns only exact-Agent owned Sessions in stable recent order", async () => {
+  it("returns only exact-Agent owned Sessions in stable recent order", async () => {
     const operations = createOpenCodeWorkspaceOperations({
-      client: stubClient(
-        {
-          list: async () => ({
-            data: [
-              session({ id: "older", time: { created: 1, updated: 10 } }),
-              session({
-                id: "foreign",
-                agent: "other",
-                time: { created: 1, updated: 90 },
-              }),
-              session({ id: "newer", time: { created: 1, updated: 90 } }),
-              session({
-                id: "unowned",
-                agent: undefined,
-                time: { created: 1, updated: 100 },
-              }),
-            ],
-            cursor: {},
-          }),
-        },
-        async () => ({
+      client: stubClient({
+        list: async () => ({
           data: [
-            {
-              id: "creator",
-              description: "private",
-              mode: "primary",
-              hidden: false,
-              permissions: [],
-              request: {},
-            },
-            {
-              id: "research",
-              description: "Research",
-              mode: "primary",
-              hidden: false,
-              permissions: [],
-              request: {},
-            },
+            session({ id: "older", time: { created: 1, updated: 10 } }),
+            session({
+              id: "foreign",
+              agent: "other",
+              time: { created: 1, updated: 90 },
+            }),
+            session({ id: "newer", time: { created: 1, updated: 90 } }),
+            session({
+              id: "unowned",
+              agent: undefined,
+              time: { created: 1, updated: 100 },
+            }),
           ],
-        })
-      ),
-      creatorAgentId: "creator",
+          cursor: {},
+        }),
+      }),
     })
 
-    await expect(operations.listAgents()).resolves.toMatchObject({
-      agents: [{ summary: { id: "research" } }],
-    })
     await expect(operations.listSessions("research", 50, 0)).resolves.toEqual({
       sessions: [
         {

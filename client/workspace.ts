@@ -72,7 +72,6 @@ export type WorkspaceActivityEvent =
       requestMore?: number
     })
   | (ActivityBase & { type: "attention-resolved"; requestId: string })
-  | (ActivityBase & { type: "agent-ready" | "agent-activation-failed" })
 
 export type SessionMetadata = {
   sessionId: string

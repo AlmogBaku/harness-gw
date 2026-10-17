@@ -9,7 +9,6 @@ import {
 } from "./client"
 import { OpenClawNativePayloadError } from "./native-schemas"
 import {
-  OPENCLAW_CREATOR_AGENT_ID,
   OpenClawWorkspaceOwnershipError,
   OpenClawWorkspaceRevisionConflictError,
   OpenClawWorkspaceUnavailableError,
@@ -68,39 +67,6 @@ describe("OpenClaw workspace reads", () => {
         revision: expect.any(String),
       },
     ])
-  })
-
-  it("[CL1-WORKSPACE-013] reports the reserved creator Agent as a hidden creator", async () => {
-    const workspace = createOpenClawWorkspace({
-      client: gateway({
-        "agents.list": agentCatalog([
-          { id: "analyst", name: "Analyst", kind: "agent" },
-          {
-            id: OPENCLAW_CREATOR_AGENT_ID,
-            name: "Agent Creator",
-            kind: "agent",
-          },
-        ]),
-      }),
-    })
-
-    const result = await workspace.listAgents()
-
-    expect(result.agents).toContainEqual({
-      summary: {
-        kind: "ready",
-        id: OPENCLAW_CREATOR_AGENT_ID,
-        name: "Agent Creator",
-        visibility: "hidden",
-        role: "creator",
-      },
-      visibility: "hidden",
-      selectable: false,
-      editable: false,
-      avatarEditable: false,
-      muteEditable: false,
-      revision: expect.any(String),
-    })
   })
 
   it("[CL1-WORKSPACE-002] leaves a row whose declared owner disagrees out of a list, and refuses it on a lookup", async () => {
@@ -277,7 +243,7 @@ describe("OpenClaw workspace reads", () => {
     // What survives a skip holds no Agent a person can pick.
     agents = [
       { id: "system", name: "System", kind: "system" },
-      { id: OPENCLAW_CREATOR_AGENT_ID, name: "Creator", kind: "agent" },
+      { id: "hidden", name: "Hidden", kind: "agent" },
       { id: "broken", name: "Broken", kind: "robot" },
     ]
     await expect(workspace.listAgents()).rejects.toBeInstanceOf(
@@ -916,20 +882,15 @@ function leaks(value: unknown) {
 }
 
 describe("OpenClaw Agent avatars", () => {
-  it("[CL1-WORKSPACE-015] reads only a token avatar and lets only a configured non-creator Agent edit it", async () => {
+  it("[CL1-WORKSPACE-015] reads only a token avatar and lets only a configured Agent edit it", async () => {
     const native = configuredGateway({
       agents: [
         { id: "agent-a", kind: "agent", identity: { avatar: "ring/blue" } },
         { id: "agent-b", kind: "agent", identity: { avatar: "avatars/b.png" } },
         { id: "main", kind: "agent" },
-        {
-          id: OPENCLAW_CREATOR_AGENT_ID,
-          kind: "agent",
-          identity: { avatar: "ring/green" },
-        },
       ],
       // The implicit default `main` has no entry of its own.
-      configured: ["agent-a", "agent-b", OPENCLAW_CREATOR_AGENT_ID],
+      configured: ["agent-a", "agent-b"],
     })
     const workspace = createOpenClawWorkspace({ client: native })
 
@@ -945,11 +906,6 @@ describe("OpenClaw Agent avatars", () => {
     ).toEqual([
       { id: "agent-a", avatar: "ring/blue", avatarEditable: true },
       { id: "agent-b", avatar: undefined, avatarEditable: true },
-      {
-        id: OPENCLAW_CREATOR_AGENT_ID,
-        avatar: "ring/green",
-        avatarEditable: false,
-      },
       { id: "main", avatar: undefined, avatarEditable: false },
     ])
     expect(leaks(catalog)).toBe(false)
@@ -1082,9 +1038,8 @@ describe("OpenClaw Agent avatars", () => {
       agents: [
         { id: "agent-a", kind: "agent" },
         { id: "main", kind: "agent" },
-        { id: OPENCLAW_CREATOR_AGENT_ID, kind: "agent" },
       ],
-      configured: ["agent-a", OPENCLAW_CREATOR_AGENT_ID],
+      configured: ["agent-a"],
     })
     const workspace = createOpenClawWorkspace({ client: native })
     const catalog = await workspace.listAgents()
@@ -1107,13 +1062,11 @@ describe("OpenClaw Agent avatars", () => {
     }
     expect(native.requests).toEqual([])
 
-    for (const id of ["main", OPENCLAW_CREATOR_AGENT_ID]) {
-      const error = await rejection(
-        workspace.updateAgent(id, { avatar: "ring/blue" }, revisionOf(id))
-      )
-      expect(error).toBeInstanceOf(ServerAgentUpdateUnsupportedError)
-      expect(leaks(error)).toBe(false)
-    }
+    const error = await rejection(
+      workspace.updateAgent("main", { avatar: "ring/blue" }, revisionOf("main"))
+    )
+    expect(error).toBeInstanceOf(ServerAgentUpdateUnsupportedError)
+    expect(leaks(error)).toBe(false)
     await expect(
       workspace.updateAgent("agent-z", { avatar: "ring/blue" }, "any")
     ).rejects.toBeInstanceOf(OpenClawWorkspaceOwnershipError)
