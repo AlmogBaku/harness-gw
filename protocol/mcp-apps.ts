@@ -130,44 +130,173 @@ export type McpAppResourceReadRequest = z.infer<
 >
 
 /**
- * The MCP App sandbox gateway: a static page, served beside the workspace on
- * every listener, that holds only the relay creating the App's own frame. It
- * is a real document rather than `srcdoc` so it carries this policy instead of
- * inheriting the embedding page's, which on the guest surface forbids inline
- * scripts. The App frame inherits it too, so it is the widest any view may
- * reach — every source `buildMcpAppCsp` can grant — and the view's own policy,
- * injected into its document, narrows it to what it declared.
+ * The MCP App sandbox page: a static page that holds only the relay creating
+ * the App's own frame. A host serves it from a sandbox origin of its own,
+ * apart from its pages' origins as the spec requires, and frames it with
+ * `allow-scripts allow-same-origin`, so the view runs on that origin with
+ * storage of its own. The page is a real document rather than `srcdoc` so it
+ * carries the view's own policy, `mcpAppSandboxPolicy`, as its header; the
+ * view's `srcdoc` frame inherits it.
  */
 export const MCP_APP_SANDBOX_PATH = "/mcp-app-sandbox.html"
 
-/** CSP has no syntax for an IPv6 literal, so `[::1]` cannot be named here. */
-const LOOPBACK_SOURCES = (scheme: "http" | "ws") =>
-  ["127.0.0.1", "localhost", "*.localhost"].map(
-    (host) => `${scheme}://${host}:*`
-  )
+/** What one view's sandbox policy is built from. */
+export type McpAppSandboxPolicyInput = {
+  /**
+   * The exact origins of the host's own pages, the only ones that may frame
+   * the sandbox page.
+   */
+  frameAncestors: readonly string[]
+  /** The exact origin the sandbox page is served from. */
+  sandboxOrigin: string
+  /** The view's declared `_meta.ui.csp`. */
+  csp?: McpUiCsp | undefined
+  /** The call's absolute file addresses; no pass is written. */
+  fileLocations?: readonly string[] | undefined
+}
 
-export const MCP_APP_SANDBOX_CSP = [
-  "default-src 'none'",
-  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https:",
-  "style-src 'self' 'unsafe-inline' https:",
-  "img-src 'self' data: https:",
-  "font-src 'self' data: https:",
-  // A view plays the call's own media straight from its file address, which
-  // a loopback gateway serves over http.
-  ["media-src 'self' data: https:", ...LOOPBACK_SOURCES("http")].join(" "),
-  [
-    "connect-src https: wss:",
-    ...LOOPBACK_SOURCES("http"),
-    ...LOOPBACK_SOURCES("ws"),
-  ].join(" "),
-  // A view authors its own workers as blob or data URLs, since the sandbox
-  // fetches no script by address. Chromium starts no module worker from a blob
-  // URL in an opaque origin, so a module worker, such as MapLibre's, comes as a
-  // data URL.
-  "worker-src 'self' blob: data:",
-  "frame-src https:",
-  "base-uri https:",
-  "object-src 'none'",
-  "form-action 'none'",
-  "frame-ancestors 'self'",
-].join("; ")
+/**
+ * An `http(s)` origin whose host CSP can name. CSP has no syntax for an IPv6
+ * literal, and `URL` admits hosts holding `;` or a quote, which would end a
+ * directive or a source.
+ */
+const POLICY_ORIGIN = new RegExp(`^https?://${HOST}${PORT}$`, "u")
+
+/** Whether `value` is such an origin exactly as `URL` writes it. */
+function isPolicyOrigin(value: string) {
+  try {
+    return POLICY_ORIGIN.test(value) && new URL(value).origin === value
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The hosts no declared domain may name: each framing page's and the
+ * sandbox's own. Throws for an origin no policy can name.
+ */
+function ownHosts({
+  frameAncestors,
+  sandboxOrigin,
+}: Pick<McpAppSandboxPolicyInput, "frameAncestors" | "sandboxOrigin">) {
+  const origins = [...frameAncestors, sandboxOrigin]
+  const invalid = origins.find((origin) => !isPolicyOrigin(origin))
+  if (invalid !== undefined)
+    throw new Error(`Not an exact origin a sandbox policy can name: ${invalid}`)
+  return new Set(origins.map((origin) => new URL(origin).host))
+}
+
+/** Whether a declared domain names one of `hosts`, its scheme aside. */
+function namesHost(domain: string, hosts: ReadonlySet<string>) {
+  try {
+    return hosts.has(new URL(domain).host)
+  } catch {
+    return false
+  }
+}
+
+const CSP_LISTS = McpUiCspSchema.keyof().options
+
+/**
+ * The domains a view's sandbox policy applies, per `_meta.ui.csp` list, as a
+ * host reports them in `hostCapabilities.sandbox.csp`: those
+ * `isMcpAppCspDomain` admits, lowercased and once each, without any that names
+ * the host and port of a framing page or of the sandbox itself, whatever its
+ * scheme. `undefined` when it applies none. Throws for an origin no policy can
+ * name.
+ */
+export function appliedMcpAppCsp({
+  csp,
+  ...origins
+}: Omit<McpAppSandboxPolicyInput, "fileLocations">): McpUiCsp | undefined {
+  const own = ownHosts(origins)
+  const applied: McpUiCsp = {}
+  for (const list of CSP_LISTS) {
+    const domains = new Set(
+      (csp?.[list] ?? [])
+        .filter((domain) => isMcpAppCspDomain(list, domain))
+        .map((domain) => domain.toLowerCase())
+        .filter((domain) => !namesHost(domain, own))
+    )
+    if (domains.size > 0) applied[list] = [...domains]
+  }
+  return Object.keys(applied).length > 0 ? applied : undefined
+}
+
+/**
+ * Text that ends a source, a directive, or a policy in a CSP header, or quotes
+ * a keyword.
+ */
+const POLICY_SYNTAX = /[\s;,'"]/u
+
+/**
+ * A file location as a policy names it: its origin, one of `origins`, and its
+ * path with every segment percent-encoded, without the query that carries its
+ * pass. `undefined` for anything but an `http(s)` URL on one of `origins`, for
+ * one carrying CSP syntax, and for a path ending in `/`, which would name every
+ * path below it.
+ */
+function policyFileLocation(value: string, origins: readonly string[]) {
+  if (POLICY_SYNTAX.test(value)) return undefined
+  try {
+    const url = new URL(value)
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      !origins.includes(url.origin) ||
+      url.pathname.endsWith("/")
+    )
+      return undefined
+    const path = url.pathname
+      .split("/")
+      .map((segment) => encodeURIComponent(decodeURIComponent(segment)))
+      .join("/")
+    return `${url.origin}${path}`
+  } catch {
+    return undefined
+  }
+}
+
+const sources = (base: readonly string[], domains: readonly string[] = []) =>
+  [...base, ...domains].join(" ") || "'none'"
+
+/**
+ * One view's sandbox policy, sent as the sandbox page's header: the MCP Apps
+ * default policy (spec 2026-01-26), widened only by the domains
+ * `appliedMcpAppCsp` keeps and by the call's own file locations, each by its
+ * exact path, to read and to play; never allowing plugins or form posts, and
+ * framed only by `frameAncestors`. Views may compile WebAssembly, as a
+ * document renderer's decoders do.
+ *
+ * Anyone can ask for a sandbox page with any query, so every value is checked
+ * before it is written: an ancestor or a sandbox origin that is no exact
+ * origin throws, and a domain or a file location its rule refuses is dropped.
+ * A file location is kept only on a framing page's origin.
+ */
+export function mcpAppSandboxPolicy({
+  fileLocations = [],
+  ...view
+}: McpAppSandboxPolicyInput): string {
+  const applied = appliedMcpAppCsp(view) ?? {}
+  // The view reads its files, and plays one that is media, at their locations.
+  const files = fileLocations.flatMap(
+    (location) => policyFileLocation(location, view.frameAncestors) ?? []
+  )
+  const resource = applied.resourceDomains ?? []
+  return [
+    "default-src 'none'",
+    `script-src ${sources(["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"], resource)}`,
+    `style-src ${sources(["'self'", "'unsafe-inline'"], resource)}`,
+    `img-src ${sources(["'self'", "data:"], resource)}`,
+    `font-src ${sources(["'self'", "data:"], resource)}`,
+    `media-src ${sources(["'self'", "data:"], [...resource, ...files])}`,
+    `connect-src ${sources(applied.connectDomains ?? [], files)}`,
+    // A view authors its own workers as blob or data URLs, since the sandbox
+    // fetches no script by address; both carry only text the view already ran.
+    "worker-src 'self' blob: data:",
+    `frame-src ${sources([], applied.frameDomains)}`,
+    `base-uri ${sources([], applied.baseUriDomains)}`,
+    "object-src 'none'",
+    "form-action 'none'",
+    `frame-ancestors ${sources([], view.frameAncestors)}`,
+  ].join("; ")
+}
