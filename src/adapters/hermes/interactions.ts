@@ -20,6 +20,10 @@ import { createHash } from "node:crypto"
 
 import { INTERACTION_PROTOCOL } from "../../../protocol"
 import {
+  MAX_ANSWER_STRING_BYTES,
+  MAX_QUESTION_TEXT_BYTES,
+} from "../../core/limits"
+import {
   PendingRequestKind,
   ReplyStatus,
   type PendingQuestion,
@@ -179,11 +183,11 @@ const HELD_METHODS = new Set([
  * and `maxStringBytes` names the protocol's largest value.
  */
 export const HERMES_INTERACTION_LIMITS = Object.freeze({
-  maxNativePayloadBytes: 512 * 1024,
+  maxNativePayloadBytes: MAX_QUESTION_TEXT_BYTES,
   maxDepth: 8,
   maxQuestions: 32,
   maxChoicesPerQuestion: 64,
-  maxStringBytes: 1_000_000,
+  maxStringBytes: MAX_ANSWER_STRING_BYTES,
   maxPending: 64,
 })
 
@@ -786,7 +790,7 @@ export class HermesInteractions {
   }
 
   /** An answer to one of this Session's requests is still on its way to Hermes. */
-  delivering(scope: HermesInteractionScope) {
+  answering(scope: HermesInteractionScope) {
     return [...this.#pending.values()].some(
       (interaction) =>
         sameSession(interaction.scope, scope) && interaction.delivery

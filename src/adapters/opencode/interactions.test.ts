@@ -193,15 +193,15 @@ describe("OpenCodeInteractions", () => {
     const reply = vi.fn(async () => undefined)
     const interactions = newInteractions(reply)
     const explanation = "המשמרת כוללת את ימי ההכנה. ".repeat(400)
-    const question = "למה? ".repeat(1_000)
+    const long = "למה? ".repeat(1_000)
     interactions.acceptQuestion(scope, {
       id: "native-question-id",
       sessionID: "native-session-1",
       questions: [
         {
-          header: "Why",
-          question,
-          options: [{ label: "Because", description: "Short" }],
+          header: long,
+          question: long,
+          options: [{ label: long, description: long }],
         },
         {
           header: "Checks",
@@ -215,6 +215,16 @@ describe("OpenCodeInteractions", () => {
       ],
     })
 
+    // One question takes one answer, however long.
+    await expect(
+      interactions.respond(scope, [
+        {
+          requestId: "native-question-id",
+          status: "resolved",
+          payload: { answers: [[explanation, "Because"], ["Lint"]] },
+        },
+      ])
+    ).rejects.toMatchObject({ code: "HGW_INVALID_INTERACTION" })
     await expect(
       interactions.respond(scope, [
         {

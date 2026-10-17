@@ -38,7 +38,7 @@ function stubInteractions() {
       }
     ),
     answer: vi.fn(async () => [{ status: "resolved" }]),
-    delivering: vi.fn(() => false),
+    answering: vi.fn(() => false),
     resume: vi.fn(async () => ({ running: false, status: "idle" as const })),
     raise(request: PendingRequest) {
       for (const listener of [...listeners]) listener(request)

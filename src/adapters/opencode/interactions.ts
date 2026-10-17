@@ -6,18 +6,13 @@ import {
   type PendingRequest,
 } from "../../core/events"
 
+import { MAX_QUESTION_TEXT_BYTES } from "../../core/limits"
 import { OpenCodeMutationUncertainError } from "./client"
 
 const MAX_PENDING = 64
 const MAX_QUESTIONS = 32
 const MAX_OPTIONS = 64
 const MAX_TEXT_BYTES = 4_096
-/**
- * OpenCode bounds none of a question's words (1.19.0
- * `packages/schema/src/question.ts`), so a question is read whole up to the
- * bound a Hermes request has.
- */
-const MAX_QUESTION_TEXT_BYTES = 512 * 1024
 export type OpenCodeInteractionScope = {
   agentId: string
   providerSessionId: string
@@ -464,9 +459,10 @@ export class OpenCodeInteractions {
         answer.some((raw) => typeof raw !== "string")
       )
         throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
-      // OpenCode bounds no answer, and the form takes any text where the
-      // question allows it beside every choice of a multi-select; a value
-      // given twice is one answer.
+      // OpenCode bounds no answer (1.19.0 `packages/schema/src/question.ts`),
+      // and the form takes any text where the question allows it beside every
+      // choice of a multi-select; an empty value is none, and a value given
+      // twice is one answer.
       const selected = [...new Set((answer as string[]).filter(Boolean))]
       if (
         (!q.multiple && selected.length > 1) ||

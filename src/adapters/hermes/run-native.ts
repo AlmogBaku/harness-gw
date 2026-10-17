@@ -234,7 +234,7 @@ export type HermesNativeInteractions = {
     scope: HermesTurnScope & { turnId: string },
     replies: readonly RequestReply[]
   ): Promise<readonly { status: string }[]>
-  delivering(scope: HermesTurnScope): boolean
+  answering(scope: HermesTurnScope): boolean
   resume(
     scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
@@ -889,7 +889,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
   }
 
   answering(scope: HermesTurnScope) {
-    return this.#interactions.delivering(scope)
+    return this.#interactions.answering(scope)
   }
 
   /**

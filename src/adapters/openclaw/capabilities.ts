@@ -1,5 +1,6 @@
 import { INTERACTION_PROTOCOL } from "../../../protocol"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
+import { MAX_ANSWER_STRING_BYTES } from "../../core/limits"
 import { OPENCLAW_ATTACHMENT_GATEWAY_LIMITS } from "./content"
 import type { OpenClawNegotiatedPolicy } from "./client"
 import { OPENCLAW_MAX_PENDING_INTERACTIONS } from "./interactions"
@@ -45,7 +46,7 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
         maxQuestions: 3,
         maxChoicesPerQuestion: 4,
         maxAnswerValuesPerQuestion: "complete-request" as const,
-        maxStringBytes: 1_000_000,
+        maxStringBytes: MAX_ANSWER_STRING_BYTES,
       },
       reactions: {
         status: "unavailable" as const,

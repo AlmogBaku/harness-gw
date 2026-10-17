@@ -661,9 +661,14 @@ describe("HermesInteractions server requests", () => {
       })
     ).resolves.toEqual({ status: "held" })
 
-    // Answered as far as anyone can see, so nothing asks it again.
+    // Answered as far as anyone can see, so nothing asks it again, and the
+    // answer is on its way for this Session alone.
     expect(interactions.pending(scope)).toEqual([])
     expect(requests.frames()).toEqual([])
+    expect(interactions.answering(scope)).toBe(true)
+    expect(
+      interactions.answering({ ...scope, providerSessionId: "session-2" })
+    ).toBe(false)
 
     // The reconnect re-delivers what Hermes still waits on, and the held
     // answer goes with no second response.
@@ -676,6 +681,8 @@ describe("HermesInteractions server requests", () => {
     await vi.waitFor(() =>
       expect(requests.answer(id)).toEqual({ answer: "eu" })
     )
+    // Settled once Hermes acknowledges it.
+    await vi.waitFor(() => expect(interactions.answering(scope)).toBe(false))
     expect(requests.frames()).toHaveLength(1)
     expect(interactions.pending(scope)).toEqual([])
   })

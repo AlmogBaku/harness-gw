@@ -1,5 +1,6 @@
 import { INTERACTION_PROTOCOL } from "../../../protocol"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
+import { MAX_ANSWER_STRING_BYTES } from "../../core/limits"
 
 /** Normalized capability fragment for the pinned OpenCode v2 surface. */
 export function openCodeCapabilities() {
@@ -27,7 +28,7 @@ export function openCodeCapabilities() {
         maxQuestions: 32,
         maxChoicesPerQuestion: 64,
         maxAnswerValuesPerQuestion: "complete-request",
-        maxStringBytes: 1_000_000,
+        maxStringBytes: MAX_ANSWER_STRING_BYTES,
       },
       reactions: {
         status: "unavailable",

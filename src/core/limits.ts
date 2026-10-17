@@ -99,3 +99,16 @@ export const LINK_WAIT_MS = 10_000
  * the child followed.
  */
 export const CHILD_FOLLOW_GRACE_MS = 60_000
+
+/**
+ * Each of a runtime's question words is read whole up to this: it holds a
+ * Hermes batch at Hermes' own limits, and neither OpenClaw nor OpenCode bounds
+ * a question's text.
+ */
+export const MAX_QUESTION_TEXT_BYTES = 512 * 1024
+
+/**
+ * The `maxStringBytes` a runtime advertises for an answer: the protocol's
+ * largest. No runtime bounds an answer, so only the ACP frame carrying it does.
+ */
+export const MAX_ANSWER_STRING_BYTES = 1_000_000

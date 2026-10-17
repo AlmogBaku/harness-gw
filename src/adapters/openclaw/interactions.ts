@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import {
   PendingRequestKind,
   RequestReplySchema,
@@ -5,6 +7,7 @@ import {
   type PendingRequest,
   type RequestReply,
 } from "../../core/events"
+import { MAX_QUESTION_TEXT_BYTES } from "../../core/limits"
 import {
   QuestionGetResultSchema,
   QuestionListResultSchema,
@@ -78,6 +81,8 @@ type Question = {
   multi?: boolean
   other?: boolean
   secret?: boolean
+  /** A form question keeps an answer as typed, blank included. */
+  form?: boolean
 }
 type Pending = {
   scope: OpenClawInteractionScope
@@ -107,13 +112,6 @@ type Binding = {
   state: "ready" | "dispatching"
 }
 export const OPENCLAW_MAX_PENDING_INTERACTIONS = 64
-/**
- * OpenClaw bounds neither a question's words nor an answer (2026.10.2
- * `packages/gateway-protocol/src/schema/questions.ts`): a question is read
- * whole up to the bound a Hermes request has, and an answer is checked only by
- * OpenClaw's own rules.
- */
-const MAX_QUESTION_TEXT_BYTES = 512 * 1024
 const MAX_DONE_INTERACTIONS = 256
 const encoder = new TextEncoder(),
   text = (v: unknown, max = 4096) =>
@@ -199,6 +197,7 @@ function record(
       ...(q.multiSelect ? { multi: true } : {}),
       ...(q.isOther ? { other: true } : {}),
       ...(q.isSecret ? { secret: true } : {}),
+      ...(q.presentation === "form" ? { form: true } : {}),
     }
   })
   if (new Set(questions.map((q) => q.questionId)).size !== questions.length)
@@ -230,7 +229,11 @@ function jsonFingerprint(value: unknown) {
     seen.delete(input)
     return normalized
   }
-  return JSON.stringify(normalize(value))
+  // A repeat is told from a changed reply by digest, so no answer, a secret
+  // one included, is kept as written once its request is done.
+  return createHash("sha256")
+    .update(JSON.stringify(normalize(value)))
+    .digest("hex")
 }
 function parseReply(raw: unknown): {
   entry: RequestReply
@@ -268,7 +271,12 @@ function answerMap(value: unknown, questions: Question[]) {
     if (
       !Array.isArray(values) ||
       (!q.multi && values.length > 1) ||
-      values.some((v) => typeof v !== "string" || !v.trim()) ||
+      // OpenClaw's own rule (2026.10.2 `src/gateway/question-manager.ts`
+      // `validateAnswers`): no answer is empty, and only a secret or form
+      // question keeps one that is blank; it bounds no answer's length.
+      values.some(
+        (v) => typeof v !== "string" || !(q.secret || q.form ? v : v.trim())
+      ) ||
       (!acceptsText(q) && values.some((v) => !q.options.includes(v as string)))
     )
       invalid()

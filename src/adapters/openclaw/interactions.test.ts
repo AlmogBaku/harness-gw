@@ -222,7 +222,7 @@ describe("OpenClaw interactions", () => {
           questionId: "why",
           header: "Why",
           question: "למה? ".repeat(1_000).trim(),
-          options: [],
+          options: [{ label: "כן — ".repeat(800).trim() }, { label: "לא" }],
           isOther: true,
         },
       ],
@@ -251,6 +251,40 @@ describe("OpenClaw interactions", () => {
       id: "q",
       answers: { answers: { why: [explanation] } },
     })
+  })
+
+  it.each([
+    ["refuses a blank answer", [["  "], ["secret-value"]], false],
+    [
+      "refuses two answers to one choice",
+      [["yes", "other"], ["secret-value"]],
+      false,
+    ],
+    ["sends a blank secret, which OpenClaw keeps", [["yes"], ["   "]], true],
+  ])("%s, as OpenClaw does", async (_name, answers, sent) => {
+    const request = vi.fn(async (method: string) =>
+      method === "question.get"
+        ? { question }
+        : {
+            status: "answered",
+            answers: { answers: { choice: answers[0], secret: answers[1] } },
+          }
+    )
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, question)
+
+    const responding = interactions.respond(scope, [
+      { requestId: "q", status: "resolved", payload: { answers } },
+    ])
+
+    if (sent) await expect(responding).resolves.toEqual({ status: "resolved" })
+    else
+      await expect(responding).rejects.toMatchObject({
+        code: "HGW_INVALID_INTERACTION",
+      })
+    expect(
+      request.mock.calls.some(([method]) => method === "question.resolve")
+    ).toBe(sent)
   })
 
   it("rediscovers and binds one exact pending question after restart", async () => {
