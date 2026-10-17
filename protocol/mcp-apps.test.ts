@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest"
 
 import {
   appliedMcpAppCsp,
+  isMcpAppCspDomain,
   isMcpAppPolicyOrigin,
   mcpAppSandboxPolicy,
+  type McpUiCsp,
 } from "./mcp-apps"
 
 const LANE = "https://aos.example.invalid"
@@ -205,5 +207,47 @@ describe("MCP App sandbox policy", () => {
     expect(named["connect-src"]).toEqual(kept)
     expect(named["media-src"]).toEqual(["'self'", "data:", ...kept])
     expect(named["frame-ancestors"]).toEqual(ORIGINS.frameAncestors)
+  })
+})
+
+describe("MCP App CSP domain rule", () => {
+  it.each<[keyof McpUiCsp, string, boolean]>([
+    // Loaded resources: https hosts, one leading wildcard label, a port.
+    ["resourceDomains", "https://api.example.com", true],
+    ["resourceDomains", "https://*.Example.com", true],
+    ["resourceDomains", "https://api.example.com:8443", true],
+    ["resourceDomains", "http://api.example.com", false],
+    ["resourceDomains", "https://api.example.com/path", false],
+    ["resourceDomains", "https://user@example.com", false],
+    ["resourceDomains", "https://*", false],
+    ["resourceDomains", "*", false],
+    ["resourceDomains", "https://a.*.example.com", false],
+    ["resourceDomains", "'unsafe-eval'", false],
+    ["resourceDomains", "https://api.example.com; script-src *", false],
+    // Connections: https and wss, and plain text only to loopback.
+    ["connectDomains", "https://api.example.com", true],
+    ["connectDomains", "wss://live.example.com", true],
+    ["connectDomains", "wss://*.example.com", true],
+    ["connectDomains", "wss://live.example.com:8443", true],
+    ["connectDomains", "http://127.0.0.1", true],
+    ["connectDomains", "http://127.0.0.1:8080", true],
+    ["connectDomains", "http://localhost:3000", true],
+    ["connectDomains", "ws://localhost", true],
+    ["connectDomains", "ws://app.localhost:5173", true],
+    ["connectDomains", "http://*.localhost", true],
+    ["connectDomains", "ws://[::1]:9000", false],
+    ["connectDomains", "http://api.example.com", false],
+    ["connectDomains", "ws://live.example.com", false],
+    ["connectDomains", "http://127.0.0.2", false],
+    ["connectDomains", "http://localhost.example.com", false],
+    ["connectDomains", "http://127.0.0.1.example.com", false],
+    ["connectDomains", "ws://localhost:3000/path", false],
+    ["connectDomains", "http://user@localhost", false],
+    ["connectDomains", "ftp://localhost", false],
+    // Frames stay on https, whatever a connection may use.
+    ["frameDomains", "wss://live.example.com", false],
+    ["frameDomains", "http://localhost:3000", false],
+  ])("%s admits %s: %s", (list, value, admitted) => {
+    expect(isMcpAppCspDomain(list, value)).toBe(admitted)
   })
 })
