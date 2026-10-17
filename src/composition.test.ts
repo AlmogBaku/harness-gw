@@ -310,8 +310,8 @@ describe("configured gateway composition", () => {
       }
     )
 
-    const invite = (origin?: string) =>
-      new Request("https://aos.example.test/api/v1/guest-invitations", {
+    const invite = (origin?: string, listener = "https://aos.example.test") =>
+      new Request(`${listener}/api/v1/guest-invitations`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -332,10 +332,13 @@ describe("configured gateway composition", () => {
     expect(
       (await operator(invite("https://attacker.example.test")))?.status
     ).toBe(403)
+    const guest = "https://guest.example.test"
     expect(
       (
-        await guardOrigins(configured.guest!.origins, invite(), () =>
-          configured.guest!.app.fetch(invite())
+        await guardOrigins(
+          configured.guest!.origins,
+          invite(undefined, guest),
+          () => configured.guest!.app.fetch(invite(undefined, guest))
         )
       )?.status
     ).toBe(404)

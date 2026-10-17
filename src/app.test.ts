@@ -776,7 +776,7 @@ describe("MCP App files", () => {
       headers: {
         ...LISTENER_HEADERS,
         ...passed,
-        "access-control-allow-origin": "null",
+        "access-control-allow-origin": "*",
         "content-disposition": "inline; filename*=UTF-8''report.pdf",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
         "content-type": "application/pdf",
@@ -1019,14 +1019,7 @@ describe("MCP App files", () => {
       `${origin}${appPath()}/files/path?pass=${forged}`
     )
 
-    expect(await observed(response)).toEqual({
-      status: 401,
-      headers: {
-        ...REFUSAL.headers,
-        "access-control-allow-origin": "null",
-      },
-      body: "",
-    })
+    expect(await observed(response)).toEqual({ status: 401, ...REFUSAL })
     expect(read).not.toHaveBeenCalled()
   })
 })
@@ -1094,7 +1087,7 @@ describe("Published Artifact views", () => {
       status: 200,
       headers: {
         ...LISTENER_HEADERS,
-        "access-control-allow-origin": "null",
+        "access-control-allow-origin": "*",
         "content-disposition": "inline; filename*=UTF-8''notes.md",
         "content-length": "7",
         "content-security-policy": SANDBOX,
@@ -1191,7 +1184,7 @@ describe("Published Artifact views", () => {
     ["a guest's", { role: "guest" }, artifactPath()],
     ["an Artifact's pass on a tool call", { artifactId: "call-1" }, appPath()],
   ])(
-    "refuses %s pass with an empty 401 and no bytes",
+    "refuses %s pass with an empty 401, no bytes, and no grant",
     async (_, other, path) => {
       const { gateway, files, artifact, read } = fileGateway()
       const forged = (await files.passes.issue({ ...pass, ...other })).pass
@@ -1200,11 +1193,7 @@ describe("Published Artifact views", () => {
         `${origin}${path}/files/path?pass=${forged}`
       )
 
-      expect(await observed(response)).toEqual({
-        status: 401,
-        headers: { ...REFUSAL.headers, "access-control-allow-origin": "null" },
-        body: "",
-      })
+      expect(await observed(response)).toEqual({ status: 401, ...REFUSAL })
       expect(artifact).not.toHaveBeenCalled()
       expect(read).not.toHaveBeenCalled()
     }
