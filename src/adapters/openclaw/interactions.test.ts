@@ -213,6 +213,46 @@ describe("OpenClaw interactions", () => {
     })
   })
 
+  it("asks a question and sends its answer as long as each is written", async () => {
+    const explanation = "המשמרת כוללת את ימי ההכנה. ".repeat(400).trim()
+    const long = {
+      ...question,
+      questions: [
+        {
+          questionId: "why",
+          header: "Why",
+          question: "למה? ".repeat(1_000).trim(),
+          options: [],
+          isOther: true,
+        },
+      ],
+    }
+    const request = vi.fn(async (method: string) =>
+      method === "question.get"
+        ? { question: long }
+        : {
+            status: "answered",
+            answers: { answers: { why: [explanation] } },
+          }
+    )
+    const interactions = new OpenClawInteractions({ request })
+    interactions.acceptQuestion(scope, long)
+
+    await expect(
+      interactions.respond(scope, [
+        {
+          requestId: "q",
+          status: "resolved",
+          payload: { answers: [[explanation]] },
+        },
+      ])
+    ).resolves.toEqual({ status: "resolved" })
+    expect(request).toHaveBeenLastCalledWith("question.resolve", {
+      id: "q",
+      answers: { answers: { why: [explanation] } },
+    })
+  })
+
   it("rediscovers and binds one exact pending question after restart", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "question.list") return { questions: [question] }

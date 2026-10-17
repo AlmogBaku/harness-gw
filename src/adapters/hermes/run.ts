@@ -620,15 +620,21 @@ export class HermesTurnEngine {
       if (!unchanged()) return
       const status = await readStatus(this.#host, liveSessionId)
       if (status !== "waiting" || !unchanged()) return
-      this.#awaitStop(active)
+      // Hermes waits for an answer of this gateway's own that is still on its
+      // way, not for one no one here can give.
+      if (this.#native.answering(scope)) arm()
+      else this.#awaitStop(active)
     }
-    const timer = setTimeout(() => {
-      checkLost().catch((err: unknown) =>
-        this.#log.warn({ err }, "hermes.run.interaction_lost_check_failed")
-      )
-    }, this.#lostInteractionGraceMs)
-    // Detection is reconciliation, never a reason to keep the process alive.
-    if (typeof timer !== "number") timer.unref()
+    const arm = () => {
+      const timer = setTimeout(() => {
+        checkLost().catch((err: unknown) =>
+          this.#log.warn({ err }, "hermes.run.interaction_lost_check_failed")
+        )
+      }, this.#lostInteractionGraceMs)
+      // Detection is reconciliation, never a reason to keep the process alive.
+      if (typeof timer !== "number") timer.unref()
+    }
+    arm()
   }
 
   /** The turn waits on a prompt no client here can answer: only Stop ends it. */

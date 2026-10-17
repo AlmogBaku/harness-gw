@@ -208,6 +208,8 @@ export interface HermesTurnNative {
     scope: HermesTurnScope & { turnId: string },
     replies: readonly RequestReply[]
   ): Promise<readonly { status: string }[]>
+  /** An answer to one of this Session's requests is still on its way to Hermes. */
+  answering(scope: HermesTurnScope): boolean
 }
 
 /** The durable-to-live binding surface `run-native.ts` depends on. */
@@ -232,6 +234,7 @@ export type HermesNativeInteractions = {
     scope: HermesTurnScope & { turnId: string },
     replies: readonly RequestReply[]
   ): Promise<readonly { status: string }[]>
+  delivering(scope: HermesTurnScope): boolean
   resume(
     scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
@@ -883,6 +886,10 @@ export class HermesNativeRuntime implements HermesTurnNative {
     replies: readonly RequestReply[]
   ) {
     return this.#interactions.answer(scope, replies)
+  }
+
+  answering(scope: HermesTurnScope) {
+    return this.#interactions.delivering(scope)
   }
 
   /**

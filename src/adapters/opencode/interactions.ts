@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 import {
   PendingRequestKind,
   type PendingQuestion,
@@ -10,6 +12,12 @@ const MAX_PENDING = 64
 const MAX_QUESTIONS = 32
 const MAX_OPTIONS = 64
 const MAX_TEXT_BYTES = 4_096
+/**
+ * OpenCode bounds none of a question's words (1.19.0
+ * `packages/schema/src/question.ts`), so a question is read whole up to the
+ * bound a Hermes request has.
+ */
+const MAX_QUESTION_TEXT_BYTES = 512 * 1024
 export type OpenCodeInteractionScope = {
   agentId: string
   providerSessionId: string
@@ -114,8 +122,8 @@ function parseQuestions(native: unknown, sessionId: string): Question[] {
   return request.questions.map((raw) => {
     const row = record(raw)
     if (
-      !text(row?.header, 256) ||
-      !text(row?.question) ||
+      !text(row?.header, MAX_QUESTION_TEXT_BYTES) ||
+      !text(row?.question, MAX_QUESTION_TEXT_BYTES) ||
       !Array.isArray(row?.options) ||
       row.options.length > MAX_OPTIONS ||
       (row.multiple !== undefined && typeof row.multiple !== "boolean") ||
@@ -124,8 +132,8 @@ function parseQuestions(native: unknown, sessionId: string): Question[] {
       throw new OpenCodeInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
     const choices = row.options.map((option) => {
       const value = record(option)
-      const label = text(value?.label, 256)
-      if (!label || !text(value?.description))
+      const label = text(value?.label, MAX_QUESTION_TEXT_BYTES)
+      if (!label || !text(value?.description, MAX_QUESTION_TEXT_BYTES))
         throw new OpenCodeInteractionPublicError(
           "HGW_PROVIDER_INVALID_RESPONSE"
         )
@@ -435,10 +443,11 @@ export class OpenCodeInteractions {
 
   #fingerprint(replies: unknown) {
     try {
-      const fingerprint = JSON.stringify(replies)
-      if (typeof fingerprint !== "string")
+      const json = JSON.stringify(replies)
+      if (typeof json !== "string")
         throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
-      return fingerprint
+      // A repeat is told from a changed reply by digest, not by copy.
+      return createHash("sha256").update(json).digest("hex")
     } catch {
       throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
     }
@@ -452,15 +461,17 @@ export class OpenCodeInteractions {
       const q = questions[index]!
       if (
         !Array.isArray(answer) ||
-        answer.length > (q.multiple ? q.choices.length : 1)
+        answer.some((raw) => typeof raw !== "string")
       )
         throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
-      const selected = answer.map((raw) => {
-        const value = text(raw)
-        if (value && (q.custom || q.choices.includes(value))) return value
-        throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
-      })
-      if (new Set(selected).size !== selected.length)
+      // OpenCode bounds no answer, and the form takes any text where the
+      // question allows it beside every choice of a multi-select; a value
+      // given twice is one answer.
+      const selected = [...new Set((answer as string[]).filter(Boolean))]
+      if (
+        (!q.multiple && selected.length > 1) ||
+        selected.some((value) => !q.custom && !q.choices.includes(value))
+      )
         throw new OpenCodeInteractionPublicError("HGW_INVALID_INTERACTION")
       return selected
     })

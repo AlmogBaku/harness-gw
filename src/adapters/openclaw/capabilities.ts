@@ -45,7 +45,7 @@ export function openClawCapabilities(policy: OpenClawCapabilityPolicy) {
         maxQuestions: 3,
         maxChoicesPerQuestion: 4,
         maxAnswerValuesPerQuestion: "complete-request" as const,
-        maxStringBytes: 4096,
+        maxStringBytes: 1_000_000,
       },
       reactions: {
         status: "unavailable" as const,

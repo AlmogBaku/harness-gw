@@ -189,6 +189,50 @@ describe("OpenCodeInteractions", () => {
     )
   })
 
+  it("sends an answer as long as it is written, and every value a multi-select carries once", async () => {
+    const reply = vi.fn(async () => undefined)
+    const interactions = newInteractions(reply)
+    const explanation = "המשמרת כוללת את ימי ההכנה. ".repeat(400)
+    const question = "למה? ".repeat(1_000)
+    interactions.acceptQuestion(scope, {
+      id: "native-question-id",
+      sessionID: "native-session-1",
+      questions: [
+        {
+          header: "Why",
+          question,
+          options: [{ label: "Because", description: "Short" }],
+        },
+        {
+          header: "Checks",
+          question: "Which checks?",
+          options: [
+            { label: "Lint", description: "Static" },
+            { label: "Unit", description: "Unit tests" },
+          ],
+          multiple: true,
+        },
+      ],
+    })
+
+    await expect(
+      interactions.respond(scope, [
+        {
+          requestId: "native-question-id",
+          status: "resolved",
+          payload: {
+            answers: [[explanation], ["Lint", "Unit", "Nightly", "Lint"]],
+          },
+        },
+      ])
+    ).resolves.toEqual({ status: "resolved" })
+    expect(reply).toHaveBeenCalledWith(
+      "native-session-1",
+      "native-question-id",
+      { answers: [[explanation], ["Lint", "Unit", "Nightly"]] }
+    )
+  })
+
   it("rejects incomplete or choice-substituted responses before native dispatch", async () => {
     const reply = vi.fn(async () => undefined)
     const interactions = newInteractions(reply)

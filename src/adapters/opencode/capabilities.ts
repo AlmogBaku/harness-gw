@@ -26,8 +26,8 @@ export function openCodeCapabilities() {
         cancellation: "native-reject",
         maxQuestions: 32,
         maxChoicesPerQuestion: 64,
-        maxAnswerValuesPerQuestion: 64,
-        maxStringBytes: 4096,
+        maxAnswerValuesPerQuestion: "complete-request",
+        maxStringBytes: 1_000_000,
       },
       reactions: {
         status: "unavailable",

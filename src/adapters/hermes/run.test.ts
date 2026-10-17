@@ -97,6 +97,7 @@ function runtime(overrides: Partial<HermesTurnNative> = {}): HermesTurnNative {
     inspectExecution: async () => ({ running: false, status: "idle" }),
     subscribePendingRequests: () => () => undefined,
     respondInteractions: async () => [],
+    answering: () => false,
     watchChild: async () => () => undefined,
     interruptChild: async () => undefined,
     ...overrides,
@@ -2345,6 +2346,35 @@ describe("HermesRunEngine", () => {
       // Stop settled the native turn, so the Session takes the next prompt.
       await engine.start(scope, input({ turnId: "run-2" }))
       expect(submitted).toEqual(["Hello Hermes"])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("waits for an answer still on its way before calling the question lost", async () => {
+    vi.useFakeTimers()
+    try {
+      let answering = true
+      const { engine } = waitingOnQuestion({ answering: () => answering })
+      const discovered = await engine.discover(scope, "recovered-run")
+      const events: unknown[] = []
+      const reading = (async () => {
+        for await (const event of discovered!.handle.events) events.push(event)
+      })()
+
+      // An answer of this gateway's own is what Hermes still waits for.
+      await vi.advanceTimersByTimeAsync(4_000)
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
+
+      // Nothing is on its way any more, so no one here can answer it.
+      answering = false
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(ofKind(events, TurnEventKind.TurnFailed)).toMatchObject([
+        { code: "HGW_INTERACTION_LOST", awaitingStop: true },
+      ])
+
+      await discovered!.handle.stop()
+      await reading
     } finally {
       vi.useRealTimers()
     }

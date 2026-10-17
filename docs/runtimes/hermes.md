@@ -343,7 +343,8 @@ visibility uses.
   not asked again, and the answer is sent when Hermes re-lists the request
   after a reconnect and every second until Hermes takes it or stops waiting.
 - A Session AOS finds `waiting` whose open request Hermes does not re-deliver
-  within about two seconds, while nothing else changes, reports
+  within about two seconds, while nothing else changes and no answer of the
+  gateway's own is still on its way to it, reports
   `HGW_INTERACTION_LOST`. The turn stays running so Stop remains available;
   Stop interrupts it natively and the Session then accepts a new prompt.
 - A Hermes restart resets every active run once: the next attach produces

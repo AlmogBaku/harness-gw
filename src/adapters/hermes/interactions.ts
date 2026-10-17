@@ -785,6 +785,14 @@ export class HermesInteractions {
     this.#retainers.clear()
   }
 
+  /** An answer to one of this Session's requests is still on its way to Hermes. */
+  delivering(scope: HermesInteractionScope) {
+    return [...this.#pending.values()].some(
+      (interaction) =>
+        sameSession(interaction.scope, scope) && interaction.delivery
+    )
+  }
+
   /** Every request still waiting for this Session's answer, oldest first. */
   pending(scope: HermesInteractionScope) {
     return [...this.#pending.values()]

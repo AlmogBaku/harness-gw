@@ -107,6 +107,13 @@ type Binding = {
   state: "ready" | "dispatching"
 }
 export const OPENCLAW_MAX_PENDING_INTERACTIONS = 64
+/**
+ * OpenClaw bounds neither a question's words nor an answer (2026.10.2
+ * `packages/gateway-protocol/src/schema/questions.ts`): a question is read
+ * whole up to the bound a Hermes request has, and an answer is checked only by
+ * OpenClaw's own rules.
+ */
+const MAX_QUESTION_TEXT_BYTES = 512 * 1024
 const MAX_DONE_INTERACTIONS = 256
 const encoder = new TextEncoder(),
   text = (v: unknown, max = 4096) =>
@@ -166,7 +173,7 @@ function record(
     if (
       !questionId ||
       !text(q.header, 12) ||
-      !text(q.question) ||
+      !text(q.question, MAX_QUESTION_TEXT_BYTES) ||
       !Array.isArray(q.options) ||
       q.options.length > 4 ||
       (q.multiSelect !== undefined && typeof q.multiSelect !== "boolean") ||
@@ -179,7 +186,7 @@ function record(
       if (
         !o ||
         typeof o !== "object" ||
-        !text((o as Record<string, unknown>).label)
+        !text((o as Record<string, unknown>).label, MAX_QUESTION_TEXT_BYTES)
       )
         bad()
       return (o as { label: string }).label
@@ -261,7 +268,7 @@ function answerMap(value: unknown, questions: Question[]) {
     if (
       !Array.isArray(values) ||
       (!q.multi && values.length > 1) ||
-      values.some((v) => !text(v)) ||
+      values.some((v) => typeof v !== "string" || !v.trim()) ||
       (!acceptsText(q) && values.some((v) => !q.options.includes(v as string)))
     )
       invalid()
