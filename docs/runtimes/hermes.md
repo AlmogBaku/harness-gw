@@ -334,10 +334,10 @@ visibility uses.
   A question Hermes no longer holds open fails with `HGW_INTERACTION_EXPIRED`.
 - A question's answer is bounded only by the ACP frame that carries it: any
   typed text, and every choice of a multi-select beside typed text. A question
-  request is shown whole up to 512 KiB, which holds a batch at Hermes' own
-  limits; a larger one is declined. An approval whose command or description
-  passes 4 KB is declined rather than shown cut, so nothing is approved
-  unseen; Hermes reads either decline as unanswered.
+  or approval is shown whole up to 512 KiB, which holds a batch at Hermes' own
+  limits. A larger one, or an approval whose words cannot be shown, is
+  declined, so nothing is approved unseen: Hermes treats a declined question
+  as skipped and withdraws a declined approval, whose command does not run.
 - An answer Hermes cannot take yet, because the socket is down or its
   acknowledgement was lost, is held: the turn keeps running, the question is
   not asked again, and the answer is sent when Hermes re-lists the request

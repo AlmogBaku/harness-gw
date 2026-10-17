@@ -188,15 +188,9 @@ export const HERMES_INTERACTION_LIMITS = Object.freeze({
 })
 
 /**
- * An operator approves only a command they can read whole, so a longer one is
- * declined, which Hermes reads as unanswered.
- */
-const MAX_APPROVAL_TEXT_BYTES = 4_096
-
-/**
- * How long an answer Hermes could not take waits before it is sent again:
- * inside the turn engine's own waits, so a held answer lands before either
- * reads the turn as lost.
+ * How long an answer Hermes could not take waits before it is sent again: about
+ * as long as the turn engine waits before reading a quiet turn as lost, so a
+ * held answer usually lands first.
  */
 const ANSWER_RETRY_MS = 1_000
 
@@ -377,13 +371,13 @@ export function interactionReason(error: unknown) {
 }
 
 /**
- * Approval words the operator reads whole, or none; words that cannot be shown
- * whole decline the request rather than ask approval for what goes unseen.
+ * Approval words the operator reads whole, or none: words that cannot be shown
+ * decline the request rather than ask approval for what goes unseen.
  */
 function approvalText(value: unknown) {
   if (value === undefined || value === null) return undefined
   if (typeof value === "string" && !value.trim()) return undefined
-  return validString(value, MAX_APPROVAL_TEXT_BYTES) ?? invalidNative()
+  return validString(value) ?? invalidNative()
 }
 
 /** A request field AOS cannot use: the caller declines the whole request. */
@@ -711,7 +705,12 @@ export class HermesInteractions {
   readonly #pending = new Map<string, PendingInteraction>()
   readonly #completed = new Map<
     string,
-    { fingerprint?: string; result: HermesInteractionResult }
+    {
+      fingerprint?: string
+      result: HermesInteractionResult
+      /** Hermes acknowledged this gateway's own answer. */
+      acknowledged?: boolean
+    }
   >()
   readonly #listeners = new Map<string, Set<PendingRequestSubscriber>>()
   /**
@@ -896,9 +895,18 @@ export class HermesInteractions {
     } finally {
       delivery.sending = false
     }
-    // A cancel or a reconciliation settled the request meanwhile.
-    if (this.#pending.get(key) !== interaction)
+    // A cancel or a reconciliation settled the request meanwhile; what Hermes
+    // said of this answer is the exact outcome when it said anything.
+    if (this.#pending.get(key) !== interaction) {
+      if (settlement !== "uncertain")
+        this.#complete(
+          key,
+          { status: settlement === "ok" ? "resolved" : "expired" },
+          delivery.fingerprint,
+          settlement === "ok"
+        )
       return this.#completed.get(key)?.result ?? { status: "expired" }
+    }
     if (settlement === "uncertain")
       return this.#keep(key, interaction, delivery)
     // An answer of this gateway's own that lost its acknowledgement is what
@@ -910,13 +918,9 @@ export class HermesInteractions {
         : answered
           ? "already-resolved"
           : "expired"
-    if (status === "expired" && delivery.waited)
-      this.#logMethod(
-        "hermes.interactions.held_answer_expired",
-        interaction.request.method
-      )
+    if (status === "expired") this.#lose(interaction)
     this.#drop(key)
-    this.#complete(key, { status }, delivery.fingerprint)
+    this.#complete(key, { status }, delivery.fingerprint, settlement === "ok")
     this.#release(interaction.scope)
     return { status }
   }
@@ -957,6 +961,15 @@ export class HermesInteractions {
         "hermes.interactions.answer_failed"
       )
     )
+  }
+
+  /** An answer that waited ends untaken: Hermes went on without it. */
+  #lose(interaction: PendingInteraction) {
+    if (interaction.delivery?.waited)
+      this.#log?.warn(
+        { method: interaction.request.method },
+        "hermes.interactions.held_answer_expired"
+      )
   }
 
   /** Stop delivering a request's answer, with any send still scheduled. */
@@ -1139,10 +1152,12 @@ export class HermesInteractions {
       if (existing.delivery) this.#resend(key, existing, existing.delivery)
       return true
     }
-    // An answered request is never re-opened by a duplicate live frame; a
-    // reconnect that still lists it means the answer never reached Hermes.
-    if (this.#completed.has(key)) {
-      if (!request.replayed) return true
+    // An answered request is never re-opened by a duplicate live frame, nor
+    // by a resume snapshot Hermes wrote before it acknowledged the answer; any
+    // other reconnect that still lists it means the answer never reached Hermes.
+    const completed = this.#completed.get(key)
+    if (completed) {
+      if (!request.replayed || completed.acknowledged) return true
       this.#completed.delete(key)
     }
     // The gateway being full is its own limit, never a reason to cancel a prompt a
@@ -1243,6 +1258,7 @@ export class HermesInteractions {
     const key = interactionKey(scope, cancelled.id)
     const interaction = this.#pending.get(key)
     if (!interaction || interaction.liveSessionId !== liveSessionId) return
+    this.#lose(interaction)
     this.#drop(key)
     this.#complete(key, { status: "expired" })
     this.#release(scope)
@@ -1265,6 +1281,7 @@ export class HermesInteractions {
         const answered =
           this.#unacknowledged.delete(interaction.request.id) ||
           interaction.delivery?.sending === true
+        if (!answered) this.#lose(interaction)
         this.#drop(key)
         this.#complete(key, {
           status: answered ? "already-resolved" : "expired",
@@ -1367,10 +1384,12 @@ export class HermesInteractions {
   #complete(
     key: string,
     result: HermesInteractionResult,
-    fingerprint?: string
+    fingerprint?: string,
+    acknowledged = false
   ) {
     this.#completed.set(key, {
       ...(fingerprint === undefined ? {} : { fingerprint }),
+      ...(acknowledged ? { acknowledged } : {}),
       result:
         result.status === "resolved" ? { status: "already-resolved" } : result,
     })

@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest"
 
 import { PendingRequestKind } from "../../core/events"
 import type { HermesLog } from "./gateway"
-import { HermesInteractions, type HermesInteractionScope } from "./interactions"
+import {
+  HERMES_INTERACTION_LIMITS,
+  HermesInteractions,
+  type HermesInteractionScope,
+} from "./interactions"
 import { serverRequests } from "./test-utils/server-requests"
 
 const scope: HermesInteractionScope = {
@@ -451,16 +455,15 @@ describe("HermesInteractions server requests", () => {
       session_id: LIVE,
       questions: [{ qid: "q0", question: { path: "/etc/shadow" } }],
     })
-    const oversized = requests.deliver("approval", {
+    const oversized = requests.deliver("clarify", {
       session_id: LIVE,
-      request_id: "approval-huge",
-      command: "x".repeat(70_000),
+      question: "x".repeat(HERMES_INTERACTION_LIMITS.maxNativePayloadBytes),
     })
-    // A command too long to show whole is never approved unseen.
+    // A command that cannot be shown is never approved unseen.
     const unshowable = requests.deliver("approval", {
       session_id: LIVE,
-      request_id: "approval-long",
-      command: "x".repeat(5_000),
+      request_id: "approval-unshowable",
+      command: { argv: ["rm", "-rf", "/"] },
     })
     const duplicated = requests.deliver("clarify", {
       session_id: LIVE,
@@ -928,22 +931,25 @@ describe("HermesInteractions server requests", () => {
     expect(requests.answer(long)).toEqual({ answer: explanation })
   })
 
-  it("presents a choice longer than 4 KB as written", () => {
+  const longChoice = "כן — ".repeat(800)
+  const longCommand = Array.from({ length: 500 }, () => "echo step").join("; ")
+  it.each([
+    ["a choice", "clarify", { question: "Which?", choices: [longChoice] }],
+    ["an approval command", "approval", { command: longCommand }],
+  ])("presents %s longer than 4 KB whole", (_name, method, params) => {
     const { requests, interactions, bind } = harness()
     bind()
-    const long = "כן — ".repeat(800)
 
-    const id = requests.deliver("clarify", {
+    const id = requests.deliver(method, {
       session_id: LIVE,
-      question: "Which?",
-      choices: [long, "לא"],
+      request_id: "approval-long",
+      ...params,
     })
 
     expect(requests.refusal(id)).toBeUndefined()
-    expect(interactions.pending(scope)[0]?.questions?.[0]?.choices).toEqual([
-      long,
-      "לא",
-    ])
+    expect(JSON.stringify(interactions.pending(scope))).toContain(
+      method === "clarify" ? longChoice : longCommand
+    )
   })
 
   it("expires a pending interaction Hermes rebound to another live Session", async () => {
@@ -1102,6 +1108,59 @@ describe("HermesInteractions server requests", () => {
 
     await expect(answering).resolves.toEqual({ status: "already-resolved" })
     expect(requests.answer(id)).toEqual({ answer: "eu" })
+  })
+
+  it("keeps an acknowledged answer settled when a resume written before it lists the request", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const notified = vi.fn()
+    interactions.subscribePendingRequests(scope, notified)
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+    await interactions.respond(scope, {
+      requestId: id,
+      status: "resolved",
+      payload: { answers: [["eu"]] },
+    })
+
+    requests.deliver(
+      "clarify",
+      { session_id: LIVE, question: "Which region?" },
+      { id, replayed: true }
+    )
+
+    expect(interactions.pending(scope)).toEqual([])
+    expect(notified).toHaveBeenCalledTimes(1)
+    expect(requests.frames()).toHaveLength(1)
+  })
+
+  it("logs a held answer Hermes went on without", async () => {
+    const warn = vi.fn()
+    const { requests, interactions, bind } = harness({ log: { warn } })
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+    requests.disconnect()
+    await interactions.respond(scope, {
+      requestId: id,
+      status: "resolved",
+      payload: { answers: [["eu"]] },
+    })
+
+    requests.emit({
+      type: "request.cancel",
+      session_id: LIVE,
+      payload: { id, method: "clarify", reason: "timeout" },
+    })
+
+    expect(warn.mock.calls).toEqual([
+      [{ method: "clarify" }, "hermes.interactions.answer_held"],
+      [{ method: "clarify" }, "hermes.interactions.held_answer_expired"],
+    ])
   })
 
   it("answers a request it holds even when reconciling with Hermes fails first", async () => {
