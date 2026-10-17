@@ -112,6 +112,7 @@ import { sessionModelChoice } from "./session-model"
 import { HermesUnavailableError, type HermesLog } from "./gateway"
 import { interactionReason } from "./interactions"
 import type {
+  HermesCorrectionLocator,
   HermesTurnNative,
   HermesSubmitPrompt,
   HermesSubmitRejection,
@@ -152,6 +153,8 @@ const LOST_INTERACTION_GRACE_MS = 2_000
 const MAX_USER_TURN_BYTES = 1_048_576
 const MAX_NATIVE_EVENT_BYTES = 4_194_304
 const MAX_REWIND_SOURCE_LENGTH = 256
+/** The steered corrections a rewind can still find, oldest forgotten first. */
+const MAX_REMEMBERED_CORRECTIONS = 256
 
 /** Where a recovery continues a Hermes stream: its epoch and last frame seen. */
 const HermesPositionSchema = z.object({
@@ -202,6 +205,15 @@ export class HermesTurnEngine {
    */
   readonly #pastChildren = new Map<string, Set<string>>()
   readonly #admissions = new Set<string>()
+  /**
+   * Each correction steered into a turn, by its steer's request id, with the
+   * Session it was steered in: Hermes stores the row without naming it, so an
+   * Edit or Retry naming the request id finds it through its turn's prompt.
+   */
+  readonly #corrections = new Map<
+    string,
+    HermesCorrectionLocator & { readonly key: string }
+  >()
   readonly #settling = new Map<string, SettlingWatcher>()
   readonly #host: TurnEngineHost
   readonly #lostInteractionGraceMs: number
@@ -356,7 +368,9 @@ export class HermesTurnEngine {
         scope,
         text: text!,
         turnId: input.turnId,
-        ...(rewindSourceId === undefined ? {} : { rewindSourceId }),
+        ...(rewindSourceId === undefined
+          ? {}
+          : { rewindSourceId, ...this.#correctionNamed(key, rewindSourceId) }),
         ...(attachments?.public.length ? { hasAttachments: true } : {}),
       },
       false,
@@ -770,6 +784,37 @@ export class HermesTurnEngine {
     )
   }
 
+  /** A correction Hermes took into `active`'s turn, for a rewind to find. */
+  #rememberCorrection(
+    active: ActiveTurn,
+    { requestId, text }: Readonly<{ requestId: string; text: string }>
+  ) {
+    // Only the prompt Hermes stored opens the turn history can find it by.
+    const anchor = active.messageBase
+    if (anchor === undefined) return
+    const key = sessionKey(active.scope)
+    const shown = text.trim()
+    let occurrence = 0
+    for (const earlier of this.#corrections.values())
+      if (
+        earlier.key === key &&
+        earlier.anchor === anchor &&
+        earlier.text === shown
+      )
+        occurrence += 1
+    this.#corrections.set(requestId, { key, anchor, text: shown, occurrence })
+    if (this.#corrections.size > MAX_REMEMBERED_CORRECTIONS)
+      this.#corrections.delete(this.#corrections.keys().next().value!)
+  }
+
+  /** The correction a rewind in Session `key` names by its steer's request id. */
+  #correctionNamed(key: string, rewindSourceId: string) {
+    const remembered = this.#corrections.get(rewindSourceId)
+    if (remembered?.key !== key) return {}
+    const { anchor, text, occurrence } = remembered
+    return { rewindCorrection: { anchor, text, occurrence } }
+  }
+
   #handle(active: ActiveTurn): HermesTurnHandle {
     return {
       events: active.queue,
@@ -780,8 +825,12 @@ export class HermesTurnEngine {
       // Gap: Hermes answers `session.redirect` with `{status, text}` alone
       // (tui_gateway/methods_session.py:2171 at v2026.9.24) and no push names
       // the correction's row, so a live steer keeps its `requestId` while a
-      // reload shows the stored row's id.
-      steer: (request) => steerTurn(this.#host, active, request.text),
+      // reload shows the stored row's id; a rewind finds the row by its turn.
+      steer: async (request) => {
+        const status = await steerTurn(this.#host, active, request.text)
+        if (status === "steered") this.#rememberCorrection(active, request)
+        return status
+      },
       recoveryPosition: () =>
         hermesRecoveryToken.mint({
           epoch: active.epoch,

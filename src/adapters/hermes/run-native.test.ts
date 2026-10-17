@@ -8,7 +8,8 @@ import {
 } from "./gateway"
 import { hermesRowMessageId, projectHermesHistory } from "./history"
 import { persistedTurnRows } from "./run-frames"
-import { HermesNativeRuntime } from "./run-native"
+import { HermesTurnRewindConflictError } from "./run-failures"
+import { HermesNativeRuntime, type HermesCorrectionLocator } from "./run-native"
 import { HermesTurnEngine } from "./run"
 import { rpcRouter, type RpcHandler } from "./test-utils/rpc-router"
 import type { HermesTurnScope } from "./run"
@@ -351,6 +352,67 @@ describe("Hermes native submit outcomes", () => {
         truncate_before_row_id: 12,
       }),
     ])
+  })
+
+  describe("a rewind naming a steer's request id", () => {
+    // Hermes stores a steer without naming its row, so the browser knows it by
+    // the steer's request id until a reload.
+    const rows = [
+      { row_id: 10, role: "user", content: "Why so slow?" },
+      { row_id: 11, role: "assistant", content: "Pausing the send" },
+      {
+        row_id: 12,
+        role: "user",
+        display_kind: "steer",
+        content:
+          "[OUT-OF-BAND USER MESSAGE — a direct message]\nOne to ten seconds is enough\n[/OUT-OF-BAND USER MESSAGE]",
+      },
+      { row_id: 13, role: "user", content: "Is it running?" },
+    ]
+    const edit = (rewindCorrection: HermesCorrectionLocator) => {
+      const { native, router } = runtime(
+        { "prompt.submit": async () => ({ status: "streaming" }) },
+        rows
+      )
+      const submitted = native.submit("live-secret", {
+        scope,
+        text: "Edited",
+        turnId: "edit-run",
+        rewindSourceId: "steer-request-1",
+        rewindCorrection,
+      })
+      return { router, submitted }
+    }
+
+    it("truncates before the row its turn stored the correction under", async () => {
+      const { router, submitted } = edit({
+        anchor: "hermes-row-10",
+        text: "One to ten seconds is enough",
+        occurrence: 0,
+      })
+
+      await submitted
+      expect(router.calls("prompt.submit")[0]?.params).toMatchObject({
+        confirm_truncate: true,
+        truncate_before_row_id: 12,
+      })
+    })
+
+    it.each([
+      ["its text differs", "Ten to twenty seconds"],
+      ["only a later turn's prompt reads it", "Is it running?"],
+    ])("is a conflict, sending nothing, when %s", async (_, text) => {
+      const { router, submitted } = edit({
+        anchor: "hermes-row-10",
+        text,
+        occurrence: 0,
+      })
+
+      await expect(submitted).rejects.toBeInstanceOf(
+        HermesTurnRewindConflictError
+      )
+      expect(router.calls("prompt.submit")).toHaveLength(0)
+    })
   })
 
   it("rewinds a just-sent prompt by the id its completion receipt saved it under", async () => {

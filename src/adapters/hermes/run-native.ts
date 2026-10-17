@@ -58,11 +58,25 @@ export type HermesNativeStatus =
   | "idle"
   | "absent"
 
+/**
+ * Where history keeps a correction steered into a turn: the `occurrence`-th
+ * correction reading `text` in the turn the `anchor` prompt opened. Hermes
+ * never names the row it stores a steer under, so its request id is all the
+ * browser knows it by until a reload.
+ */
+export type HermesCorrectionLocator = {
+  readonly anchor: string
+  readonly text: string
+  readonly occurrence: number
+}
+
 export type HermesSubmitPrompt = {
   scope: HermesTurnScope
   text: string
   turnId: string
   rewindSourceId?: string
+  /** The steered correction `rewindSourceId` names, when it is a steer's id. */
+  rewindCorrection?: HermesCorrectionLocator
   /** Staged attachments ride along; command routing takes plain text only. */
   hasAttachments?: boolean
   /**
@@ -318,6 +332,38 @@ function completionOutcome(
   }
 }
 
+type HistoryEntry = ReturnType<typeof projectHermesHistory>[number]
+
+/** The text a message shows in the transcript. */
+function shownText(message: Exclude<HistoryEntry, { role: "activity" }>) {
+  return message.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+}
+
+/**
+ * The index of the correction `locator` names: corrections follow their
+ * turn's prompt until the next prompt opens another turn.
+ */
+function correctionIndex(
+  history: readonly HistoryEntry[],
+  { anchor, text, occurrence }: HermesCorrectionLocator
+) {
+  const opened = history.findIndex(
+    ({ id, role }) => id === anchor && role === "user"
+  )
+  if (opened < 0) return -1
+  let seen = 0
+  for (let index = opened + 1; index < history.length; index += 1) {
+    const message = history[index]!
+    if (message.role !== "user") continue
+    if (!message.correction) return -1
+    if (shownText(message).trim() === text && seen++ === occurrence)
+      return index
+  }
+  return -1
+}
+
 /**
  * Address the authoritative durable user row a rewind must truncate before,
  * with the native paths of the images that row attached: a retry resends the
@@ -326,12 +372,15 @@ function completionOutcome(
  */
 function rewindSubmitParams(
   rows: readonly unknown[],
-  rewindSourceId: string
+  rewindSourceId: string,
+  correction?: HermesCorrectionLocator
 ): { params: Record<string, unknown>; images: string[]; text: string } {
   const history = projectHermesHistory(rows)
-  const targetIndex = history.findIndex(
+  const named = history.findIndex(
     ({ id, role }) => id === rewindSourceId && role === "user"
   )
+  const targetIndex =
+    named < 0 && correction ? correctionIndex(history, correction) : named
   const target = targetIndex < 0 ? undefined : history[targetIndex]
   if (target?.role !== "user") throw new HermesTurnRewindConflictError()
 
@@ -353,14 +402,10 @@ function rewindSubmitParams(
     return image ? [image.reference] : []
   })
 
-  // A Retry hands back the turn it replaces, as Hermes' own client does: the
-  // text the transcript shows, which Hermes re-expands where a skill made it.
-  const text = target.content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("\n")
-
   return {
-    text,
+    // A Retry hands back the turn it replaces, as Hermes' own client does: the
+    // text the transcript shows, which Hermes re-expands where a skill made it.
+    text: shownText(target),
     params: {
       confirm_truncate: true,
       ...address,
@@ -459,7 +504,8 @@ export class HermesNativeRuntime implements HermesTurnNative {
           text: replaced,
         } = rewindSubmitParams(
           await this.#history(prompt.scope),
-          prompt.rewindSourceId
+          prompt.rewindSourceId,
+          prompt.rewindCorrection
         ))
       } catch (error) {
         if (error instanceof HermesTurnRewindConflictError) throw error

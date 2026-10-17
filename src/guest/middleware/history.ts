@@ -17,6 +17,7 @@ import {
   type MemberEvent,
   type Middleware,
 } from "../../core/member"
+import { TurnEventKind } from "../../core/events"
 import { appCallPassesWhole } from "./app-servers"
 import { refusedText } from "./commands"
 import { ARTIFACT_PART_NAME, guestArtifact } from "./artifacts"
@@ -209,7 +210,11 @@ export function createHistoryMiddleware({
             )
           )
           return event
+        // A steer the turn took is a user message under its request id.
         case "turn":
+          if (event.event.kind === TurnEventKind.SteerAccepted)
+            show(event.event.requestId, [event.event.text])
+          return event
         case "child":
         case "child-history":
         case "request-asked":

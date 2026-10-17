@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { SessionHistoryResponse } from "../../../protocol"
 import { guestErrorDescription } from "../../auth/guest-projection"
+import { TurnEventKind } from "../../core/events"
 import {
   CommandRefusedError,
   type MemberAct,
@@ -616,7 +617,7 @@ describe("guest Edit and Retry", () => {
       })
   })
 
-  it("runs on a message the guest was shown in history or as a prompt", async () => {
+  it("runs on a message the guest was shown in history, as a prompt, or as a steer", async () => {
     const test = guarded()
     test.show({
       sessionId: "ref",
@@ -631,11 +632,24 @@ describe("guest Edit and Retry", () => {
       content: [{ kind: "text", text: "Next" }],
       own: true,
     })
+    test.show({
+      sessionId: "ref",
+      kind: "turn",
+      stream: { turnId: "turn-1", replayedCorrections: 0, dropped: false },
+      sequence: 1,
+      event: {
+        kind: TurnEventKind.SteerAccepted,
+        requestId: "steer-1",
+        text: "Shorter, please",
+        delivery: "steered",
+      },
+      stopping: false,
+    })
 
-    for (const id of ["stored-ask", "live-ask"])
+    for (const id of ["stored-ask", "live-ask", "steer-1"])
       await expect(test.rewind(id), id).resolves.toEqual({
         messageId: "sent",
       })
-    expect(test.next).toHaveBeenCalledTimes(2)
+    expect(test.next).toHaveBeenCalledTimes(3)
   })
 })

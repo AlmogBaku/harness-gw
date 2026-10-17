@@ -328,6 +328,44 @@ describe("HermesRunEngine", () => {
       { toolCallId: "tool-1" },
     ])
   })
+  it("finds a landed steer for a rewind naming its request id, in its own Session only", async () => {
+    const submit = vi.fn<HermesTurnNative["submit"]>(async () => ({
+      ...accepted,
+      userRowId: 7,
+    }))
+    const { engine, publish } = liveEngine({ submit })
+    const handle = await engine.start(scope, input())
+    const t = nativeTurn("live-secret", 1)
+    publish(t.messageStart("reply-before"))
+    await handle.steer?.({ requestId: "steer-1", text: " Use the draft " })
+    publish(t.complete("reply-before", "Before"))
+    publish(t.messageStart("reply-after"))
+    publish(t.complete("reply-after", "After"))
+    publish(t.idle())
+    await collect(handle)
+    const other: SessionScope = {
+      ...scope,
+      providerSessionId: providerSessionId("other-session"),
+      sessionId: sessionId("hermes:research:other-session"),
+    }
+
+    for (const [rewound, turnId] of [
+      [scope, "edit-run"],
+      [other, "other-run"],
+    ] as const)
+      await engine.start(
+        rewound,
+        input({ turnId, prompt: "Edited", rewindSourceId: "steer-1" })
+      )
+
+    expect(
+      submit.mock.calls.map(([, prompt]) => prompt.rewindCorrection)
+    ).toEqual([
+      undefined,
+      { anchor: "hermes-row-7", text: "Use the draft", occurrence: 0 },
+      undefined,
+    ])
+  })
   it("holds an early native idle boundary until redirect acknowledgement", async () => {
     const attachment = observation()
     const publish = (event: unknown) => attachment.publish("live-secret", event)
