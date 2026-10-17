@@ -237,10 +237,11 @@ the tool runs, so a call whose turn is still live is found.
 
 The catalog passes each profile's `ui_meta.aos` namespace, as stored, as the
 Agent summary's `_meta.aos`; a profile with no such namespace, or an empty one,
-carries no `_meta`. The gateway reads nothing inside it and gives no key a
-meaning: a client reads its own keys there, such as the `role: creator` marker
-AOS UI looks for, and the profile's visibility, editability, and pushes follow
-the same rules as every other profile's.
+carries no `_meta`. The copy is whole and unread: a client reads its own keys
+there, such as the `role: creator` marker AOS UI looks for, and the profile's
+visibility, editability, and pushes follow the same rules as every other
+profile's. Separately, the gateway reads the namespace's `avatar` and `muted`
+for the summary's own fields (below).
 
 Every key in `ui_meta.aos` reaches the operator's browser, so it must never hold
 a path, a token, or any other private value.

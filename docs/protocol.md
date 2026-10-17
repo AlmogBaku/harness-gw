@@ -561,8 +561,8 @@ when it is not. Only Hermes stores a mute; see
 [the runtime notes](runtimes/hermes.md#agent-icons-and-mute).
 
 A `summary` may also carry `_meta`, the harness's native metadata for the
-Agent, passed through unread: the gateway neither checks nor interprets
-anything inside it. It is unvalidated harness data, so a client must not trust
+Agent, passed through whole: the gateway neither checks nor interprets the
+copy. It is unvalidated harness data, so a client must not trust
 it as it trusts `avatar`, which the gateway checks is a token. Hermes sends
 `_meta.aos`, the profile's `ui_meta.aos` as stored (see
 [the runtime notes](runtimes/hermes.md#agent-metadata)); OpenClaw and OpenCode
