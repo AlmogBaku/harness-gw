@@ -2097,13 +2097,14 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   /**
-   * The Session as Hermes stores it, and whether `session.branch` made it:
-   * Hermes marks a fork's row with `model_config._branched_from`.
+   * The Session as Hermes stores it, whether Hermes has stored it yet, and
+   * whether `session.branch` made it: Hermes marks a fork's row with
+   * `model_config._branched_from`.
    */
   async #storedSession(
     profile: string,
     storedId: string
-  ): Promise<{ session: Session; branched: boolean }> {
+  ): Promise<{ session: Session; stored: boolean; branched: boolean }> {
     if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
@@ -2112,6 +2113,7 @@ export class HermesServerAdapter implements ServerRuntime {
       if (error instanceof HermesHttpError && error.status === 404)
         return {
           session: await this.#unpersistedDraft(profile, storedId),
+          stored: false,
           branched: false,
         }
       throwUnavailable(error)
@@ -2142,6 +2144,7 @@ export class HermesServerAdapter implements ServerRuntime {
     const config = parseJson(payload.model_config)
     return {
       session: result.data,
+      stored: true,
       branched:
         isRecord(config) && trimmedText(config._branched_from) !== undefined,
     }
@@ -2265,26 +2268,30 @@ export class HermesServerAdapter implements ServerRuntime {
     }
   }
 
-  updateSession(profile: string, storedId: string, patch: SessionPatch) {
+  async updateSession(profile: string, storedId: string, patch: SessionPatch) {
+    // A Session Hermes has not stored yet has no row to patch, and the
+    // dashboard answers 404 as for a deleted one: refused as unavailable, it
+    // stays, and the write can be sent again once its first turn is stored.
+    if (!(await this.#storedSession(profile, storedId)).stored)
+      throw new HermesUnavailableError()
     // The native patch owns every flag's side effects: pinning a Session also
     // clears `hidden` and exempts the row from auto-archive.
-    return this.#mutateSession(profile, storedId, (dashboard) =>
+    return this.#mutateSession((dashboard) =>
       dashboard.updateSession(profile, storedId, patch)
     )
   }
 
-  deleteSession(profile: string, storedId: string) {
-    return this.#mutateSession(profile, storedId, (dashboard) =>
+  async deleteSession(profile: string, storedId: string) {
+    await this.getSession(profile, storedId)
+    return this.#mutateSession((dashboard) =>
       dashboard.deleteSession(profile, storedId)
     )
   }
 
+  /** One dashboard write to a Session already read, its refusals mapped. */
   async #mutateSession(
-    profile: string,
-    storedId: string,
     write: (dashboard: HermesDashboardClient) => Promise<unknown>
   ) {
-    await this.getSession(profile, storedId)
     if (!this.#dashboard) throw new HermesUnavailableError()
     try {
       await write(this.#dashboard)

@@ -27,6 +27,7 @@ import { providerSessionId, sessionId } from "../../core/ids"
 import {
   ServerAgentUpdateUnsupportedError,
   ServerTurnSteerUncertainError,
+  type SessionPatch,
   type SessionScope,
 } from "../../core/runtime"
 import { HermesTurnPublicError, HermesTurnRewindConflictError } from "./run"
@@ -1490,13 +1491,13 @@ describe("Hermes server adapter", () => {
   /** An adapter whose dashboard has no row for any Session yet. */
   const unstoredAdapter = (resume: Record<string, unknown>) => {
     const router = rpcRouter({ "session.resume": async () => resume })
-    const adapter = new HermesServerAdapter({
-      ...router,
-      http: vi.fn(async () => {
-        throw new HermesHttpError(404)
-      }),
+    const http = vi.fn<
+      (path: string, init?: { method?: string }) => Promise<unknown>
+    >(async () => {
+      throw new HermesHttpError(404)
     })
-    return { adapter, router }
+    const adapter = new HermesServerAdapter({ ...router, http })
+    return { adapter, router, http }
   }
 
   it("projects an unpersisted lazy Session from its native resume snapshot", async () => {
@@ -1543,6 +1544,26 @@ describe("Hermes server adapter", () => {
     ).resolves.toMatchObject({ id: "stored/1", agentId: "researcher" })
   })
 
+  it.each<SessionPatch>([
+    { title: "Renamed" },
+    { archived: true },
+    { pinned: true },
+    { unread: false },
+  ])(
+    "refuses a write to a Session Hermes has not stored as unavailable, writing nothing: %o",
+    async (patch) => {
+      const { adapter, http } = unstoredAdapter(lazySnapshot)
+
+      // Not gone: the Session stays, and the write can be sent again later.
+      await expect(
+        adapter.updateSession("researcher", "stored/1", patch)
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+      expect(http.mock.calls.flatMap(([, init]) => init?.method ?? [])).toEqual(
+        []
+      )
+    }
+  )
+
   it("returns empty Todos for an unpersisted lazy Session", async () => {
     const { adapter } = unstoredAdapter(lazySnapshot)
 
@@ -1571,6 +1592,9 @@ describe("Hermes server adapter", () => {
     })
     await expect(
       unknown.getSession("researcher", "missing")
+    ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    await expect(
+      unknown.updateSession("researcher", "missing", { title: "Renamed" })
     ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
 
     const conflict = new HermesServerAdapter({
