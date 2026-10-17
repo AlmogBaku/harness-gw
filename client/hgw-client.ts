@@ -272,7 +272,7 @@ export class HgwRemoteClient {
     )
   }
 
-  /** A view fetches from its own opaque origin, so each address is absolute. */
+  /** A view fetches from its host's sandbox origin, so each address is absolute. */
   #absoluteFiles(files: McpAppFiles): McpAppFiles {
     const base = new URL(this.#basePath, this.#origin)
     return {

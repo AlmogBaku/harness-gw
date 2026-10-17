@@ -7,6 +7,7 @@ import { guardOrigins, type OriginPolicy } from "./origins"
 const OPERATOR = "https://aos.example.test"
 const GUEST = "https://guest.example.test"
 const FOREIGN = "https://attacker.example.test"
+const SANDBOX = "https://sandbox.example.test"
 /** Each lane's policy, as the composition builds it. */
 const LANES: Record<"operator" | "guest", OriginPolicy> = {
   operator: { allowedOrigins: [OPERATOR] },
@@ -146,16 +147,91 @@ describe("origin guard", () => {
     }
   })
 
-  it("keeps the grant a pass-bearing file answer gave its opaque-origin view", async () => {
+  it("keeps the grant a pass-bearing file answer gave its view on the sandbox origin", async () => {
     const response = await guardOrigins(
       LANES.operator,
-      request("operator", "/api/v1/file?pass=p", { origin: "null" }),
+      request("operator", "/api/v1/file?pass=p", { origin: SANDBOX }),
       () =>
         new Response("bytes", {
-          headers: { "access-control-allow-origin": "null" },
+          headers: { "access-control-allow-origin": "*" },
         })
     )
 
-    expect(response!.headers.get("access-control-allow-origin")).toBe("null")
+    expect(response!.headers.get("access-control-allow-origin")).toBe("*")
+  })
+
+  it("answers 421 to a host none of the listener's origins name by host and port, and serves loopback by name", async () => {
+    const outcome = async (allowedOrigins: readonly string[], host: string) => {
+      const next = vi.fn(() => new Response(null, { status: 204 }))
+      const response = await guardOrigins(
+        { allowedOrigins },
+        new Request(`${OPERATOR}/api/v1/runtime`, { headers: { host } }),
+        next
+      )
+      return next.mock.calls.length > 0 ? "reached" : response!.status
+    }
+    const outcomes = async (
+      allowedOrigins: readonly string[],
+      hosts: readonly string[]
+    ) =>
+      Object.fromEntries(
+        await Promise.all(
+          hosts.map(async (host) => [host, await outcome(allowedOrigins, host)])
+        )
+      )
+
+    expect(
+      await outcomes(
+        [OPERATOR],
+        [
+          "aos.example.test",
+          "aos.example.test:443",
+          "AOS.Example.Test",
+          "aos.example.test:8443",
+          "aos.example.test:80",
+          "sandbox.example.test",
+          "guest.example.test",
+          "aos.example.test.attacker.example.test",
+          "localhost",
+          "localhost:4100",
+          "127.0.0.1:4100",
+          "[::1]:4100",
+          "sandbox.localhost:3000",
+          "localhost.example.test",
+          "127.0.0.1.example.test",
+        ]
+      )
+    ).toEqual({
+      "aos.example.test": "reached",
+      "aos.example.test:443": "reached",
+      "AOS.Example.Test": "reached",
+      "aos.example.test:8443": 421,
+      "aos.example.test:80": 421,
+      "sandbox.example.test": 421,
+      "guest.example.test": 421,
+      "aos.example.test.attacker.example.test": 421,
+      localhost: "reached",
+      "localhost:4100": "reached",
+      "127.0.0.1:4100": "reached",
+      "[::1]:4100": "reached",
+      "sandbox.localhost:3000": 421,
+      "localhost.example.test": 421,
+      "127.0.0.1.example.test": 421,
+    })
+    // An origin on another port names that port alone.
+    expect(
+      await outcomes(
+        ["https://aos.example.test:8443"],
+        ["aos.example.test:8443", "aos.example.test"]
+      )
+    ).toEqual({ "aos.example.test:8443": "reached", "aos.example.test": 421 })
+
+    // The host is judged before the Origin, an upgrade's too.
+    const upgrade = await served("operator", "/api/v1/acp", {
+      origin: OPERATOR,
+      headers: { ...UPGRADE, host: "sandbox.example.test" },
+    })
+    expect(upgrade.reached).toBe(false)
+    expect(upgrade.response!.status).toBe(421)
   })
 })

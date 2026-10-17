@@ -334,8 +334,6 @@ export async function answerAppFile<Login>(input: {
   const { logger, passes, calls, servers } = grant.options
   const pass = new URL(request.url).searchParams.get("pass")
   const headers = new Headers({ "content-security-policy": SANDBOX })
-  // A view reads from an opaque origin, and only a pass may answer it.
-  if (pass !== null) headers.set("access-control-allow-origin", "null")
   const empty = (status: number) => new Response(null, { status, headers })
   const refused = (reason: string, status = 404) => {
     logger.info({ reason, ...target }, "app_file.refused")
@@ -351,6 +349,9 @@ export async function answerAppFile<Login>(input: {
       ? login !== undefined
       : await passes.opens(pass, { role: grant.role, ...target })
   if (!admitted) return empty(401)
+  // A view reads from its host's sandbox origin, which no listener lists, so
+  // an admitted pass alone lets any origin read the answer; no cookie is read.
+  if (pass !== null) headers.set("access-control-allow-origin", "*")
   const subject = input.subject(login)
   if (!input.allow(target)) return empty(429)
   try {

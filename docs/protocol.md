@@ -59,14 +59,23 @@ Each listener serves an exact list of browser origins, `allowedOrigins`,
 defaulting to its `publicOrigin`; the two listeners may not share one. Before
 any socket or route is reached:
 
+- a request whose `Host` names neither the host and port of one of those
+  origins, a default port named or left out, nor `localhost`, `127.0.0.1` or
+  `[::1]` on any port gets 421. A proxy must keep the browser's `Host`, and a
+  non-browser caller reaches the gateway on loopback or by a listed name: one
+  that uses another, such as `aos-invite-link` with an `AOS_GATEWAY_URL` naming
+  a container or host, is refused. `*.localhost` is not loopback here, so a
+  request for an MCP App sandbox origin such as `http://sandbox.localhost:3000`
+  is refused too.
 - a WebSocket upgrade, or any request other than GET, HEAD and OPTIONS, needs
   an `Origin` on that list when it carries one; a `null` or foreign one gets 403. A request with no `Origin` comes from no browser page, so it is
   admitted: a script or a non-browser ACP client needs no `Origin`.
-- a GET or HEAD is never checked, so a view in an opaque-origin frame can read
-  the file its pass names.
+- a GET or HEAD is never checked, so a view on its host's sandbox origin,
+  which no listener lists, can read the file its pass names.
 - CORS answers listed origins only (`Access-Control-Allow-Origin` with
   `Vary: Origin`), never with credentials; a preflight from any other origin
-  gets 403.
+  gets 403. The one exception is a file answer to an admitted pass, which any
+  origin may read (see [HTTP API](#http-api)).
 
 The response carries an `Acp-Connection-Id` header. A client sends
 `initialize` and receives capabilities in `_meta.hgw`. On reconnect, send
@@ -928,13 +937,67 @@ MCP App views sit below a Session, at
 `/api/v1/agents/:agentId/sessions/:sessionId/tool-calls/:toolCallId/app` for a
 tool call's view and `…/artifacts/:artifactId/app` for a published Artifact's:
 
-| Method | Path below the view       | Purpose                                                          |
-| ------ | ------------------------- | ---------------------------------------------------------------- |
-| `GET`  | (the view itself)         | Open the view: its resource, CSP domains and file addresses      |
-| `POST` | `/tools/call`             | A tool call's view calls its own server's tools                  |
-| `POST` | `/resources/read`         | Read one of the view server's `ui://` resources                  |
-| `POST` | `/files`                  | Renew the view's file addresses                                  |
-| `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds |
+| Method | Path below the view       | Purpose                                                                                                                                   |
+| ------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | (the view itself)         | Open the view: its resource, CSP domains and file addresses                                                                               |
+| `POST` | `/tools/call`             | A tool call's view calls its own server's tools                                                                                           |
+| `POST` | `/resources/read`         | Read one of the view server's `ui://` resources                                                                                           |
+| `POST` | `/files`                  | Renew the view's file addresses                                                                                                           |
+| `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds; only an admitted pass's answer carries `Access-Control-Allow-Origin: *` |
+
+### Hosting MCP App views
+
+A UI shows a view as the spec's sandbox proxy does, with
+`@harness-gw/sdk/protocol`:
+
+1. Serve its sandbox page, the relay that creates the view's own `srcdoc`
+   frame, at `MCP_APP_SANDBOX_PATH` from a sandbox origin of its own: another
+   name, or the UI's name on another port. On loopback, use a `*.localhost`
+   name such as `http://sandbox.localhost:3000`: the gateway answers
+   `localhost`, `127.0.0.1` and `[::1]` on every port, so a loopback sandbox on
+   another port, such as `http://127.0.0.1:3001`, would still reach it. That
+   origin serves the page and its script alone. Never send its `/api/v1` to the
+   gateway, which answers a host it does not serve 421 (see
+   [Origins](#origins)), and never list it in `allowedOrigins`.
+2. Frame the page at that origin with
+   `sandbox="allow-scripts allow-same-origin"`, so the view runs on the sandbox
+   origin with storage of its own.
+3. Answer the page with the view's own policy as its `Content-Security-Policy`
+   header, and `Cache-Control: no-store`, since the policy follows the view.
+   Report the domains it applies to the view as `hostCapabilities.sandbox.csp`:
+
+   ```ts
+   const origins = {
+     frameAncestors: ["https://agents.example"], // the UI's own exact origins
+     sandboxOrigin: "https://sandbox.agents.example",
+   }
+   mcpAppSandboxPolicy({
+     ...origins,
+     csp: view.csp,
+     fileLocations: Object.values(view.files?.addresses ?? {}),
+   })
+   appliedMcpAppCsp({ ...origins, csp: view.csp })
+   ```
+
+   `view` here is as the SDK client's `openMcpApp` returns it, its file
+   addresses absolute; a plain `GET` of the view answers them relative to the
+   listener, so resolve them against its origin first.
+
+The policy is the spec's default, widened only by the view's declared domains
+and its own file locations, and framed only by `frameAncestors`. Anyone can ask
+for a sandbox page with any query, so every value is checked before it is
+written. An ancestor or sandbox origin that is not an exact `http(s)` origin
+(lowercase, with no default port, path, or IPv6 literal) throws, as does a
+sandbox origin that is one of the ancestors, since the spec requires the host
+and the sandbox to have different origins. `isMcpAppPolicyOrigin` is that
+exact-origin rule alone, so a host can refuse a setting before it serves a view.
+A declared domain `isMcpAppCspDomain` refuses, or one naming the host and port
+of a framing page or the sandbox, is dropped. A file location is kept only on a
+framing page's origin, as that origin and its path without the pass, every
+segment percent-encoded with quotes included, so whitespace, `;`, `,` and
+quotes reach the header only encoded; one ending in `/`, which would name every
+path below it, is dropped. Send locations without their passes when they travel
+in a URL.
 
 ### Web Push payload
 

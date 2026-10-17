@@ -5,8 +5,8 @@ import { z } from "zod"
 
 /**
  * Passes that open one tool call's files, or one published Artifact's bytes,
- * to an MCP App. A view reads from an
- * opaque origin that no login reaches, so each file address carries a pass.
+ * to an MCP App. A view reads from its host's sandbox origin, which no login
+ * reaches, so each file address carries a pass.
  * The key never leaves this process, so a restart ends every pass.
  */
 
