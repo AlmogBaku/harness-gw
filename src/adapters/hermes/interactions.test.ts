@@ -2,11 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { PendingRequestKind } from "../../core/events"
 import type { HermesLog } from "./gateway"
-import {
-  HERMES_INTERACTION_LIMITS,
-  HermesInteractions,
-  type HermesInteractionScope,
-} from "./interactions"
+import { HermesInteractions, type HermesInteractionScope } from "./interactions"
 import { serverRequests } from "./test-utils/server-requests"
 
 const scope: HermesInteractionScope = {
@@ -458,7 +454,13 @@ describe("HermesInteractions server requests", () => {
     const oversized = requests.deliver("approval", {
       session_id: LIVE,
       request_id: "approval-huge",
-      command: "x".repeat(HERMES_INTERACTION_LIMITS.maxNativePayloadBytes),
+      command: "x".repeat(70_000),
+    })
+    // A command too long to show whole is never approved unseen.
+    const unshowable = requests.deliver("approval", {
+      session_id: LIVE,
+      request_id: "approval-long",
+      command: "x".repeat(5_000),
     })
     const duplicated = requests.deliver("clarify", {
       session_id: LIVE,
@@ -468,7 +470,7 @@ describe("HermesInteractions server requests", () => {
       ],
     })
 
-    for (const id of [malformed, oversized, duplicated])
+    for (const id of [malformed, oversized, unshowable, duplicated])
       expect(requests.refusal(id)).toMatchObject({ code: -32601 })
     expect(interactions.pending(scope)).toEqual([])
   })
@@ -671,6 +673,7 @@ describe("HermesInteractions server requests", () => {
     await vi.waitFor(() =>
       expect(requests.answer(id)).toEqual({ answer: "eu" })
     )
+    expect(requests.frames()).toHaveLength(1)
     expect(interactions.pending(scope)).toEqual([])
   })
 
@@ -895,7 +898,7 @@ describe("HermesInteractions server requests", () => {
     expect(requests.answer(id)).toEqual({ answers: { q0: "ap-southeast" } })
   })
 
-  it("enforces the question count, and bounds an answer only as a message is bounded", async () => {
+  it("enforces the question count, and takes an answer as long as it is written", async () => {
     const { requests, interactions, bind } = harness()
     bind()
 
@@ -923,50 +926,25 @@ describe("HermesInteractions server requests", () => {
       })
     ).resolves.toEqual({ status: "resolved" })
     expect(requests.answer(long)).toEqual({ answer: explanation })
-
-    const huge = requests.deliver("clarify", {
-      session_id: LIVE,
-      question: "Notes?",
-    })
-    await expect(
-      interactions.respond(scope, {
-        requestId: huge,
-        status: "resolved",
-        payload: {
-          answers: [["x".repeat(HERMES_INTERACTION_LIMITS.maxAnswerBytes)]],
-        },
-      })
-    ).rejects.toMatchObject({ code: "HGW_LIMIT_EXCEEDED" })
-    expect(requests.answer(huge)).toBeUndefined()
   })
 
-  const longChoice = "כן — ".repeat(800)
-  const longCommand = Array.from({ length: 500 }, () => "echo step").join("; ")
-  it.each([
-    [
-      "a choice",
-      "clarify",
-      { question: "Which?", choices: [longChoice, "לא"] },
-      longChoice,
-    ],
-    [
-      "an approval command",
-      "approval",
-      { request_id: "approval-long", command: longCommand },
-      longCommand,
-    ],
-  ])(
-    "presents %s longer than 4 KB as written",
-    (_name, method, params, written) => {
-      const { requests, interactions, bind } = harness()
-      bind()
+  it("presents a choice longer than 4 KB as written", () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const long = "כן — ".repeat(800)
 
-      const id = requests.deliver(method, { session_id: LIVE, ...params })
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which?",
+      choices: [long, "לא"],
+    })
 
-      expect(requests.refusal(id)).toBeUndefined()
-      expect(JSON.stringify(interactions.pending(scope))).toContain(written)
-    }
-  )
+    expect(requests.refusal(id)).toBeUndefined()
+    expect(interactions.pending(scope)[0]?.questions?.[0]?.choices).toEqual([
+      long,
+      "לא",
+    ])
+  })
 
   it("expires a pending interaction Hermes rebound to another live Session", async () => {
     const { requests, interactions, bind } = harness({ live: "live-run-2" })
@@ -1065,7 +1043,11 @@ describe("HermesInteractions server requests", () => {
   it("resends an answer whose acknowledgement was lost until Hermes takes it", async () => {
     vi.useFakeTimers()
     try {
-      const { requests, interactions, bind } = harness({ answerRetryMs: 1_000 })
+      const warn = vi.fn()
+      const { requests, interactions, bind } = harness({
+        answerRetryMs: 1_000,
+        log: { warn },
+      })
       bind()
       requests.breakAnswers()
       const id = requests.deliver("clarify", {
@@ -1088,12 +1070,38 @@ describe("HermesInteractions server requests", () => {
       requests.repairAnswers()
       await vi.advanceTimersByTimeAsync(1_000)
       expect(requests.answer(id)).toEqual({ answer: "eu" })
-      // Settled: nothing is sent again.
+      // Settled: nothing is sent again, and the wait was logged once.
       await vi.advanceTimersByTimeAsync(5_000)
       expect(requests.frames()).toHaveLength(1)
+      expect(warn.mock.calls).toEqual([
+        [{ method: "clarify" }, "hermes.interactions.answer_held"],
+      ])
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("keeps an answer in flight its own when a reconciliation stops listing the request", async () => {
+    const { requests, interactions, bind } = harness()
+    bind()
+    const id = requests.deliver("clarify", {
+      session_id: LIVE,
+      question: "Which region?",
+    })
+    const release = requests.deferAnswers()
+
+    const answering = interactions.respond(scope, {
+      requestId: id,
+      status: "resolved",
+      payload: { answers: [["eu"]] },
+    })
+    // Another tab reconciles while the answer is in flight; Hermes has
+    // applied it, so it no longer lists the request.
+    await interactions.resume(scope)
+    release()
+
+    await expect(answering).resolves.toEqual({ status: "already-resolved" })
+    expect(requests.answer(id)).toEqual({ answer: "eu" })
   })
 
   it("answers a request it holds even when reconciling with Hermes fails first", async () => {

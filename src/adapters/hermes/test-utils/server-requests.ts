@@ -60,6 +60,8 @@ export type ServerRequestsHarness = {
   breakAnswers(): void
   /** Answer RPCs are acknowledged again. */
   repairAnswers(): void
+  /** Hold every answer RPC open until the returned release is called. */
+  deferAnswers(): () => void
   /** Drop the socket: later writes are swallowed and `connected()` is false. */
   disconnect(): void
   reconnect(): void
@@ -83,6 +85,7 @@ export function serverRequests(): ServerRequestsHarness {
   channel.attach(socket)
   let sequence = 0
   let answers: "ok" | "expired" | "missing" | "broken" = "ok"
+  let deferred: Promise<void> | undefined
   const frameFor = (id: string, member: "result" | "error") =>
     written.find((frame) => frame.id === id && frame[member] !== undefined)?.[
       member
@@ -102,6 +105,7 @@ export function serverRequests(): ServerRequestsHarness {
       request: async (method, params) => {
         if (method !== "request.answer")
           throw new Error(`unexpected RPC: ${method}`)
+        if (deferred) await deferred
         if (answers === "missing")
           throw new HermesRpcRejectedError(JSON_RPC_METHOD_NOT_FOUND)
         if (answers === "broken") throw new Error("socket closed")
@@ -157,6 +161,16 @@ export function serverRequests(): ServerRequestsHarness {
     },
     repairAnswers() {
       answers = "ok"
+    },
+    deferAnswers() {
+      let release!: () => void
+      deferred = new Promise((resolve) => {
+        release = resolve
+      })
+      return () => {
+        deferred = undefined
+        release()
+      }
     },
     disconnect() {
       open = false

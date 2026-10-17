@@ -16,6 +16,8 @@
  * waiting out its 300 s deadline. Native ids never reach public output; a
  * request reaches the one asked in the words Hermes wrote.
  */
+import { createHash } from "node:crypto"
+
 import { INTERACTION_PROTOCOL } from "../../../protocol"
 import {
   PendingRequestKind,
@@ -31,7 +33,7 @@ import {
   type ServerRequest,
 } from "./gateway"
 import {
-  boundedNativeBytes,
+  boundedJsonShape,
   isRecord,
   nativeId,
   parseJson,
@@ -170,24 +172,33 @@ const HELD_METHODS = new Set([
 ])
 
 /**
- * Neither side is cut shorter than its own source allows. One request holds
- * Hermes' largest batch (`tools/clarify_tool.py`: five questions of four
- * 8,000-character choices, two bytes a Hebrew character). The form bounds no
- * answer, so one answer set may be as long as the protocol's largest
- * `maxStringBytes`, about a message.
+ * A question is never cut shorter than its words. One request is bounded at
+ * 512 KiB, which holds a batch at Hermes' own limits (`tools/clarify_tool.py`:
+ * five questions of four 8,000-character choices); a larger one is declined.
+ * The form bounds no answer, so only the ACP frame that carries one bounds it,
+ * and `maxStringBytes` names the protocol's largest value.
  */
 export const HERMES_INTERACTION_LIMITS = Object.freeze({
   maxNativePayloadBytes: 512 * 1024,
   maxDepth: 8,
   maxQuestions: 32,
   maxChoicesPerQuestion: 64,
-  maxAnswerValuesPerQuestion: 64,
-  maxAnswerBytes: 1_000_000,
+  maxStringBytes: 1_000_000,
   maxPending: 64,
 })
 
-/** How long an answer Hermes could not take waits before it is sent again. */
-const ANSWER_RETRY_MS = 5_000
+/**
+ * An operator approves only a command they can read whole, so a longer one is
+ * declined, which Hermes reads as unanswered.
+ */
+const MAX_APPROVAL_TEXT_BYTES = 4_096
+
+/**
+ * How long an answer Hermes could not take waits before it is sent again:
+ * inside the turn engine's own waits, so a held answer lands before either
+ * reads the turn as lost.
+ */
+const ANSWER_RETRY_MS = 1_000
 
 /** Bound for the per-method log: Hermes chooses both method and volume. */
 const MAX_LOGGED_METHODS = 32
@@ -234,19 +245,27 @@ type PendingInteraction = {
   request: ServerRequest
   /** The reconciliation Hermes last confirmed this request was open in. */
   confirmed: number
-  /**
-   * The answer given, kept until Hermes takes it. From then on the request is
-   * answered for every reader, so nothing asks it again.
-   */
-  held?: { result: ClarifyResult | ApprovalResult; fingerprint: string }
-  /** A send of the held answer is in flight. */
-  sending?: boolean
-  /** The next send of a held answer Hermes could not take. */
-  retry?: ReturnType<typeof setTimeout>
+  delivery?: Delivery
 } & (
   | { kind: "approval"; choices: ApprovalChoice[] }
   | { kind: "questions"; questions: Question[] }
 )
+
+/**
+ * An answer given and not yet taken by Hermes. From then on its request is
+ * answered for every reader, so nothing asks it again.
+ */
+type Delivery = {
+  result: ClarifyResult | ApprovalResult
+  /** A digest of the reply, telling a repeat from a changed answer. */
+  fingerprint: string
+  /** A send is in flight. */
+  sending: boolean
+  /** Hermes could not take it once, so its outcome is worth a log line. */
+  waited: boolean
+  /** The next send of an answer Hermes could not take. */
+  retry?: ReturnType<typeof setTimeout>
+}
 
 /** A projected request, before it is bound to a live Session and remembered. */
 type ProjectedInteraction =
@@ -357,6 +376,16 @@ export function interactionReason(error: unknown) {
     : publicReason(error)
 }
 
+/**
+ * Approval words the operator reads whole, or none; words that cannot be shown
+ * whole decline the request rather than ask approval for what goes unseen.
+ */
+function approvalText(value: unknown) {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === "string" && !value.trim()) return undefined
+  return validString(value, MAX_APPROVAL_TEXT_BYTES) ?? invalidNative()
+}
+
 /** A request field AOS cannot use: the caller declines the whole request. */
 function invalidNative(): never {
   throw new HermesInteractionPublicError("HGW_PROVIDER_INVALID_RESPONSE")
@@ -438,34 +467,13 @@ function validateLockedAnswers(answers: unknown, questions: Question[]) {
       ) === undefined
     )
       invalidNative()
-    let nativeAnswers: string[]
-    if (question.multiple) {
-      // A native answer list that is not JSON parses to `undefined`, which the
-      // array check below rejects like any other invalid shape.
-      const parsed = parseJson(encoded)
-      if (
-        !Array.isArray(parsed) ||
-        parsed.some(
-          (answer) =>
-            nativeText(
-              answer,
-              HERMES_INTERACTION_LIMITS.maxNativePayloadBytes,
-              true
-            ) === undefined
-        )
-      )
-        invalidNative()
-      nativeAnswers = parsed as string[]
-    } else {
-      nativeAnswers = encoded ? [encoded] : []
-    }
+    if (!question.multiple) continue
+    // A native answer list that is not JSON parses to `undefined`, which the
+    // array check rejects like any other invalid shape.
+    const parsed = parseJson(encoded)
     if (
-      nativeAnswers.length >
-        (question.multiple
-          ? (question.choices?.length ??
-            HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion)
-          : 1) ||
-      new Set(nativeAnswers).size !== nativeAnswers.length
+      !Array.isArray(parsed) ||
+      parsed.some((answer) => typeof answer !== "string")
     )
       invalidNative()
   }
@@ -530,8 +538,8 @@ function approvalInteraction(
 ): ProjectedInteraction {
   // As with `clarify`, `title` is the label and the message the words: Hermes
   // names the operation in `command` and explains it in `description`.
-  const command = validString(params.command)
-  const description = validString(params.description)
+  const command = approvalText(params.command)
+  const description = approvalText(params.description)
   const message =
     description ?? command ?? "Hermes is requesting permission to continue."
   const choices = approvalChoices(params)
@@ -596,10 +604,7 @@ function strictReply(value: unknown) {
       value.status !== ReplyStatus.Cancelled)
   )
     throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
-  if (
-    boundedNativeBytes(value, HERMES_INTERACTION_LIMITS.maxAnswerBytes) ===
-    undefined
-  )
+  if (!boundedJsonShape(value))
     throw new HermesInteractionPublicError("HGW_LIMIT_EXCEEDED")
   return {
     requestId,
@@ -609,6 +614,13 @@ function strictReply(value: unknown) {
 }
 
 type ValidReply = ReturnType<typeof strictReply>
+
+/** A repeat of an answer is told from a changed one by digest, not by copy. */
+function replyFingerprint(reply: ValidReply) {
+  return createHash("sha256")
+    .update(JSON.stringify([reply.status, reply.payload ?? null]))
+    .digest("hex")
+}
 
 /** The native values one ordered public answer set stands for. */
 function answerSets(value: unknown, questions: Question[]) {
@@ -629,12 +641,7 @@ function answerSets(value: unknown, questions: Question[]) {
     // The form takes any text, and a multi-select any of its choices beside
     // typed text; a value given twice is one answer.
     const answers = [...new Set(candidate as string[])]
-    if (
-      answers.length >
-      (question.multiple
-        ? HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion
-        : 1)
-    )
+    if (!question.multiple && answers.length > 1)
       throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
     // A choice reaches the browser as Hermes wrote it, so every answer is
     // already its native value; one that is none of the choices is the user's
@@ -763,7 +770,8 @@ export class HermesInteractions {
   /** Release both gateway subscriptions, every parked request and retainer. */
   close() {
     this.#closed = true
-    for (const { retry } of this.#pending.values()) clearTimeout(retry)
+    for (const { delivery } of this.#pending.values())
+      clearTimeout(delivery?.retry)
     this.#stopRequests()
     this.#stopEvents()
     for (const { timer } of this.#deferred.values()) clearTimeout(timer)
@@ -783,7 +791,7 @@ export class HermesInteractions {
     return [...this.#pending.values()]
       .filter(
         (interaction) =>
-          sameSession(interaction.scope, scope) && !interaction.held
+          sameSession(interaction.scope, scope) && !interaction.delivery
       )
       .sort((left, right) => left.sequence - right.sequence)
       .map(({ pendingRequest }) => pendingRequest)
@@ -815,7 +823,7 @@ export class HermesInteractions {
   ): Promise<HermesInteractionResult> {
     const reply = strictReply(candidate)
     const key = interactionKey(scope, reply.requestId)
-    const fingerprint = JSON.stringify([reply.status, reply.payload ?? null])
+    const fingerprint = replyFingerprint(reply)
     const completed = this.#completed.get(key)
     if (completed) {
       if (
@@ -828,16 +836,21 @@ export class HermesInteractions {
     const interaction = this.#pending.get(key)
     if (!interaction)
       throw new HermesInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
-    if (interaction.held && interaction.held.fingerprint !== fingerprint)
+    if (
+      interaction.delivery &&
+      interaction.delivery.fingerprint !== fingerprint
+    )
       throw new HermesInteractionPublicError("HGW_INVALID_INTERACTION")
-    interaction.held ??= {
+    interaction.delivery ??= {
       result:
         interaction.kind === "approval"
           ? approvalResult(interaction, reply)
           : clarifyResult(interaction, reply),
       fingerprint,
+      sending: false,
+      waited: false,
     }
-    return this.#send(key, interaction)
+    return this.#send(key, interaction, interaction.delivery)
   }
 
   /**
@@ -859,34 +872,35 @@ export class HermesInteractions {
   }
 
   /**
-   * Give Hermes the held answer. One it cannot take now stays held and goes
-   * again when Hermes re-lists its request or after `answerRetryMs`, until
-   * Hermes takes it or stops holding the request.
+   * Give Hermes the answer. One it cannot take now is kept and goes again when
+   * Hermes re-lists its request or after `answerRetryMs`, until Hermes takes it
+   * or stops holding the request.
    */
   async #send(
     key: string,
-    interaction: PendingInteraction
+    interaction: PendingInteraction,
+    delivery: Delivery
   ): Promise<HermesInteractionResult> {
-    const held = interaction.held!
     // A write onto a dead socket is swallowed, and would report an answer
     // Hermes never received.
-    if (interaction.sending || !this.transport.connected())
-      return this.#keep(key, interaction)
-    interaction.sending = true
+    if (delivery.sending || !this.transport.connected())
+      return this.#keep(key, interaction, delivery)
+    delivery.sending = true
     let settlement: "ok" | "expired" | "uncertain"
     try {
-      settlement = await this.#answer(interaction, held.result)
+      settlement = await this.#answer(interaction, delivery.result)
     } catch (error) {
       // Hermes takes no answer at all, so the request is open to answer again.
-      interaction.held = undefined
+      this.#undeliver(interaction)
       throw error
     } finally {
-      interaction.sending = false
+      delivery.sending = false
     }
     // A cancel or a reconciliation settled the request meanwhile.
     if (this.#pending.get(key) !== interaction)
       return this.#completed.get(key)?.result ?? { status: "expired" }
-    if (settlement === "uncertain") return this.#keep(key, interaction)
+    if (settlement === "uncertain")
+      return this.#keep(key, interaction, delivery)
     // An answer of this gateway's own that lost its acknowledgement is what
     // settled a request Hermes now calls expired.
     const answered = this.#unacknowledged.delete(interaction.request.id)
@@ -896,29 +910,48 @@ export class HermesInteractions {
         : answered
           ? "already-resolved"
           : "expired"
+    if (status === "expired" && delivery.waited)
+      this.#logMethod(
+        "hermes.interactions.held_answer_expired",
+        interaction.request.method
+      )
     this.#drop(key)
-    this.#complete(key, { status }, held.fingerprint)
+    this.#complete(key, { status }, delivery.fingerprint)
     this.#release(interaction.scope)
     return { status }
   }
 
   /** Keep the answer for a later send; Hermes' own deadline bounds the wait. */
-  #keep(key: string, interaction: PendingInteraction): HermesInteractionResult {
-    if (!interaction.retry && !this.#closed) {
+  #keep(
+    key: string,
+    interaction: PendingInteraction,
+    delivery: Delivery
+  ): HermesInteractionResult {
+    if (!delivery.waited) {
+      delivery.waited = true
+      this.#log?.warn(
+        { method: interaction.request.method },
+        "hermes.interactions.answer_held"
+      )
+    }
+    if (!delivery.retry && !this.#closed) {
       const retry = setTimeout(() => {
-        interaction.retry = undefined
-        if (this.#pending.get(key) === interaction)
-          this.#resend(key, interaction)
+        delivery.retry = undefined
+        if (
+          this.#pending.get(key) === interaction &&
+          interaction.delivery === delivery
+        )
+          this.#resend(key, interaction, delivery)
       }, this.#answerRetryMs)
       // A retry is housekeeping, never a reason to keep the process alive.
       if (typeof retry !== "number") retry.unref()
-      interaction.retry = retry
+      delivery.retry = retry
     }
     return { status: "held" }
   }
 
-  #resend(key: string, interaction: PendingInteraction) {
-    this.#send(key, interaction).catch((err: unknown) =>
+  #resend(key: string, interaction: PendingInteraction, delivery: Delivery) {
+    this.#send(key, interaction, delivery).catch((err: unknown) =>
       this.#log?.warn(
         { reason: interactionReason(err) },
         "hermes.interactions.answer_failed"
@@ -926,9 +959,16 @@ export class HermesInteractions {
     )
   }
 
-  /** Forget a request nothing answers any more, and any send still scheduled. */
+  /** Stop delivering a request's answer, with any send still scheduled. */
+  #undeliver(interaction: PendingInteraction) {
+    clearTimeout(interaction.delivery?.retry)
+    interaction.delivery = undefined
+  }
+
+  /** Forget a request nothing answers any more. */
   #drop(key: string) {
-    clearTimeout(this.#pending.get(key)?.retry)
+    const interaction = this.#pending.get(key)
+    if (interaction) this.#undeliver(interaction)
     this.#pending.delete(key)
   }
 
@@ -1041,9 +1081,8 @@ export class HermesInteractions {
         cancellation: "native-empty-answer" as const,
         maxQuestions: HERMES_INTERACTION_LIMITS.maxQuestions,
         maxChoicesPerQuestion: HERMES_INTERACTION_LIMITS.maxChoicesPerQuestion,
-        maxAnswerValuesPerQuestion:
-          HERMES_INTERACTION_LIMITS.maxAnswerValuesPerQuestion,
-        maxStringBytes: HERMES_INTERACTION_LIMITS.maxAnswerBytes,
+        maxAnswerValuesPerQuestion: "complete-request" as const,
+        maxStringBytes: HERMES_INTERACTION_LIMITS.maxStringBytes,
       },
       reactions: {
         status: "unavailable" as const,
@@ -1097,7 +1136,7 @@ export class HermesInteractions {
       existing.liveSessionId = liveSessionId
       existing.confirmed = this.#reconciliation
       // Hermes still waits on it, so an answer it could not take goes now.
-      if (existing.held) this.#resend(key, existing)
+      if (existing.delivery) this.#resend(key, existing, existing.delivery)
       return true
     }
     // An answered request is never re-opened by a duplicate live frame; a
@@ -1220,10 +1259,13 @@ export class HermesInteractions {
         sameSession(interaction.scope, scope) &&
         interaction.confirmed < reconciliation
       ) {
-        this.#drop(key)
         // An answer of this Session's own, dispatched without an
-        // acknowledgement, is what settled a request Hermes stopped listing.
-        const answered = this.#unacknowledged.delete(interaction.request.id)
+        // acknowledgement or still in flight, is what settled a request
+        // Hermes stopped listing.
+        const answered =
+          this.#unacknowledged.delete(interaction.request.id) ||
+          interaction.delivery?.sending === true
+        this.#drop(key)
         this.#complete(key, {
           status: answered ? "already-resolved" : "expired",
         })

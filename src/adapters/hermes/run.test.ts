@@ -1134,6 +1134,26 @@ describe("HermesRunEngine", () => {
     )
   })
 
+  it("keeps the run going while Hermes cannot take its answer yet", async () => {
+    const { handle, publish } = await resumedRun({
+      respondInteractions: async () => [{ status: "held" as const }],
+    })
+    const turn = nativeTurn("live-secret", 2)
+
+    // The held answer reaches Hermes later, and its turn goes on.
+    publish(turn.messageStart("continued"))
+    publish(turn.delta("The first one is a bar chart."))
+    publish(turn.complete("continued", "The first one is a bar chart."))
+    publish(turn.idle())
+
+    await expect(settledWithin(handle, 250)).resolves.toBe("settled")
+    const events = await collect(handle)
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([])
+    expect(ofKind(events, TurnEventKind.TurnEnded)).toEqual([
+      { kind: TurnEventKind.TurnEnded, stopReason: StopReason.EndTurn },
+    ])
+  })
+
   it("terminalizes an uncertain acknowledgement without retrying or releasing admission", async () => {
     let submissions = 0
     const engine = new HermesTurnEngine(

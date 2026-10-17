@@ -332,14 +332,16 @@ visibility uses.
   disconnect, and an unreadable ownership registry, are retried for a few
   seconds without a visible error, then fail with `HGW_PROVIDER_UNAVAILABLE`.
   A question Hermes no longer holds open fails with `HGW_INTERACTION_EXPIRED`.
-- An answer is never cut shorter than a message: a question takes typed text
-  and every choice of a multi-select, and only a whole answer set past
-  1,000,000 bytes is refused. A question, choice, or approval command Hermes
-  writes is shown whole up to 512 KiB, which holds Hermes' largest batch. An answer Hermes cannot take
-  yet, because the socket is down or its acknowledgement was lost, is held:
-  the turn keeps running, the question is not asked again, and the answer is
-  sent when Hermes re-lists the request after a reconnect and every few
-  seconds until Hermes takes it or stops waiting.
+- A question's answer is bounded only by the ACP frame that carries it: any
+  typed text, and every choice of a multi-select beside typed text. A question
+  request is shown whole up to 512 KiB, which holds a batch at Hermes' own
+  limits; a larger one is declined. An approval whose command or description
+  passes 4 KB is declined rather than shown cut, so nothing is approved
+  unseen; Hermes reads either decline as unanswered.
+- An answer Hermes cannot take yet, because the socket is down or its
+  acknowledgement was lost, is held: the turn keeps running, the question is
+  not asked again, and the answer is sent when Hermes re-lists the request
+  after a reconnect and every second until Hermes takes it or stops waiting.
 - A Session AOS finds `waiting` whose open request Hermes does not re-deliver
   within about two seconds, while nothing else changes, reports
   `HGW_INTERACTION_LOST`. The turn stays running so Stop remains available;
