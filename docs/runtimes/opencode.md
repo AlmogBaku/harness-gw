@@ -75,11 +75,10 @@ maps, and stats are [MCP App](#mcp-apps) views the gateway reads from the
 registered URL itself, so that URL must reach the server from the gateway as
 well as from OpenCode, and each view receives a text-only result.
 
-The `aos-agent-creator` skill can be placed at
-`.opencode/skills/aos-agent-creator/SKILL.md` and the `aos-invite-link` skill
-at `.opencode/skills/aos-invite-link/SKILL.md` in the worktree. The creator may
-write only a new `.opencode/agents/<id>.md` file. The OpenCode adapter does not
-yet report it as the creator, so AOS does not offer **New Agent** on OpenCode.
+The `aos-invite-link` skill can be placed at
+`.opencode/skills/aos-invite-link/SKILL.md` in the worktree. An OpenCode Agent's
+summary carries no `_meta`, and the gateway treats no Agent specially, so AOS
+does not offer **New Agent** on OpenCode.
 
 Set `AOS_GATEWAY_URL` for an Agent using `aos-invite-link` to the
 configured operator gateway origin. The skill prefers the operator invitation

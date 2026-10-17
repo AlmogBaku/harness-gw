@@ -209,7 +209,7 @@ describe("AOS ACP agent", () => {
       authMethods: [],
       _meta: {
         hgw: {
-          version: 2,
+          version: 3,
           role: "operator",
           extensions: {
             steer: true,

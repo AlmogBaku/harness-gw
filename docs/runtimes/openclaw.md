@@ -92,15 +92,12 @@ the tool call's textual details. The tool shows as `mcp__NAME__TOOL`, resolved
 against the Session's `tools.effective` list. The gateway's `mcpApps` headers
 block does not apply to OpenClaw.
 
-### Creator Agent
+### Agent metadata
 
-OpenClaw's Agent summary has no field for a role, so AOS treats the Agent with
-the reserved id `aos-agent-creator` as the creator behind **New Agent** and
-keeps it out of the roster. Create it with `openclaw agents add` and give its
-workspace a copy of the `aos-agent-creator` skill. After the user confirms a
-definition, the creator runs `openclaw agents add` as the skill's
-`reference/harness-openclaw.md` describes, so it needs OpenClaw's command
-execution tool.
+OpenClaw's closed Agent summary has no place for a client's own metadata, so an
+OpenClaw Agent's summary carries no `_meta`. The gateway treats no Agent id
+specially: an Agent named `aos-agent-creator` is listed, selectable, and
+writable like any other.
 
 ### MCP App file reads
 
@@ -133,10 +130,10 @@ after the Session is reloaded, not while the turn streams.
 Each Agent's icon is stored in the `identity.avatar` field of the Agent's own
 authored entry in `agents.list` inside the config.
 
-The gateway writes an icon only for a non-creator Agent (never `aos-agent-creator`)
-that has its own `agents.list` entry whose `id` exactly matches. An Agent with
-no authored entry cannot take a write; its `avatarEditable` is `false`. The
-implicit default Agent (no entry) stays unsaved for the same reason.
+The gateway writes an icon only for an Agent that has its own `agents.list`
+entry whose `id` exactly matches. An Agent with no authored entry cannot take a
+write; its `avatarEditable` is `false`. The implicit default Agent (no entry)
+stays unsaved for the same reason.
 
 The write reads the current config hash with `config.get`, then sends one
 `config.patch` with that `baseHash` and exactly

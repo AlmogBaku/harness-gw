@@ -98,7 +98,6 @@ export type OpenCodeServerAdapterOptions = Readonly<{
   turns: ServerTurnEngine
   /** Factory supplies the one shared native-interaction authority. */
   interactions?: OpenCodeInteractions
-  creatorAgentId?: string
   /** Where a row left out of a list is told. */
   logger?: Logger
   /** The project's MCP servers; without them, no tool opens a view. */
@@ -225,7 +224,6 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     this.link = options.link ?? READY_LINK
     this.#workspace = createOpenCodeWorkspaceOperations({
       client: options.client,
-      creatorAgentId: options.creatorAgentId,
       ...(options.logger ? { log: options.logger } : {}),
     })
     this.interactions =

@@ -15,16 +15,14 @@ import { HGW_REQUEST_TEXT_MAX, IdentifierSchema } from "./acp"
 export const PushCategorySchema = z.enum(["input", "failure", "completion"])
 export type PushCategory = z.infer<typeof PushCategorySchema>
 
-/** Which category, if any, an execution or Agent lifecycle event notifies as. */
+/** Which category, if any, an execution event notifies as. */
 export function categoryOf(type: string): PushCategory | undefined {
   switch (type) {
     case "attention-requested":
       return "input"
     case "turn-failed":
-    case "agent-activation-failed":
       return "failure"
     case "turn-finished":
-    case "agent-ready":
       return "completion"
     default:
       return undefined

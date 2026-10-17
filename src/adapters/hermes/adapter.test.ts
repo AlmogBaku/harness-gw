@@ -27,6 +27,7 @@ import { providerSessionId, sessionId } from "../../core/ids"
 import {
   ServerAgentUpdateUnsupportedError,
   ServerTurnSteerUncertainError,
+  type SessionPatch,
   type SessionScope,
 } from "../../core/runtime"
 import { HermesTurnPublicError, HermesTurnRewindConflictError } from "./run"
@@ -59,14 +60,19 @@ function profile(
     name: "researcher",
     display_name: "Researcher",
     description: "Investigates primary sources",
+    // Native fields a real row carries and no catalog entry may.
+    path: "/srv/hermes/canary-path",
+    model: "canary-model",
+    provider: "canary-provider",
+    previous_names: ["canary-previous-name"],
     ui_meta: {
       aos: {
         role: "agent",
-        privatePath: "/srv/hermes/researcher",
         ...(aos.avatar === undefined ? {} : { avatar: aos.avatar }),
         ...(aos.muted === undefined ? {} : { muted: aos.muted }),
       },
-      "hermes-bots": { hidden, nativeOnly: "keep-server-side" },
+      "hermes-bots": { hidden, nativeOnly: "canary-bots" },
+      "other-client": { note: "canary-other-namespace" },
     },
     ...(revision === null
       ? {}
@@ -672,7 +678,7 @@ describe("Hermes server adapter", () => {
     )
     // What survives a skip holds no Agent a person can pick.
     profiles = [
-      profile("creator", { ui_meta: { aos: { role: "creator" } } }),
+      profile("hidden", { ui_meta: { "hermes-bots": { hidden: true } } }),
       profile(""),
     ]
     await expect(adapter.listAgents()).rejects.toBeInstanceOf(
@@ -937,55 +943,6 @@ describe("Hermes server adapter", () => {
         expect(own.served).toEqual(ids(profileRows))
       }
     })
-  })
-
-  it("catalogs creator-owned Sessions while keeping the creator unselectable", async () => {
-    const request = vi.fn(async () => ({
-      profiles: [
-        { name: "researcher", ui_meta: {}, ui_meta_revisions: {} },
-        {
-          name: "aos-creator",
-          ui_meta: { aos: { role: "creator" } },
-          ui_meta_revisions: {},
-        },
-      ],
-    }))
-    const http = vi.fn(async (path: string) => {
-      const profileName = new URL(path, "http://native.test").searchParams.get(
-        "profile"
-      )
-      return {
-        sessions: [
-          {
-            id: `${profileName}-session`,
-            profile: profileName,
-            last_active: profileName === "researcher" ? 20 : 10,
-          },
-        ],
-        total: 1,
-      }
-    })
-    const adapter = new HermesServerAdapter({ request, http })
-
-    const agents = await adapter.listAgents()
-    const catalog = await adapter.listAllSessions(50, 0)
-
-    expect(
-      agents.agents.find(({ summary }) => summary.id === "aos-creator")
-    ).toMatchObject({
-      summary: { role: "creator" },
-      selectable: false,
-    })
-    expect(
-      catalog.sessions.map(({ id, agentId }) => ({ id, agentId }))
-    ).toEqual([
-      { id: "researcher-session", agentId: "researcher" },
-      { id: "aos-creator-session", agentId: "aos-creator" },
-    ])
-    expect(http.mock.calls.map(([path]) => path)).toEqual([
-      "/api/sessions?profile=researcher&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban",
-      "/api/sessions?profile=aos-creator&limit=50&offset=0&order=recent&archived=include&exclude_sources=cron%2Ctool%2Ckanban",
-    ])
   })
 
   it("creates Agent-owned lazy Sessions using the native stored identity", async () => {
@@ -1534,13 +1491,13 @@ describe("Hermes server adapter", () => {
   /** An adapter whose dashboard has no row for any Session yet. */
   const unstoredAdapter = (resume: Record<string, unknown>) => {
     const router = rpcRouter({ "session.resume": async () => resume })
-    const adapter = new HermesServerAdapter({
-      ...router,
-      http: vi.fn(async () => {
-        throw new HermesHttpError(404)
-      }),
+    const http = vi.fn<
+      (path: string, init?: { method?: string }) => Promise<unknown>
+    >(async () => {
+      throw new HermesHttpError(404)
     })
-    return { adapter, router }
+    const adapter = new HermesServerAdapter({ ...router, http })
+    return { adapter, router, http }
   }
 
   it("projects an unpersisted lazy Session from its native resume snapshot", async () => {
@@ -1587,6 +1544,26 @@ describe("Hermes server adapter", () => {
     ).resolves.toMatchObject({ id: "stored/1", agentId: "researcher" })
   })
 
+  it.each<SessionPatch>([
+    { title: "Renamed" },
+    { archived: true },
+    { pinned: true },
+    { unread: false },
+  ])(
+    "refuses a write to a Session Hermes has not stored as unavailable, writing nothing: %o",
+    async (patch) => {
+      const { adapter, http } = unstoredAdapter(lazySnapshot)
+
+      // Not gone: the Session stays, and the write can be sent again later.
+      await expect(
+        adapter.updateSession("researcher", "stored/1", patch)
+      ).rejects.toBeInstanceOf(HermesUnavailableError)
+      expect(http.mock.calls.flatMap(([, init]) => init?.method ?? [])).toEqual(
+        []
+      )
+    }
+  )
+
   it("returns empty Todos for an unpersisted lazy Session", async () => {
     const { adapter } = unstoredAdapter(lazySnapshot)
 
@@ -1615,6 +1592,9 @@ describe("Hermes server adapter", () => {
     })
     await expect(
       unknown.getSession("researcher", "missing")
+    ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
+    await expect(
+      unknown.updateSession("researcher", "missing", { title: "Renamed" })
     ).rejects.toBeInstanceOf(HermesSessionNotFoundError)
 
     const conflict = new HermesServerAdapter({
@@ -2632,7 +2612,7 @@ describe("Hermes server adapter", () => {
     })
   })
 
-  it("projects profile names as Agent IDs without leaking native metadata", async () => {
+  it("projects profile names as Agent IDs and passes `ui_meta.aos` alone through", async () => {
     const request = vi.fn(async () => ({ profiles: [profile()] }))
     const adapter = new HermesServerAdapter({ request } as HermesRpcTransport)
 
@@ -2651,6 +2631,7 @@ describe("Hermes server adapter", () => {
             name: "Researcher",
             description: "Investigates primary sources",
             visibility: "visible",
+            _meta: { aos: { role: "agent" } },
           },
           visibility: "visible",
           selectable: true,
@@ -2661,8 +2642,7 @@ describe("Hermes server adapter", () => {
         },
       ],
     })
-    expect(JSON.stringify(catalog)).not.toContain("privatePath")
-    expect(JSON.stringify(catalog)).not.toContain("nativeOnly")
+    expect(JSON.stringify(catalog)).not.toContain("canary")
   })
 
   it("keeps the catalog revision inside the identifier bound for many long profile names", async () => {
@@ -2798,10 +2778,7 @@ describe("Hermes server adapter", () => {
         {
           name: "researcher",
           ui_meta: {
-            "hermes-bots": {
-              hidden: true,
-              nativeOnly: "keep-server-side",
-            },
+            "hermes-bots": { hidden: true, nativeOnly: "canary-bots" },
           },
           ui_meta_expected_revisions: { "hermes-bots": 7 },
         },
@@ -2897,8 +2874,8 @@ describe("Hermes server adapter", () => {
         {
           name: "researcher",
           ui_meta: {
-            "hermes-bots": { hidden: true, nativeOnly: "keep-server-side" },
-            aos: { role: "agent", privatePath: "/srv/hermes/researcher" },
+            "hermes-bots": { hidden: true, nativeOnly: "canary-bots" },
+            aos: { role: "agent" },
           },
           ui_meta_expected_revisions: { "hermes-bots": 7, aos: 3 },
         },
@@ -2935,11 +2912,7 @@ describe("Hermes server adapter", () => {
         {
           name: "researcher",
           ui_meta: {
-            aos: {
-              role: "agent",
-              privatePath: "/srv/hermes/researcher",
-              avatar: "dome/sage",
-            },
+            aos: { role: "agent", avatar: "dome/sage" },
           },
           ui_meta_expected_revisions: { aos: 3 },
         },
@@ -2994,11 +2967,7 @@ describe("Hermes server adapter", () => {
         {
           name: "researcher",
           ui_meta: {
-            aos: {
-              role: "agent",
-              privatePath: "/srv/hermes/researcher",
-              ...written,
-            },
+            aos: { role: "agent", ...written },
           },
           ui_meta_expected_revisions: { aos: 3 },
         },
@@ -3040,33 +3009,6 @@ describe("Hermes server adapter", () => {
         )
       ).rejects.toBeInstanceOf(ServerAgentUpdateUnsupportedError)
     expect(request).not.toHaveBeenCalled()
-  })
-
-  it("refuses an update aimed at the creator", async () => {
-    const creator = {
-      name: "aos-creator",
-      ui_meta: { aos: { role: "creator" } },
-      ui_meta_revisions: {},
-    }
-    const request = vi.fn<
-      (method: string) => Promise<{ profiles: (typeof creator)[] }>
-    >(async () => ({ profiles: [creator] }))
-    const adapter = new HermesServerAdapter({ request })
-
-    expect((await adapter.listAgents()).agents[0]).toMatchObject({
-      editable: false,
-      avatarEditable: false,
-    })
-    await expect(
-      adapter.updateAgent(
-        "aos-creator",
-        { avatar: "ring/blue" },
-        "hermes-bots:0,aos:0"
-      )
-    ).rejects.toBeInstanceOf(HermesUnavailableError)
-    expect(
-      request.mock.calls.some(([method]) => method === "profiles.configure")
-    ).toBe(false)
   })
 
   it("distinguishes rejected Hermes credentials from a temporary outage", async () => {

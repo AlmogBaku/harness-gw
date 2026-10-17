@@ -98,6 +98,7 @@ import { READY_LINK, type ServerLink } from "../../core/link"
 import * as ids from "../../core/ids"
 import type { McpToolNameResolver } from "../../core/aos-tool-names"
 import { loggedId } from "../../core/identifier"
+import type { JsonValue } from "../json-value"
 import { inviteSessionKey } from "../../core/invite-key"
 import { sessionPlatform } from "../../core/session-platform"
 import type { McpAppClient } from "../../mcp-apps/client"
@@ -330,10 +331,9 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
   const revisions = nativeRevisions(profile)
   const visibility =
     bots.hidden === true ? ("hidden" as const) : ("visible" as const)
-  const creator = aos.role === "creator"
   // A stored value that is not a token reads as no avatar, never as a bad row.
   const avatar = AgentAvatarSchema.safeParse(aos.avatar)
-  const editable = revisions !== undefined && !creator
+  const editable = revisions !== undefined
   return {
     summary: {
       kind: "ready",
@@ -343,12 +343,16 @@ function projectProfile(profile: NativeRecord): AgentCatalogEntry {
         ? { description: trimmedText(profile.description) }
         : {}),
       visibility,
-      ...(creator ? { role: "creator" as const } : {}),
       ...(avatar.success ? { avatar: avatar.data } : {}),
       ...(aos.muted === true ? { muted: true as const } : {}),
+      // The namespace of a JSON row as stored, unread, under its own key so no
+      // stored key reaches the `_meta` root.
+      ...(Object.keys(aos).length > 0
+        ? { _meta: { aos: aos as JsonValue } }
+        : {}),
     },
     visibility,
-    selectable: visibility === "visible" && !creator,
+    selectable: visibility === "visible",
     editable,
     avatarEditable: editable,
     muteEditable: editable,
@@ -1294,8 +1298,7 @@ export class HermesServerAdapter implements ServerRuntime {
     try {
       const catalog = await this.listAgents()
       visibilityAvailable = catalog.agents.every(
-        ({ summary, revision }) =>
-          summary.role === "creator" || revision !== "unavailable"
+        ({ revision }) => revision !== "unavailable"
       )
     } catch (error) {
       if (error instanceof HermesAuthenticationError) throw error
@@ -1436,8 +1439,9 @@ export class HermesServerAdapter implements ServerRuntime {
         hidden: patch.visibility === "hidden",
       }
     if (patch.avatar !== undefined || patch.muted !== undefined) {
-      // One write from the stored keys, so `role` survives and an avatar and
-      // a mute in one patch both land; null drops the avatar, unmute the key.
+      // One write from the stored keys, so every other key survives and an
+      // avatar and a mute in one patch both land; null drops the avatar,
+      // unmute the key.
       const aos = { ...nativeNamespace(profile, "aos") }
       if (patch.avatar === null) delete aos.avatar
       else if (patch.avatar !== undefined) aos.avatar = patch.avatar
@@ -2093,13 +2097,14 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   /**
-   * The Session as Hermes stores it, and whether `session.branch` made it:
-   * Hermes marks a fork's row with `model_config._branched_from`.
+   * The Session as Hermes stores it, whether Hermes has stored it yet, and
+   * whether `session.branch` made it: Hermes marks a fork's row with
+   * `model_config._branched_from`.
    */
   async #storedSession(
     profile: string,
     storedId: string
-  ): Promise<{ session: Session; branched: boolean }> {
+  ): Promise<{ session: Session; stored: boolean; branched: boolean }> {
     if (!this.#dashboard) throw new HermesUnavailableError()
     let payload: unknown
     try {
@@ -2108,6 +2113,7 @@ export class HermesServerAdapter implements ServerRuntime {
       if (error instanceof HermesHttpError && error.status === 404)
         return {
           session: await this.#unpersistedDraft(profile, storedId),
+          stored: false,
           branched: false,
         }
       throwUnavailable(error)
@@ -2138,6 +2144,7 @@ export class HermesServerAdapter implements ServerRuntime {
     const config = parseJson(payload.model_config)
     return {
       session: result.data,
+      stored: true,
       branched:
         isRecord(config) && trimmedText(config._branched_from) !== undefined,
     }
@@ -2261,26 +2268,30 @@ export class HermesServerAdapter implements ServerRuntime {
     }
   }
 
-  updateSession(profile: string, storedId: string, patch: SessionPatch) {
+  async updateSession(profile: string, storedId: string, patch: SessionPatch) {
+    // A Session Hermes has not stored yet has no row to patch, and the
+    // dashboard answers 404 as for a deleted one: refused as unavailable, it
+    // stays, and the write can be sent again once its first turn is stored.
+    if (!(await this.#storedSession(profile, storedId)).stored)
+      throw new HermesUnavailableError()
     // The native patch owns every flag's side effects: pinning a Session also
     // clears `hidden` and exempts the row from auto-archive.
-    return this.#mutateSession(profile, storedId, (dashboard) =>
+    return this.#mutateSession((dashboard) =>
       dashboard.updateSession(profile, storedId, patch)
     )
   }
 
-  deleteSession(profile: string, storedId: string) {
-    return this.#mutateSession(profile, storedId, (dashboard) =>
+  async deleteSession(profile: string, storedId: string) {
+    await this.getSession(profile, storedId)
+    return this.#mutateSession((dashboard) =>
       dashboard.deleteSession(profile, storedId)
     )
   }
 
+  /** One dashboard write to a Session already read, its refusals mapped. */
   async #mutateSession(
-    profile: string,
-    storedId: string,
     write: (dashboard: HermesDashboardClient) => Promise<unknown>
   ) {
-    await this.getSession(profile, storedId)
     if (!this.#dashboard) throw new HermesUnavailableError()
     try {
       await write(this.#dashboard)

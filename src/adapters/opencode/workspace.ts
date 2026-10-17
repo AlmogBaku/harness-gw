@@ -163,7 +163,6 @@ function listedSession(
 
 export function createOpenCodeWorkspaceOperations(input: {
   client: OpenCodeWorkspaceClient
-  creatorAgentId?: string
   /** Where a row left out of a list is told, by its id alone. */
   log?: Logger
 }) {
@@ -342,7 +341,6 @@ export function createOpenCodeWorkspaceOperations(input: {
       let skipped = 0
       for (const row of parsed.data.data) {
         const native = parseOpenCodeAgent(row)
-        if (native.success && native.data.id === input.creatorAgentId) continue
         const entry = native.success
           ? AgentCatalogEntrySchema.safeParse(catalogEntry(native.data))
           : undefined

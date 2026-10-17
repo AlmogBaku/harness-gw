@@ -18,6 +18,8 @@ const Utf8MiBTextSchema = z
   .min(1)
   .refine((value) => new TextEncoder().encode(value).byteLength <= 1_048_576)
 
+const JsonRecordSchema = z.record(z.string(), z.json())
+
 export const RuntimeAuthStateSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("authenticated") }),
   z.strictObject({ status: z.literal("authentication-required") }),
@@ -109,10 +111,14 @@ const AgentSummarySchema = z.strictObject({
     .optional(),
   activity: z.enum(["active", "idle", "unknown"]).optional(),
   visibility: z.enum(["visible", "hidden"]).optional(),
-  role: z.literal("creator").optional(),
   avatar: AgentAvatarSchema.optional(),
   /** The operator muted the Agent's notifications; absent when not. */
   muted: z.literal(true).optional(),
+  /**
+   * The harness's own Agent metadata, passed through unread: the gateway never
+   * looks inside it, so it is unvalidated harness data.
+   */
+  _meta: JsonRecordSchema.optional(),
 })
 
 export const AgentCatalogEntrySchema = z.strictObject({
@@ -301,7 +307,6 @@ export const ToolDiffSchema = z.strictObject({
 })
 export type ToolDiff = z.infer<typeof ToolDiffSchema>
 
-const JsonRecordSchema = z.record(z.string(), z.json())
 const SessionMessagePartSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("text"), text: z.string().max(1_000_000) }),
   z.strictObject({

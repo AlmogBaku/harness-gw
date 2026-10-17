@@ -83,11 +83,6 @@ export function createAcpWorkspaceClient({
     connection,
     logger: clientLog,
     ...(now ? { now } : {}),
-    onTurnFinished: (sessionId) => {
-      reportCreatedAgents(sessionId).catch((err: unknown) =>
-        clientLog.warn({ err }, "agent.report_created_failed")
-      )
-    },
   })
   const composer = createAcpComposerStore(connection)
   const revisions = new Map<string, string>()
@@ -101,10 +96,6 @@ export function createAcpWorkspaceClient({
     revisions.set(agentId, result.agent.revision)
   }
 
-  let creatorId: string | undefined
-  let listedAgentIds: ReadonlySet<string> = new Set()
-  /** The Agent ids each creator Session's catalog held when it opened. */
-  const creatorBaselines = new Map<string, Set<string>>()
   let sessionActions: Promise<SessionActionCapabilities> | undefined
 
   function adopt(sessionId: string, agentId: string) {
@@ -139,10 +130,6 @@ export function createAcpWorkspaceClient({
     revisions.clear()
     for (const entry of response.agents)
       revisions.set(entry.summary.id, entry.revision)
-    creatorId = response.agents.find(
-      ({ summary }) => summary.role === "creator"
-    )?.summary.id
-    listedAgentIds = new Set(response.agents.map(({ summary }) => summary.id))
     return response
   }
 
@@ -197,40 +184,6 @@ export function createAcpWorkspaceClient({
       .finally(() => pageReads.delete(key))
     pageReads.set(key, read)
     return read
-  }
-
-  function watchCreator(sessionId: string, agentId: string) {
-    if (agentId === creatorId && !creatorBaselines.has(sessionId))
-      creatorBaselines.set(sessionId, new Set(listedAgentIds))
-  }
-
-  /**
-   * The creator makes Agents with its harness's own means, so creation is
-   * observable only in the catalog: an Agent that was not listed when the
-   * creator Session opened, and is listed once one of its turns stops. A
-   * visible one is ready; a hidden one still needs its operator.
-   */
-  async function reportCreatedAgents(sessionId: string) {
-    const baseline = creatorBaselines.get(sessionId)
-    if (!baseline) return
-    let agents
-    try {
-      agents = (await catalog()).agents
-    } catch {
-      return
-    }
-    for (const { summary, visibility } of agents) {
-      if (baseline.has(summary.id)) continue
-      baseline.add(summary.id)
-      store.emitActivity({
-        id: `${sessionId}:${summary.id}`,
-        type:
-          visibility === "hidden" ? "agent-activation-failed" : "agent-ready",
-        agentId: summary.id,
-        sessionId,
-        occurredAt: new Date((now ?? Date.now)()).toISOString(),
-      })
-    }
   }
 
   async function listSessions(agentId?: string, cursor?: string) {
@@ -372,10 +325,7 @@ export function createAcpWorkspaceClient({
           leaveComposer()
         },
       })
-      if (agentId) {
-        adopt(sessionId, agentId)
-        watchCreator(sessionId, agentId)
-      }
+      if (agentId) adopt(sessionId, agentId)
     }
     let released = false
     return () => {
@@ -472,7 +422,6 @@ export function createAcpWorkspaceClient({
         ...(options?.title ? { title: options.title } : {}),
       })
       adopt(created.sessionId, agentId)
-      watchCreator(created.sessionId, agentId)
       return { sessionId: created.sessionId }
     },
     subscribeSession,

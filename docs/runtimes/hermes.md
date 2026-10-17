@@ -233,29 +233,18 @@ To look up the call's input when the App opens, the gateway pages the stored raw
 rows with `GET /api/sessions/:id/messages`. Hermes stores a call's row before
 the tool runs, so a call whose turn is still live is found.
 
-## Creator profile
+## Agent metadata
 
-The creator behind **New Agent** is an ordinary profile, conventionally
-`aos-agent-creator`, that loads the `aos-agent-creator` skill. Its marker lives
-in its `profile.yaml`, and no `hermes` command sets it; the gateway keeps the
-marked profile out of the Agent roster and management surfaces:
+The catalog passes each profile's `ui_meta.aos` namespace, as stored, as the
+Agent summary's `_meta.aos`; a profile with no such namespace, or an empty one,
+carries no `_meta`. The copy is whole and unread: a client reads its own keys
+there, such as the `role: creator` marker AOS UI looks for, and the profile's
+visibility, editability, and pushes follow the same rules as every other
+profile's. Separately, the gateway reads the namespace's `avatar` and `muted`
+for the summary's own fields (below).
 
-```yaml
-ui_meta:
-  aos:
-    role: creator
-  hermes-bots:
-    hidden: true
-```
-
-The marker grants no authority. After the user confirms a definition, the
-creator writes the new profile with `hermes profile create` and the other
-steps in the skill's `reference/harness-hermes.md`, so it needs Hermes's
-terminal tool. AOS shows the new Agent once Hermes lists it, and the draft
-**New Agent** row resolves into it. A freshly provisioned profile has no
-credentials for its model: Hermes copies a new profile's model block but not
-its credential pool, so sign it in with `hermes -p <name> auth add`. Never copy
-another profile's tokens into it.
+Every key in `ui_meta.aos` reaches the operator's browser, so it must never hold
+a path, a token, or any other private value.
 
 ## Agent icons and mute
 
@@ -272,13 +261,13 @@ that `profiles.list` returns in `ui_meta_revisions`.
 `_hgw/agents/update` writes the avatar, the mute, and visibility with one
 `profiles.configure` call. That call sends only the `ui_meta` namespaces the
 patch touches, each paired with its current `ui_meta_expected_revisions` entry.
-The `aos` namespace is written whole from the stored keys, so `role` survives
-and a patch carrying both an avatar and a mute writes both. Passing `null` for
-the avatar removes that key, and `muted: false` removes `muted`. The update
-re-lists the profiles and fails unless they show every field it wrote.
+The `aos` namespace is written whole from the stored keys, so every other key
+in it survives and a patch carrying both an avatar and a mute writes both.
+Passing `null` for the avatar removes that key, and `muted: false` removes
+`muted`. The update re-lists the profiles and fails unless they show every field
+it wrote.
 
-`avatarEditable` and `muteEditable` equal `editable` for every profile. The
-creator profile is never writable.
+`avatarEditable` and `muteEditable` equal `editable` for every profile.
 
 Session `createdAt` comes from the Session row's `started_at` (epoch seconds).
 
@@ -307,6 +296,7 @@ visibility uses.
 - AOS needs `display.tool_progress` left at its default (`all`). With `off`, live tool calls are withheld from the tui gateway stream and appear only after a reload. `display.show_reasoning` gates nothing AOS reads; it only makes the messaging gateway prepend reasoning to chat replies.
 - Each served profile needs an existing `terminal.cwd` that is neither `.`, `auto`, `cwd`, nor a missing directory; the gateway reads it with `config.get project` and lists it as the Agent's folder. If the launch profile or `TERMINAL_CWD` sets a different path at runtime, the listed folder may not match where the Session actually runs. A named SSH profile needs a remote `terminal.cwd` that is an absolute path (`~/…` yields no folder), or AOS cannot list, start, or resume its Sessions.
 - The listed folder is the Agent's. A resumed Session runs in the folder Hermes stored on its own row, which can differ.
+- Hermes stores a new Session's row only with its first turn. Until then a title, archive, pin, or read-state write to it is refused as temporarily unavailable, and the Session stays; a delete ends it.
 - When Hermes compacts a conversation, the carried-forward messages receive new row ids. History reads after a compaction return the new ids; live ids before it remain in the client until the page reloads.
 - A compaction shows again when the Session is reloaded, without a summary, since Hermes stores none. Live and stored dividers match only when Hermes names the prompt's row in its `prompt.submit` answer; a Hermes release that does not can show the divider twice on a reload during the turn that compacted.
 - Operators can fork a Session (`session/fork`). The gateway runs native `session.branch` on the Session's live Session and then closes the branch's live session. The fork copies the conversation's text but not its tool calls, the original Session is left as it was, and both stay listed. A typed `/branch` or `/fork`, Hermes aliases included, runs the same fork instead of Hermes' slash worker, and the turn answers with the new Session's title and id. A quick-command alias a user defined for `/branch` is not caught.

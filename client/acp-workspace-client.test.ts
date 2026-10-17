@@ -188,21 +188,6 @@ function catalogEntry() {
   }
 }
 
-const CREATOR_ID = "agent-creator"
-
-function creatorEntry() {
-  return {
-    ...catalogEntry(),
-    summary: {
-      kind: "ready" as const,
-      id: CREATOR_ID,
-      name: "Agent Creator",
-      role: "creator" as const,
-    },
-    visibility: "hidden" as const,
-  }
-}
-
 type ConnectionCall = { method: string; args: unknown[] }
 
 function createFakeConnection() {
@@ -1107,45 +1092,6 @@ describe("ACP workspace client", () => {
     expect(events[2]).not.toHaveProperty("replayed")
   })
 
-  it("reports an Agent the catalog gained once a creator run stops", async () => {
-    const clock = useFakeClock()
-    const { client, join, emitUpdate, emitNotification, setAgents } =
-      createClient()
-    const events: unknown[] = []
-    client.subscribeActivity((event) => events.push(event))
-    setAgents([creatorEntry()])
-    await client.listAgents()
-    const { sessionId } = await client.createSession(CREATOR_ID)
-    // The thread binds the new Session and replays it.
-    await join(sessionId)
-
-    emitUpdate({ sessionUpdate: "state_update", state: "running" })
-    setAgents([creatorEntry(), catalogEntry()])
-    // The feed can tell of the turn's end before the Session's own stream does.
-    emitNotification(HGW_METHODS.notify.activity, {
-      ...activity("turn-finished"),
-      agentId: CREATOR_ID,
-      sessionId,
-    })
-    emitUpdate({
-      sessionUpdate: "state_update",
-      state: "idle",
-      stopReason: "end_turn",
-    })
-    await clock.advance(0)
-
-    expect(events).toEqual([
-      expect.objectContaining({ type: "turn-finished", sessionId }),
-      {
-        id: `${sessionId}:${AGENT_ID}`,
-        type: "agent-ready",
-        agentId: AGENT_ID,
-        sessionId,
-        occurredAt: UPDATED_AT,
-      },
-    ])
-  })
-
   it("reads the post-write catalog on a refresh while an older read is still open", async () => {
     const { client, connection } = createClient()
     const catalogWith = (avatar: string) => ({
@@ -1175,31 +1121,6 @@ describe("ACP workspace client", () => {
       expect.objectContaining({ id: AGENT_ID, avatar: "disc/rose" }),
     ])
     await older
-  })
-
-  it("reports nothing when a creator run stops without a new Agent", async () => {
-    const clock = useFakeClock()
-    const { client, join, emitUpdate, setAgents, calls } = createClient()
-    const events: unknown[] = []
-    client.subscribeActivity((event) => events.push(event))
-    setAgents([creatorEntry(), catalogEntry()])
-    await client.listAgents()
-    const { sessionId } = await client.createSession(CREATOR_ID)
-    // The thread binds the new Session and replays it.
-    await join(sessionId)
-
-    emitUpdate({ sessionUpdate: "state_update", state: "running" })
-    emitUpdate({
-      sessionUpdate: "state_update",
-      state: "idle",
-      stopReason: "end_turn",
-    })
-    await clock.advance(0)
-
-    expect(calls.filter(({ method }) => method === "listAgents")).toHaveLength(
-      2
-    )
-    expect(events).toEqual([])
   })
 
   it("projects models and writes one config option per half", async () => {
