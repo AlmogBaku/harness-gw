@@ -23,17 +23,18 @@ describe("a prompt whose turn ended before its storage receipt", () => {
     expect(replyOf(cause)).toBe(reply)
   })
 
-  it("names a refused command's code, so a client can word it", () => {
+  it.each([
+    ["a command the runtime refused", "HGW_COMMAND_UNSUPPORTED"],
+    ["a rewind to a message history no longer holds", "HGW_REWIND_CONFLICT"],
+  ])("names %s by its code, so a client can word it", (_, code) => {
     const reply = publicRequestError(
       () => undefined,
-      new ServerTurnEndedError("failed", "HGW_COMMAND_UNSUPPORTED", {
-        unstored: true,
-      })
+      new ServerTurnEndedError("failed", code, { unstored: true })
     )
 
     expect(reply).toMatchObject({
       code: invalidParams().code,
-      data: { code: "HGW_COMMAND_UNSUPPORTED" },
+      data: { code },
     })
   })
 })

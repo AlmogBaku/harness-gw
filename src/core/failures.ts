@@ -82,6 +82,8 @@ export const TURN_FAILURES = {
   // A command the runtime refused before storing anything: the caller's to fix.
   HGW_COMMAND_WITH_ATTACHMENTS: { kind: "invalid_request" },
   HGW_COMMAND_UNSUPPORTED: { kind: "invalid_request" },
+  // An Edit or Retry naming a message the runtime's history no longer holds.
+  HGW_REWIND_CONFLICT: { kind: "invalid_request" },
 } as const satisfies FailureTable
 
 /** The failure a gateway-core error is, whatever the runtime behind it. */
