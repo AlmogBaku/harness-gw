@@ -952,10 +952,13 @@ A UI shows a view as the spec's sandbox proxy does, with
 
 1. Serve its sandbox page, the relay that creates the view's own `srcdoc`
    frame, at `MCP_APP_SANDBOX_PATH` from a sandbox origin of its own: another
-   name, or the UI's name on another port. That origin serves the page and its
-   script alone. Never send its `/api/v1` to the gateway, which answers a host
-   it does not serve 421 (see [Origins](#origins)), and never list it in
-   `allowedOrigins`.
+   name, or the UI's name on another port. On loopback, use a `*.localhost`
+   name such as `http://sandbox.localhost:3000`: the gateway answers
+   `localhost`, `127.0.0.1` and `[::1]` on every port, so a loopback sandbox on
+   another port, such as `http://127.0.0.1:3001`, would still reach it. That
+   origin serves the page and its script alone. Never send its `/api/v1` to the
+   gateway, which answers a host it does not serve 421 (see
+   [Origins](#origins)), and never list it in `allowedOrigins`.
 2. Frame the page at that origin with
    `sandbox="allow-scripts allow-same-origin"`, so the view runs on the sandbox
    origin with storage of its own.
@@ -976,16 +979,25 @@ A UI shows a view as the spec's sandbox proxy does, with
    appliedMcpAppCsp({ ...origins, csp: view.csp })
    ```
 
+   `view` here is as the SDK client's `openMcpApp` returns it, its file
+   addresses absolute; a plain `GET` of the view answers them relative to the
+   listener, so resolve them against its origin first.
+
 The policy is the spec's default, widened only by the view's declared domains
 and its own file locations, and framed only by `frameAncestors`. Anyone can ask
 for a sandbox page with any query, so every value is checked before it is
 written. An ancestor or sandbox origin that is not an exact `http(s)` origin
-(lowercase, with no default port, path, or IPv6 literal) throws. A declared
-domain `isMcpAppCspDomain` refuses, or one naming the host and port of a framing
-page or the sandbox, is dropped. A file location is kept only on a framing
-page's origin, as that origin and its percent-encoded path without the pass,
-and dropped when it carries whitespace, `;`, `,` or a quote, or ends in `/`.
-Send locations without their passes when they travel in a URL.
+(lowercase, with no default port, path, or IPv6 literal) throws, as does a
+sandbox origin that is one of the ancestors, since the spec requires the host
+and the sandbox to have different origins. `isMcpAppPolicyOrigin` is that
+exact-origin rule alone, so a host can refuse a setting before it serves a view.
+A declared domain `isMcpAppCspDomain` refuses, or one naming the host and port
+of a framing page or the sandbox, is dropped. A file location is kept only on a
+framing page's origin, as that origin and its path without the pass, every
+segment percent-encoded with quotes included, so whitespace, `;`, `,` and
+quotes reach the header only encoded; one ending in `/`, which would name every
+path below it, is dropped. Send locations without their passes when they travel
+in a URL.
 
 ### Web Push payload
 

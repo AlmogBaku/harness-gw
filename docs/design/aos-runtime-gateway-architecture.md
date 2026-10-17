@@ -132,9 +132,11 @@ x-frame-options: DENY
 ```
 
 Origin is guarded at the server level: `guardOrigins` (`src/origins.ts`),
-called from `src/server.ts` before socket matching, refuses an upgrade or any
-non-GET/HEAD/OPTIONS request whose `Origin` is not in the listener's
-`allowedOrigins` list (defaults to the listener's `publicOrigin`). The one
+called from `src/server.ts` before socket matching, answers 421 to a request
+whose `Host` names neither the host and port of one of the listener's
+`allowedOrigins` (defaults to the listener's `publicOrigin`) nor `localhost`,
+`127.0.0.1` or `[::1]`, then refuses an upgrade or any non-GET/HEAD/OPTIONS
+request whose `Origin` is not in that list. The one
 exception is `POST /api/v1/guest-invitations` on the operator listener, which
 admits a missing `Origin`. The ACP service does not check the origin itself.
 
@@ -234,8 +236,8 @@ Only Sessions listed, created, or resumed on this connection are addressable.
 `adopt` trusts a client-supplied `agentId` for `session/resume` until the
 provider read confirms it.
 
-**Upgrade rules**: origin is checked by `guardOrigins` (`src/origins.ts`) before
-the socket service; a present `Origin` not in `allowedOrigins` is refused with 403. An absent `Origin` is admitted for non-browser clients. The per-Agent path
+**Upgrade rules**: host and origin are checked by `guardOrigins` (`src/origins.ts`) before
+the socket service; a `Host` the listener does not serve is refused with 421, and a present `Origin` not in `allowedOrigins` with 403. An absent `Origin` is admitted for non-browser clients. The per-Agent path
 `/api/v1/acp/agents/<agentId>` scopes a connection to one Agent and must
 never be exposed publicly. A cap of `operatorEventPeers` is enforced per socket
 mount (`src/cli/serve.ts`).
