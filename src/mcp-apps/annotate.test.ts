@@ -233,4 +233,30 @@ describe("withMcpApps on a watched Session", () => {
     expect(subscribeTurns).toHaveBeenCalledWith(scope, listener)
     expect(stop).toHaveBeenCalledOnce()
   })
+
+  // The wrapper used to rebuild the engine from the methods it annotates, so
+  // Stop on a child whose parent turn had ended reached nothing.
+  it("keeps stopping and answering a child once its turn has ended", async () => {
+    const stopChild = vi.fn(async () => undefined)
+    const respondChild = vi.fn(async () => undefined)
+    const engine = {
+      start: vi.fn(),
+      recover: vi.fn(),
+      stopChild,
+      respondChild,
+    } as unknown as ServerTurnEngine
+    const runtime = withMcpApps({
+      turns: engine,
+      mcpApps: {} as ServerMcpApps,
+    } as unknown as ServerRuntime)
+    const reply = { requestId: "child-permission" } as unknown as Parameters<
+      NonNullable<ServerTurnEngine["respondChild"]>
+    >[1]
+
+    await runtime.turns.stopChild?.(scope, "child-session")
+    await runtime.turns.respondChild?.(scope, reply)
+
+    expect(stopChild).toHaveBeenCalledExactlyOnceWith(scope, "child-session")
+    expect(respondChild).toHaveBeenCalledExactlyOnceWith(scope, reply)
+  })
 })

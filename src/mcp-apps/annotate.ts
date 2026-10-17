@@ -172,7 +172,11 @@ function annotatedTurns(
   apps: ServerMcpApps,
   gone: (cause: unknown) => boolean
 ): ServerTurnEngine {
-  return {
+  // Only the turns a caller reads get annotated. Every other engine method
+  // passes through untouched, as `annotatedHandle` does for a turn's own
+  // handle: stopping or answering a child once its parent turn has ended goes
+  // through the engine, not a turn.
+  const annotated: Partial<ServerTurnEngine> = {
     start: async (scope, input, attachments, signal) =>
       annotatedHandle(
         await turns.start(scope, input, attachments, signal),
@@ -206,12 +210,15 @@ function annotatedTurns(
           },
         }
       : {}),
-    // A turn subscription only signals; the turn it reports is read
-    // through `discover`.
-    ...(turns.subscribeTurns
-      ? { subscribeTurns: turns.subscribeTurns.bind(turns) }
-      : {}),
   }
+  return new Proxy(turns, {
+    get(target, property) {
+      if (Object.hasOwn(annotated, property))
+        return annotated[property as keyof ServerTurnEngine]
+      const value = Reflect.get(target, property, target) as unknown
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
 }
 
 async function annotatedHistory(
