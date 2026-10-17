@@ -982,6 +982,15 @@ A UI shows a view as the spec's sandbox proxy does, with
    `view` here is as the SDK client's `openMcpApp` returns it, its file
    addresses absolute; a plain `GET` of the view answers them relative to the
    listener, so resolve them against its origin first.
+4. Bind the view from the host page too, as the spec's "Host MUST block
+   connections to undeclared domains" needs: a view shares its sandbox page's
+   origin, so it can navigate that frame.
+   - Send `frame-src <the sandbox origin>` in the host page's own policy, so
+     the frame loads nothing else.
+   - Drop a view whose sandbox frame loads a second time, as it does when the
+     view sends it to another sandbox query, and so another policy.
+   - Show no views while the host page is at the sandbox origin, or at an
+     address `frameAncestors` does not name.
 
 The policy is the spec's default, widened only by the view's declared domains
 and its own file locations, and framed only by `frameAncestors`. Anyone can ask
