@@ -33,7 +33,7 @@ function nativeFor(request: HermesRpcTransport["request"]) {
     },
     interactions: {
       subscribePendingRequests: () => () => undefined,
-      respond: async () => ({ status: "resolved" }),
+      answer: async () => [{ status: "resolved" }],
       resume: async () => ({ running: false, status: "idle" }),
     },
     history: async () => [],

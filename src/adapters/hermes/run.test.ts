@@ -34,6 +34,7 @@ import {
   type HermesTurnScope,
 } from "./run"
 import { HermesUnavailableError, type HermesLog } from "./gateway"
+import { HermesInteractionPublicError } from "./interactions"
 import { HermesPublishedArtifacts } from "./published-artifacts"
 import { HermesChildSessions } from "./child-sessions"
 import type {
@@ -1103,6 +1104,34 @@ describe("HermesRunEngine", () => {
         message: "This Hermes interaction is no longer pending.",
       },
     ])
+  })
+
+  it("names the cause of an answer Hermes could not be given", async () => {
+    const warn = vi.fn()
+    const { handle } = await resumedRun(
+      {
+        respondInteractions: async () => {
+          throw new HermesInteractionPublicError("HGW_INTERACTION_NOT_FOUND")
+        },
+      },
+      { log: { warn } }
+    )
+
+    const events = await collect(handle)
+    expect(ofKind(events, TurnEventKind.TurnFailed)).toEqual([
+      {
+        kind: TurnEventKind.TurnFailed,
+        code: "HGW_INTERACTION_FAILED",
+        message: "Hermes could not apply this interaction response.",
+      },
+    ])
+    expect(warn).toHaveBeenCalledWith(
+      {
+        publicCode: "HGW_INTERACTION_FAILED",
+        failureReason: "HGW_INTERACTION_NOT_FOUND",
+      },
+      "hermes.turn.failed"
+    )
   })
 
   it("terminalizes an uncertain acknowledgement without retrying or releasing admission", async () => {

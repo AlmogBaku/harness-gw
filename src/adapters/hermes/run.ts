@@ -110,6 +110,7 @@ import {
 } from "./run-state"
 import { sessionModelChoice } from "./session-model"
 import { HermesUnavailableError, type HermesLog } from "./gateway"
+import { interactionReason } from "./interactions"
 import type {
   HermesTurnNative,
   HermesSubmitPrompt,
@@ -630,7 +631,12 @@ export class HermesTurnEngine {
     })
   }
 
-  /** Sends the answers the run's turn waits on; a failed send ends the run. */
+  /**
+   * Sends the answers the run's turn waits on. An answer Hermes cannot take yet
+   * is held and sent again by the interactions, so the run waits for Hermes as
+   * it does through any slow turn; only an answer Hermes can never be given, or
+   * no longer waits for, ends it.
+   */
   async #respond(active: ActiveTurn, replies: readonly RequestReply[]) {
     let results: readonly { status: string }[]
     try {
@@ -638,14 +644,17 @@ export class HermesTurnEngine {
         { ...active.scope, turnId: active.turnId },
         replies
       )
-    } catch {
-      this.#fail(active, TURN_FAILURES.interactionFailed)
+    } catch (error) {
+      const failure = TURN_FAILURES.interactionFailed
+      this.#log.warn(
+        { publicCode: failure.code, failureReason: interactionReason(error) },
+        TURN_FAILED_LOG
+      )
+      this.#fail(active, failure)
       return
     }
     if (active.terminal) return
-    if (results.some(({ status }) => status === "uncertain"))
-      this.#detach(active, TURN_FAILURES.interactionUncertain)
-    else if (results.some(({ status }) => status === "expired"))
+    if (results.some(({ status }) => status === "expired"))
       this.#fail(active, TURN_FAILURES.interactionExpired)
   }
 

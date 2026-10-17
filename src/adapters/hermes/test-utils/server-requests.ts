@@ -58,6 +58,8 @@ export type ServerRequestsHarness = {
   withoutAnswerMethod(): void
   /** Answer RPCs fail with a lost acknowledgement. */
   breakAnswers(): void
+  /** Answer RPCs are acknowledged again. */
+  repairAnswers(): void
   /** Drop the socket: later writes are swallowed and `connected()` is false. */
   disconnect(): void
   reconnect(): void
@@ -152,6 +154,9 @@ export function serverRequests(): ServerRequestsHarness {
     },
     breakAnswers() {
       answers = "broken"
+    },
+    repairAnswers() {
+      answers = "ok"
     },
     disconnect() {
       open = false

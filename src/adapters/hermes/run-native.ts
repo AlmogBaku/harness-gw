@@ -214,10 +214,10 @@ export type HermesNativeInteractions = {
     listener: (request: PendingRequest) => void,
     held?: () => void
   ): () => void
-  respond(
+  answer(
     scope: HermesTurnScope & { turnId: string },
-    entry: RequestReply
-  ): Promise<{ status: string }>
+    replies: readonly RequestReply[]
+  ): Promise<readonly { status: string }[]>
   resume(
     scope: HermesTurnScope & { turnId: string }
   ): Promise<HermesInteractionSnapshot>
@@ -832,14 +832,11 @@ export class HermesNativeRuntime implements HermesTurnNative {
     return this.#interactions.subscribePendingRequests(scope, listener, held)
   }
 
-  async respondInteractions(
+  respondInteractions(
     scope: HermesTurnScope & { turnId: string },
     replies: readonly RequestReply[]
   ) {
-    await this.#interactions.resume(scope)
-    return Promise.all(
-      replies.map((entry) => this.#interactions.respond(scope, entry))
-    )
+    return this.#interactions.answer(scope, replies)
   }
 
   /**

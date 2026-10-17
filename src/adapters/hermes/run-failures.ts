@@ -99,11 +99,6 @@ export const TURN_FAILURES = {
     message:
       "Hermes may have accepted this turn; reconcile before sending again.",
   },
-  interactionUncertain: {
-    code: "HGW_INTERACTION_UNCERTAIN",
-    message:
-      "Hermes may have applied this interaction response; reconcile before responding again.",
-  },
   interactionFailed: {
     code: "HGW_INTERACTION_FAILED",
     message: "Hermes could not apply this interaction response.",
