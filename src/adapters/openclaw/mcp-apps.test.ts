@@ -135,6 +135,8 @@ describe("OpenClaw MCP Apps", () => {
         sandboxPort: 18790,
         html: "<p>app</p>",
         csp: { connectDomains: ["https://api.example.com"] },
+        // The gateway never dialed this server, so no domain is its to verify.
+        domain: "c3d80a4ed901ee05b21755a88273b4a4.mcp-apps.example",
         toolInput: { title: "Plan" },
         toolResult,
         messageSupported: true,

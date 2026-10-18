@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { parse } from "yaml"
 import { afterEach, describe, expect, it } from "vitest"
 
+import { mcpAppStableOriginKey } from "../protocol/node"
 import {
   isHttpsOrLoopback,
   listenerOrigins,
@@ -570,6 +571,18 @@ describe("MCP Apps fallback credentials", () => {
     expect(parsed.mcpApps?.fallback?.servers["aos-ui"]).toEqual({
       url: "http://tools-mcp:4110/mcp",
     })
+  })
+
+  it("keys a stable origin to an override written with a trailing slash as to its canonical form", () => {
+    const url = parseGatewayConfig(
+      withServer({ url: "http://tools-mcp:4110/mcp/" })
+    ).mcpApps?.fallback?.servers["aos-ui"]?.url
+
+    expect(url).toBe("http://tools-mcp:4110/mcp")
+    // The key of `http://tools-mcp:4110/mcp`.
+    expect(mcpAppStableOriginKey(url ?? "")).toBe(
+      "5c25e9af9fca8071e322bd227eaaa176"
+    )
   })
 
   it("accepts a URL override with headers over HTTPS or loopback", () => {

@@ -77,12 +77,24 @@ export const McpAppFilesSchema = z.strictObject({
 })
 export type McpAppFiles = z.infer<typeof McpAppFilesSchema>
 
+/**
+ * A UI resource's `_meta.ui.domain`: the lowercase host name its view asks to
+ * run on, a stable origin of its own. The format is the host's; the gateway
+ * passes one on only when its first label is `mcpAppStableOriginKey`
+ * (`@harness-gw/sdk/node`) of the URL it dialed the view's server at.
+ */
+export const McpUiDomainSchema = z
+  .string()
+  .max(253)
+  .regex(new RegExp(`^${HOST}$`, "u"))
+
 /** `GET` an MCP App view: its HTML, sandbox policy, and the call it renders. */
 export const McpAppViewSchema = z.strictObject({
   html: z.string().max(5_000_000),
   csp: McpUiCspSchema.optional(),
   permissions: McpUiPermissionsSchema.optional(),
   prefersBorder: z.boolean().optional(),
+  domain: McpUiDomainSchema.optional(),
   toolInput: z.record(z.string(), z.unknown()).optional(),
   toolResult: CallToolResultSchema.optional(),
   files: McpAppFilesSchema.optional(),
@@ -90,19 +102,29 @@ export const McpAppViewSchema = z.strictObject({
 export type McpAppView = z.infer<typeof McpAppViewSchema>
 
 /**
- * The file a viewer App shows: the display name and type of a published
- * Artifact, which its view reads from `toolResult.structuredContent.value`,
- * and from the JSON after `Structured fallback:` in the text for a view that
- * reads text alone. It is the whole contract any configured viewer reads.
+ * The file a viewer App shows: a published Artifact's display name and type,
+ * and its `fileId` (`artifactFileId` of its path) when the runtime read it from
+ * a path. The view reads it from `toolResult.structuredContent.value`, or from
+ * the JSON after `Structured fallback:` in the text when it reads text alone.
+ * It is the whole contract any configured viewer reads.
  */
-export type ViewerFile = { filename: string; mimeType?: string }
+export type ViewerFile = {
+  filename: string
+  mimeType?: string
+  fileId?: string
+}
 
 /** A published Artifact's `toolResult`: its `ViewerFile`, as structure and as text. */
 export function viewerFileResult({
   filename,
   mimeType,
+  fileId,
 }: ViewerFile): CallToolResult {
-  const value: ViewerFile = { filename, ...(mimeType && { mimeType }) }
+  const value: ViewerFile = {
+    filename,
+    ...(mimeType && { mimeType }),
+    ...(fileId && { fileId }),
+  }
   return {
     content: [
       {

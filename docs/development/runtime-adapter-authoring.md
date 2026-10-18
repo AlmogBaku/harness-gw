@@ -520,8 +520,11 @@ Keep the path in a private Agent-and-Session-scoped mapping.
 
 Implement `ServerRuntime.artifact(agentId, publicSessionId, artifactId)`
 (`src/core/runtime.ts`) to resolve the id only within that
-Session and return `{bytes, mimeType?, filename}`, read through the harness's
-own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB). The route
+Session and return `{bytes, mimeType?, filename, fileId?}`, read through the
+harness's own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB).
+`fileId` is `artifactFileId` (`protocol/node.ts`) of the native path as the
+Session delivered it, where there is one, so the viewer knows the file as
+`present_artifact` does; the path stays in the adapter. The route
 `GET .../sessions/:sessionId/artifacts/:artifactId`
 (`src/routes/content.ts`) serves it on both listeners.
 
@@ -570,24 +573,28 @@ An MCP tool whose server declares a `ui://` view (`_meta.ui.resourceUri`)
 renders as an App card. Implement the optional `ServerRuntime.mcpApps`
 (`src/core/runtime.ts`) in the adapter's `mcp-apps.ts`:
 
-| Method                                             | Answers                                                                            |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `observe?(scope, call)`                            | A flagged call of this Session's run as it streams: name, then input, then result. |
-| `describe(scope, {toolCallId, toolName, result?})` | Whether the call's tool declares a view.                                           |
-| `open(scope, toolCallId, signal?)`                 | The `McpAppView`: HTML, CSP, permissions, `prefersBorder`, tool input and result.  |
-| `toolCall?(scope, toolCallId, signal?)`            | The stored call: its server, tool, and full input. Absent when unavailable.        |
-| `callTool(scope, toolCallId, name, args)`          | A view's `tools/call`, limited to its own server's app-visible tools.              |
-| `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                       |
-| `serverResource?(scope, server, uri, signal?)`     | A named server's `ui://` resource with no call, for a published attachment's view. |
+| Method                                             | Answers                                                                                |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `observe?(scope, call)`                            | A flagged call of this Session's run as it streams: name, then input, then result.     |
+| `describe(scope, {toolCallId, toolName, result?})` | Whether the call's tool declares a view.                                               |
+| `open(scope, toolCallId, signal?)`                 | The `McpAppView`: HTML, CSP, permissions, `prefersBorder`, tool input and result.      |
+| `toolCall?(scope, toolCallId, signal?)`            | The stored call: its server, tool, and full input. Absent when unavailable.            |
+| `callTool(scope, toolCallId, name, args)`          | A view's `tools/call`, limited to its own server's app-visible tools.                  |
+| `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                           |
+| `serverView?(scope, server, uri, signal?)`         | A named server's view with no call, verified as `open`'s: a published Artifact's view. |
+| `serverResource?(scope, server, uri, signal?)`     | A named server's `ui://` resource with no call, as answered: that view's own reads.    |
 
 Every method first finds the `toolCallId` in this Session's own native
 history, or among the running calls `observe` heard for that Session; the
 client never names a server, tool, or resource URI. An unknown or foreign call
 reads as not found. A host that holds its views natively leaves `observe` out.
-`serverResource` is the one exception: it names a server, the configured
-viewer's, and never a call. The fallback implements it; leave it out where the
-native API reads a resource only for a call, as OpenClaw's does, and a
-published attachment then opens with no view.
+`serverView` and `serverResource` are the one exception: they name a server,
+the configured viewer's, and never a call. The fallback implements both; leave
+them out where the native API reads a resource only for a call, as OpenClaw's
+does, and a published attachment then opens with no view. Only the fallback
+sets a view's `domain`, after checking it against the URL it dialed (see
+[Stable origins](../protocol.md#stable-origins)); a native view never carries
+one.
 
 Map the native MCP Apps API when the runtime has one (OpenClaw's
 `mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`). Otherwise build

@@ -145,6 +145,23 @@ export function createMcpAppsFallback(
     )
   }
 
+  /**
+   * The server this Session's Agent names `server` (`aos-ui` also matching
+   * `aos_ui`), for one of its `ui://` resources read without a tool call.
+   */
+  async function namedServer(
+    scope: SessionScope,
+    server: string,
+    uri: string
+  ): Promise<McpAppEndpoint> {
+    if (!isUiResourceUri(uri)) throw new McpAppRefusedError()
+    const found = (await source.servers(scope)).find(({ name }) =>
+      serverAllowed([server], name)
+    )
+    if (!found?.url) throw new McpAppNotFoundError()
+    return { name: found.name, url: found.url }
+  }
+
   /** The stored call, else the running one this Session's own run reported. */
   async function owned(scope: SessionScope, toolCallId: string) {
     const call =
@@ -243,19 +260,25 @@ export function createMcpAppsFallback(
       logged(scope, toolCallId, resolved, { operation: "resources/read", uri })
       return client.readResource(resolved.endpoint, uri)
     },
-    async serverResource(scope, server, uri) {
-      if (!isUiResourceUri(uri)) throw new McpAppRefusedError()
-      const found = (await source.servers(scope)).find(({ name }) =>
-        serverAllowed([server], name)
-      )
-      if (!found?.url) throw new McpAppNotFoundError()
+    async serverView(scope, server, uri) {
+      const endpoint = await namedServer(scope, server, uri)
       logged(
         scope,
         undefined,
-        { server: found.name },
+        { server: endpoint.name },
+        { operation: "open", uri }
+      )
+      return client.appResource(endpoint, uri)
+    },
+    async serverResource(scope, server, uri) {
+      const endpoint = await namedServer(scope, server, uri)
+      logged(
+        scope,
+        undefined,
+        { server: endpoint.name },
         { operation: "resources/read", uri }
       )
-      return client.readResource({ name: found.name, url: found.url }, uri)
+      return client.readResource(endpoint, uri)
     },
     reportSessionGone(agentId, providerSessionId) {
       live.delete(sessionKey(agentId, providerSessionId))

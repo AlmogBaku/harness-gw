@@ -2,11 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest"
 
 import { artifactIds } from "../test/support/history-artifacts"
 import { captureLogs } from "../test/support/log-capture"
-import type {
-  McpAppFiles,
-  McpAppView,
-  ReadResourceResult,
-} from "../protocol/mcp-apps"
+import type { McpAppFiles, McpAppView } from "../protocol/mcp-apps"
 import { createGatewayApp, type GatewayAppOptions } from "./app"
 import {
   HermesAuthenticationError,
@@ -35,6 +31,7 @@ import {
   type SessionScope,
 } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
+import { McpAppResourceError } from "./mcp-apps/client"
 import { McpAppNotFoundError } from "./mcp-apps/fallback"
 import { appFileSettings, type AppFileOptions } from "./routes/app-files"
 
@@ -453,7 +450,10 @@ function passOf(address: string) {
   return new URL(address, origin).searchParams.get("pass") ?? ""
 }
 
-/** The Artifact Session `stored` publishes as `artifact-1`. */
+/** A stable origin the runtime verified the viewer's view on. */
+const VIEWER_DOMAIN = "5c25e9af9fca8071e322bd227eaaa176.mcp-apps.example"
+
+/** The Artifact Session `stored` publishes as `artifact-1`, read from no path. */
 const NOTES = {
   bytes: new TextEncoder().encode("# Notes"),
   mimeType: "text/markdown",
@@ -470,8 +470,9 @@ function artifactPath(sessionId = "stored", artifactId = "artifact-1") {
  * whose Session `stored` holds `call-1` as `call` describes it: `null` is a
  * call no server matches, and a `null` reader a runtime that reads no files.
  * Its view gets the call's own input unless `viewInput` differs. The Session
- * publishes NOTES as `artifact-1`, and any server's `ui://` resource reads
- * as one viewer page unless `viewer` is `null`, a runtime that reads none.
+ * publishes NOTES as `artifact-1`. Any server's view opens as one viewer page
+ * on a stable origin, and its other `ui://` resources read as scripts, unless
+ * `viewer` is `null`, a runtime that reads none.
  */
 function fileGateway(
   setup: {
@@ -499,11 +500,12 @@ function fileGateway(
     html: "<p>view</p>",
     toolInput: setup.viewInput ?? (call ?? reportCall).input,
   }))
+  const serverView = vi.fn<NonNullable<ServerMcpApps["serverView"]>>(
+    async () => ({ html: "<p>viewer</p>", domain: VIEWER_DOMAIN })
+  )
   const serverResource = vi.fn<NonNullable<ServerMcpApps["serverResource"]>>(
     async (_scope, _server, uri) => ({
-      contents: [
-        { uri, mimeType: "text/html;profile=mcp-app", text: "<p>viewer</p>" },
-      ],
+      contents: [{ uri, mimeType: "text/javascript", text: "onmessage=0" }],
     })
   )
   const mcpApps: ServerMcpApps = {
@@ -512,7 +514,7 @@ function fileGateway(
     toolCall,
     callTool: vi.fn(async () => ({ content: [] })),
     readResource: vi.fn(async () => ({ contents: [] })),
-    ...(setup.viewer === null ? {} : { serverResource }),
+    ...(setup.viewer === null ? {} : { serverView, serverResource }),
   }
   Object.defineProperty(runtime, "mcpApps", { value: mcpApps })
   const artifact = vi
@@ -554,6 +556,7 @@ function fileGateway(
     files,
     logs,
     artifact,
+    serverView,
     serverResource,
   }
 }
@@ -1043,13 +1046,15 @@ describe("Published Artifact views", () => {
     })
 
   it("opens an Artifact in the viewer with its server-side name and type, and serves its bytes", async () => {
-    const { gateway, serverResource, logs } = fileGateway()
+    const { gateway, serverView, serverResource, logs } = fileGateway()
 
     const response = await gateway.request(`${origin}${artifactPath()}`)
     expect(response.status).toBe(200)
     const view = (await response.json()) as McpAppView
+    // Read from no path, as an OpenClaw `MEDIA:` file is, it has no `fileId`.
     expect(view).toEqual({
       html: "<p>viewer</p>",
+      domain: VIEWER_DOMAIN,
       toolInput: {},
       toolResult: {
         content: [
@@ -1073,12 +1078,13 @@ describe("Published Artifact views", () => {
         expiresAt: expect.any(String),
       },
     })
-    expect(serverResource).toHaveBeenCalledWith(
+    expect(serverView).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "stored" }),
       "aos-ui",
       "ui://aos-ui/artifact",
       expect.any(AbortSignal)
     )
+    expect(serverResource).not.toHaveBeenCalled()
     const address = view.files?.addresses.path ?? ""
 
     expect(
@@ -1095,11 +1101,20 @@ describe("Published Artifact views", () => {
       },
       body: "# Notes",
     })
-    // Its view's own reads reach the viewer's server alone.
+    // Its view's own reads reach the viewer's server alone, answered as they
+    // are, though no App view.
     const read = await post(gateway, `${artifactPath()}/resources/read`, {
       uri: "ui://aos-ui/pdfjs/pdf.worker.js",
     })
-    expect(read.status).toBe(200)
+    expect(await read.json()).toEqual({
+      contents: [
+        {
+          uri: "ui://aos-ui/pdfjs/pdf.worker.js",
+          mimeType: "text/javascript",
+          text: "onmessage=0",
+        },
+      ],
+    })
     expect(serverResource.mock.lastCall?.slice(1, 3)).toEqual([
       "aos-ui",
       "ui://aos-ui/pdfjs/pdf.worker.js",
@@ -1114,6 +1129,30 @@ describe("Published Artifact views", () => {
     const renewed = await post(gateway, `${artifactPath()}/files`)
     expect(await renewed.json()).toEqual(view.files)
     expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
+  })
+
+  it("names the viewer's file by the file id the runtime read it with", async () => {
+    const { gateway, artifact } = fileGateway()
+    artifact.mockResolvedValue({ ...NOTES, fileId: "69749e306120414a" })
+    const value = {
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      fileId: "69749e306120414a",
+    }
+
+    const response = await gateway.request(`${origin}${artifactPath()}`)
+
+    expect(((await response.json()) as McpAppView).toolResult).toEqual({
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `Structured fallback:\n${JSON.stringify(value)}`
+          ),
+        },
+      ],
+      structuredContent: { value },
+    })
   })
 
   it.each<
@@ -1139,7 +1178,7 @@ describe("Published Artifact views", () => {
       "get",
     ],
   ])("answers %s with 404", async (_, setup, path, method) => {
-    const { gateway, serverResource } = fileGateway(setup)
+    const { gateway, serverView, serverResource } = fileGateway(setup)
 
     const response =
       method === "get"
@@ -1147,29 +1186,25 @@ describe("Published Artifact views", () => {
         : await post(gateway, path, { name: "refresh", arguments: {} })
 
     expect(response.status).toBe(404)
-    if (setup.viewer !== null) expect(serverResource).not.toHaveBeenCalled()
+    if (setup.viewer !== null) {
+      expect(serverView).not.toHaveBeenCalled()
+      expect(serverResource).not.toHaveBeenCalled()
+    }
   })
 
-  it.each<
-    [
-      string,
-      Parameters<typeof fileGateway>[0],
-      Error | ReadResourceResult | undefined,
-    ]
-  >([
+  it.each<[string, Parameters<typeof fileGateway>[0], Error | undefined]>([
     ["a runtime with no viewer", { viewer: null }, undefined],
     ["a viewer server out of reach", {}, new McpAppNotFoundError()],
     [
       "a viewer resource that is no App",
       {},
-      { contents: [{ uri: "ui://aos-ui/artifact", text: "plain" }] },
+      new McpAppResourceError("mime type"),
     ],
   ])(
     "answers an Artifact that is there with 503, not 404, under %s",
-    async (_, setup, answer) => {
-      const { gateway, serverResource } = fileGateway(setup)
-      if (answer instanceof Error) serverResource.mockRejectedValue(answer)
-      else if (answer) serverResource.mockResolvedValue(answer)
+    async (_, setup, refusal) => {
+      const { gateway, serverView } = fileGateway(setup)
+      if (refusal) serverView.mockRejectedValue(refusal)
 
       const response = await gateway.request(`${origin}${artifactPath()}`)
 

@@ -981,4 +981,26 @@ describe("MCP App view", () => {
         .success
     ).toBe(false)
   })
+
+  const key = "c3d80a4ed901ee05b21755a88273b4a4"
+  /** The key and three 63-character labels, the longest a label may be: 224 characters. */
+  const long = [key, ...["a", "b", "c"].map((c) => c.repeat(63))].join(".")
+  // A lowercase host name of at most 253 characters, and nothing else.
+  it.each<[string, boolean]>([
+    [`${key}.mcp-apps.example`, true],
+    [`${long}.${"d".repeat(28)}`, true],
+    [`${long}.${"d".repeat(29)}`, false],
+    [`${key}.${"a".repeat(64)}.example`, false],
+    [`${key.toUpperCase()}.mcp-apps.example`, false],
+    [`https://${key}.mcp-apps.example`, false],
+    [`${key}.mcp-apps.example:8443`, false],
+    [`${key}.mcp-apps.example/view`, false],
+    ["*.mcp-apps.example", false],
+    [`.${key}.mcp-apps.example`, false],
+    ["", false],
+  ])("admits the domain %s: %s", (domain, admitted) => {
+    expect(McpAppViewSchema.safeParse({ html: "", domain }).success).toBe(
+      admitted
+    )
+  })
 })

@@ -744,6 +744,16 @@ on its own listener, a guest with its invitation token as a Bearer
 `Authorization` header. The gateway resolves the id only against that Session's
 own provider history.
 
+A client opens such an Artifact in the configured viewer
+(`mcpApps.files.viewer`) at `…/artifacts/:artifactId/app` (see
+[HTTP API](#http-api)). The view's `toolResult` is `viewerFileResult`: the
+Artifact's `filename`, its `mimeType`, and its `fileId` where the runtime read
+it from a path. `fileId` is `artifactFileId(path)` from `@harness-gw/sdk/node`,
+the first 16 hex digits of a SHA-256 of the normalized POSIX path, so a Hermes
+`MEDIA:` file carries the same `fileId` as a `present_artifact` call for the
+same path, while the path itself never leaves the adapter. A file read from no
+path, such as OpenClaw's, carries none.
+
 ### Stored user images
 
 A user image the provider stored inline in its transcript replays as an
@@ -1008,6 +1018,47 @@ quotes reach the header only encoded; one ending in `/`, which would name every
 path below it, is dropped. Send locations without their passes when they travel
 in a URL.
 
+### Stable origins
+
+A view may ask for an origin of its own with `_meta.ui.domain` (MCP Apps
+2026-01-26, "Dedicated origin for view"), whose format each host defines. The
+gateway passes on one format. A host that opts in serves such a view's sandbox
+page from that domain, on a scheme and port of its choosing, by the steps
+above; one that has not ignores `domain`, however well its key matches, and
+keeps its sandbox origin.
+
+- **Format:** `<key>.<the host's domain>`, a lowercase host name of at most
+  253 characters (`McpUiDomainSchema`). `<key>` is
+  `mcpAppStableOriginKey(url)` from `@harness-gw/sdk/node`: the first 32 hex
+  digits of a SHA-256 of the MCP server's URL in its `canonicalUrl` form. For
+  a URL already in that form, such as `https://example.com/mcp`, that is
+  Claude's published format.
+- **The URL the gateway dials:** `mcpApps.fallback.servers.<name>.url` where
+  the operator set one, else the URL the runtime reports. Either is hashed in
+  its canonical form, the WHATWG URL serialization with no trailing slash (the
+  form the configuration keeps a URL in), so `https://Example.com:443/mcp/`
+  and `https://example.com/mcp` give one key. A server that declares `domain`
+  computes its key with the same function, from the URL the gateway dials it
+  at, however written.
+- **Both locations,** as the draft spec's "Metadata Location" requires: the
+  gateway takes `_meta.ui` whole from the `resources/read` content item, and
+  only when the item declares none, whole from the resource's `resources/list`
+  entry. It never merges the two, and sanitizes either alike. The listing is
+  cached per server and URL as `tools/list` is, at 3 s a page and 20 pages.
+  One that fails or times out is skipped and logged as
+  `mcp_app.resources.list_failed`, and the view opens without it.
+- **Checked on every view:** a tool call's, and the viewer a published
+  Artifact opens in. `domain` stays only when its first label is the key of the
+  URL the gateway dialed. Otherwise it is dropped and logged as
+  `mcp_app.domain.dropped` with the server's name and a `reason`: `mismatch`,
+  with the declared label, or `malformed`, with nothing it declared; never the
+  URL. A server named `aos-ui` that the gateway dials elsewhere cannot claim the
+  tools server's origin, and a view the gateway did not read itself, such as
+  OpenClaw's native `mcp.app.view`, carries none.
+- **Strict schema:** `McpAppViewSchema` refuses unknown fields, so an SDK
+  client from 0.12.0 or earlier refuses a view that carries `domain`. Upgrade
+  the gateway and its clients together.
+
 ### Web Push payload
 
 A configured deployment sends one Web Push message per Session when a
@@ -1075,3 +1126,8 @@ category, which named no Session when it counted several.
 - `hgw-client.ts`, `hgw-notification.ts`: the HTTP API and `_hgw/*`
   notifications
 - `types.ts`, `workspace.ts`: the client's own types
+
+`protocol/node.ts` is the server-only `@harness-gw/sdk/node`: the ids a server
+derives, `mcpAppStableOriginKey` and `artifactFileId`, with Node's own crypto,
+and `canonicalUrl`, the form the key hashes. No other protocol module imports
+it, so `@harness-gw/sdk/protocol` still loads in a browser.

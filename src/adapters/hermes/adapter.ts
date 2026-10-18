@@ -1210,7 +1210,11 @@ export class HermesServerAdapter implements ServerRuntime {
     return this.#content.stage(agentId, sessionId, attachments)
   }
 
-  artifact(agentId: string, sessionId: string, artifactId: string) {
+  artifact(
+    agentId: string,
+    sessionId: string,
+    artifactId: string
+  ): ReturnType<ServerRuntime["artifact"]> {
     return this.#content.artifact(agentId, sessionId, artifactId)
   }
 

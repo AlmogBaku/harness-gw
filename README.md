@@ -63,7 +63,7 @@ You need a running harness. Hermes is the primary one; see
    docker run --rm \
      -v "$PWD/config.yaml:/run/harness-gw/config.yaml:ro" \
      -v "$PWD/hermes-token:/run/secrets/hermes-token:ro" \
-     ghcr.io/almogbaku/harness-gw:0.12.0 \
+     ghcr.io/almogbaku/harness-gw:0.13.0 \
      config check --config /run/harness-gw/config.yaml
    ```
 
@@ -73,7 +73,7 @@ You need a running harness. Hermes is the primary one; see
    docker run --rm -p 127.0.0.1:4100:4100 \
      -v "$PWD/config.yaml:/run/harness-gw/config.yaml:ro" \
      -v "$PWD/hermes-token:/run/secrets/hermes-token:ro" \
-     ghcr.io/almogbaku/harness-gw:0.12.0 \
+     ghcr.io/almogbaku/harness-gw:0.13.0 \
      serve --config /run/harness-gw/config.yaml
    ```
 
@@ -116,12 +116,13 @@ await connection.joined(sessionId)
 await connection.prompt(sessionId, [{ type: "text", text: "Hello" }], {})
 ```
 
-The package has two entry points:
+The package has three entry points:
 
 | Import                     | What it holds                                                                                                                                                                 |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@harness-gw/sdk`          | The ACP connection with reconnect and backoff, the workspace client (Agents, Sessions, read state, activity), approvals, questions, and `HgwRemoteClient` for the HTTP routes |
 | `@harness-gw/sdk/protocol` | The wire alone: `_hgw/*` method names, the `_meta.hgw` zod schemas and their types, route paths and `HGW_EXTENSION_VERSION`. It loads without the client                      |
+| `@harness-gw/sdk/node`     | Server-only: `mcpAppStableOriginKey` and `artifactFileId`, the ids an MCP server derives as the gateway does. It needs Node's `crypto`                                        |
 
 The client checks the gateway's extension version during `initialize`. On a
 mismatch it fails `initialized` with both versions named and stops instead of
