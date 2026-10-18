@@ -232,6 +232,9 @@
     },
     {
       "files": ["protocol/**/*.ts"],
+      // The server-only `@harness-gw/sdk/node` entry hashes with Node's own
+      // crypto, and no other protocol module may import it.
+      "excludeFiles": ["protocol/node.ts", "protocol/node.test.ts"],
       "rules": {
         "no-restricted-imports": [
           "error",
@@ -242,6 +245,7 @@
                   "node:*",
                   "bun",
                   "bun:*",
+                  "./node",
                   "../src",
                   "../src/**",
                   "../../src/**",
@@ -250,7 +254,7 @@
                   "../lifecycle",
                   "../lifecycle/**"
                 ],
-                "message": "The protocol loads alone: no Node, Bun, gateway, client, or lifecycle imports."
+                "message": "The protocol loads alone: no Node, Bun, server-only entry, gateway, client, or lifecycle imports."
               }
             ]
           }

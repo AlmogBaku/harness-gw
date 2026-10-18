@@ -116,12 +116,13 @@ await connection.joined(sessionId)
 await connection.prompt(sessionId, [{ type: "text", text: "Hello" }], {})
 ```
 
-The package has two entry points:
+The package has three entry points:
 
 | Import                     | What it holds                                                                                                                                                                 |
 | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@harness-gw/sdk`          | The ACP connection with reconnect and backoff, the workspace client (Agents, Sessions, read state, activity), approvals, questions, and `HgwRemoteClient` for the HTTP routes |
 | `@harness-gw/sdk/protocol` | The wire alone: `_hgw/*` method names, the `_meta.hgw` zod schemas and their types, route paths and `HGW_EXTENSION_VERSION`. It loads without the client                      |
+| `@harness-gw/sdk/node`     | Server-only: `mcpAppStableOriginKey` and `artifactFileId`, the ids an MCP server derives as the gateway does. It needs Node's `crypto`                                        |
 
 The client checks the gateway's extension version during `initialize`. On a
 mismatch it fails `initialized` with both versions named and stops instead of

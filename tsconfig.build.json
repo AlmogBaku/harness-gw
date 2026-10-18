@@ -2,12 +2,17 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "lib": ["DOM", "ES2024", "ESNext.Disposable"],
-    "types": [],
+    "types": ["node"],
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
     "rootDir": ".",
     "outDir": "dist"
   },
-  "include": ["client/index.ts", "protocol/sdk.ts", "client/*.d.ts"]
+  "include": [
+    "client/index.ts",
+    "protocol/sdk.ts",
+    "protocol/node.ts",
+    "client/*.d.ts"
+  ]
 }

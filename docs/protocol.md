@@ -1075,3 +1075,8 @@ category, which named no Session when it counted several.
 - `hgw-client.ts`, `hgw-notification.ts`: the HTTP API and `_hgw/*`
   notifications
 - `types.ts`, `workspace.ts`: the client's own types
+
+`protocol/node.ts` is the server-only `@harness-gw/sdk/node`: the ids a server
+derives, `mcpAppStableOriginKey` and `artifactFileId`, with Node's own crypto.
+No other protocol module imports it, so `@harness-gw/sdk/protocol` still loads
+in a browser.

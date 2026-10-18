@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
 import * as clientSource from "../../client/index"
+import * as nodeSource from "../../protocol/node"
 import * as protocolSource from "../../protocol/sdk"
 
 const root = join(import.meta.dirname, "../..")
@@ -90,13 +91,14 @@ afterAll(() => rmSync(consumer, { recursive: true, force: true }))
 
 describe("@harness-gw/sdk package", () => {
   /**
-   * Only the two built entry points, their shared chunk, and their types ship:
-   * no source, test, test helper, gateway code, or example.
+   * Only the three built entry points, the browser two's shared chunk, and
+   * their types ship: no source, test, test helper, gateway code, or example.
    */
   it("ships the built entries and their types, and nothing else", () => {
     expect(files.filter((path) => path.endsWith(".js"))).toEqual([
       "dist/chunks/index.js",
       "dist/client/index.js",
+      "dist/protocol/node.js",
       "dist/protocol/sdk.js",
     ])
     expect(files.filter((path) => !path.startsWith("dist/"))).toEqual([
@@ -107,6 +109,7 @@ describe("@harness-gw/sdk package", () => {
     const types = files.filter((path) => path.endsWith(".d.ts"))
     expect(types).toContain("dist/client/index.d.ts")
     expect(types).toContain("dist/protocol/sdk.d.ts")
+    expect(types).toContain("dist/protocol/node.d.ts")
     expect(
       types.filter(
         (path) =>
@@ -131,6 +134,7 @@ describe("@harness-gw/sdk package", () => {
   it.each([
     ["client/index.js", clientSource],
     ["protocol/sdk.js", protocolSource],
+    ["protocol/node.js", nodeSource],
   ])("dist/%s exports every value its source does", async (entry, source) => {
     const built = (await import(
       pathToFileURL(
@@ -156,10 +160,12 @@ describe("@harness-gw/sdk package", () => {
       [
         `import { HgwRemoteClient, type AcpConnection, type Logger } from "${manifest.name}"`,
         `import { type HgwInitializeMeta } from "${manifest.name}/protocol"`,
+        `import { mcpAppStableOriginKey } from "${manifest.name}/node"`,
         "type IsAny<T> = 0 extends 1 & T ? true : false",
         "export const resolved: [",
-        "  IsAny<AcpConnection>, IsAny<Logger>, IsAny<HgwInitializeMeta>, IsAny<HgwRemoteClient>",
-        "] = [false, false, false, false]",
+        "  IsAny<AcpConnection>, IsAny<Logger>, IsAny<HgwInitializeMeta>, IsAny<HgwRemoteClient>,",
+        "  IsAny<typeof mcpAppStableOriginKey>",
+        "] = [false, false, false, false, false]",
       ].join("\n")
     )
     writeFileSync(
