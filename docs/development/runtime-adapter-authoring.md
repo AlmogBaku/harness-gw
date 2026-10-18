@@ -520,8 +520,11 @@ Keep the path in a private Agent-and-Session-scoped mapping.
 
 Implement `ServerRuntime.artifact(agentId, publicSessionId, artifactId)`
 (`src/core/runtime.ts`) to resolve the id only within that
-Session and return `{bytes, mimeType?, filename}`, read through the harness's
-own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB). The route
+Session and return `{bytes, mimeType?, filename, fileId?}`, read through the
+harness's own file interface and bounded by `MAX_ARTIFACT_BYTES` (25 MiB).
+`fileId` is `artifactFileId` (`protocol/node.ts`) of the native path as the
+Session delivered it, where there is one, so the viewer knows the file as
+`present_artifact` does; the path stays in the adapter. The route
 `GET .../sessions/:sessionId/artifacts/:artifactId`
 (`src/routes/content.ts`) serves it on both listeners.
 

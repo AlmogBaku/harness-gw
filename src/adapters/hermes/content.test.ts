@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { artifactFileId } from "../../../protocol/node"
 import {
   HermesContentCleanupRequiredError,
   HermesContentScopeError,
@@ -39,7 +40,10 @@ function harness(overrides?: {
   const requireArtifact = vi.fn(async (_scope: typeof scope, id: string) =>
     overrides?.artifact
       ? overrides.artifact(id)
-      : { reference: "reports/private.pdf", filename: "Report.pdf" }
+      : {
+          reference: "/srv/private/reports/private.pdf",
+          filename: "Report.pdf",
+        }
   )
   const request = vi.fn(
     async (method: string, params: Readonly<Record<string, unknown>>) =>
@@ -388,7 +392,7 @@ describe("Hermes content operations", () => {
     }
   })
 
-  it("reads only an authority-bound opaque artifact and strips its native reference", async () => {
+  it("reads only an authority-bound opaque artifact, keyed by its path's file id, and strips its native reference", async () => {
     const h = harness()
     await expect(
       h.operations.artifact("research", "session-public-1", "artifact-1")
@@ -396,11 +400,13 @@ describe("Hermes content operations", () => {
       bytes: Uint8Array.of(1, 2, 3),
       mimeType: "application/pdf",
       filename: "Report.pdf",
+      // The id `present_artifact` gives the path the Session delivered.
+      fileId: artifactFileId("/srv/private/reports/private.pdf"),
     })
     expect(h.requireArtifact).toHaveBeenCalledWith(scope, "artifact-1")
     expect(h.readArtifact).toHaveBeenCalledWith(
       scope,
-      "reports/private.pdf",
+      "/srv/private/reports/private.pdf",
       26_214_400,
       26_214_400
     )

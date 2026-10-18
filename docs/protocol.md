@@ -744,6 +744,16 @@ on its own listener, a guest with its invitation token as a Bearer
 `Authorization` header. The gateway resolves the id only against that Session's
 own provider history.
 
+A client opens such an Artifact in the configured viewer
+(`mcpApps.files.viewer`) at `…/artifacts/:artifactId/app` (see
+[HTTP API](#http-api)). The view's `toolResult` is `viewerFileResult`: the
+Artifact's `filename`, its `mimeType`, and its `fileId` where the runtime read
+it from a path. `fileId` is `artifactFileId(path)` from `@harness-gw/sdk/node`,
+the first 16 hex digits of a SHA-256 of the normalized POSIX path, so a Hermes
+`MEDIA:` file carries the same `fileId` as a `present_artifact` call for the
+same path, while the path itself never leaves the adapter. A file read from no
+path, such as OpenClaw's, carries none.
+
 ### Stored user images
 
 A user image the provider stored inline in its transcript replays as an

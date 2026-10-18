@@ -469,11 +469,21 @@ export interface ServerRuntime {
     publicSessionId: string,
     attachments: SessionAttachmentStageRequest["attachments"]
   ): Promise<ServerAttachmentStage>
+  /**
+   * One Artifact this Session published. `fileId` is `artifactFileId` of the
+   * native path it was read from, where there is one; the path itself never
+   * leaves the adapter.
+   */
   artifact(
     agentId: string,
     publicSessionId: string,
     artifactId: string
-  ): Promise<{ bytes: Uint8Array; mimeType?: string; filename: string }>
+  ): Promise<{
+    bytes: Uint8Array
+    mimeType?: string
+    filename: string
+    fileId?: string
+  }>
   transcribe(
     agentId: string,
     bytes: Uint8Array,

@@ -8,6 +8,7 @@ import {
   RECORDING_MIME_TYPES,
   SPEECH_MIME_TYPES,
 } from "../../../protocol/audio"
+import { artifactFileId } from "../../../protocol/node"
 import { MAX_ARTIFACT_BYTES } from "../../core/artifact-path"
 
 import { isRecord, utf8BytesWithin } from "./native"
@@ -676,10 +677,13 @@ export function createHermesContentOperations(input: {
       )
         throw new HermesContentUnavailableError()
       const mimeType = safeMimeType(result.mimeType)
+      // The path as the Session delivered it, so a `MEDIA:` file and a
+      // `present_artifact` of the same path share one identity.
       return {
         bytes: result.bytes,
         ...(mimeType ? { mimeType } : {}),
         filename,
+        fileId: artifactFileId(reference),
       }
     },
     async audio(agentId: string, sessionId: string) {

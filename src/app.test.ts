@@ -453,7 +453,7 @@ function passOf(address: string) {
 /** A stable origin the runtime verified the viewer's view on. */
 const VIEWER_DOMAIN = "5c25e9af9fca8071e322bd227eaaa176.mcp-apps.example"
 
-/** The Artifact Session `stored` publishes as `artifact-1`. */
+/** The Artifact Session `stored` publishes as `artifact-1`, read from no path. */
 const NOTES = {
   bytes: new TextEncoder().encode("# Notes"),
   mimeType: "text/markdown",
@@ -1051,6 +1051,7 @@ describe("Published Artifact views", () => {
     const response = await gateway.request(`${origin}${artifactPath()}`)
     expect(response.status).toBe(200)
     const view = (await response.json()) as McpAppView
+    // Read from no path, as an OpenClaw `MEDIA:` file is, it has no `fileId`.
     expect(view).toEqual({
       html: "<p>viewer</p>",
       domain: VIEWER_DOMAIN,
@@ -1128,6 +1129,30 @@ describe("Published Artifact views", () => {
     const renewed = await post(gateway, `${artifactPath()}/files`)
     expect(await renewed.json()).toEqual(view.files)
     expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
+  })
+
+  it("names the viewer's file by the file id the runtime read it with", async () => {
+    const { gateway, artifact } = fileGateway()
+    artifact.mockResolvedValue({ ...NOTES, fileId: "69749e306120414a" })
+    const value = {
+      filename: "notes.md",
+      mimeType: "text/markdown",
+      fileId: "69749e306120414a",
+    }
+
+    const response = await gateway.request(`${origin}${artifactPath()}`)
+
+    expect(((await response.json()) as McpAppView).toolResult).toEqual({
+      content: [
+        {
+          type: "text",
+          text: expect.stringContaining(
+            `Structured fallback:\n${JSON.stringify(value)}`
+          ),
+        },
+      ],
+      structuredContent: { value },
+    })
   })
 
   it.each<
