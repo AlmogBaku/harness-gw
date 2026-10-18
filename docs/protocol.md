@@ -1008,6 +1008,41 @@ quotes reach the header only encoded; one ending in `/`, which would name every
 path below it, is dropped. Send locations without their passes when they travel
 in a URL.
 
+### Stable origins
+
+A view may ask for an origin of its own with `_meta.ui.domain` (MCP Apps
+2026-01-26, "Dedicated origin for view"), whose format each host defines. The
+gateway passes on one format. A host that opts in serves such a view's sandbox
+page from that domain, on a scheme and port of its choosing, by the steps
+above; one that has not ignores `domain`, however well its key matches, and
+keeps its sandbox origin.
+
+- **Format:** `<key>.<the host's domain>`, a lowercase host name of at most
+  253 characters (`McpUiDomainSchema`). `<key>` is
+  `mcpAppStableOriginKey(url)` from `@harness-gw/sdk/node`: the first 32 hex
+  digits of a SHA-256 of the MCP server's URL, Claude's published format.
+- **The URL the gateway dials:** `mcpApps.fallback.servers.<name>.url` where
+  the operator set one, else the URL the runtime reports, hashed exactly as
+  written. A server that declares `domain` computes its key from that same
+  string.
+- **Both locations,** as the draft spec's "Metadata Location" requires: the
+  gateway takes `_meta.ui` whole from the `resources/read` content item, and
+  only when the item declares none, whole from the resource's `resources/list`
+  entry. It never merges the two, and sanitizes either alike. The listing is cached per server and URL as
+  `tools/list` is, at 3 s a page and 20 pages. One that fails or times out is
+  skipped and logged as `mcp_app.resources.list_failed`, and the view opens
+  without it.
+- **Checked on every view:** a tool call's, and the viewer a published
+  Artifact opens in. `domain` stays only when its first label is the key of the
+  URL the gateway dialed; otherwise it is dropped and logged as
+  `mcp_app.domain.dropped` with the server's name and the declared label, never
+  the URL. A server named `aos-ui` that the gateway dials elsewhere cannot claim
+  the tools server's origin, and a view the gateway did not read itself, such
+  as OpenClaw's native `mcp.app.view`, carries none.
+- **Strict schema:** `McpAppViewSchema` refuses unknown fields, so an SDK
+  client from 0.12.0 or earlier refuses a view that carries `domain`. Upgrade
+  the gateway and its clients together.
+
 ### Web Push payload
 
 A configured deployment sends one Web Push message per Session when a

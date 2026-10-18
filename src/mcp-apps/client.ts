@@ -2,6 +2,7 @@ import {
   Client,
   ProtocolError,
   StreamableHTTPClientTransport,
+  type Resource,
   type Tool,
 } from "@modelcontextprotocol/client"
 
@@ -15,26 +16,34 @@ import {
 import type { Logger } from "../../lifecycle"
 import { isHttpsOrLoopback } from "../config"
 import { createMcpServerCache } from "../core/mcp-server-cache"
-import { MCP_APP_MIME_TYPE, sanitizeCsp, sanitizePermissions } from "./policy"
+import {
+  domainLabel,
+  isStableOriginOf,
+  MCP_APP_MIME_TYPE,
+  sanitizeUiMeta,
+  type McpUiMeta,
+} from "./policy"
 
 /** The largest UI resource a view is served from. */
 export const MAX_MCP_APP_HTML_BYTES = 2 * 1024 * 1024
-const MAX_TOOL_PAGES = 20
+/** How many pages one `tools/list` or `resources/list` may take. */
+const MAX_LIST_PAGES = 20
 const IDLE_CLOSE_MS = 5 * 60_000
 /**
- * How long a connect or one `tools/list` page may take. A history read waits
- * on the listing, so a server that does not answer resolves by its prefix
- * instead; an App's own tool call and resource read keep the SDK's longer
+ * How long a connect or one `tools/list` or `resources/list` page may take. A
+ * history read waits on the tool listing, so a server that does not answer
+ * resolves by its prefix instead, and a view opens without the resource
+ * listing; an App's own tool call and resource read keep the SDK's longer
  * default, since a person watches that work.
  */
 export const MCP_CATALOG_TIMEOUT_MS = 3_000
 const CATALOG_REQUEST = { timeout: MCP_CATALOG_TIMEOUT_MS }
 
-/** A view's resource, validated: its HTML and the `_meta.ui` it declared. */
-export type McpAppResource = Pick<
-  McpAppView,
-  "html" | "csp" | "permissions" | "prefersBorder"
->
+/**
+ * A view's resource, validated: its HTML and the `_meta.ui` it declared, with
+ * `domain` only as its own server's stable origin.
+ */
+export type McpAppResource = Pick<McpAppView, "html"> & McpUiMeta
 
 /** One MCP server: the name the runtime reports for it, and its Streamable HTTP URL. */
 export type McpAppEndpoint = { name: string; url: string }
@@ -60,8 +69,13 @@ export type McpAppClient = {
   tools(server: McpAppEndpoint): Promise<readonly Tool[]>
   /** `tools/list` after a lookup miss, refetched at most once per window. */
   refreshTools(server: McpAppEndpoint): Promise<readonly Tool[]>
-  /** An App's UI resource; anything but `text/html;profile=mcp-app` is refused. */
+  /**
+   * An App's UI resource as every view opens it: `_meta.ui` from its content
+   * item, else from its listing entry, with `domain` only as the dialed
+   * server's own; anything but `text/html;profile=mcp-app` is refused.
+   */
   appResource(server: McpAppEndpoint, uri: string): Promise<McpAppResource>
+  /** One `resources/read`, as the server answered it. */
   readResource(server: McpAppEndpoint, uri: string): Promise<ReadResourceResult>
   callTool(
     server: McpAppEndpoint,
@@ -79,14 +93,11 @@ export class McpAppResourceError extends Error {
 }
 
 /**
- * The App view `uri` names in a `resources/read` result: its HTML and the
- * `_meta.ui` it declared, sanitized. Anything but `text/html;profile=mcp-app`
- * is refused.
+ * The App view `uri` names in a `resources/read` result: its HTML and its
+ * content item's `_meta.ui`, as declared. Anything but
+ * `text/html;profile=mcp-app` is refused.
  */
-export function appResourceOf(
-  { contents }: ReadResourceResult,
-  uri: string
-): McpAppResource {
+function appContentOf({ contents }: ReadResourceResult, uri: string) {
   const entry = contents.find((candidate) => candidate.uri === uri)
   if (!entry || entry.mimeType !== MCP_APP_MIME_TYPE)
     throw new McpAppResourceError("mime type")
@@ -94,19 +105,7 @@ export function appResourceOf(
     "text" in entry
       ? entry.text
       : Buffer.from(entry.blob, "base64").toString("utf8")
-  const ui = entry._meta?.ui
-  const meta =
-    typeof ui === "object" && ui !== null ? (ui as Record<string, unknown>) : {}
-  const csp = sanitizeCsp(meta.csp)
-  const permissions = sanitizePermissions(meta.permissions)
-  return {
-    html,
-    ...(csp ? { csp } : {}),
-    ...(permissions ? { permissions } : {}),
-    ...(typeof meta.prefersBorder === "boolean"
-      ? { prefersBorder: meta.prefersBorder }
-      : {}),
-  }
+  return { html, ui: entry._meta?.ui }
 }
 
 /** Configured headers never travel in the clear beyond this machine. */
@@ -149,15 +148,18 @@ export function createMcpAppClient(
       )
   }
 
-  async function open({ name, url }: McpAppEndpoint) {
-    const override = overrides.get(name)
-    const target = new URL(override?.url ?? url)
-    const headers = override?.headers
+  /** The URL a server is dialed at: the operator's, else the runtime's. */
+  const dialedUrl = ({ name, url }: McpAppEndpoint) =>
+    overrides.get(name)?.url ?? url
+
+  async function open(server: McpAppEndpoint) {
+    const target = new URL(dialedUrl(server))
+    const headers = overrides.get(server.name)?.headers
     if (headers && !isHttpsOrLoopback(target))
       throw new McpAppConnectionRefusedError()
     const client = new Client(
       { name: "harness-gw", version: "1.0.0" },
-      { listMaxPages: MAX_TOOL_PAGES }
+      { listMaxPages: MAX_LIST_PAGES }
     )
     await client.connect(
       new StreamableHTTPClientTransport(target, {
@@ -202,16 +204,16 @@ export function createMcpAppClient(
     }
   }
 
-  /** Every page of one server's `tools/list`; a failure warns once per fetch. */
-  async function listTools(key: string) {
+  /** Every page of one server's list; a failure warns once per fetch. */
+  async function listAll<T>(
+    key: string,
+    failed: "mcp_app.tools.list_failed" | "mcp_app.resources.list_failed",
+    list: (client: Client) => Promise<readonly T[]>
+  ) {
     const server = endpointOf(key)
     const started = performance.now()
     try {
-      return await request(
-        server,
-        async (client) =>
-          (await client.listTools(undefined, CATALOG_REQUEST)).tools
-      )
+      return await request(server, list)
     } catch (err) {
       logger?.warn(
         {
@@ -219,13 +221,59 @@ export function createMcpAppClient(
           server: server.name,
           elapsedMs: Math.round(performance.now() - started),
         },
-        "mcp_app.tools.list_failed"
+        failed
       )
       throw err
     }
   }
 
-  const toolCache = createMcpServerCache<Tool>(listTools)
+  const toolCache = createMcpServerCache<Tool>((key) =>
+    listAll(
+      key,
+      "mcp_app.tools.list_failed",
+      async (client) =>
+        (await client.listTools(undefined, CATALOG_REQUEST)).tools
+    )
+  )
+  const resourceCache = createMcpServerCache<Resource>((key) =>
+    listAll(
+      key,
+      "mcp_app.resources.list_failed",
+      async (client) =>
+        (await client.listResources(undefined, CATALOG_REQUEST)).resources
+    )
+  )
+
+  /**
+   * The `_meta.ui` a server's `resources/list` entry for `uri` declares. A
+   * listing that fails or times out has none, so the view still opens.
+   */
+  async function listedUi(server: McpAppEndpoint, uri: string) {
+    try {
+      const resources = await resourceCache.get(keyOf(server))
+      return resources.find((resource) => resource.uri === uri)?._meta?.ui
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * `meta` with its `domain` only when that is the dialed server's own stable
+   * origin. One dropped is logged by the server's name and the label it
+   * declared, never by a URL.
+   */
+  function verified(
+    server: McpAppEndpoint,
+    { domain, ...meta }: McpUiMeta
+  ): McpUiMeta {
+    if (domain === undefined) return meta
+    if (isStableOriginOf(domain, dialedUrl(server))) return { ...meta, domain }
+    logger?.warn(
+      { server: server.name, label: domainLabel(domain) },
+      "mcp_app.domain.dropped"
+    )
+    return meta
+  }
 
   async function readResource(server: McpAppEndpoint, uri: string) {
     const result = ReadResourceResultSchema.parse(
@@ -246,8 +294,13 @@ export function createMcpAppClient(
     tools: (server) => toolCache.get(keyOf(server)),
     refreshTools: (server) => toolCache.refresh(keyOf(server)),
     readResource,
+    // The draft spec: "Hosts MUST check both locations, preferring the
+    // content item and falling back to the listing entry", each taken whole.
     async appResource(server, uri) {
-      return appResourceOf(await readResource(server, uri), uri)
+      const { html, ui } = appContentOf(await readResource(server, uri), uri)
+      const meta =
+        sanitizeUiMeta(ui) ?? sanitizeUiMeta(await listedUi(server, uri)) ?? {}
+      return { html, ...verified(server, meta) }
     },
     async callTool(server, name, args) {
       return CallToolResultSchema.parse(

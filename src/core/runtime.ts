@@ -557,6 +557,10 @@ export type ServerMcpApps = {
     scope: SessionScope,
     call: { toolCallId: string; toolName: string; result?: unknown }
   ): Promise<boolean>
+  /**
+   * The call's view. It carries `domain` only where the gateway dialed the
+   * view's server itself and found the domain that server's stable origin.
+   */
   open(
     scope: SessionScope,
     toolCallId: string,
@@ -588,10 +592,21 @@ export type ServerMcpApps = {
     uri: string
   ): Promise<ReadResourceResult>
   /**
-   * One `ui://` resource of the server this Session's Agent names `server`
-   * (`aos-ui` also matching `aos_ui`), read without a tool call: the view a
-   * published Artifact opens in, and that view's own reads. Absent when the
-   * runtime reaches views only through a call.
+   * The App view `uri` names on the server this Session's Agent names
+   * `server` (`aos-ui` also matching `aos_ui`), read without a tool call and
+   * verified as `open` verifies a call's: the view a published Artifact opens
+   * in. Absent when the runtime reaches views only through a call.
+   */
+  serverView?(
+    scope: SessionScope,
+    server: string,
+    uri: string,
+    signal?: AbortSignal
+  ): Promise<McpAppView>
+  /**
+   * One `ui://` resource of that same server, read without a tool call and as
+   * the server answered it: the reads of the view `serverView` opened, which
+   * need not be App views themselves. Present exactly where `serverView` is.
    */
   serverResource?(
     scope: SessionScope,

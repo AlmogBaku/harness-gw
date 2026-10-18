@@ -1,10 +1,13 @@
 import {
   isMcpAppCspDomain,
   McpUiCspSchema,
+  McpUiDomainSchema,
   McpUiPermissionsSchema,
+  type McpAppView,
   type McpUiCsp,
   type McpUiPermissions,
 } from "../../protocol/mcp-apps"
+import { mcpAppStableOriginKey } from "../../protocol/node"
 
 /**
  * The MCP Apps rules the gateway enforces for a view (spec 2026-01-26). Pure, so
@@ -66,7 +69,7 @@ export function splitCanonicalMcpName(
 }
 
 /** A resource's `_meta.ui.csp` with every invalid origin dropped. */
-export function sanitizeCsp(value: unknown): McpUiCsp | undefined {
+function sanitizeCsp(value: unknown): McpUiCsp | undefined {
   const parsed = McpUiCspSchema.safeParse(value)
   if (!parsed.success) return undefined
   const csp: McpUiCsp = {}
@@ -79,9 +82,47 @@ export function sanitizeCsp(value: unknown): McpUiCsp | undefined {
   return csp
 }
 
-export function sanitizePermissions(
-  value: unknown
-): McpUiPermissions | undefined {
+function sanitizePermissions(value: unknown): McpUiPermissions | undefined {
   const parsed = McpUiPermissionsSchema.safeParse(value)
   return parsed.success ? parsed.data : undefined
+}
+
+/** What a view's `_meta.ui` declares for its sandbox. */
+export type McpUiMeta = Pick<
+  McpAppView,
+  "csp" | "permissions" | "prefersBorder" | "domain"
+>
+
+/**
+ * A resource's `_meta.ui` with every invalid field dropped, alike from either
+ * location, or `undefined` where the location declares no object. Its `domain`
+ * is not yet the view's: only `isStableOriginOf` the dialed URL makes it so.
+ */
+export function sanitizeUiMeta(value: unknown): McpUiMeta | undefined {
+  const ui = record(value)
+  if (!ui) return undefined
+  const csp = sanitizeCsp(ui.csp)
+  const permissions = sanitizePermissions(ui.permissions)
+  const domain = McpUiDomainSchema.safeParse(ui.domain)
+  return {
+    ...(csp ? { csp } : {}),
+    ...(permissions ? { permissions } : {}),
+    ...(typeof ui.prefersBorder === "boolean"
+      ? { prefersBorder: ui.prefersBorder }
+      : {}),
+    ...(domain.success ? { domain: domain.data } : {}),
+  }
+}
+
+/** A domain's first label, the part a stable origin's key is. */
+export function domainLabel(domain: string) {
+  return domain.split(".", 1)[0]
+}
+
+/**
+ * Whether `domain` is the stable origin of the MCP server at `url`, the URL
+ * the gateway dials: its first label is that URL's `mcpAppStableOriginKey`.
+ */
+export function isStableOriginOf(domain: string, url: string) {
+  return domainLabel(domain) === mcpAppStableOriginKey(url)
 }

@@ -11,7 +11,7 @@ import type { GatewayAppOptions } from "../app"
 import { coreFailure } from "../core/failures"
 import * as ids from "../core/ids"
 import type { ServerMcpApps, ServerRuntime } from "../core/runtime"
-import { appResourceOf, McpAppResourceError } from "../mcp-apps/client"
+import { McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
 import { isUiResourceUri } from "../mcp-apps/policy"
 import { maskJson } from "../redaction"
@@ -122,8 +122,9 @@ type McpAppInput = AppFileContext & {
 
 /**
  * One request of an Artifact's view. `open` and `files` read the Artifact
- * first, so one the Session lacks answers 404, as its content route does; the
- * view's reads reach only the viewer's server. An Artifact that is there with
+ * first, so one the Session lacks answers 404, as its content route does.
+ * `open` verifies the viewer's view as a call's is; the view's own reads reach
+ * only the viewer's server, as it answers them. An Artifact that is there with
  * no viewer to open it in (a listener serving no files, a runtime that reads
  * no server's resource without a call, or a viewer out of reach) answers 503,
  * so the browser never mistakes it for a pruned one.
@@ -136,11 +137,10 @@ async function handleArtifactRequest(
   const { scope, operation, request, files } = input
   if (operation === "tools/call") return failure.not_found
   const artifact = await subject.read(scope)
+  const serverView = apps.serverView?.bind(apps)
   const serverResource = apps.serverResource?.bind(apps)
-  if (!files || !serverResource) return failure.unavailable
+  if (!files || !serverView || !serverResource) return failure.unavailable
   const { viewer } = files.options
-  const read = (uri: string) =>
-    serverResource(scope, viewer.server, uri, request.signal)
   if (operation === "resources/read") {
     const body = McpAppResourceReadRequestSchema.safeParse(
       await boundedJson(request, MAX_REQUEST_BYTES)
@@ -150,14 +150,26 @@ async function handleArtifactRequest(
     if (!isUiResourceUri(body.data.uri)) return failure.forbidden
     return {
       ok: true,
-      body: ReadResourceResultSchema.parse(await read(body.data.uri)),
+      body: ReadResourceResultSchema.parse(
+        await serverResource(
+          scope,
+          viewer.server,
+          body.data.uri,
+          request.signal
+        )
+      ),
     }
   }
   if (operation === "files")
     return { ok: true, body: await artifactFiles(input, files) }
-  let resource: ReturnType<typeof appResourceOf>
+  let view: McpAppView
   try {
-    resource = appResourceOf(await read(viewer.resource), viewer.resource)
+    view = await serverView(
+      scope,
+      viewer.server,
+      viewer.resource,
+      request.signal
+    )
   } catch (error) {
     if (
       error instanceof McpAppNotFoundError ||
@@ -169,7 +181,7 @@ async function handleArtifactRequest(
   return {
     ok: true,
     body: McpAppViewSchema.parse({
-      ...resource,
+      ...view,
       toolInput: {},
       toolResult: viewerFileResult(artifact),
       files: await artifactFiles(input, files),

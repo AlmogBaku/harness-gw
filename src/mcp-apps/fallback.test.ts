@@ -7,8 +7,10 @@ import {
 } from "@modelcontextprotocol/server"
 import { afterEach, describe, expect, it } from "vitest"
 
+import { mcpAppStableOriginKey } from "../../protocol/node"
 import { captureLogs } from "../../test/support/log-capture"
 import * as ids from "../core/ids"
+import type { McpAppView } from "../../protocol/mcp-apps"
 import {
   ServerSessionNotFoundError,
   type ServerRuntime,
@@ -18,6 +20,7 @@ import { withMcpApps } from "./annotate"
 import {
   createMcpAppClient,
   McpAppConnectionRefusedError,
+  McpAppResourceError,
   type McpAppClient,
   type McpServerOverrides,
 } from "./client"
@@ -30,6 +33,9 @@ import {
 import { createMcpToolNames } from "./tool-names"
 
 const VIEW_URI = "ui://weather/forecast"
+const ARTIFACT_URI = "ui://aos-ui/artifact"
+/** A viewer's own script, which is no App view. */
+const WORKER_URI = "ui://aos-ui/pdfjs/pdf.worker.js"
 const TOOLS = [
   { name: "show-forecast", _meta: { ui: { resourceUri: VIEW_URI } } },
   { name: "refresh_forecast", _meta: { ui: { visibility: ["app"] } } },
@@ -37,12 +43,50 @@ const TOOLS = [
   { name: "plain_lookup" },
 ]
 
+/** The `_meta.ui` the forecast view declares, one origin in it invalid. */
+const FORECAST_UI = {
+  csp: {
+    connectDomains: [
+      "https://api.weather.test",
+      "wss://live.weather.test",
+      "javascript:x",
+    ],
+  },
+  prefersBorder: false,
+}
+
+/** The `_meta.ui` a view declares on its content item and its listing entry. */
+type DeclaredUi = {
+  item?: Record<string, unknown>
+  listed?: Record<string, unknown>
+}
+
 /**
  * A Streamable HTTP MCP App server, answered in process through `fetch`; given
  * an `authorization`, it answers 401 to any request that does not carry it.
+ * Each view declares `_meta.ui` where `views` says, by default the forecast's
+ * on its content item; `listingFails` answers `resources/list` with a 500.
  */
-function appServer(authorization?: string) {
-  const seen = { listTools: 0, calls: [] as string[], urls: new Set<string>() }
+function appServer({
+  authorization,
+  views,
+  listingFails = false,
+}: {
+  authorization?: string
+  views?: Record<string, DeclaredUi>
+  listingFails?: boolean
+} = {}) {
+  const seen = {
+    listTools: 0,
+    listResources: 0,
+    calls: [] as string[],
+    urls: new Set<string>(),
+  }
+  const declared: Record<string, DeclaredUi> = {
+    [VIEW_URI]: { item: FORECAST_UI },
+    [ARTIFACT_URI]: { item: FORECAST_UI },
+    ...views,
+  }
   const handle = async (request: Request) => {
     seen.urls.add(request.url)
     if (
@@ -54,6 +98,10 @@ function appServer(authorization?: string) {
       const message: unknown = await request.clone().json()
       if (isJSONRPCRequest(message) && message.method === "tools/list")
         seen.listTools += 1
+      if (isJSONRPCRequest(message) && message.method === "resources/list") {
+        seen.listResources += 1
+        if (listingFails) return new Response(null, { status: 500 })
+      }
     }
     const server = new McpServer({ name: "weather", version: "1.0.0" })
     for (const { name, _meta } of TOOLS)
@@ -61,28 +109,27 @@ function appServer(authorization?: string) {
         seen.calls.push(name)
         return { content: [{ type: "text", text: `ran ${name}` }] }
       })
-    for (const uri of [VIEW_URI, "ui://aos-ui/artifact"])
-      server.registerResource(uri, uri, {}, () => ({
-        contents: [
-          {
-            uri,
-            mimeType: "text/html;profile=mcp-app",
-            text: "<!doctype html><p>Forecast</p>",
-            _meta: {
-              ui: {
-                csp: {
-                  connectDomains: [
-                    "https://api.weather.test",
-                    "wss://live.weather.test",
-                    "javascript:x",
-                  ],
-                },
-                prefersBorder: false,
-              },
+    for (const [uri, { item, listed }] of Object.entries(declared))
+      server.registerResource(
+        uri,
+        uri,
+        listed ? { _meta: { ui: listed } } : {},
+        () => ({
+          contents: [
+            {
+              uri,
+              mimeType: "text/html;profile=mcp-app",
+              text: "<!doctype html><p>Forecast</p>",
+              ...(item ? { _meta: { ui: item } } : {}),
             },
-          },
-        ],
-      }))
+          ],
+        })
+      )
+    server.registerResource(WORKER_URI, WORKER_URI, {}, () => ({
+      contents: [
+        { uri: WORKER_URI, mimeType: "text/javascript", text: "onmessage=0" },
+      ],
+    }))
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -123,6 +170,14 @@ const stored: Record<string, StoredMcpToolCall> = {
       _meta: { ui: { resourceUri: VIEW_URI } },
     },
   },
+  "call-artifact": {
+    toolName: "present_artifact",
+    input: { path: "/srv/agent/q3.md" },
+    result: {
+      content: [{ type: "text", text: "q3.md is ready for display." }],
+      _meta: { ui: { resourceUri: ARTIFACT_URI } },
+    },
+  },
 }
 
 let client: McpAppClient | undefined
@@ -137,14 +192,17 @@ function fallback(
     weatherUrl?: string
     authorization?: string
     servers?: McpServerOverrides
+    views?: Record<string, DeclaredUi>
+    listingFails?: boolean
   } = {}
 ) {
-  const server = appServer(options.authorization)
+  const server = appServer(options)
+  const logs = captureLogs()
   client = createMcpAppClient({
     fetch: server.fetch,
     servers: options.servers,
+    logger: logs.logger,
   })
-  const logs = captureLogs()
   const apps = createMcpAppsFallback(
     {
       servers: async () => [
@@ -222,24 +280,44 @@ describe("MCP Apps fallback host", () => {
     ).rejects.toBeInstanceOf(McpAppNotFoundError)
   })
 
-  it("reads a named server's ui:// resource without a tool call", async () => {
+  it("opens a named server's view, and reads its resources as it answers them, without a tool call", async () => {
     const { apps, seen } = fallback()
 
     await expect(
-      apps.serverResource!(scope, "aos-ui", "ui://aos-ui/artifact")
+      apps.serverView!(scope, "aos-ui", ARTIFACT_URI)
+    ).resolves.toEqual({
+      html: "<!doctype html><p>Forecast</p>",
+      csp: {
+        connectDomains: ["https://api.weather.test", "wss://live.weather.test"],
+      },
+      prefersBorder: false,
+    })
+    // The view's own reads need not be App views.
+    await expect(
+      apps.serverResource!(scope, "aos-ui", WORKER_URI)
     ).resolves.toMatchObject({
       contents: [
-        { uri: "ui://aos-ui/artifact", text: "<!doctype html><p>Forecast</p>" },
+        { uri: WORKER_URI, mimeType: "text/javascript", text: "onmessage=0" },
       ],
     })
-    expect(seen.urls).toEqual(new Set(["http://aos-ui.test/mcp"]))
     await expect(
-      apps.serverResource!(scope, "aos-ui", "https://aos-ui.test/secret")
-    ).rejects.toBeInstanceOf(McpAppRefusedError)
-    for (const server of ["absent", "unreachable"])
+      apps.serverView!(scope, "aos-ui", WORKER_URI)
+    ).rejects.toBeInstanceOf(McpAppResourceError)
+    expect(seen.urls).toEqual(new Set(["http://aos-ui.test/mcp"]))
+    const reads = [
+      (server: string, uri: string) => apps.serverView!(scope, server, uri),
+      (server: string, uri: string) => apps.serverResource!(scope, server, uri),
+    ]
+    for (const read of reads) {
       await expect(
-        apps.serverResource!(scope, server, "ui://aos-ui/artifact")
-      ).rejects.toBeInstanceOf(McpAppNotFoundError)
+        read("aos-ui", "https://aos-ui.test/secret")
+      ).rejects.toBeInstanceOf(McpAppRefusedError)
+      // A server the Agent lacks, and one with no URL the gateway may dial.
+      for (const server of ["absent", "unreachable"])
+        await expect(read(server, ARTIFACT_URI)).rejects.toBeInstanceOf(
+          McpAppNotFoundError
+        )
+    }
   })
 
   it("takes the view a stored result names without listing tools", async () => {
@@ -403,6 +481,154 @@ describe("MCP Apps fallback host", () => {
       expect(plain.seen.urls.size).toBe(0)
     })
   })
+})
+
+describe("an MCP App view's _meta.ui", () => {
+  const view = (declared: DeclaredUi) =>
+    fallback({ views: { [VIEW_URI]: declared } })
+  const call = {
+    html: "<!doctype html><p>Forecast</p>",
+    toolInput: { city: "Haifa" },
+    toolResult: { content: [{ type: "text", text: "Sunny" }] },
+  }
+
+  it("takes the content item's whole, never a field of the listing entry's", async () => {
+    const { apps, seen } = view({
+      item: { prefersBorder: true },
+      listed: FORECAST_UI,
+    })
+
+    await expect(apps.open(scope, "call-forecast")).resolves.toEqual({
+      ...call,
+      prefersBorder: true,
+    })
+    expect(seen.listResources).toBe(0)
+  })
+
+  it("falls back to the listing entry's whole, sanitized alike, listed once", async () => {
+    const { apps, seen } = view({ listed: FORECAST_UI })
+    const opened = {
+      ...call,
+      csp: {
+        connectDomains: ["https://api.weather.test", "wss://live.weather.test"],
+      },
+      prefersBorder: false,
+    }
+
+    await expect(apps.open(scope, "call-forecast")).resolves.toEqual(opened)
+    await expect(apps.open(scope, "call-forecast")).resolves.toEqual(opened)
+    expect(seen.listResources).toBe(1)
+  })
+
+  it("opens with neither when the listing fails, and logs the failure", async () => {
+    const { apps, logs } = fallback({
+      views: { [VIEW_URI]: { listed: FORECAST_UI } },
+      listingFails: true,
+    })
+
+    await expect(apps.open(scope, "call-forecast")).resolves.toEqual(call)
+    expect(logs.records()).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: "mcp_app.resources.list_failed",
+        fields: expect.objectContaining({ server: "weather" }),
+      })
+    )
+  })
+})
+
+describe("an MCP App view's stable origin", () => {
+  const REPORTED = "http://weather.test/mcp"
+  /** The tools server's URL, as an operator's override names it. */
+  const TOOLS_URL = "http://tools-mcp:4110/mcp"
+  const toTools: McpServerOverrides = new Map([["weather", { url: TOOLS_URL }]])
+  /** The domain a view of the server dialed at `url` may declare. */
+  const stable = (url: string) =>
+    `${mcpAppStableOriginKey(url)}.mcp-apps.example`
+  const declaring = (uri: string, domain: string) => ({
+    [uri]: { item: { domain } },
+  })
+  type Open = (apps: ReturnType<typeof fallback>["apps"]) => Promise<McpAppView>
+  const forecast: Open = (apps) => apps.open(scope, "call-forecast")
+  const presented: Open = (apps) => apps.open(scope, "call-artifact")
+  const viewer: Open = (apps) => apps.serverView!(scope, "aos-ui", ARTIFACT_URI)
+
+  it.each<[string, Parameters<typeof fallback>[0], Open, string]>([
+    [
+      "a call's view, keyed to the URL the runtime reports",
+      { views: declaring(VIEW_URI, stable(REPORTED)) },
+      forecast,
+      stable(REPORTED),
+    ],
+    [
+      "a call's view, keyed to the operator's URL it is dialed at instead",
+      { servers: toTools, views: declaring(VIEW_URI, stable(TOOLS_URL)) },
+      forecast,
+      stable(TOOLS_URL),
+    ],
+    [
+      "the viewer's view, read without a call",
+      {
+        views: declaring(ARTIFACT_URI, stable("http://aos-ui.test/mcp")),
+      },
+      viewer,
+      stable("http://aos-ui.test/mcp"),
+    ],
+  ])("keeps the domain of %s", async (_, options, open, domain) => {
+    const { apps, logs } = fallback(options)
+
+    await expect(open(apps)).resolves.toMatchObject({ domain })
+    expect(logs.records().map(({ message }) => message)).not.toContain(
+      "mcp_app.domain.dropped"
+    )
+  })
+
+  it.each<[string, Parameters<typeof fallback>[0], Open, string, string]>([
+    // An Agent's own server named `aos-ui` claims the tools server's origin.
+    [
+      "a look-alike aos-ui server's call view",
+      { views: declaring(ARTIFACT_URI, stable(TOOLS_URL)) },
+      presented,
+      "aos_ui",
+      mcpAppStableOriginKey(TOOLS_URL),
+    ],
+    [
+      "a look-alike aos-ui server's viewer",
+      { views: declaring(ARTIFACT_URI, stable(TOOLS_URL)) },
+      viewer,
+      "aos_ui",
+      mcpAppStableOriginKey(TOOLS_URL),
+    ],
+    [
+      "a call's view keyed to the reported URL, dialed at the operator's",
+      { servers: toTools, views: declaring(VIEW_URI, stable(REPORTED)) },
+      forecast,
+      "weather",
+      mcpAppStableOriginKey(REPORTED),
+    ],
+  ])(
+    "drops the domain of %s, logging its server and label alone",
+    async (_, options, open, server, label) => {
+      const { apps, logs } = fallback(options)
+
+      const opened = await open(apps)
+
+      expect(opened).toMatchObject({ html: "<!doctype html><p>Forecast</p>" })
+      expect(opened).not.toHaveProperty("domain")
+      expect(
+        logs
+          .records()
+          .filter(({ message }) => message === "mcp_app.domain.dropped")
+      ).toEqual([
+        {
+          level: "warn",
+          message: "mcp_app.domain.dropped",
+          fields: { server, label },
+        },
+      ])
+      expect(JSON.stringify(logs.records())).not.toMatch(/https?:/u)
+    }
+  )
 })
 
 describe("MCP tool name split", () => {

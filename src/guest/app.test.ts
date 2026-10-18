@@ -835,11 +835,8 @@ function fileHarness(
     ),
     callTool: vi.fn(async () => ({ content: [] })),
     readResource: vi.fn(async () => ({ contents: [] })),
-    serverResource: vi.fn(async (_scope, _server, uri) => ({
-      contents: [
-        { uri, mimeType: "text/html;profile=mcp-app", text: "<p>viewer</p>" },
-      ],
-    })),
+    serverView: vi.fn(async () => ({ html: "<p>viewer</p>" })),
+    serverResource: vi.fn(async () => ({ contents: [] })),
   }
   const reader: ServerFileReader = realPath
     ? { read, realPath: async (_: SessionScope, path: string) => path }
