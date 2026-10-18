@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path"
 import { z } from "zod"
 
+import { canonicalUrl } from "../protocol/node"
 import { isUiResourceUri } from "./mcp-apps/policy"
 
 /** The gateway log's levels, quietest last; `info` is the default. */
@@ -35,7 +36,7 @@ const HttpUrlSchema = z
         context.addIssue({ code: "custom", message: "Invalid URL" })
         return z.NEVER
       }
-      return url.href.replace(/\/$/u, "")
+      return canonicalUrl(url)
     } catch {
       context.addIssue({ code: "custom", message: "Invalid URL" })
       return z.NEVER
@@ -82,7 +83,7 @@ const WebSocketUrlSchema = z
         context.addIssue({ code: "custom", message: "Invalid URL" })
         return z.NEVER
       }
-      return url.href.replace(/\/$/u, "")
+      return canonicalUrl(url)
     } catch {
       context.addIssue({ code: "custom", message: "Invalid URL" })
       return z.NEVER

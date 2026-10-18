@@ -567,6 +567,15 @@ describe("an MCP App view's stable origin", () => {
       stable(TOOLS_URL),
     ],
     [
+      "a call's view, keyed to the canonical form of the URL the runtime reports",
+      {
+        weatherUrl: "http://Weather.test:80/mcp/",
+        views: declaring(VIEW_URI, stable(REPORTED)),
+      },
+      forecast,
+      stable(REPORTED),
+    ],
+    [
       "the viewer's view, read without a call",
       {
         views: declaring(ARTIFACT_URI, stable("http://aos-ui.test/mcp")),

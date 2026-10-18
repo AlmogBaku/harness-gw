@@ -1030,11 +1030,16 @@ keeps its sandbox origin.
 - **Format:** `<key>.<the host's domain>`, a lowercase host name of at most
   253 characters (`McpUiDomainSchema`). `<key>` is
   `mcpAppStableOriginKey(url)` from `@harness-gw/sdk/node`: the first 32 hex
-  digits of a SHA-256 of the MCP server's URL, Claude's published format.
+  digits of a SHA-256 of the MCP server's URL in its `canonicalUrl` form. For
+  a URL already in that form, such as `https://example.com/mcp`, that is
+  Claude's published format.
 - **The URL the gateway dials:** `mcpApps.fallback.servers.<name>.url` where
-  the operator set one, else the URL the runtime reports, hashed exactly as
-  written. A server that declares `domain` computes its key from that same
-  string.
+  the operator set one, else the URL the runtime reports. Either is hashed in
+  its canonical form, the WHATWG URL serialization with no trailing slash (the
+  form the configuration keeps a URL in), so `https://Example.com:443/mcp/`
+  and `https://example.com/mcp` give one key. A server that declares `domain`
+  computes its key with the same function, from the URL the gateway dials it
+  at, however written.
 - **Both locations,** as the draft spec's "Metadata Location" requires: the
   gateway takes `_meta.ui` whole from the `resources/read` content item, and
   only when the item declares none, whole from the resource's `resources/list`
@@ -1122,6 +1127,6 @@ category, which named no Session when it counted several.
 - `types.ts`, `workspace.ts`: the client's own types
 
 `protocol/node.ts` is the server-only `@harness-gw/sdk/node`: the ids a server
-derives, `mcpAppStableOriginKey` and `artifactFileId`, with Node's own crypto.
-No other protocol module imports it, so `@harness-gw/sdk/protocol` still loads
-in a browser.
+derives, `mcpAppStableOriginKey` and `artifactFileId`, with Node's own crypto,
+and `canonicalUrl`, the form the key hashes. No other protocol module imports
+it, so `@harness-gw/sdk/protocol` still loads in a browser.
