@@ -30,6 +30,7 @@ import {
   McpAppRefusedError,
   type StoredMcpToolCall,
 } from "./fallback"
+import type { DroppedDomain } from "./policy"
 import { createMcpToolNames } from "./tool-names"
 
 const VIEW_URI = "ui://weather/forecast"
@@ -65,16 +66,17 @@ type DeclaredUi = {
  * A Streamable HTTP MCP App server, answered in process through `fetch`; given
  * an `authorization`, it answers 401 to any request that does not carry it.
  * Each view declares `_meta.ui` where `views` says, by default the forecast's
- * on its content item; `listingFails` answers `resources/list` with a 500.
+ * on its content item; `listing` answers `resources/list` with a 500, or
+ * never.
  */
 function appServer({
   authorization,
   views,
-  listingFails = false,
+  listing,
 }: {
   authorization?: string
   views?: Record<string, DeclaredUi>
-  listingFails?: boolean
+  listing?: "fails" | "hangs"
 } = {}) {
   const seen = {
     listTools: 0,
@@ -100,7 +102,8 @@ function appServer({
         seen.listTools += 1
       if (isJSONRPCRequest(message) && message.method === "resources/list") {
         seen.listResources += 1
-        if (listingFails) return new Response(null, { status: 500 })
+        if (listing === "fails") return new Response(null, { status: 500 })
+        if (listing === "hangs") return new Promise<Response>(() => {})
       }
     }
     const server = new McpServer({ name: "weather", version: "1.0.0" })
@@ -193,7 +196,8 @@ function fallback(
     authorization?: string
     servers?: McpServerOverrides
     views?: Record<string, DeclaredUi>
-    listingFails?: boolean
+    listing?: "fails" | "hangs"
+    catalogTimeoutMs?: number
   } = {}
 ) {
   const server = appServer(options)
@@ -202,6 +206,7 @@ function fallback(
     fetch: server.fetch,
     servers: options.servers,
     logger: logs.logger,
+    catalogTimeoutMs: options.catalogTimeoutMs,
   })
   const apps = createMcpAppsFallback(
     {
@@ -520,21 +525,25 @@ describe("an MCP App view's _meta.ui", () => {
     expect(seen.listResources).toBe(1)
   })
 
-  it("opens with neither when the listing fails, and logs the failure", async () => {
-    const { apps, logs } = fallback({
-      views: { [VIEW_URI]: { listed: FORECAST_UI } },
-      listingFails: true,
-    })
-
-    await expect(apps.open(scope, "call-forecast")).resolves.toEqual(call)
-    expect(logs.records()).toContainEqual(
-      expect.objectContaining({
-        level: "warn",
-        message: "mcp_app.resources.list_failed",
-        fields: expect.objectContaining({ server: "weather" }),
+  it.each(["fails", "hangs"] as const)(
+    "opens with neither when the listing %s, and logs it",
+    async (listing) => {
+      const { apps, logs } = fallback({
+        views: { [VIEW_URI]: { listed: FORECAST_UI } },
+        listing,
+        catalogTimeoutMs: 200,
       })
-    )
-  })
+
+      await expect(apps.open(scope, "call-forecast")).resolves.toEqual(call)
+      expect(logs.records()).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          message: "mcp_app.resources.list_failed",
+          fields: expect.objectContaining({ server: "weather" }),
+        })
+      )
+    }
+  )
 })
 
 describe("an MCP App view's stable origin", () => {
@@ -592,32 +601,43 @@ describe("an MCP App view's stable origin", () => {
     )
   })
 
-  it.each<[string, Parameters<typeof fallback>[0], Open, string, string]>([
+  it.each<
+    [string, Parameters<typeof fallback>[0], Open, string, DroppedDomain]
+  >([
     // An Agent's own server named `aos-ui` claims the tools server's origin.
     [
       "a look-alike aos-ui server's call view",
       { views: declaring(ARTIFACT_URI, stable(TOOLS_URL)) },
       presented,
       "aos_ui",
-      mcpAppStableOriginKey(TOOLS_URL),
+      { reason: "mismatch", label: mcpAppStableOriginKey(TOOLS_URL) },
     ],
     [
       "a look-alike aos-ui server's viewer",
       { views: declaring(ARTIFACT_URI, stable(TOOLS_URL)) },
       viewer,
       "aos_ui",
-      mcpAppStableOriginKey(TOOLS_URL),
+      { reason: "mismatch", label: mcpAppStableOriginKey(TOOLS_URL) },
     ],
     [
       "a call's view keyed to the reported URL, dialed at the operator's",
       { servers: toTools, views: declaring(VIEW_URI, stable(REPORTED)) },
       forecast,
       "weather",
-      mcpAppStableOriginKey(REPORTED),
+      { reason: "mismatch", label: mcpAppStableOriginKey(REPORTED) },
+    ],
+    [
+      "a call's view naming no host",
+      {
+        views: declaring(VIEW_URI, `https://${stable(REPORTED)}`),
+      },
+      forecast,
+      "weather",
+      { reason: "malformed" },
     ],
   ])(
-    "drops the domain of %s, logging its server and label alone",
-    async (_, options, open, server, label) => {
+    "drops the domain of %s, logging its server and why alone",
+    async (_, options, open, server, why) => {
       const { apps, logs } = fallback(options)
 
       const opened = await open(apps)
@@ -632,7 +652,7 @@ describe("an MCP App view's stable origin", () => {
         {
           level: "warn",
           message: "mcp_app.domain.dropped",
-          fields: { server, label },
+          fields: { server, ...why },
         },
       ])
       expect(JSON.stringify(logs.records())).not.toMatch(/https?:/u)

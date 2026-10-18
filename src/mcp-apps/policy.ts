@@ -93,36 +93,47 @@ export type McpUiMeta = Pick<
   "csp" | "permissions" | "prefersBorder" | "domain"
 >
 
+/** A view's `_meta.ui`, sanitized, with the `domain` it declared still to judge. */
+export type DeclaredUiMeta = Omit<McpUiMeta, "domain"> & { domain?: unknown }
+
 /**
  * A resource's `_meta.ui` with every invalid field dropped, alike from either
- * location, or `undefined` where the location declares no object. Its `domain`
- * is not yet the view's: only `isStableOriginOf` the dialed URL makes it so.
+ * location, or `undefined` where the location declares no object. Its
+ * `domain` is passed on as declared, for `judgedDomain`.
  */
-export function sanitizeUiMeta(value: unknown): McpUiMeta | undefined {
+export function sanitizeUiMeta(value: unknown): DeclaredUiMeta | undefined {
   const ui = record(value)
   if (!ui) return undefined
   const csp = sanitizeCsp(ui.csp)
   const permissions = sanitizePermissions(ui.permissions)
-  const domain = McpUiDomainSchema.safeParse(ui.domain)
   return {
     ...(csp ? { csp } : {}),
     ...(permissions ? { permissions } : {}),
     ...(typeof ui.prefersBorder === "boolean"
       ? { prefersBorder: ui.prefersBorder }
       : {}),
-    ...(domain.success ? { domain: domain.data } : {}),
+    ...(ui.domain === undefined ? {} : { domain: ui.domain }),
   }
 }
 
-/** A domain's first label, the part a stable origin's key is. */
-export function domainLabel(domain: string) {
-  return domain.split(".", 1)[0]
-}
+/** Why a declared `domain` is not the view's; never the URL it was judged by. */
+export type DroppedDomain =
+  | { reason: "malformed" }
+  | { reason: "mismatch"; label: string }
 
 /**
- * Whether `domain` is the stable origin of the MCP server at `url`, the URL
- * the gateway dials: its first label is that URL's `mcpAppStableOriginKey`.
+ * A declared `domain`, judged against the URL the gateway dials the view's
+ * server at: the view's when it is a host name `McpUiDomainSchema` admits
+ * whose first label is that URL's `mcpAppStableOriginKey`, else why not.
  */
-export function isStableOriginOf(domain: string, url: string) {
-  return domainLabel(domain) === mcpAppStableOriginKey(url)
+export function judgedDomain(
+  declared: unknown,
+  url: string
+): { domain: string } | DroppedDomain {
+  const parsed = McpUiDomainSchema.safeParse(declared)
+  if (!parsed.success) return { reason: "malformed" }
+  const label = parsed.data.split(".", 1)[0]
+  return label === mcpAppStableOriginKey(url)
+    ? { domain: parsed.data }
+    : { reason: "mismatch", label }
 }

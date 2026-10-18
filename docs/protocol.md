@@ -1043,17 +1043,18 @@ keeps its sandbox origin.
 - **Both locations,** as the draft spec's "Metadata Location" requires: the
   gateway takes `_meta.ui` whole from the `resources/read` content item, and
   only when the item declares none, whole from the resource's `resources/list`
-  entry. It never merges the two, and sanitizes either alike. The listing is cached per server and URL as
-  `tools/list` is, at 3 s a page and 20 pages. One that fails or times out is
-  skipped and logged as `mcp_app.resources.list_failed`, and the view opens
-  without it.
+  entry. It never merges the two, and sanitizes either alike. The listing is
+  cached per server and URL as `tools/list` is, at 3 s a page and 20 pages.
+  One that fails or times out is skipped and logged as
+  `mcp_app.resources.list_failed`, and the view opens without it.
 - **Checked on every view:** a tool call's, and the viewer a published
   Artifact opens in. `domain` stays only when its first label is the key of the
-  URL the gateway dialed; otherwise it is dropped and logged as
-  `mcp_app.domain.dropped` with the server's name and the declared label, never
-  the URL. A server named `aos-ui` that the gateway dials elsewhere cannot claim
-  the tools server's origin, and a view the gateway did not read itself, such
-  as OpenClaw's native `mcp.app.view`, carries none.
+  URL the gateway dialed. Otherwise it is dropped and logged as
+  `mcp_app.domain.dropped` with the server's name and a `reason`: `mismatch`,
+  with the declared label, or `malformed`, with nothing it declared; never the
+  URL. A server named `aos-ui` that the gateway dials elsewhere cannot claim the
+  tools server's origin, and a view the gateway did not read itself, such as
+  OpenClaw's native `mcp.app.view`, carries none.
 - **Strict schema:** `McpAppViewSchema` refuses unknown fields, so an SDK
   client from 0.12.0 or earlier refuses a view that carries `domain`. Upgrade
   the gateway and its clients together.

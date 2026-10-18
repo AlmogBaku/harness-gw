@@ -17,10 +17,10 @@ import type { Logger } from "../../lifecycle"
 import { isHttpsOrLoopback } from "../config"
 import { createMcpServerCache } from "../core/mcp-server-cache"
 import {
-  domainLabel,
-  isStableOriginOf,
+  judgedDomain,
   MCP_APP_MIME_TYPE,
   sanitizeUiMeta,
+  type DeclaredUiMeta,
   type McpUiMeta,
 } from "./policy"
 
@@ -37,7 +37,6 @@ const IDLE_CLOSE_MS = 5 * 60_000
  * default, since a person watches that work.
  */
 export const MCP_CATALOG_TIMEOUT_MS = 3_000
-const CATALOG_REQUEST = { timeout: MCP_CATALOG_TIMEOUT_MS }
 
 /**
  * A view's resource, validated: its HTML and the `_meta.ui` it declared, with
@@ -131,9 +130,14 @@ export function createMcpAppClient(
     fetch?: typeof fetch
     servers?: McpServerOverrides
     logger?: Logger
+    /** How long a connect or one list page may take. */
+    catalogTimeoutMs?: number
   } = {}
 ): McpAppClient {
   const { logger } = options
+  const catalogRequest = {
+    timeout: options.catalogTimeoutMs ?? MCP_CATALOG_TIMEOUT_MS,
+  }
   const overrides: McpServerOverrides = options.servers ?? new Map()
   const pool = new Map<string, Pooled>()
 
@@ -166,7 +170,7 @@ export function createMcpAppClient(
         ...(options.fetch ? { fetch: options.fetch } : {}),
         ...(headers ? { requestInit: { headers: { ...headers } } } : {}),
       }),
-      CATALOG_REQUEST
+      catalogRequest
     )
     return client
   }
@@ -232,7 +236,7 @@ export function createMcpAppClient(
       key,
       "mcp_app.tools.list_failed",
       async (client) =>
-        (await client.listTools(undefined, CATALOG_REQUEST)).tools
+        (await client.listTools(undefined, catalogRequest)).tools
     )
   )
   const resourceCache = createMcpServerCache<Resource>((key) =>
@@ -240,7 +244,7 @@ export function createMcpAppClient(
       key,
       "mcp_app.resources.list_failed",
       async (client) =>
-        (await client.listResources(undefined, CATALOG_REQUEST)).resources
+        (await client.listResources(undefined, catalogRequest)).resources
     )
   )
 
@@ -259,19 +263,17 @@ export function createMcpAppClient(
 
   /**
    * `meta` with its `domain` only when that is the dialed server's own stable
-   * origin. One dropped is logged by the server's name and the label it
-   * declared, never by a URL.
+   * origin. One dropped is logged by the server's name and why, with the label
+   * a well-formed one declared, never by a URL.
    */
   function verified(
     server: McpAppEndpoint,
-    { domain, ...meta }: McpUiMeta
+    { domain, ...meta }: DeclaredUiMeta
   ): McpUiMeta {
     if (domain === undefined) return meta
-    if (isStableOriginOf(domain, dialedUrl(server))) return { ...meta, domain }
-    logger?.warn(
-      { server: server.name, label: domainLabel(domain) },
-      "mcp_app.domain.dropped"
-    )
+    const judged = judgedDomain(domain, dialedUrl(server))
+    if ("domain" in judged) return { ...meta, ...judged }
+    logger?.warn({ server: server.name, ...judged }, "mcp_app.domain.dropped")
     return meta
   }
 
