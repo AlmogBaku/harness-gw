@@ -50,6 +50,9 @@ export type McpAppResource = Pick<McpAppView, "html"> & McpUiMeta
 /** One MCP server: the name the runtime reports for it, and its Streamable HTTP URL. */
 export type McpAppEndpoint = { name: string; url: string }
 
+/** A server a runtime reads for the gateway: its name, and its URL if any. */
+export type RelayingServer = { name: string; url: string | undefined }
+
 /**
  * What the operator configured for one MCP server: a `url` the gateway connects
  * to instead of the one the runtime reports, and request headers that replace
@@ -77,6 +80,18 @@ export type McpAppClient = {
    * server's own; anything but `text/html;profile=mcp-app` is refused.
    */
   appResource(server: McpAppEndpoint, uri: string): Promise<McpAppResource>
+  /**
+   * The App view `uri` names in a `resources/read` a runtime answered for the
+   * gateway from `server`, held to `appResource`'s rules from its content
+   * item's `_meta.ui` alone: `domain` stays only as the stable origin of the
+   * URL the gateway would dial `server` at, and none stays for a server it
+   * would dial at no URL, or an unknown one.
+   */
+  relayedAppResource(
+    server: RelayingServer | undefined,
+    value: unknown,
+    uri: string
+  ): McpAppResource
   /** One `resources/read`, as the server answered it. */
   readResource(server: McpAppEndpoint, uri: string): Promise<ReadResourceResult>
   /**
@@ -149,6 +164,21 @@ function appContentOf({ contents }: ReadResourceResult, uri: string) {
   return { html, ui: entry._meta?.ui }
 }
 
+/** A `resources/read` a view's own reads answer, refused past its cap. */
+function boundedResource(result: ReadResourceResult) {
+  if (bytesOf(result, "characters") > MAX_MCP_APP_HTML_BYTES)
+    throw new McpAppResourceError("size")
+  return result
+}
+
+/**
+ * A `resources/read` a runtime answered for the gateway, held to the cap the
+ * gateway's own reads are: one of a view's reads.
+ */
+export function relayedResource(value: unknown): ReadResourceResult {
+  return boundedResource(ReadResourceResultSchema.parse(value))
+}
+
 /** Configured headers never travel in the clear beyond this machine. */
 export class McpAppConnectionRefusedError extends Error {
   constructor() {
@@ -196,9 +226,11 @@ export function createMcpAppClient(
       )
   }
 
-  /** The URL a server is dialed at: the operator's, else the runtime's. */
-  const dialedUrl = ({ name, url }: McpAppEndpoint) =>
-    overrides.get(name)?.url ?? url
+  /** The URL a server is dialed at, or would be: the operator's, else the runtime's. */
+  const dialedUrl = <Url extends string | undefined>(server: {
+    name: string
+    url: Url
+  }): string | Url => overrides.get(server.name)?.url ?? server.url
 
   async function open(server: McpAppEndpoint) {
     const target = new URL(dialedUrl(server))
@@ -317,13 +349,16 @@ export function createMcpAppClient(
    * a well-formed one declared, never by a URL.
    */
   function verified(
-    server: McpAppEndpoint,
+    server: RelayingServer | undefined,
     { domain, ...meta }: DeclaredUiMeta
   ): McpUiMeta {
     if (domain === undefined) return meta
-    const judged = judgedDomain(domain, dialedUrl(server))
+    const judged = judgedDomain(domain, server && dialedUrl(server))
     if ("domain" in judged) return { ...meta, ...judged }
-    logger?.warn({ server: server.name, ...judged }, "mcp_app.domain.dropped")
+    logger?.warn(
+      { ...(server ? { server: server.name } : {}), ...judged },
+      "mcp_app.domain.dropped"
+    )
     return meta
   }
 
@@ -341,10 +376,7 @@ export function createMcpAppClient(
     )
 
   async function readResource(server: McpAppEndpoint, uri: string) {
-    const result = await read(server, uri)
-    if (bytesOf(result, "characters") > MAX_MCP_APP_HTML_BYTES)
-      throw new McpAppResourceError("size")
-    return result
+    return boundedResource(await read(server, uri))
   }
 
   async function readFile(
@@ -379,6 +411,10 @@ export function createMcpAppClient(
       const meta =
         sanitizeUiMeta(ui) ?? sanitizeUiMeta(await listedUi(server, uri)) ?? {}
       return { html, ...verified(server, meta) }
+    },
+    relayedAppResource(server, value, uri) {
+      const { html, ui } = appContentOf(relayedResource(value), uri)
+      return { html, ...verified(server, sanitizeUiMeta(ui) ?? {}) }
     },
     async callTool(server, name, args) {
       return CallToolResultSchema.parse(

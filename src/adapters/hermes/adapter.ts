@@ -596,6 +596,15 @@ export class HermesServerAdapter implements ServerRuntime {
         rawHistory: (scope) => this.#rawHistory(scope),
         scanHistory: (scope, find) => this.#scanRawHistory(scope, find),
         ...options.mcp,
+        // A view's requests name the live Session this socket resumed.
+        host: {
+          transport,
+          live: async (scope) =>
+            (await this.#attachments.ensure(scope)).liveSessionId,
+          bound: (scope) => this.#attachments.bound(scope),
+          invalidate: (liveSessionId) =>
+            this.#attachments.invalidate(liveSessionId),
+        },
       })
       this.mcpApps = apps.mcpApps
       this.#mcpToolNames = apps.names

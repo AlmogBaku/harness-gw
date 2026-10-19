@@ -219,6 +219,20 @@ export class HermesAttachmentRegistry {
     )
   }
 
+  /**
+   * The live Session bound to a durable one on this socket, or `undefined`,
+   * never resuming one: for a caller that must not attach a Session just to
+   * ask about it. A binding a resume is replacing is none yet.
+   */
+  bound(scope: HermesAttachmentScope): string | undefined {
+    const entry = this.#entries.get(sessionKey(scope))
+    return entry?.attachment.liveSessionId &&
+      !entry.resuming &&
+      !this.#stale(entry.generation)
+      ? entry.attachment.liveSessionId
+      : undefined
+  }
+
   async retain(scope: HermesAttachmentScope, reason: string) {
     await this.ensure(scope)
     const entry = this.#entry(scope)

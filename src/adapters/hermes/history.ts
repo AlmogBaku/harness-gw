@@ -381,6 +381,11 @@ export function projectHermesHistory(
       content[target.partIndex] = {
         ...part,
         ...(resultToolName ? { toolName, kind: hermesToolKind(toolName) } : {}),
+        // A Hermes that hosts views keeps a view's call on its tool row.
+        ...(isRecord(value.display_metadata) &&
+        isRecord(value.display_metadata.mcp_app)
+          ? { app: true as const }
+          : {}),
         result: outcome.result,
         ...(outcome.isError ? { isError: true } : {}),
         ...(diffs ? { diffs } : {}),

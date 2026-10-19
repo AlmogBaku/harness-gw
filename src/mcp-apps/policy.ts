@@ -123,18 +123,19 @@ export type DroppedDomain =
 
 /**
  * A declared `domain`, judged against the URL the gateway dials the view's
- * server at: the view's when it is a host name `McpUiDomainSchema` admits
- * whose first label is that URL's `mcpAppStableOriginKey`, else why not. The
- * only mint point for a `VerifiedDomain`.
+ * server at, or would: the view's when it is a host name `McpUiDomainSchema`
+ * admits whose first label is that URL's `mcpAppStableOriginKey`, else why
+ * not. With no URL to judge it by, it is no server's. The only mint point for
+ * a `VerifiedDomain`.
  */
 export function judgedDomain(
   declared: unknown,
-  url: string
+  url: string | undefined
 ): { domain: VerifiedDomain } | DroppedDomain {
   const parsed = McpUiDomainSchema.safeParse(declared)
   if (!parsed.success) return { reason: "malformed" }
   const label = parsed.data.split(".", 1)[0]
-  return label === mcpAppStableOriginKey(url)
+  return url !== undefined && label === mcpAppStableOriginKey(url)
     ? { domain: parsed.data as VerifiedDomain }
     : { reason: "mismatch", label }
 }
