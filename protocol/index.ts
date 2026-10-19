@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { McpAppFileReadFailureSchema } from "./mcp-apps"
+
 export const SESSION_CATALOG_MAX_WINDOW = 1_000 as const
 
 const IdentifierSchema = z
@@ -1051,6 +1053,11 @@ export const ErrorResponseSchema = z.strictObject({
       "internal_error",
     ]),
     description: z.string().min(1).max(512),
+    /**
+     * Why a view's read of its own file address failed; no other answer
+     * names one.
+     */
+    reason: McpAppFileReadFailureSchema.optional(),
   }),
 })
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>

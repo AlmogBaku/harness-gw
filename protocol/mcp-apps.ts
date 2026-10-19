@@ -143,12 +143,48 @@ export const McpAppToolCallRequestSchema = z.strictObject({
 })
 export type McpAppToolCallRequest = z.infer<typeof McpAppToolCallRequestSchema>
 
-/** A view's `resources/read`, answered with a `ReadResourceResult`. */
+/**
+ * A view's `resources/read`, answered with a `ReadResourceResult`: one of its
+ * server's `ui://` resources, or one of the view's own file addresses, which
+ * the gateway forwards to that server to read.
+ */
 export const McpAppResourceReadRequestSchema = z.strictObject({
   uri: z.string().min(1).max(2048),
 })
 export type McpAppResourceReadRequest = z.infer<
   typeof McpAppResourceReadRequestSchema
+>
+
+/**
+ * The most file content a view's read of its own file address answers: 64
+ * MiB, so a base64 `blob` of at most 4·⌈64 MiB / 3⌉ characters.
+ */
+export const MAX_MCP_APP_FILE_BYTES = 64 * 1024 * 1024
+
+/**
+ * Why a view's read of its own file address failed, as the gateway answers
+ * it: the file route refused the pass (`denied`), the file is past
+ * `MAX_MCP_APP_FILE_BYTES` (`tooLarge`), the view's server could not reach
+ * the file route (`unreachable`), or the gateway could not forward the read
+ * (`unavailable`).
+ */
+export const McpAppFileReadFailureSchema = z.enum([
+  "denied",
+  "tooLarge",
+  "unreachable",
+  "unavailable",
+])
+export type McpAppFileReadFailure = z.infer<typeof McpAppFileReadFailureSchema>
+
+/**
+ * The `data` of the JSON-RPC error a view's server answers a failed file read
+ * with, so the gateway passes its reason on.
+ */
+export const McpAppFileReadErrorDataSchema = z.object({
+  reason: McpAppFileReadFailureSchema,
+})
+export type McpAppFileReadErrorData = z.infer<
+  typeof McpAppFileReadErrorDataSchema
 >
 
 /**
