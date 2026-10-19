@@ -949,13 +949,14 @@ MCP App views sit below a Session, at
 `/api/v1/agents/:agentId/sessions/:sessionId/tool-calls/:toolCallId/app` for a
 tool call's view and `…/artifacts/:artifactId/app` for a published Artifact's:
 
-| Method | Path below the view       | Purpose                                                                                                                                   |
-| ------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`  | (the view itself)         | Open the view: its resource, CSP domains and file addresses                                                                               |
-| `POST` | `/tools/call`             | A tool call's view calls its own server's tools                                                                                           |
-| `POST` | `/resources/read`         | Read one of the view server's `ui://` resources, or one of the view's own file addresses through that server                              |
-| `POST` | `/files`                  | Renew the view's file addresses                                                                                                           |
-| `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds                                                                          |
+| Method | Path below the view        | Purpose                                                                                                                   |
+| ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `GET`  | (the view itself)          | Open the view: its resource, CSP domains and file addresses                                                               |
+| `POST` | `/tools/call`              | A tool call's view calls its own server's tools                                                                           |
+| `POST` | `/resources/read`          | Read one of the view server's `ui://` resources, or one of the view's own file addresses through that server              |
+| `POST` | `/ui/update-model-context` | A tool call's view sets what the model reads of it (see [A view's context for the model](#a-views-context-for-the-model)) |
+| `POST` | `/files`                   | Renew the view's file addresses                                                                                           |
+| `GET`  | `/files/:argument?pass=…`  | Read the file an argument names, with the pass its address holds                                                          |
 
 ### Hosting MCP App views
 
@@ -1019,6 +1020,13 @@ segment percent-encoded with quotes included, so whitespace, `;`, `,` and
 quotes reach the header only encoded; one ending in `/`, which would name every
 path below it, is dropped. Send locations without their passes when they travel
 in a URL.
+
+As the spec's "Host SHOULD log CSP configurations for security review" asks,
+the gateway logs each view it opens once, at `info`, as
+`mcp_app.view.opened`: the Agent, Session and tool call, the view's server and
+tool where the runtime names them, and the domains its `_meta.ui.csp`
+declares (`{}` for none). It never logs the view's HTML or the call's
+arguments and result.
 
 ### Reading a view's files
 
@@ -1095,6 +1103,37 @@ No other answer names a `reason`. The SDK client's `readMcpAppResource`
 rejects such an answer with `McpAppFileReadError`, an `HgwClientError` that
 carries the `reason`.
 
+### A view's context for the model
+
+A tool call's view sends `ui/update-model-context` (MCP Apps 2026-01-26) as
+`POST …/tool-calls/:toolCallId/app/ui/update-model-context`, with the request's
+params as its body (`McpAppModelContextRequestSchema`): `content`, MCP content
+blocks, and `structuredContent`, an object, both optional. The answer is the
+spec's empty result, `{}`. The SDK client's
+`updateMcpAppModelContext(sessionId, toolCallId, request)` sends it.
+
+- **Replaces:** each update replaces what the call's view sent before; one with
+  neither field clears it.
+- **When the model reads it:** once, with the Session's next turn, and only
+  the last update sent before it, as the spec's "If multiple updates are
+  received before the next user message, Host SHOULD only send the last update"
+  asks. On Hermes that turn is the next user prompt, and any other turn leaves
+  it waiting; on OpenClaw it is the next turn but a heartbeat. It stays out of
+  the visible transcript.
+- **Who keeps it:** the runtime, never the gateway. Hermes keeps it when it
+  hosts the view itself (`mcp.app.update_model_context`), and hands it to the
+  model as the MCP server's untrusted output. OpenClaw keeps it
+  (`mcp.app.updateModelContext`) for a view whose `mcp.app.view` reports
+  `updateModelContextSupported`.
+- **Unsupported:** a runtime with nowhere to put it out of sight answers `400`
+  with code `unsupported`, and the SDK client rejects with an `HgwClientError`
+  carrying that `code`, which the host returns to the view as its error. That
+  is OpenCode, whose prompt API takes no text its transcript leaves out, a
+  Hermes that does not host views itself, and an OpenClaw view that may send
+  none.
+- **Guests:** the guest listener takes it under the invitation's message
+  permission, as a view's tool call, and answers `unsupported` the same way.
+
 ### Stable origins
 
 A view may ask for an origin of its own with `_meta.ui.domain` (MCP Apps
@@ -1130,8 +1169,10 @@ keeps its sandbox origin.
   `mcp_app.domain.dropped` with the server's name and a `reason`: `mismatch`,
   with the declared label, or `malformed`, with nothing it declared; never the
   URL. A server named `aos-ui` that the gateway dials elsewhere cannot claim the
-  tools server's origin, and a view the gateway did not read itself, such as
-  OpenClaw's native `mcp.app.view`, carries none.
+  tools server's origin. A view Hermes reads for the gateway is judged the
+  same way, by the URL the gateway would dial its server at, whether or not it
+  may: one whose server names no URL keeps none. A view OpenClaw serves
+  (`mcp.app.view`) carries none.
 - **Strict schema:** `McpAppViewSchema` refuses unknown fields, so an SDK
   client from 0.12.0 or earlier refuses a view that carries `domain`. Upgrade
   the gateway and its clients together.

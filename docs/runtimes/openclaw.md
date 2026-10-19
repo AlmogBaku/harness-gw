@@ -86,7 +86,11 @@ openclaw mcp reload
 
 The gateway finds a view in the tool result's `details.mcpAppPreview`, opens it
 with `mcp.app.view`, and relays the view's requests through `mcp.app.callTool`
-and `mcp.app.readResource`. OpenClaw caps a view's HTML at 2 MiB. A view's
+and `mcp.app.readResource`. A view's `ui/update-model-context` goes to
+`mcp.app.updateModelContext` when `mcp.app.view` reports
+`updateModelContextSupported`, and answers `unsupported` otherwise; OpenClaw
+hands it to the Session's next turn but a heartbeat, out of the transcript.
+OpenClaw caps a view's HTML at 2 MiB. A view's
 read of its own file address is never relayed and answers `unavailable` (see
 [Reading a view's files](../protocol.md#reading-a-views-files)). A view the
 Gateway no longer holds, or any view while `mcp.apps.enabled` is off, shows

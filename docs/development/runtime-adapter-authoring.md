@@ -581,6 +581,7 @@ renders as an App card. Implement the optional `ServerRuntime.mcpApps`
 | `toolCall?(scope, toolCallId, signal?)`            | The stored call: its server, tool, and full input. Absent when unavailable.            |
 | `callTool(scope, toolCallId, name, args)`          | A view's `tools/call`, limited to its own server's app-visible tools.                  |
 | `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                           |
+| `updateModelContext?(scope, toolCallId, context)`  | A view's `ui/update-model-context`, for the model's next turn, out of the transcript.  |
 | `serverView?(scope, server, uri, signal?)`         | A named server's view with no call, verified as `open`'s: a published Artifact's view. |
 | `serverResource?(scope, server, uri, signal?)`     | A named server's `ui://` resource with no call, as answered: that view's own reads.    |
 | `fileResource?(scope, owner, uri, signal?)`        | A view's read of its own file address, forwarded to the call's server or the viewer's. |
@@ -596,18 +597,51 @@ does, and a published attachment then opens with no view. The route matches a
 file address to the view's own subject before `fileResource` sees it (see
 [Reading a view's files](../protocol.md#reading-a-views-files)); leave it out
 where the native relay cannot forward one, and such a read answers
-`unavailable`. Only the fallback
-sets a view's `domain`, after checking it against the URL it dialed (see
-[Stable origins](../protocol.md#stable-origins)); a native view never carries
-one. The types hold it: a `ServerMcpAppView`'s `domain` is a `VerifiedDomain`,
+`unavailable`. A view's `domain` stays only once checked against the URL
+the gateway dials its server at, or would (see
+[Stable origins](../protocol.md#stable-origins)): the fallback's own reads, and
+a view Hermes reads for it, through `McpAppClient.relayedAppResource`.
+OpenClaw's native view never carries one. The types hold it: a `ServerMcpAppView`'s `domain` is a `VerifiedDomain`,
 which only `judgedDomain` (`src/mcp-apps/policy.ts`) mints.
 
 Map the native MCP Apps API when the runtime has one (OpenClaw's
-`mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`). Otherwise build
+`mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`,
+`mcp.app.updateModelContext`). Otherwise build
 the hook with `createMcpAppsFallback(source, client)`
 (`src/mcp-apps/fallback.ts`): the adapter supplies only the server
 list and the stored call, and the gateway's own Streamable HTTP client reads the
 view. A view named in the stored result wins over the server's `tools/list`.
+
+Where only some versions of a runtime host views, ask the native API first and
+fall back per connection. Hermes does (`hermesHostedMcpApps`,
+`src/adapters/hermes/mcp-apps.ts`): `describe`, `open`, `callTool`,
+`readResource` and `updateModelContext` go to `mcp.app.view`,
+`mcp.app.read_resource`, `mcp.app.call_tool` and
+`mcp.app.update_model_context` on the Session's live binding, and `open` reads
+the resource the view's tool names (`_meta.ui.resourceUri`); `readResource`
+refuses anything but a `ui://` URI before asking, as the fallback does. Hermes
+holds a call's view only once it stores the call's result, and keeps the call
+on its tool row (`display_metadata.mcp_app`), so the history flags a stored
+view from that row. `describe` answers `false` for a running call without
+asking, and `withMcpApps` asks again with the result; Hermes is asked about a
+completed call only on a Session already bound live, and the fallback answers
+for any other. A Hermes older than that answers `-32601`, its
+"unknown method" (`tui_gateway/rpc_dispatch.py`); the adapter then serves that
+socket's views through the fallback, and asks again on the next connection.
+Hermes' `4064` reads as no view, and its `4030` as a refused tool. Every other
+operation stays the fallback's.
+
+A view's `ui/update-model-context` reaches the model only through the runtime:
+implement `updateModelContext` where the runtime keeps a view's context out of
+its transcript for the next turn, and leave it out, or throw
+`McpAppUnsupportedError`, where it has nowhere to. Never put the context into a
+prompt's visible text. The fallback implements none: OpenCode's prompt API
+takes no text its transcript leaves out, and a Hermes on the fallback none
+either.
+
+Each `open` logs the view's server, tool and declared CSP domains through
+`logViewOpened` (`src/mcp-apps/audit.ts`), never its HTML or the call's
+arguments.
 The fallback reaches only HTTP servers the gateway may connect to: without auth,
 or with headers the operator configured under `mcpApps.fallback.servers`
 (`src/config.ts`), where the operator
