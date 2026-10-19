@@ -28,7 +28,12 @@ import {
   type AppSubject,
   type AppTarget,
 } from "./app-files"
-import { createFileReadQueue, OPERATOR_FILE_READS } from "./file-reads"
+import {
+  createFileReadQueue,
+  heldBody,
+  OPERATOR_FILE_READS,
+  type FileReadTurn,
+} from "./file-reads"
 import { boundedJson, errorResponse } from "./http"
 import type { GatewayRouteApp } from "./types"
 
@@ -48,6 +53,8 @@ const MAX_REQUEST_BYTES = 256 * 1024
 const RATE_WINDOW_MS = 1_000
 const RATE_MAX_PER_WINDOW = 10
 const RATE_MAX_TRACKED = 4_096
+/** The type a streamed answer carries, as `context.json`'s does. */
+export const JSON_TYPE = { "content-type": "application/json" }
 
 /**
  * A view as a browser may read it, for every runtime and both listeners: the
@@ -66,6 +73,8 @@ export type McpAppOperation = "open" | "tools/call" | "resources/read" | "files"
 
 export type McpAppOutcome =
   | { ok: true; body: unknown }
+  /** A forwarded file read's JSON, written within its turn. */
+  | { ok: true; stream: ReadableStream<Uint8Array> }
   | {
       ok: false
       reason:
@@ -103,10 +112,13 @@ const fileFailure = (fileReason: McpAppFileReadFailure): McpAppOutcome => ({
 
 /**
  * A view's read of its own file address, forwarded to the server that owns
- * the view in its turn on the listener, since each holds its whole file until
- * it is parsed. Every failure names its reason: the server's, the cap's,
- * `unreachable` for a read that found no turn, or `unavailable` where the
- * runtime cannot forward it or the read fails short of an answer.
+ * the view within a turn on the listener, since each holds its whole file:
+ * the read, its parse and its answer's write all happen within the turn,
+ * which the written body gives back. A read whose request ends stops, and
+ * writes nothing. Every failure names its reason: the server's, the cap's,
+ * `unreachable` for a read that found no turn or outlasted it, or
+ * `unavailable` where the runtime cannot forward it or the read fails short
+ * of an answer.
  */
 async function readOwnFile(
   { scope, request, fileReads }: McpAppInput,
@@ -116,18 +128,28 @@ async function readOwnFile(
 ): Promise<McpAppOutcome> {
   const fileResource = apps.fileResource?.bind(apps)
   if (!fileResource) return fileFailure("unavailable")
+  let turn: FileReadTurn
   try {
-    return {
-      ok: true,
-      body: await fileReads(async () =>
-        ReadResourceResultSchema.parse(
-          await fileResource(scope, owner, uri, request.signal)
-        )
-      ),
-    }
+    turn = await fileReads(request.signal)
+  } catch {
+    return fileFailure("unreachable")
+  }
+  const signal = AbortSignal.any([request.signal, turn.signal])
+  try {
+    const result = ReadResourceResultSchema.parse(
+      await fileResource(scope, owner, uri, signal)
+    )
+    signal.throwIfAborted()
+    const json = new TextEncoder().encode(JSON.stringify(result))
+    return { ok: true, stream: heldBody(json, turn) }
   } catch (error) {
+    turn.release()
     return fileFailure(
-      error instanceof McpAppFileError ? error.reason : "unavailable"
+      turn.signal.aborted
+        ? "unreachable"
+        : error instanceof McpAppFileError
+          ? error.reason
+          : "unavailable"
     )
   }
 }
@@ -170,8 +192,8 @@ export function createMcpAppLimits(now?: () => number, fileRate?: number) {
 type McpAppInput = AppFileContext & {
   operation: McpAppOperation
   allow: (target: AppTarget) => boolean
-  /** Runs a forwarded file read in its turn on this listener. */
-  fileReads: <T>(read: () => Promise<T>) => Promise<T>
+  /** A forwarded file read's turn on this listener, while `signal` holds. */
+  fileReads: (signal: AbortSignal) => Promise<FileReadTurn>
 }
 
 /**
@@ -460,10 +482,13 @@ export function registerMcpAppRoutes(
         operation,
         request: context.req.raw,
         allow: limit(operation),
-        fileReads: (read) => fileReads.run(read),
+        fileReads: (signal) => fileReads.take("", signal),
         files,
       })
-      if (outcome.ok) return context.json(outcome.body)
+      if (outcome.ok)
+        return "stream" in outcome
+          ? context.body(outcome.stream, 200, JSON_TYPE)
+          : context.json(outcome.body)
       return errorResponse(
         outcome.reason === "rate_limited"
           ? "temporarily_unavailable"

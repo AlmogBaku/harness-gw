@@ -21,6 +21,7 @@ import { createFileReadQueue, GUEST_FILE_READS } from "../../routes/file-reads"
 import {
   createMcpAppLimits,
   handleMcpAppRequest,
+  JSON_TYPE,
   mcpAppParams,
   mcpAppRoutes,
 } from "../../routes/mcp-apps"
@@ -155,12 +156,15 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
         request: context.req.raw,
         allow: limit(operation),
         // One invitation reads one file at a time.
-        fileReads: (read) => fileReads.run(read, identity.invitationId),
+        fileReads: (signal) => fileReads.take(identity.invitationId, signal),
         files,
         // A pass ends with the invitation that earned it.
         notAfter: identity.authorizationExpiresAt,
       })
-      if (outcome.ok) return context.json(outcome.body)
+      if (outcome.ok)
+        return "stream" in outcome
+          ? context.body(outcome.stream, 200, JSON_TYPE)
+          : context.json(outcome.body)
       return outcome.reason === "invalid_request"
         ? emptyError(400)
         : routes.projectedError(

@@ -7,7 +7,6 @@ import type {
   McpAppFileReadFailure,
   McpAppFiles,
   McpAppView,
-  ReadResourceResult,
 } from "../protocol/mcp-apps"
 import { createGatewayApp, type GatewayAppOptions } from "./app"
 import {
@@ -1061,32 +1060,95 @@ describe("MCP App files", () => {
     }
   )
 
-  it("forwards four file reads at once, and answers one that waited 30 s for its turn as unreachable", async () => {
+  it("holds a forwarded read's turn until its answer is written or cancelled, and gives none to a waiter whose request ended", async () => {
+    useFakeClock()
+    const { gateway, fileResource } = fileGateway()
+    const { files } = await openView(gateway)
+    const read = (signal?: AbortSignal) =>
+      gateway.request(`${origin}${appPath()}/resources/read`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          uri: `${SANDBOX_ORIGIN}${files?.addresses.path}`,
+        }),
+        ...(signal ? { signal } : {}),
+      })
+
+    // Four answers not yet read hold the listener's four turns.
+    const answers = await Promise.all(Array.from({ length: 4 }, () => read()))
+    const gone = new AbortController()
+    const abandoned = read(gone.signal)
+    const waiting = read()
+    // The reads run on the real event loop until both wait on the clock,
+    // beside each turn's TTL.
+    while (vi.getTimerCount() < 6)
+      await new Promise((resolve) => setImmediate(resolve))
+    gone.abort()
+    expect(fileResource).toHaveBeenCalledTimes(4)
+
+    expect(JSON.parse(await answers[0]!.text())).toMatchObject({
+      contents: [{ blob: "JVBERi0x" }],
+    })
+    expect((await waiting).status).toBe(200)
+    expect(fileResource).toHaveBeenCalledTimes(5)
+    await answers[1]!.body!.cancel()
+    expect((await read()).status).toBe(200)
+    expect(fileResource).toHaveBeenCalledTimes(6)
+    expect((await abandoned).status).toBe(503)
+  })
+
+  it("stops a forwarded read whose request ended, writes nothing for one, and answers one past its 120 s as unreachable", async () => {
     const clock = useFakeClock()
     const { gateway, fileResource } = fileGateway()
-    const gate = Promise.withResolvers<ReadResourceResult>()
-    fileResource.mockImplementation(() => gate.promise)
+    const signals: AbortSignal[] = []
+    // A read that runs until its signal aborts.
+    fileResource.mockImplementation(
+      (_scope, _owner, _uri, signal) =>
+        new Promise((_resolve, reject) => {
+          signals.push(signal!)
+          signal!.addEventListener("abort", () => reject(signal!.reason))
+        })
+    )
     const { files } = await openView(gateway)
-    const read = () =>
-      post(gateway, `${appPath()}/resources/read`, {
-        uri: `${SANDBOX_ORIGIN}${files?.addresses.path}`,
+    const read = (signal?: AbortSignal) =>
+      gateway.request(`${origin}${appPath()}/resources/read`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          uri: `${SANDBOX_ORIGIN}${files?.addresses.path}`,
+        }),
+        ...(signal ? { signal } : {}),
       })
-    const held = Array.from({ length: 4 }, read)
-    const waiting = read()
-    // The reads run on the real event loop until one waits on the clock.
-    while (vi.getTimerCount() === 0)
-      await new Promise((resolve) => setImmediate(resolve))
+    const started = async (count: number) => {
+      while (signals.length < count)
+        await new Promise((resolve) => setImmediate(resolve))
+    }
 
-    await clock.advance(30_000)
+    // A read that finishes after its request ended writes nothing.
+    const finished = new AbortController()
+    fileResource.mockImplementationOnce(async (_scope, _owner, uri) => {
+      finished.abort()
+      return { contents: [{ uri, blob: "JVBERi0x" }] }
+    })
+    expect((await read(finished.signal)).status).toBe(503)
+    const gone = new AbortController()
+    const abandoned = read(gone.signal)
+    await started(1)
+    gone.abort()
+    expect(signals[0]!.aborted).toBe(true)
+    await abandoned
+    const slow = read()
+    await started(2)
+    await clock.advance(119_999)
+    expect(signals[1]!.aborted).toBe(false)
+    await clock.advance(1)
 
-    const late = await waiting
+    const late = await slow
     expect(late.status).toBe(503)
     expect(await late.json()).toMatchObject({
       error: { code: "temporarily_unavailable", reason: "unreachable" },
     })
-    expect(fileResource).toHaveBeenCalledTimes(4)
-    gate.resolve({ contents: [] })
-    for (const response of held) expect((await response).status).toBe(200)
+    expect(signals[1]!.aborted).toBe(true)
   })
 
   it("limits file reads and renewals apart from the view's own requests", async () => {
@@ -1299,7 +1361,9 @@ describe("Published Artifact views", () => {
     const read = (uri: string) =>
       post(gateway, `${artifactPath()}/resources/read`, { uri })
 
-    expect((await read(own)).status).toBe(200)
+    const forwarded = await read(own)
+    expect(forwarded.status).toBe(200)
+    await forwarded.text()
     expect(fileResource).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "researcher", sessionId: "stored" }),
       { server: "aos-ui" },

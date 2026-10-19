@@ -7,11 +7,7 @@ import { useFakeClock } from "../../test/support/fake-clock"
 import { artifactIds } from "../../test/support/history-artifacts"
 import { captureLogs } from "../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
-import type {
-  McpAppFiles,
-  McpAppView,
-  ReadResourceResult,
-} from "../../protocol/mcp-apps"
+import type { McpAppFiles, McpAppView } from "../../protocol/mcp-apps"
 import { createFilePassService, type FilePassScope } from "../auth/file-pass"
 import {
   createGuestInvitationService,
@@ -978,7 +974,10 @@ describe("guest MCP App files", () => {
         body: JSON.stringify({ uri }),
       })
 
-    expect((await read()).status).toBe(200)
+    const forwarded = await read()
+    expect(forwarded.status).toBe(200)
+    // Its answer holds the invitation's one turn until it is read.
+    await forwarded.text()
     expect(subject.fileResource).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: AGENT, sessionId: REF }),
       { toolCallId: "call-1" },
@@ -997,11 +996,9 @@ describe("guest MCP App files", () => {
     })
   })
 
-  it("forwards one file read per invitation at once, another's beside it, and answers one that waited 30 s as unreachable", async () => {
+  it("holds a stalled answer's turn for its invitation alone, refuses its third waiter, and ends it at 120 s", async () => {
     const clock = useFakeClock()
     const subject = fileHarness({ guest: { agentFolder: true } })
-    const gate = Promise.withResolvers<ReadResourceResult>()
-    subject.fileResource.mockImplementation(() => gate.promise)
     const OTHER = "other_guest_ref"
     const invites: Record<string, string> = {
       [REF]: await token(subject.invitationService),
@@ -1027,27 +1024,34 @@ describe("guest MCP App files", () => {
           uri: `https://sandbox.example.com${addresses[ref]}`,
         }),
       })
+    const unreachable = async (response: Response) => {
+      expect(response.status).toBe(503)
+      expect(await response.json()).toMatchObject({
+        error: { code: "temporarily_unavailable", reason: "unreachable" },
+      })
+    }
 
-    // An invitation's second read waits for its first, while another
-    // invitation's starts. Invitations are checked with WebCrypto, which
-    // settles on the real event loop, so the reads run there until each has
-    // started or waits on the clock.
-    const own = [read(REF), read(REF)]
-    const other = read(OTHER)
-    while (subject.fileResource.mock.calls.length + vi.getTimerCount() < 3)
-      await new Promise((resolve) => setImmediate(resolve))
-    expect(subject.fileResource).toHaveBeenCalledTimes(2)
-    await clock.advance(30_000)
-
-    const late = await Promise.race(own)
-    expect(late.status).toBe(503)
-    expect(await late.json()).toMatchObject({
-      error: { code: "temporarily_unavailable", reason: "unreachable" },
-    })
-    gate.resolve({ contents: [] })
-    const statuses = await Promise.all(own.map(async (r) => (await r).status))
-    expect(statuses.sort()).toEqual([200, 503])
-    expect((await other).status).toBe(200)
+    // An answer its reader never takes holds its invitation's one turn.
+    const stalled = await read(REF)
+    expect(stalled.status).toBe(200)
+    // Two more of its reads wait; a third is refused at once.
+    const waiting = [read(REF), read(REF), read(REF)]
+    const refused = await Promise.race(waiting)
+    await unreachable(refused)
+    // Another invitation's read proceeds.
+    const other = await read(OTHER)
+    expect(other.status).toBe(200)
+    await other.text()
+    // Its waiters give up at 30 s; the stalled answer ends at 120 s, which
+    // frees its invitation's turn.
+    await clock.advance(120_000)
+    for (const response of waiting)
+      if ((await response) !== refused) await unreachable(await response)
+    await expect(stalled.text()).rejects.toMatchObject({ name: "TimeoutError" })
+    const after = await read(REF)
+    expect(after.status).toBe(200)
+    await after.text()
+    expect(subject.fileResource).toHaveBeenCalledTimes(3)
   })
 
   it("refuses an operator's pass, even beside a valid invitation", async () => {

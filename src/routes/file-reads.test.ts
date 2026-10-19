@@ -1,94 +1,211 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../../test/support/fake-clock"
 import { McpAppFileError } from "../mcp-apps/client"
-import { createFileReadQueue } from "./file-reads"
+import {
+  createFileReadQueue,
+  heldBody,
+  type FileReadQueue,
+  type FileReadTurn,
+} from "./file-reads"
 
-/**
- * Reads that each hold their turn until the test ends them, recording the
- * order they started and how each settled.
- */
-function reads(queue: ReturnType<typeof createFileReadQueue>) {
-  const started: string[] = []
-  const settled = new Map<string, unknown>()
-  const ends = new Map<string, PromiseWithResolvers<string>>()
-  const start = (name: string, key?: string) => {
-    const end = Promise.withResolvers<string>()
-    ends.set(name, end)
-    queue
-      .run(() => {
-        started.push(name)
-        return end.promise
-      }, key)
-      .then(
-        (value) => settled.set(name, value),
-        (error: unknown) => settled.set(name, error)
-      )
+const unreachable = new McpAppFileError("unreachable")
+
+/** Named asks for a turn, recording the order they got one and each refusal. */
+function asks(queue: FileReadQueue) {
+  const taken = new Map<string, FileReadTurn>()
+  const refused = new Map<string, unknown>()
+  const take = (name: string, key?: string, signal?: AbortSignal) =>
+    void queue.take(key, signal).then(
+      (turn) => taken.set(name, turn),
+      (error: unknown) => refused.set(name, error)
+    )
+  return {
+    taken,
+    refused,
+    take,
+    started: () => [...taken.keys()],
+    release: (name: string) => taken.get(name)!.release(),
   }
-  return { started, settled, start, end: (name: string) => ends.get(name)! }
 }
 
 describe("a listener's forwarded file reads", () => {
-  it("run at most `limit` at once, the rest in their order as each ends", async () => {
+  it("hand out at most `limit` turns, the rest in their order, each freed once however often given back", async () => {
     const clock = useFakeClock()
-    const { started, settled, start, end } = reads(
+    const { started, take, release } = asks(
       createFileReadQueue({ limit: 2, queue: 8, waitMs: 1_000 })
     )
-    for (const name of ["a", "b", "c", "d"]) start(name)
+    for (const name of ["a", "b", "c", "d"]) take(name)
 
     await clock.advance(0)
-    expect(started).toEqual(["a", "b"])
-    // A failed read frees its turn as a finished one does.
-    end("b").reject(new Error("synthetic failure"))
+    expect(started()).toEqual(["a", "b"])
+    release("b")
+    release("b")
     await clock.advance(0)
-    expect(started).toEqual(["a", "b", "c"])
-    end("a").resolve("a read")
+    expect(started()).toEqual(["a", "b", "c"])
+    release("a")
     await clock.advance(0)
-    expect(started).toEqual(["a", "b", "c", "d"])
-    expect(settled.get("a")).toBe("a read")
+    expect(started()).toEqual(["a", "b", "c", "d"])
   })
 
   it("hold one key to `perKey`, while another key's read starts within `limit`", async () => {
     const clock = useFakeClock()
-    const { started, start, end } = reads(
+    const { started, take, release } = asks(
       createFileReadQueue({ limit: 2, perKey: 1, queue: 8, waitMs: 1_000 })
     )
-    start("first", "invitation-a")
-    start("second", "invitation-a")
-    start("other", "invitation-b")
-    start("third", "invitation-c")
+    take("first", "invitation-a")
+    take("second", "invitation-a")
+    take("other", "invitation-b")
+    take("third", "invitation-c")
 
     await clock.advance(0)
-    expect(started).toEqual(["first", "other"])
+    expect(started()).toEqual(["first", "other"])
     // The earlier waiter takes the turn, its key free again.
-    end("first").resolve("done")
+    release("first")
     await clock.advance(0)
-    expect(started).toEqual(["first", "other", "second"])
-    end("other").resolve("done")
+    expect(started()).toEqual(["first", "other", "second"])
+    release("other")
     await clock.advance(0)
-    expect(started).toEqual(["first", "other", "second", "third"])
+    expect(started()).toEqual(["first", "other", "second", "third"])
   })
 
-  it("refuse one past the queue at once, and one still waiting at `waitMs`, as unreachable", async () => {
+  it("refuse one past the queue or a key's share of it at once, and one still waiting at `waitMs`", async () => {
     const clock = useFakeClock()
-    const { started, settled, start, end } = reads(
-      createFileReadQueue({ limit: 1, queue: 1, waitMs: 1_000 })
+    const { started, refused, take, release } = asks(
+      createFileReadQueue({
+        limit: 2,
+        perKey: 1,
+        queue: 3,
+        queuePerKey: 2,
+        waitMs: 1_000,
+      })
     )
-    const unreachable = new McpAppFileError("unreachable")
-    start("running")
-    start("waiting")
-    start("past the queue")
+    take("a1", "a")
+    take("b1", "b")
+    take("a2", "a")
+    take("a3", "a")
+    // A third waiter of one key is refused; another key's is accepted, until
+    // the queue is full.
+    take("a4", "a")
+    take("b2", "b")
+    take("c1", "c")
 
     await clock.advance(0)
-    expect([...settled]).toEqual([["past the queue", unreachable]])
+    expect([...refused]).toEqual([
+      ["a4", unreachable],
+      ["c1", unreachable],
+    ])
     await clock.advance(999)
-    expect(settled.has("waiting")).toBe(false)
+    expect(refused.size).toBe(2)
     await clock.advance(1)
-    expect(settled.get("waiting")).toEqual(unreachable)
-    // Neither held a turn: the running read's end lets the next one start.
-    end("running").resolve("done")
-    start("next")
+    expect([...refused.keys()]).toEqual(["a4", "c1", "a2", "a3", "b2"])
+    // None of them holds a place: a freed turn goes to the next one asking.
+    release("a1")
+    take("a5", "a")
     await clock.advance(0)
-    expect(started).toEqual(["running", "next"])
+    expect(started()).toEqual(["a1", "b1", "a5"])
+  })
+
+  it("drop a waiter whose request ended, which never takes a turn", async () => {
+    const clock = useFakeClock()
+    const { started, refused, take, release } = asks(
+      createFileReadQueue({ limit: 1, queue: 8, waitMs: 1_000 })
+    )
+    const gone = new AbortController()
+    take("running")
+    take("gone", "", gone.signal)
+    take("next")
+
+    await clock.advance(0)
+    gone.abort()
+    await clock.advance(0)
+    expect(refused.get("gone")).toEqual(unreachable)
+    release("running")
+    await clock.advance(0)
+    expect(started()).toEqual(["running", "next"])
+    // A request that ended before it asked is refused at once.
+    take("ended", "", gone.signal)
+    await clock.advance(0)
+    expect(refused.get("ended")).toEqual(unreachable)
+  })
+
+  it("end a turn at `ttlMs`, aborting its signal and freeing it once", async () => {
+    const clock = useFakeClock()
+    const { taken, started, take, release } = asks(
+      createFileReadQueue({ limit: 1, queue: 8, waitMs: 5_000, ttlMs: 1_000 })
+    )
+    take("held")
+    take("next")
+    take("after")
+
+    await clock.advance(999)
+    expect(taken.get("held")!.signal.aborted).toBe(false)
+    expect(started()).toEqual(["held"])
+    await clock.advance(1)
+    expect(taken.get("held")!.signal.reason).toMatchObject({
+      name: "TimeoutError",
+    })
+    expect(started()).toEqual(["held", "next"])
+    // The turn is already free; giving it back again frees no other.
+    release("held")
+    await clock.advance(0)
+    expect(started()).toEqual(["held", "next"])
+  })
+})
+
+describe("a held answer", () => {
+  /** Two writes' worth, so a reader can stop between them. */
+  const BYTES = new Uint8Array(64 * 1024 + 1).fill(65)
+
+  function held() {
+    const ttl = new AbortController()
+    const release = vi.fn()
+    const body = heldBody(BYTES, { signal: ttl.signal, release }).getReader()
+    return { ttl, release, body }
+  }
+
+  it("holds its turn until it is written whole, then gives it back once", async () => {
+    const { release, body } = held()
+
+    expect((await body.read()).value?.byteLength).toBe(64 * 1024)
+    expect(release).not.toHaveBeenCalled()
+    expect((await body.read()).value?.byteLength).toBe(1)
+    expect(release).toHaveBeenCalledOnce()
+    expect((await body.read()).done).toBe(true)
+    await body.cancel()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it("writes nothing ahead of its reader, so a one-write answer holds its turn until read", async () => {
+    const release = vi.fn()
+    const body = heldBody(new Uint8Array(1), {
+      signal: new AbortController().signal,
+      release,
+    }).getReader()
+
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(release).not.toHaveBeenCalled()
+    await body.read()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it("gives its turn back once when its reader cancels it", async () => {
+    const { release, body } = held()
+
+    await body.read()
+    await body.cancel()
+    await body.cancel()
+
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it("ends mid-write when its turn's TTL passes, and gives the turn back once", async () => {
+    const { ttl, release, body } = held()
+
+    await body.read()
+    ttl.abort(new DOMException("Deadline passed", "TimeoutError"))
+
+    await expect(body.read()).rejects.toMatchObject({ name: "TimeoutError" })
+    expect(release).toHaveBeenCalledOnce()
   })
 })
