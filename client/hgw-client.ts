@@ -24,6 +24,7 @@ import {
   McpAppToolCallRequestSchema,
   McpAppViewSchema,
   ReadResourceResultSchema,
+  type McpAppFileReadFailure,
   type McpAppFiles,
   type McpAppResourceReadRequest,
   type McpAppToolCallRequest,
@@ -65,6 +66,20 @@ export class HgwClientError extends Error {
   ) {
     super(message)
     this.name = "HgwClientError"
+  }
+}
+
+/**
+ * A view's read of its own file address failed: `reason` says why, as the
+ * gateway answered it.
+ */
+export class McpAppFileReadError extends HgwClientError {
+  constructor(
+    readonly reason: McpAppFileReadFailure,
+    ...failure: ConstructorParameters<typeof HgwClientError>
+  ) {
+    super(...failure)
+    this.name = "McpAppFileReadError"
   }
 }
 
@@ -136,7 +151,7 @@ export class HgwRemoteClient {
     }
     if (!response.ok) {
       const error = await normalizedError(response)
-      throw new HgwClientError(
+      const failure = [
         response.status === 503
           ? "provider-unavailable"
           : response.status === 404
@@ -144,8 +159,11 @@ export class HgwRemoteClient {
             : "gateway-failure",
         error?.description,
         error?.code,
-        response.status
-      )
+        response.status,
+      ] as const
+      throw error?.reason
+        ? new McpAppFileReadError(error.reason, ...failure)
+        : new HgwClientError(...failure)
     }
     let payload: unknown
     try {
@@ -301,7 +319,11 @@ export class HgwRemoteClient {
     )
   }
 
-  /** A resource read the App view makes, answered by the gateway's MCP server. */
+  /**
+   * A resource read the App view makes, answered by the gateway's MCP server:
+   * one of its `ui://` resources, or one of the view's own file addresses,
+   * whose failure rejects as `McpAppFileReadError`.
+   */
   async readMcpAppResource(
     sessionId: string,
     subject: McpAppSubject,

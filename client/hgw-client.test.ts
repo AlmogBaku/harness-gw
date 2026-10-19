@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { HgwClientError, HgwRemoteClient } from "./hgw-client"
+import type { ErrorResponse } from "../protocol"
+import {
+  HgwClientError,
+  HgwRemoteClient,
+  McpAppFileReadError,
+} from "./hgw-client"
 
 const AGENT_ID = "researcher"
 const SESSION_ID = "opaque-session-1"
@@ -443,6 +448,50 @@ describe("MCP App routes", () => {
       new Headers(fetcher.mock.calls[0]?.[1]?.headers).get("authorization")
     ).toBe("Bearer invitation-token")
   })
+
+  it.each<[number, ErrorResponse["error"], boolean]>([
+    [
+      403,
+      { code: "forbidden", description: "Refused.", reason: "denied" },
+      true,
+    ],
+    [
+      503,
+      {
+        code: "temporarily_unavailable",
+        description: "Try again.",
+        reason: "unreachable",
+      },
+      true,
+    ],
+    // A refused `ui://` read names no reason.
+    [403, { code: "forbidden", description: "Refused." }, false],
+  ])(
+    "rejects a resource read answered %i with the reason it names",
+    async (status, error, named) => {
+      const client = new HgwRemoteClient({
+        fetcher: vi.fn(async () => Response.json({ error }, { status })),
+      })
+      client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
+
+      const failure: unknown = await client
+        .readMcpAppResource(
+          SESSION_ID,
+          { artifactId: "artifact-1" },
+          { uri: "https://sandbox.example.com/files/path?pass=synthetic" }
+        )
+        .catch((rejection: unknown) => rejection)
+
+      expect(failure).toBeInstanceOf(HgwClientError)
+      expect(failure instanceof McpAppFileReadError).toBe(named)
+      expect(failure).toMatchObject({
+        kind: status === 503 ? "provider-unavailable" : "gateway-failure",
+        code: error.code,
+        status,
+        ...(named ? { reason: error.reason } : {}),
+      })
+    }
+  )
 
   it("refuses an empty tool call id before asking the gateway", async () => {
     const fetcher = appFetcher()
