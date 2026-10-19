@@ -63,9 +63,8 @@ function servesHost(policy: OriginPolicy, host: string | undefined) {
  * fails closed. A socket upgrade or a state change from a browser needs a
  * listed Origin; one with no Origin at all comes from no browser page, so it
  * passes, as a script or a non-browser ACP client sends it. A read is never
- * checked, so a view on its host's sandbox origin, which no listener lists,
- * still reads the file its pass names. CORS answers listed origins alone, and
- * never with credentials.
+ * checked: it changes nothing, and no other origin reads its answer, since
+ * CORS answers listed origins alone, and never with credentials.
  */
 export async function guardOrigins(
   policy: OriginPolicy,

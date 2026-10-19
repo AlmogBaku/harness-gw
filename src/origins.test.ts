@@ -7,7 +7,6 @@ import { guardOrigins, type OriginPolicy } from "./origins"
 const OPERATOR = "https://aos.example.test"
 const GUEST = "https://guest.example.test"
 const FOREIGN = "https://attacker.example.test"
-const SANDBOX = "https://sandbox.example.test"
 /** Each lane's policy, as the composition builds it. */
 const LANES: Record<"operator" | "guest", OriginPolicy> = {
   operator: { allowedOrigins: [OPERATOR] },
@@ -145,19 +144,6 @@ describe("origin guard", () => {
         false
       )
     }
-  })
-
-  it("keeps the grant a pass-bearing file answer gave its view on the sandbox origin", async () => {
-    const response = await guardOrigins(
-      LANES.operator,
-      request("operator", "/api/v1/file?pass=p", { origin: SANDBOX }),
-      () =>
-        new Response("bytes", {
-          headers: { "access-control-allow-origin": "*" },
-        })
-    )
-
-    expect(response!.headers.get("access-control-allow-origin")).toBe("*")
   })
 
   it("answers 421 to a host none of the listener's origins name by host and port, and serves loopback by name", async () => {

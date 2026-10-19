@@ -70,12 +70,12 @@ any socket or route is reached:
 - a WebSocket upgrade, or any request other than GET, HEAD and OPTIONS, needs
   an `Origin` on that list when it carries one; a `null` or foreign one gets 403. A request with no `Origin` comes from no browser page, so it is
   admitted: a script or a non-browser ACP client needs no `Origin`.
-- a GET or HEAD is never checked, so a view on its host's sandbox origin,
-  which no listener lists, can read the file its pass names.
+- a GET or HEAD is never checked: it changes nothing, and no other origin
+  reads its answer.
 - CORS answers listed origins only (`Access-Control-Allow-Origin` with
   `Vary: Origin`), never with credentials; a preflight from any other origin
-  gets 403. The one exception is a file answer to an admitted pass, which any
-  origin may read (see [HTTP API](#http-api)).
+  gets 403. A file answer is no exception: a view reads its file through its
+  server (see [Reading a view's files](#reading-a-views-files)).
 
 The response carries an `Acp-Connection-Id` header. A client sends
 `initialize` and receives capabilities in `_meta.hgw`. On reconnect, send
@@ -955,7 +955,7 @@ tool call's view and `…/artifacts/:artifactId/app` for a published Artifact's:
 | `POST` | `/tools/call`             | A tool call's view calls its own server's tools                                                                                           |
 | `POST` | `/resources/read`         | Read one of the view server's `ui://` resources, or one of the view's own file addresses through that server                              |
 | `POST` | `/files`                  | Renew the view's file addresses                                                                                                           |
-| `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds; only an admitted pass's answer carries `Access-Control-Allow-Origin: *` |
+| `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds                                                                          |
 
 ### Hosting MCP App views
 

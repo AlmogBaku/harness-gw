@@ -778,7 +778,7 @@ describe("MCP App files", () => {
     ).toBe(200)
   })
 
-  it("passes on only the runtime headers a file needs, and lets only a view that sent a pass read the answer", async () => {
+  it("passes on only the runtime headers a file needs, and lets no other origin read the answer, pass or not", async () => {
     const { gateway, read } = fileGateway({
       call: {
         ...reportCall,
@@ -813,7 +813,6 @@ describe("MCP App files", () => {
       headers: {
         ...LISTENER_HEADERS,
         ...passed,
-        "access-control-allow-origin": "*",
         "content-disposition": "inline; filename*=UTF-8''report.pdf",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
         "content-type": "application/pdf",
@@ -1253,7 +1252,6 @@ describe("Published Artifact views", () => {
       status: 200,
       headers: {
         ...LISTENER_HEADERS,
-        "access-control-allow-origin": "*",
         "content-disposition": "inline; filename*=UTF-8''notes.md",
         "content-length": "7",
         "content-security-policy": SANDBOX,

@@ -380,9 +380,6 @@ export async function answerAppFile<Login>(input: {
       ? login !== undefined
       : await passes.opens(pass, { role: grant.role, ...target })
   if (!admitted) return empty(401)
-  // A view reads from its host's sandbox origin, which no listener lists, so
-  // an admitted pass alone lets any origin read the answer; no cookie is read.
-  if (pass !== null) headers.set("access-control-allow-origin", "*")
   const subject = input.subject(login)
   if (!input.allow(target)) return empty(429)
   try {
