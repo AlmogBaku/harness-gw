@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { providerSessionId, sessionId } from "../../core/ids"
 import type { SessionScope } from "../../core/runtime"
+import { McpAppUnsupportedError } from "../../mcp-apps/fallback"
 import { OpenClawServerAdapter } from "./adapter"
 import {
   OpenClawClientRequestError,
@@ -175,6 +176,45 @@ describe("OpenClaw MCP Apps", () => {
       undefined
     )
   })
+
+  it.each([true, false])(
+    "forwards a view's model context only where its view says it may send one (%s)",
+    async (supported) => {
+      const { mcpApps, request } = gateway({
+        "mcp.app.view": () => ({
+          html: "<p>app</p>",
+          updateModelContextSupported: supported,
+        }),
+        "mcp.app.updateModelContext": () => ({
+          _meta: { "openai/modelContext": { updateId: "update-1" } },
+        }),
+      })
+      const context = {
+        content: [{ type: "text" as const, text: "Plan drawn" }],
+        structuredContent: { shapes: 3 },
+      }
+
+      const update = mcpApps.updateModelContext!(scope, "call-1", context)
+
+      if (supported) await expect(update).resolves.toBeUndefined()
+      else await expect(update).rejects.toBeInstanceOf(McpAppUnsupportedError)
+      expect(
+        request.mock.calls.filter(
+          ([method]) => method === "mcp.app.updateModelContext"
+        )
+      ).toEqual(
+        supported
+          ? [
+              [
+                "mcp.app.updateModelContext",
+                { sessionKey, agentId: "research", viewId, ...context },
+                undefined,
+              ],
+            ]
+          : []
+      )
+    }
+  )
 
   it("refuses a tool call id from another Session without asking the gateway", async () => {
     const { adapter, mcpApps, request } = gateway()
