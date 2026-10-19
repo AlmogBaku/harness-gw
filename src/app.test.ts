@@ -1123,6 +1123,13 @@ describe("MCP App files", () => {
       while (signals.length < count)
         await new Promise((resolve) => setImmediate(resolve))
     }
+    const unreachable = async (response: Response | Promise<Response>) => {
+      const answer = await response
+      expect(answer.status).toBe(503)
+      expect(await answer.json()).toMatchObject({
+        error: { code: "temporarily_unavailable", reason: "unreachable" },
+      })
+    }
 
     // A read that finishes after its request ended writes nothing.
     const finished = new AbortController()
@@ -1130,24 +1137,20 @@ describe("MCP App files", () => {
       finished.abort()
       return { contents: [{ uri, blob: "JVBERi0x" }] }
     })
-    expect((await read(finished.signal)).status).toBe(503)
+    await unreachable(read(finished.signal))
     const gone = new AbortController()
     const abandoned = read(gone.signal)
     await started(1)
     gone.abort()
     expect(signals[0]!.aborted).toBe(true)
-    await abandoned
+    await unreachable(abandoned)
     const slow = read()
     await started(2)
     await clock.advance(119_999)
     expect(signals[1]!.aborted).toBe(false)
     await clock.advance(1)
 
-    const late = await slow
-    expect(late.status).toBe(503)
-    expect(await late.json()).toMatchObject({
-      error: { code: "temporarily_unavailable", reason: "unreachable" },
-    })
+    await unreachable(slow)
     expect(signals[1]!.aborted).toBe(true)
   })
 

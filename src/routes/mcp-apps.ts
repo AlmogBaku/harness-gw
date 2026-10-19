@@ -116,9 +116,9 @@ const fileFailure = (fileReason: McpAppFileReadFailure): McpAppOutcome => ({
  * the read, its parse and its answer's write all happen within the turn,
  * which the written body gives back. A read whose request ends stops, and
  * writes nothing. Every failure names its reason: the server's, the cap's,
- * `unreachable` for a read that found no turn or outlasted it, or
- * `unavailable` where the runtime cannot forward it or the read fails short
- * of an answer.
+ * `unreachable` for a read that found no turn, outlasted it, or outlasted
+ * its request, or `unavailable` where the runtime cannot forward it or the
+ * read fails short of an answer.
  */
 async function readOwnFile(
   { scope, request, fileReads }: McpAppInput,
@@ -144,8 +144,9 @@ async function readOwnFile(
     return { ok: true, stream: heldBody(json, turn) }
   } catch (error) {
     turn.release()
+    // A read its request or its turn ended found no time to answer in.
     return fileFailure(
-      turn.signal.aborted
+      signal.aborted
         ? "unreachable"
         : error instanceof McpAppFileError
           ? error.reason
