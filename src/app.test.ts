@@ -1,11 +1,13 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest"
 
+import { useFakeClock } from "../test/support/fake-clock"
 import { artifactIds } from "../test/support/history-artifacts"
 import { captureLogs } from "../test/support/log-capture"
 import type {
   McpAppFileReadFailure,
   McpAppFiles,
   McpAppView,
+  ReadResourceResult,
 } from "../protocol/mcp-apps"
 import { createGatewayApp, type GatewayAppOptions } from "./app"
 import {
@@ -1059,6 +1061,34 @@ describe("MCP App files", () => {
       })
     }
   )
+
+  it("forwards four file reads at once, and answers one that waited 30 s for its turn as unreachable", async () => {
+    const clock = useFakeClock()
+    const { gateway, fileResource } = fileGateway()
+    const gate = Promise.withResolvers<ReadResourceResult>()
+    fileResource.mockImplementation(() => gate.promise)
+    const { files } = await openView(gateway)
+    const read = () =>
+      post(gateway, `${appPath()}/resources/read`, {
+        uri: `${SANDBOX_ORIGIN}${files?.addresses.path}`,
+      })
+    const held = Array.from({ length: 4 }, read)
+    const waiting = read()
+    // The reads run on the real event loop until one waits on the clock.
+    while (vi.getTimerCount() === 0)
+      await new Promise((resolve) => setImmediate(resolve))
+
+    await clock.advance(30_000)
+
+    const late = await waiting
+    expect(late.status).toBe(503)
+    expect(await late.json()).toMatchObject({
+      error: { code: "temporarily_unavailable", reason: "unreachable" },
+    })
+    expect(fileResource).toHaveBeenCalledTimes(4)
+    gate.resolve({ contents: [] })
+    for (const response of held) expect((await response).status).toBe(200)
+  })
 
   it("limits file reads and renewals apart from the view's own requests", async () => {
     // One instant, so every request falls in one window.

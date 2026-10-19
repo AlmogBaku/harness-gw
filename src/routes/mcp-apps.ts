@@ -28,6 +28,7 @@ import {
   type AppSubject,
   type AppTarget,
 } from "./app-files"
+import { createFileReadQueue, OPERATOR_FILE_READS } from "./file-reads"
 import { boundedJson, errorResponse } from "./http"
 import type { GatewayRouteApp } from "./types"
 
@@ -102,22 +103,26 @@ const fileFailure = (fileReason: McpAppFileReadFailure): McpAppOutcome => ({
 
 /**
  * A view's read of its own file address, forwarded to the server that owns
- * the view. Every failure names its reason: the server's, the cap's, or
- * `unavailable` where the runtime cannot forward it or the read fails short of
- * an answer.
+ * the view in its turn on the listener, since each holds its whole file until
+ * it is parsed. Every failure names its reason: the server's, the cap's,
+ * `unreachable` for a read that found no turn, or `unavailable` where the
+ * runtime cannot forward it or the read fails short of an answer.
  */
 async function readOwnFile(
-  { scope, request }: McpAppInput,
+  { scope, request, fileReads }: McpAppInput,
   apps: ServerMcpApps,
   owner: { toolCallId: string } | { server: string },
   uri: string
 ): Promise<McpAppOutcome> {
-  if (!apps.fileResource) return fileFailure("unavailable")
+  const fileResource = apps.fileResource?.bind(apps)
+  if (!fileResource) return fileFailure("unavailable")
   try {
     return {
       ok: true,
-      body: ReadResourceResultSchema.parse(
-        await apps.fileResource(scope, owner, uri, request.signal)
+      body: await fileReads(async () =>
+        ReadResourceResultSchema.parse(
+          await fileResource(scope, owner, uri, request.signal)
+        )
       ),
     }
   } catch (error) {
@@ -165,6 +170,8 @@ export function createMcpAppLimits(now?: () => number, fileRate?: number) {
 type McpAppInput = AppFileContext & {
   operation: McpAppOperation
   allow: (target: AppTarget) => boolean
+  /** Runs a forwarded file read in its turn on this listener. */
+  fileReads: <T>(read: () => Promise<T>) => Promise<T>
 }
 
 /**
@@ -377,6 +384,7 @@ export function registerMcpAppRoutes(
   ) => Promise<ids.ProviderSessionId>
 ) {
   const limit = createMcpAppLimits(options.clock, options.files?.ratePerSecond)
+  const fileReads = createFileReadQueue(OPERATOR_FILE_READS)
   const files: AppFileGrant | undefined = options.files && {
     options: options.files,
     role: "operator",
@@ -452,6 +460,7 @@ export function registerMcpAppRoutes(
         operation,
         request: context.req.raw,
         allow: limit(operation),
+        fileReads: (read) => fileReads.run(read),
         files,
       })
       if (outcome.ok) return context.json(outcome.body)

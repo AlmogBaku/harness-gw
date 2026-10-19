@@ -3,10 +3,15 @@
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../test/support/fake-clock"
 import { artifactIds } from "../../test/support/history-artifacts"
 import { captureLogs } from "../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
-import type { McpAppFiles, McpAppView } from "../../protocol/mcp-apps"
+import type {
+  McpAppFiles,
+  McpAppView,
+  ReadResourceResult,
+} from "../../protocol/mcp-apps"
 import { createFilePassService, type FilePassScope } from "../auth/file-pass"
 import {
   createGuestInvitationService,
@@ -790,9 +795,9 @@ describe("guest app", () => {
   })
 })
 
-/** One of the invited Session's calls' MCP App path on the guest listener. */
-function guestApp(toolCallId = "call-1") {
-  return `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
+/** One of an invited Session's calls' MCP App path on the guest listener. */
+function guestApp(toolCallId = "call-1", ref = REF) {
+  return `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${ref}/tool-calls/${toolCallId}/app`
 }
 
 /** The invited Session's published Artifact's view path on the guest listener. */
@@ -990,6 +995,59 @@ describe("guest MCP App files", () => {
         reason: "denied",
       },
     })
+  })
+
+  it("forwards one file read per invitation at once, another's beside it, and answers one that waited 30 s as unreachable", async () => {
+    const clock = useFakeClock()
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const gate = Promise.withResolvers<ReadResourceResult>()
+    subject.fileResource.mockImplementation(() => gate.promise)
+    const OTHER = "other_guest_ref"
+    const invites: Record<string, string> = {
+      [REF]: await token(subject.invitationService),
+      [OTHER]: await scopedToken({ ref: OTHER }),
+    }
+    const addresses: Record<string, string> = {}
+    for (const ref of [REF, OTHER]) {
+      const opened = await subject.app.request(guestApp("call-1", ref), {
+        headers: headers(invites[ref]!),
+      })
+      addresses[ref] = (
+        (await opened.json()) as McpAppView
+      ).files!.addresses.path!
+    }
+    const read = (ref: string) =>
+      subject.app.request(`${guestApp("call-1", ref)}/resources/read`, {
+        method: "POST",
+        headers: {
+          ...headers(invites[ref]!, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          uri: `https://sandbox.example.com${addresses[ref]}`,
+        }),
+      })
+
+    // An invitation's second read waits for its first, while another
+    // invitation's starts. Invitations are checked with WebCrypto, which
+    // settles on the real event loop, so the reads run there until each has
+    // started or waits on the clock.
+    const own = [read(REF), read(REF)]
+    const other = read(OTHER)
+    while (subject.fileResource.mock.calls.length + vi.getTimerCount() < 3)
+      await new Promise((resolve) => setImmediate(resolve))
+    expect(subject.fileResource).toHaveBeenCalledTimes(2)
+    await clock.advance(30_000)
+
+    const late = await Promise.race(own)
+    expect(late.status).toBe(503)
+    expect(await late.json()).toMatchObject({
+      error: { code: "temporarily_unavailable", reason: "unreachable" },
+    })
+    gate.resolve({ contents: [] })
+    const statuses = await Promise.all(own.map(async (r) => (await r).status))
+    expect(statuses.sort()).toEqual([200, 503])
+    expect((await other).status).toBe(200)
   })
 
   it("refuses an operator's pass, even beside a valid invitation", async () => {

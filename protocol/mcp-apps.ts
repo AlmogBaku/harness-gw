@@ -165,8 +165,8 @@ export const MAX_MCP_APP_FILE_BYTES = 64 * 1024 * 1024
  * Why a view's read of its own file address failed, as the gateway answers
  * it: the file route refused the pass (`denied`), the file is past
  * `MAX_MCP_APP_FILE_BYTES` (`tooLarge`), the view's server could not reach
- * the file route (`unreachable`), or the gateway could not forward the read
- * (`unavailable`).
+ * the file route or the read found no turn on the listener (`unreachable`),
+ * or the gateway could not forward the read (`unavailable`).
  */
 export const McpAppFileReadFailureSchema = z.enum([
   "denied",

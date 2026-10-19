@@ -17,6 +17,7 @@ import {
   type AppSubject,
   type AppTarget,
 } from "../../routes/app-files"
+import { createFileReadQueue, GUEST_FILE_READS } from "../../routes/file-reads"
 import {
   createMcpAppLimits,
   handleMcpAppRequest,
@@ -76,6 +77,7 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
     routes.options.now,
     routes.options.files?.ratePerSecond
   )
+  const fileReads = createFileReadQueue(GUEST_FILE_READS)
   const runtime = routes.options.runtime.runtime
   const configured = routes.options.files
   const files: AppFileGrant | undefined = configured && {
@@ -152,6 +154,8 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
         operation,
         request: context.req.raw,
         allow: limit(operation),
+        // One invitation reads one file at a time.
+        fileReads: (read) => fileReads.run(read, identity.invitationId),
         files,
         // A pass ends with the invitation that earned it.
         notAfter: identity.authorizationExpiresAt,
