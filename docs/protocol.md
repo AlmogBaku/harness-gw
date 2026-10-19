@@ -1049,9 +1049,17 @@ reads the file route server to server
   an address aimed at the other lane is refused there.
 - **Turns:** each read holds its whole file, so the operator listener
   forwards at most 4 at once, and the guest listener 2, with 1 per invitation
-  (`src/routes/file-reads.ts`). The rest wait their turn in arrival order, at
-  most 32 waiting and each for at most 30 s; a read past either answers
-  `unreachable`.
+  (`src/routes/file-reads.ts`). A turn covers the read, its parse and its
+  answer's write: the answer streams, and gives the turn back once its last
+  byte is written, or when its reader cancels it. The rest wait their turn in
+  arrival order, at most 32 waiting, 2 of them per invitation on the guest
+  listener, and each for at most 30 s; a read past any answers
+  `unreachable`. A waiter whose request ends leaves, and a read whose request
+  ends stops and writes nothing.
+- **TTL:** a turn lasts at most 120 s (`FILE_READ_TTL_MS`), from taking it to
+  its answer's last byte. Past it, a read still running stops and answers
+  `unreachable`, and an answer still writing ends unfinished; either way the
+  turn is free and its buffers are dropped.
 - **Size:** up to 64 MiB of decoded file content (`MAX_MCP_APP_FILE_BYTES`),
   so a `blob` of at most 4·⌈64 MiB / 3⌉ base64 characters. Every other read
   keeps its 2 MiB.
@@ -1078,7 +1086,7 @@ listeners:
 | ------------- | ------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `denied`      | 403    | `forbidden`               | The file route refused the read: it answered the server 403                                                                             |
 | `tooLarge`    | 403    | `forbidden`               | The file is past `MAX_MCP_APP_FILE_BYTES`, by the server's count or the gateway's                                                       |
-| `unreachable` | 503    | `temporarily_unavailable` | The view's server could not reach the file route, or the read found no turn on the listener                                             |
+| `unreachable` | 503    | `temporarily_unavailable` | The view's server could not reach the file route, or the read found no turn on the listener or outlasted its turn                       |
 | `unavailable` | 503    | `temporarily_unavailable` | The gateway could not forward it: a runtime that forwards none (OpenClaw's native relay), no server or viewer it may dial, or no answer |
 
 No other answer names a `reason`. The SDK client's `readMcpAppResource`
