@@ -165,7 +165,8 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
             ref,
             outcome.reason,
             outcome.status === 429 || outcome.status === 503,
-            outcome.status
+            outcome.status,
+            outcome.fileReason
           )
     })
   }

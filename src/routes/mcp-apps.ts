@@ -5,13 +5,14 @@ import {
   McpAppViewSchema,
   ReadResourceResultSchema,
   viewerFileResult,
+  type McpAppFileReadFailure,
   type McpAppView,
 } from "../../protocol/mcp-apps"
 import type { GatewayAppOptions } from "../app"
 import { coreFailure } from "../core/failures"
 import * as ids from "../core/ids"
 import type { ServerMcpApps, ServerRuntime } from "../core/runtime"
-import { McpAppResourceError } from "../mcp-apps/client"
+import { McpAppFileError, McpAppResourceError } from "../mcp-apps/client"
 import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
 import { isUiResourceUri } from "../mcp-apps/policy"
 import { maskJson } from "../redaction"
@@ -19,6 +20,7 @@ import {
   answerAppFile,
   appFiles,
   artifactFiles,
+  isOwnFileAddress,
   offerAppFiles,
   subjectId,
   type AppFileContext,
@@ -34,7 +36,9 @@ import type { GatewayRouteApp } from "./types"
  * server, tool, or resource URI to open a view; a view's own requests reach
  * only the server its tool call came from. A published Artifact opens in the
  * configured viewer instead, with no tool call: its view reads only the
- * viewer server's `ui://` resources and calls no tool.
+ * viewer server's `ui://` resources and calls no tool. Either view may also
+ * read its own file addresses through its server, which reads them back from
+ * the file route.
  */
 
 const MCP_APP_PATH = "/tool-calls/:toolCallId/app"
@@ -70,6 +74,11 @@ export type McpAppOutcome =
         | "rate_limited"
         | "temporarily_unavailable"
       status: 400 | 403 | 404 | 429 | 503
+      /**
+       * Why a read of a view's own file address failed; no other failure
+       * names one.
+       */
+      fileReason?: McpAppFileReadFailure
     }
 
 const failure = {
@@ -79,6 +88,44 @@ const failure = {
   rate_limited: { ok: false, reason: "rate_limited", status: 429 },
   unavailable: { ok: false, reason: "temporarily_unavailable", status: 503 },
 } as const satisfies Record<string, McpAppOutcome>
+
+/**
+ * A failed read of a view's own file address, with its reason: refused when
+ * asking again cannot help, unavailable when it may.
+ */
+const fileFailure = (fileReason: McpAppFileReadFailure): McpAppOutcome => ({
+  ...(fileReason === "denied" || fileReason === "tooLarge"
+    ? failure.forbidden
+    : failure.unavailable),
+  fileReason,
+})
+
+/**
+ * A view's read of its own file address, forwarded to the server that owns
+ * the view. Every failure names its reason: the server's, the cap's, or
+ * `unavailable` where the runtime cannot forward it or the read fails short of
+ * an answer.
+ */
+async function readOwnFile(
+  { scope, request }: McpAppInput,
+  apps: ServerMcpApps,
+  owner: { toolCallId: string } | { server: string },
+  uri: string
+): Promise<McpAppOutcome> {
+  if (!apps.fileResource) return fileFailure("unavailable")
+  try {
+    return {
+      ok: true,
+      body: ReadResourceResultSchema.parse(
+        await apps.fileResource(scope, owner, uri, request.signal)
+      ),
+    }
+  } catch (error) {
+    return fileFailure(
+      error instanceof McpAppFileError ? error.reason : "unavailable"
+    )
+  }
+}
 
 /** A fixed window per view, so one chatty view cannot flood its server. */
 function createMcpAppRateLimit(
@@ -146,6 +193,8 @@ async function handleArtifactRequest(
       await boundedJson(request, MAX_REQUEST_BYTES)
     )
     if (!body.success) return failure.invalid_request
+    if (isOwnFileAddress(input, body.data.uri))
+      return readOwnFile(input, apps, { server: viewer.server }, body.data.uri)
     // The viewer reads only its own server's views, whatever the adapter allows.
     if (!isUiResourceUri(body.data.uri)) return failure.forbidden
     return {
@@ -257,6 +306,8 @@ export async function handleMcpAppRequest(
     }
     const body = McpAppResourceReadRequestSchema.safeParse(json)
     if (!body.success) return failure.invalid_request
+    if (isOwnFileAddress(input, body.data.uri))
+      return await readOwnFile(input, apps, { toolCallId }, body.data.uri)
     return {
       ok: true,
       body: ReadResourceResultSchema.parse(
@@ -408,7 +459,9 @@ export function registerMcpAppRoutes(
         outcome.reason === "rate_limited"
           ? "temporarily_unavailable"
           : outcome.reason,
-        outcome.status
+        outcome.status,
+        undefined,
+        outcome.fileReason
       )
     })
 }

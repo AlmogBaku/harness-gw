@@ -183,24 +183,11 @@ function discard(response: Response) {
   response.body?.cancel().catch(() => undefined)
 }
 
-/** One address per name under one pass for the subject, for the listener's role. */
-async function addressed(
-  context: AppFileContext,
-  grant: AppFileGrant,
-  names: readonly string[]
-): Promise<McpAppFiles> {
+/** The path a subject's file addresses sit below, on the listener's root. */
+function filesBase(context: AppFileContext, grant: AppFileGrant) {
   const { scope } = context
   const subject = subjectId(context.subject)
-  const { pass, expiresAt } = await grant.options.passes.issue(
-    {
-      role: grant.role,
-      agentId: scope.agentId,
-      sessionId: scope.sessionId,
-      ...subject,
-    },
-    context.notAfter
-  )
-  const base = [
+  return [
     grant.root,
     "agents",
     encodeURIComponent(scope.agentId),
@@ -211,6 +198,50 @@ async function addressed(
       : ["artifacts", encodeURIComponent(subject.artifactId)]),
     "app/files",
   ].join("/")
+}
+
+/**
+ * Whether `uri` is one of the subject's own file addresses on a listener
+ * serving files: an absolute `http(s)` URL whose path is the subject's file
+ * route, `filesBase` and one argument, as `open` wrote it. Its origin and its
+ * query are whatever the browser sent; the file route judges the pass when
+ * the view's server reads the address.
+ */
+export function isOwnFileAddress(context: AppFileContext, uri: string) {
+  if (!context.files) return false
+  let url: URL
+  try {
+    url = new URL(uri)
+  } catch {
+    return false
+  }
+  const base = `${filesBase(context, context.files)}/`
+  const argument = url.pathname.slice(base.length)
+  return (
+    ["http:", "https:"].includes(url.protocol) &&
+    url.pathname.startsWith(base) &&
+    argument !== "" &&
+    !argument.includes("/")
+  )
+}
+
+/** One address per name under one pass for the subject, for the listener's role. */
+async function addressed(
+  context: AppFileContext,
+  grant: AppFileGrant,
+  names: readonly string[]
+): Promise<McpAppFiles> {
+  const { scope } = context
+  const { pass, expiresAt } = await grant.options.passes.issue(
+    {
+      role: grant.role,
+      agentId: scope.agentId,
+      sessionId: scope.sessionId,
+      ...subjectId(context.subject),
+    },
+    context.notAfter
+  )
+  const base = filesBase(context, grant)
   return {
     addresses: Object.fromEntries(
       names.map((name) => [

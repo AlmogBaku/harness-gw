@@ -26,6 +26,7 @@ import { withHistoryImageArtifacts } from "../core/history-image-artifacts"
 import { providerSessionId } from "../core/ids"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
+import { McpAppFileError } from "../mcp-apps/client"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
 import { appFileSettings, type AppFileOptions } from "../routes/app-files"
 import { createGuestApp } from "./app"
@@ -825,6 +826,9 @@ function fileHarness(
     async () =>
       new Response("%PDF-1", { headers: { "content-type": "application/pdf" } })
   )
+  const fileResource = vi.fn<NonNullable<ServerMcpApps["fileResource"]>>(
+    async (_scope, _owner, uri) => ({ contents: [{ uri, blob: "JVBERi0x" }] })
+  )
   const mcpApps: ServerMcpApps = {
     describe: vi.fn(async () => true),
     open: vi.fn(async () => ({ html: "<p>view</p>", toolInput: input })),
@@ -837,6 +841,7 @@ function fileHarness(
     readResource: vi.fn(async () => ({ contents: [] })),
     serverView: vi.fn(async () => ({ html: "<p>viewer</p>" })),
     serverResource: vi.fn(async () => ({ contents: [] })),
+    fileResource,
   }
   const reader: ServerFileReader = realPath
     ? { read, realPath: async (_: SessionScope, path: string) => path }
@@ -846,7 +851,7 @@ function fileHarness(
     agentFolder: vi.fn(async () => "/srv/agent"),
     readFile: reader,
   })
-  return { ...subject, files, read }
+  return { ...subject, files, read, fileResource }
 }
 
 /** Opens `call-1`'s view with the invitation `invite`. */
@@ -951,6 +956,40 @@ describe("guest MCP App files", () => {
     const renewed = await renew(ORIGIN)
     expect(renewed.status).toBe(200)
     expect(((await renewed.json()) as McpAppFiles).expiresAt).toBe(ends)
+  })
+
+  it("forwards a view's read of its own file address, and tells the guest why one failed", async () => {
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const invite = await token(subject.invitationService)
+    const { files } = await openGuestView(subject, invite)
+    const uri = `https://sandbox.example.com${files?.addresses.path}`
+    const read = () =>
+      subject.app.request(`${guestApp()}/resources/read`, {
+        method: "POST",
+        headers: {
+          ...headers(invite, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ uri }),
+      })
+
+    expect((await read()).status).toBe(200)
+    expect(subject.fileResource).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: AGENT, sessionId: REF }),
+      { toolCallId: "call-1" },
+      uri,
+      expect.any(AbortSignal)
+    )
+    subject.fileResource.mockRejectedValueOnce(new McpAppFileError("denied"))
+    const denied = await read()
+    expect(denied.status).toBe(403)
+    expect(await denied.json()).toEqual({
+      error: {
+        code: "forbidden",
+        description: "You do not have permission to do that.",
+        reason: "denied",
+      },
+    })
   })
 
   it("refuses an operator's pass, even beside a valid invitation", async () => {

@@ -147,19 +147,27 @@ export function createMcpAppsFallback(
 
   /**
    * The server this Session's Agent names `server` (`aos-ui` also matching
-   * `aos_ui`), for one of its `ui://` resources read without a tool call.
+   * `aos_ui`), read without a tool call.
    */
   async function namedServer(
     scope: SessionScope,
-    server: string,
-    uri: string
+    server: string
   ): Promise<McpAppEndpoint> {
-    if (!isUiResourceUri(uri)) throw new McpAppRefusedError()
     const found = (await source.servers(scope)).find(({ name }) =>
       serverAllowed([server], name)
     )
     if (!found?.url) throw new McpAppNotFoundError()
     return { name: found.name, url: found.url }
+  }
+
+  /** `namedServer`, for one of its `ui://` resources. */
+  async function namedUiServer(
+    scope: SessionScope,
+    server: string,
+    uri: string
+  ): Promise<McpAppEndpoint> {
+    if (!isUiResourceUri(uri)) throw new McpAppRefusedError()
+    return namedServer(scope, server)
   }
 
   /** The stored call, else the running one this Session's own run reported. */
@@ -175,8 +183,9 @@ export function createMcpAppsFallback(
   }
 
   /**
-   * What one view request reached upstream; never its arguments. A read
-   * without a tool call logs no `toolCallId`.
+   * What one view request reached upstream; never its arguments, and of a
+   * file address only its path, never the pass in its query. A read without a
+   * tool call logs no `toolCallId`.
    */
   function logged(
     scope: SessionScope,
@@ -186,6 +195,7 @@ export function createMcpAppsFallback(
       operation: "open" | "tools/call" | "resources/read"
       tool?: string
       uri?: string
+      path?: string
     }
   ) {
     logger.info(
@@ -261,7 +271,7 @@ export function createMcpAppsFallback(
       return client.readResource(resolved.endpoint, uri)
     },
     async serverView(scope, server, uri) {
-      const endpoint = await namedServer(scope, server, uri)
+      const endpoint = await namedUiServer(scope, server, uri)
       logged(
         scope,
         undefined,
@@ -271,7 +281,7 @@ export function createMcpAppsFallback(
       return client.appResource(endpoint, uri)
     },
     async serverResource(scope, server, uri) {
-      const endpoint = await namedServer(scope, server, uri)
+      const endpoint = await namedUiServer(scope, server, uri)
       logged(
         scope,
         undefined,
@@ -279,6 +289,20 @@ export function createMcpAppsFallback(
         { operation: "resources/read", uri }
       )
       return client.readResource(endpoint, uri)
+    },
+    async fileResource(scope, owner, uri) {
+      const toolCallId = "toolCallId" in owner ? owner.toolCallId : undefined
+      const endpoint =
+        "toolCallId" in owner
+          ? (await owned(scope, owner.toolCallId)).resolved.endpoint
+          : await namedServer(scope, owner.server)
+      logged(
+        scope,
+        toolCallId,
+        { server: endpoint.name },
+        { operation: "resources/read", path: new URL(uri).pathname }
+      )
+      return client.readFile(endpoint, uri)
     },
     reportSessionGone(agentId, providerSessionId) {
       live.delete(sessionKey(agentId, providerSessionId))

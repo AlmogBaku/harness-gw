@@ -3,6 +3,8 @@
 import {
   isJSONRPCRequest,
   McpServer,
+  ProtocolError,
+  ProtocolErrorCode,
   WebStandardStreamableHTTPServerTransport,
 } from "@modelcontextprotocol/server"
 import { afterEach, describe, expect, it } from "vitest"
@@ -10,7 +12,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { mcpAppStableOriginKey } from "../../protocol/node"
 import { captureLogs } from "../../test/support/log-capture"
 import * as ids from "../core/ids"
-import type { McpAppView } from "../../protocol/mcp-apps"
+import type { McpAppFileReadFailure, McpAppView } from "../../protocol/mcp-apps"
 import {
   ServerSessionNotFoundError,
   type ServerRuntime,
@@ -20,6 +22,7 @@ import { withMcpApps } from "./annotate"
 import {
   createMcpAppClient,
   McpAppConnectionRefusedError,
+  McpAppFileError,
   McpAppResourceError,
   type McpAppClient,
   type McpServerOverrides,
@@ -62,21 +65,26 @@ type DeclaredUi = {
   listed?: Record<string, unknown>
 }
 
+/** A resource's answer: its blob or text, or a JSON-RPC error with `data`. */
+type Answer = { blob: string } | { text: string } | { error: unknown }
+
 /**
  * A Streamable HTTP MCP App server, answered in process through `fetch`; given
  * an `authorization`, it answers 401 to any request that does not carry it.
  * Each view declares `_meta.ui` where `views` says, by default the forecast's
  * on its content item; `listing` answers `resources/list` with a 500, or
- * never.
+ * never. Each of `reads` is one more resource, answered as it says.
  */
 function appServer({
   authorization,
   views,
   listing,
+  reads,
 }: {
   authorization?: string
   views?: Record<string, DeclaredUi>
   listing?: "fails" | "hangs"
+  reads?: Record<string, Answer>
 } = {}) {
   const seen = {
     listTools: 0,
@@ -133,6 +141,16 @@ function appServer({
         { uri: WORKER_URI, mimeType: "text/javascript", text: "onmessage=0" },
       ],
     }))
+    for (const [uri, answer] of Object.entries(reads ?? {}))
+      server.registerResource(uri, uri, {}, () => {
+        if ("error" in answer)
+          throw new ProtocolError(
+            ProtocolErrorCode.InternalError,
+            "The file read failed",
+            answer.error
+          )
+        return { contents: [{ uri, ...answer }] }
+      })
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -197,7 +215,9 @@ function fallback(
     servers?: McpServerOverrides
     views?: Record<string, DeclaredUi>
     listing?: "fails" | "hangs"
+    reads?: Record<string, Answer>
     catalogTimeoutMs?: number
+    maxFileBytes?: number
   } = {}
 ) {
   const server = appServer(options)
@@ -207,6 +227,7 @@ function fallback(
     servers: options.servers,
     logger: logs.logger,
     catalogTimeoutMs: options.catalogTimeoutMs,
+    maxFileBytes: options.maxFileBytes,
   })
   const apps = createMcpAppsFallback(
     {
@@ -485,6 +506,100 @@ describe("MCP Apps fallback host", () => {
       ).rejects.toBeInstanceOf(McpAppConnectionRefusedError)
       expect(plain.seen.urls.size).toBe(0)
     })
+  })
+})
+
+describe("a view's read of its own file address", () => {
+  const PASS = "pass-s3cret"
+  /** One of the Session's file addresses, as a view sends it. */
+  const address = (subject: string) =>
+    `https://sandbox.test/api/v1/agents/agent-1/sessions/session-1/${subject}/app/files/path?pass=${PASS}`
+  const CALL_FILE = address("tool-calls/call-forecast")
+  const ARTIFACT_FILE = address("artifacts/artifact-1")
+  const forecastFile = (apps: ReturnType<typeof fallback>["apps"]) =>
+    apps.fileResource!(scope, { toolCallId: "call-forecast" }, CALL_FILE)
+
+  it("reaches the server that owns the view, and logs no pass", async () => {
+    const { apps, seen, logs } = fallback({
+      reads: {
+        [CALL_FILE]: { blob: "JVBERi0x" },
+        [ARTIFACT_FILE]: { blob: "IyBOb3Rlcw==" },
+      },
+    })
+
+    await expect(forecastFile(apps)).resolves.toEqual({
+      contents: [{ uri: CALL_FILE, blob: "JVBERi0x" }],
+    })
+    expect(seen.urls).toEqual(new Set(["http://weather.test/mcp"]))
+    // A published Artifact's file, through the viewer's server.
+    await expect(
+      apps.fileResource!(scope, { server: "aos-ui" }, ARTIFACT_FILE)
+    ).resolves.toEqual({
+      contents: [{ uri: ARTIFACT_FILE, blob: "IyBOb3Rlcw==" }],
+    })
+    expect(seen.urls).toContain("http://aos-ui.test/mcp")
+    // No server the gateway may dial.
+    await expect(
+      apps.fileResource!(scope, { server: "unreachable" }, ARTIFACT_FILE)
+    ).rejects.toBeInstanceOf(McpAppNotFoundError)
+    expect(logs.records()).toContainEqual({
+      level: "info",
+      message: "mcp_app.upstream",
+      fields: {
+        agentId: "agent-1",
+        sessionId: "session-1",
+        toolCallId: "call-forecast",
+        server: "weather",
+        operation: "resources/read",
+        path: "/api/v1/agents/agent-1/sessions/session-1/tool-calls/call-forecast/app/files/path",
+      },
+    })
+    expect(JSON.stringify(logs.records())).not.toContain(PASS)
+  })
+
+  it.each<[string, unknown, McpAppFileReadFailure]>([
+    ["denied", { reason: "denied" }, "denied"],
+    ["too large", { reason: "tooLarge" }, "tooLarge"],
+    ["out of the file's reach", { reason: "unreachable" }, "unreachable"],
+    ["failed without a reason", undefined, "unavailable"],
+    [
+      "failed for a reason the protocol lacks",
+      { reason: "gone" },
+      "unavailable",
+    ],
+  ])("fails a read its server %s as it said", async (_, error, reason) => {
+    const { apps } = fallback({ reads: { [CALL_FILE]: { error } } })
+
+    await expect(forecastFile(apps)).rejects.toEqual(
+      new McpAppFileError(reason)
+    )
+  })
+
+  it("answers a file up to its cap, past the 2 MiB every other read keeps", async () => {
+    // The cap is 64 MiB; a smaller one makes the same boundary cheap to reach.
+    const CAP = 3 * 1024 * 1024
+    const LARGE_URI = "ui://aos-ui/large.js"
+    const { apps } = fallback({
+      maxFileBytes: CAP,
+      reads: {
+        [CALL_FILE]: { blob: Buffer.alloc(CAP).toString("base64") },
+        [ARTIFACT_FILE]: { blob: Buffer.alloc(CAP + 1).toString("base64") },
+        [LARGE_URI]: { text: "x".repeat(2 * 1024 * 1024 + 1) },
+      },
+    })
+
+    const largest = await forecastFile(apps)
+    expect(
+      largest.contents.map(
+        (entry) => "blob" in entry && Buffer.byteLength(entry.blob, "base64")
+      )
+    ).toEqual([CAP])
+    await expect(
+      apps.fileResource!(scope, { server: "aos-ui" }, ARTIFACT_FILE)
+    ).rejects.toEqual(new McpAppFileError("tooLarge"))
+    await expect(
+      apps.serverResource!(scope, "aos-ui", LARGE_URI)
+    ).rejects.toBeInstanceOf(McpAppResourceError)
   })
 })
 
