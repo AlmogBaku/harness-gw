@@ -66,6 +66,14 @@ export class McpAppRefusedError extends Error {
   }
 }
 
+/** A view asked for what this runtime does not do, such as feeding its model. */
+export class McpAppUnsupportedError extends Error {
+  constructor() {
+    super("MCP App request unsupported")
+    this.name = "McpAppUnsupportedError"
+  }
+}
+
 type Resolved = { endpoint: McpAppEndpoint; server: string; tool: string }
 
 /**

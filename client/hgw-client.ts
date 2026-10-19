@@ -19,13 +19,16 @@ import {
 } from "../protocol/push"
 import {
   CallToolResultSchema,
+  EmptyResultSchema,
   McpAppFilesSchema,
+  McpAppModelContextRequestSchema,
   McpAppResourceReadRequestSchema,
   McpAppToolCallRequestSchema,
   McpAppViewSchema,
   ReadResourceResultSchema,
   type McpAppFileReadFailure,
   type McpAppFiles,
+  type McpAppModelContextRequest,
   type McpAppResourceReadRequest,
   type McpAppToolCallRequest,
 } from "../protocol/mcp-apps"
@@ -335,6 +338,26 @@ export class HgwRemoteClient {
       "/resources/read",
       McpAppResourceReadRequestSchema.safeParse(request),
       ReadResourceResultSchema
+    )
+  }
+
+  /**
+   * A view's `ui/update-model-context`, answered with its empty result: the
+   * model reads it once, in the Session's next turn, in place of what the view
+   * sent before. A runtime with nowhere to put it out of the transcript
+   * rejects it with code `unsupported`, a refusal no retry changes.
+   */
+  async updateMcpAppModelContext(
+    sessionId: string,
+    toolCallId: string,
+    request: McpAppModelContextRequest
+  ) {
+    return this.#postMcpApp(
+      sessionId,
+      { toolCallId },
+      "/ui/update-model-context",
+      McpAppModelContextRequestSchema.safeParse(request),
+      EmptyResultSchema
     )
   }
 

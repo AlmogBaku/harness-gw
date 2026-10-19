@@ -1,5 +1,7 @@
 import {
   CallToolResultSchema,
+  ContentBlockSchema,
+  EmptyResultSchema,
   ReadResourceResultSchema,
 } from "@modelcontextprotocol/core"
 import { z } from "zod"
@@ -11,7 +13,7 @@ import { z } from "zod"
  * by the tool call that opened it, never the resource URI.
  */
 
-export { CallToolResultSchema, ReadResourceResultSchema }
+export { CallToolResultSchema, EmptyResultSchema, ReadResourceResultSchema }
 export type CallToolResult = z.infer<typeof CallToolResultSchema>
 export type ReadResourceResult = z.infer<typeof ReadResourceResultSchema>
 
@@ -153,6 +155,19 @@ export const McpAppResourceReadRequestSchema = z.strictObject({
 })
 export type McpAppResourceReadRequest = z.infer<
   typeof McpAppResourceReadRequestSchema
+>
+
+/**
+ * A view's `ui/update-model-context`, answered with an empty result: what the
+ * model reads of the view once, in the Session's next turn, in place of
+ * whatever the view sent before. An update carrying neither field clears it.
+ */
+export const McpAppModelContextRequestSchema = z.strictObject({
+  content: z.array(ContentBlockSchema).optional(),
+  structuredContent: z.record(z.string(), z.unknown()).optional(),
+})
+export type McpAppModelContextRequest = z.infer<
+  typeof McpAppModelContextRequestSchema
 >
 
 /**

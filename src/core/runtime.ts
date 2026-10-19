@@ -20,6 +20,7 @@ import type {
 } from "../../protocol"
 import type {
   CallToolResult,
+  McpAppModelContextRequest,
   McpAppView,
   ReadResourceResult,
 } from "../../protocol/mcp-apps"
@@ -613,6 +614,17 @@ export type ServerMcpApps = {
     toolCallId: string,
     uri: string
   ): Promise<ReadResourceResult>
+  /**
+   * A view's `ui/update-model-context`: replaces what the call's view gave the
+   * model before, for the model to read once, in the Session's next turn, out
+   * of its visible transcript. Absent, or failing as `McpAppUnsupportedError`,
+   * where the runtime has nowhere to put it out of sight.
+   */
+  updateModelContext?(
+    scope: SessionScope,
+    toolCallId: string,
+    context: McpAppModelContextRequest
+  ): Promise<void>
   /**
    * The App view `uri` names on the server this Session's Agent names
    * `server` (`aos-ui` also matching `aos_ui`), read without a tool call and
