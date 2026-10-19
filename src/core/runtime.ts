@@ -554,6 +554,18 @@ export type LiveMcpToolCall = {
   result?: CallToolResult
 }
 
+/**
+ * A view's `domain` the gateway verified as its own server's stable origin.
+ * The only mint point is `judgedDomain` (`src/mcp-apps/policy.ts`), the one
+ * check of a declared domain against the URL the gateway dials.
+ */
+export type VerifiedDomain = string & { readonly __brand: "VerifiedDomain" }
+
+/** A view as a runtime answers it: the wire's, with only a verified `domain`. */
+export type ServerMcpAppView = Omit<McpAppView, "domain"> & {
+  domain?: VerifiedDomain
+}
+
 /** MCP Apps operations, each scoped to one Session's tool call. */
 export type ServerMcpApps = {
   /**
@@ -575,7 +587,7 @@ export type ServerMcpApps = {
     scope: SessionScope,
     toolCallId: string,
     signal?: AbortSignal
-  ): Promise<McpAppView>
+  ): Promise<ServerMcpAppView>
   /**
    * The call as the runtime stored it, its native name split into server and
    * tool once the server list has loaded, so it works right after a restart.
@@ -612,7 +624,7 @@ export type ServerMcpApps = {
     server: string,
     uri: string,
     signal?: AbortSignal
-  ): Promise<McpAppView>
+  ): Promise<ServerMcpAppView>
   /**
    * One `ui://` resource of that same server, read without a tool call and as
    * the server answered it: the reads of the view `serverView` opened, which

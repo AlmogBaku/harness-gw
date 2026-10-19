@@ -577,7 +577,7 @@ renders as an App card. Implement the optional `ServerRuntime.mcpApps`
 | -------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `observe?(scope, call)`                            | A flagged call of this Session's run as it streams: name, then input, then result.     |
 | `describe(scope, {toolCallId, toolName, result?})` | Whether the call's tool declares a view.                                               |
-| `open(scope, toolCallId, signal?)`                 | The `McpAppView`: HTML, CSP, permissions, `prefersBorder`, tool input and result.      |
+| `open(scope, toolCallId, signal?)`                 | A `ServerMcpAppView`: HTML, CSP, permissions, `prefersBorder`, tool input and result.  |
 | `toolCall?(scope, toolCallId, signal?)`            | The stored call: its server, tool, and full input. Absent when unavailable.            |
 | `callTool(scope, toolCallId, name, args)`          | A view's `tools/call`, limited to its own server's app-visible tools.                  |
 | `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                           |
@@ -599,7 +599,8 @@ where the native relay cannot forward one, and such a read answers
 `unavailable`. Only the fallback
 sets a view's `domain`, after checking it against the URL it dialed (see
 [Stable origins](../protocol.md#stable-origins)); a native view never carries
-one.
+one. The types hold it: a `ServerMcpAppView`'s `domain` is a `VerifiedDomain`,
+which only `judgedDomain` (`src/mcp-apps/policy.ts`) mints.
 
 Map the native MCP Apps API when the runtime has one (OpenClaw's
 `mcp.app.view`, `mcp.app.callTool`, `mcp.app.readResource`). Otherwise build
