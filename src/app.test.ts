@@ -34,6 +34,7 @@ import {
   type ServerFileReader,
   type ServerMcpApps,
   type SessionScope,
+  type VerifiedDomain,
 } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
 import { McpAppFileError, McpAppResourceError } from "./mcp-apps/client"
@@ -456,7 +457,8 @@ function passOf(address: string) {
 }
 
 /** A stable origin the runtime verified the viewer's view on. */
-const VIEWER_DOMAIN = "5c25e9af9fca8071e322bd227eaaa176.mcp-apps.example"
+const VIEWER_DOMAIN =
+  "5c25e9af9fca8071e322bd227eaaa176.mcp-apps.example" as VerifiedDomain
 
 /** The Artifact Session `stored` publishes as `artifact-1`, read from no path. */
 const NOTES = {

@@ -21,6 +21,12 @@ export const OPENCLAW_MCP_APP_MAX_BYTES = 2 * 1024 * 1024
 /** OpenClaw mints `mcp-app-<uuid>` view ids of at most 128 characters. */
 const VIEW_ID = /^mcp-app-[A-Za-z0-9-]{1,120}$/u
 
+/**
+ * A native view: the wire's with no `domain`, since the gateway never dials
+ * an OpenClaw view's server and so has none to verify.
+ */
+const NativeViewSchema = McpAppViewSchema.omit({ domain: true })
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -132,7 +138,7 @@ export function createOpenClawMcpApps(input: {
         )
       )
       // `permissions` and `prefersBorder` are not part of the native view.
-      return parsed(McpAppViewSchema, {
+      return parsed(NativeViewSchema, {
         html: view?.html,
         ...(view?.csp === undefined ? {} : { csp: view.csp }),
         ...(record(view?.toolInput) ? { toolInput: view?.toolInput } : {}),

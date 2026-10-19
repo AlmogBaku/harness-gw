@@ -3,11 +3,11 @@ import {
   McpUiCspSchema,
   McpUiDomainSchema,
   McpUiPermissionsSchema,
-  type McpAppView,
   type McpUiCsp,
   type McpUiPermissions,
 } from "../../protocol/mcp-apps"
 import { mcpAppStableOriginKey } from "../../protocol/node"
+import type { ServerMcpAppView, VerifiedDomain } from "../core/runtime"
 
 /**
  * The MCP Apps rules the gateway enforces for a view (spec 2026-01-26). Pure, so
@@ -87,9 +87,9 @@ function sanitizePermissions(value: unknown): McpUiPermissions | undefined {
   return parsed.success ? parsed.data : undefined
 }
 
-/** What a view's `_meta.ui` declares for its sandbox. */
+/** What a view's `_meta.ui` declares for its sandbox, its `domain` verified. */
 export type McpUiMeta = Pick<
-  McpAppView,
+  ServerMcpAppView,
   "csp" | "permissions" | "prefersBorder" | "domain"
 >
 
@@ -124,16 +124,17 @@ export type DroppedDomain =
 /**
  * A declared `domain`, judged against the URL the gateway dials the view's
  * server at: the view's when it is a host name `McpUiDomainSchema` admits
- * whose first label is that URL's `mcpAppStableOriginKey`, else why not.
+ * whose first label is that URL's `mcpAppStableOriginKey`, else why not. The
+ * only mint point for a `VerifiedDomain`.
  */
 export function judgedDomain(
   declared: unknown,
   url: string
-): { domain: string } | DroppedDomain {
+): { domain: VerifiedDomain } | DroppedDomain {
   const parsed = McpUiDomainSchema.safeParse(declared)
   if (!parsed.success) return { reason: "malformed" }
   const label = parsed.data.split(".", 1)[0]
   return label === mcpAppStableOriginKey(url)
-    ? { domain: parsed.data }
+    ? { domain: parsed.data as VerifiedDomain }
     : { reason: "mismatch", label }
 }
