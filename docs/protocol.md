@@ -1055,7 +1055,9 @@ reads the file route server to server
   arrival order, at most 32 waiting, 2 of them per invitation on the guest
   listener, and each for at most 30 s; a read past any answers
   `unreachable`. A waiter whose request ends leaves, and a read whose request
-  ends stops and writes nothing.
+  ends stops, writes nothing, and answers `unreachable`; only its own MCP
+  request is cancelled, and the connection every other request to that
+  server shares stays open.
 - **TTL:** a turn lasts at most 120 s (`FILE_READ_TTL_MS`), from taking it to
   its answer's last byte. Past it, a read still running stops and answers
   `unreachable`, and an answer still writing ends unfinished; either way the
@@ -1086,7 +1088,7 @@ listeners:
 | ------------- | ------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `denied`      | 403    | `forbidden`               | The file route refused the read: it answered the server 403                                                                             |
 | `tooLarge`    | 403    | `forbidden`               | The file is past `MAX_MCP_APP_FILE_BYTES`, by the server's count or the gateway's                                                       |
-| `unreachable` | 503    | `temporarily_unavailable` | The view's server could not reach the file route, or the read found no turn on the listener or outlasted its turn                       |
+| `unreachable` | 503    | `temporarily_unavailable` | The view's server could not reach the file route, or the read found no turn on the listener, or outlasted its turn or its request       |
 | `unavailable` | 503    | `temporarily_unavailable` | The gateway could not forward it: a runtime that forwards none (OpenClaw's native relay), no server or viewer it may dial, or no answer |
 
 No other answer names a `reason`. The SDK client's `readMcpAppResource`
