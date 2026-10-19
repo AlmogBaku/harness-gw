@@ -66,11 +66,11 @@ type DeclaredUi = {
 }
 
 /**
- * A resource's answer: its blob or text, a JSON-RPC error with `data`, or
- * none ever.
+ * A resource's answer: its blob, once `after` settles where it is given, or
+ * its text, a JSON-RPC error with `data`, or none ever.
  */
 type Answer =
-  | { blob: string }
+  | { blob: string; after?: Promise<void> }
   | { text: string }
   | { error: unknown }
   | { hangs: true }
@@ -94,6 +94,8 @@ function appServer({
   reads?: Record<string, Answer>
 } = {}) {
   const seen = {
+    initializes: 0,
+    reads: 0,
     listTools: 0,
     listResources: 0,
     calls: [] as string[],
@@ -113,6 +115,10 @@ function appServer({
       return new Response(null, { status: 401 })
     if (request.method === "POST") {
       const message: unknown = await request.clone().json()
+      if (isJSONRPCRequest(message) && message.method === "initialize")
+        seen.initializes += 1
+      if (isJSONRPCRequest(message) && message.method === "resources/read")
+        seen.reads += 1
       if (isJSONRPCRequest(message) && message.method === "tools/list")
         seen.listTools += 1
       if (isJSONRPCRequest(message) && message.method === "resources/list") {
@@ -149,8 +155,13 @@ function appServer({
       ],
     }))
     for (const [uri, answer] of Object.entries(reads ?? {}))
-      server.registerResource(uri, uri, {}, () => {
+      server.registerResource(uri, uri, {}, async () => {
         if ("hangs" in answer) return new Promise<never>(() => {})
+        if ("after" in answer) {
+          const { after, blob } = answer
+          await after
+          return { contents: [{ uri, blob }] }
+        }
         if ("error" in answer)
           throw new ProtocolError(
             ProtocolErrorCode.InternalError,
@@ -596,6 +607,33 @@ describe("a view's read of its own file address", () => {
     request.abort()
 
     await expect(read).rejects.toEqual(new McpAppFileError("unavailable"))
+  })
+
+  it("keeps the connection other requests share when one read's request ends", async () => {
+    const answer = Promise.withResolvers<void>()
+    const OTHER_FILE = `${CALL_FILE}&part=other`
+    const { apps, seen } = fallback({
+      reads: {
+        [CALL_FILE]: { hangs: true },
+        [OTHER_FILE]: { blob: "JVBERi0x", after: answer.promise },
+      },
+    })
+    const forecast = { toolCallId: "call-forecast" }
+    const request = new AbortController()
+
+    // Two reads on the one pooled connection to the forecast's server.
+    const ended = apps.fileResource!(scope, forecast, CALL_FILE, request.signal)
+    const other = apps.fileResource!(scope, forecast, OTHER_FILE)
+    while (seen.reads < 2) await new Promise((resolve) => setImmediate(resolve))
+    request.abort()
+    await expect(ended).rejects.toEqual(new McpAppFileError("unavailable"))
+    answer.resolve()
+
+    await expect(other).resolves.toEqual({
+      contents: [{ uri: OTHER_FILE, blob: "JVBERi0x" }],
+    })
+    await apps.callTool(scope, "call-forecast", "refresh_forecast", {})
+    expect(seen.initializes).toBe(1)
   })
 
   it("answers a file up to its cap, past the 2 MiB every other read keeps", async () => {

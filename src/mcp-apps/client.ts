@@ -233,20 +233,26 @@ export function createMcpAppClient(
     return pooled.client
   }
 
-  /** One request; a failed connection is dropped so the next call reconnects. */
+  /**
+   * One request; a failed connection is dropped so the next call reconnects.
+   * A request its caller's `signal` ended keeps the connection every other
+   * request shares.
+   */
   async function request<T>(
     server: McpAppEndpoint,
-    run: (client: Client) => Promise<T>
+    run: (client: Client) => Promise<T>,
+    signal?: AbortSignal
   ) {
     const client = await connect(server)
     try {
       return await run(client)
     } catch (error) {
-      // A JSON-RPC error is the server answering; a timeout or anything else
-      // is the link.
+      // A JSON-RPC error is the server answering, and an abort the caller
+      // ending its own request, which the SDK cancelled alone; a timeout or
+      // anything else is the link.
       const key = keyOf(server)
       const pooled = pool.get(key)
-      const answered = error instanceof ProtocolError
+      const answered = error instanceof ProtocolError || signal?.aborted
       if (pooled && !answered) drop(key, pooled)
       throw error
     }
@@ -327,8 +333,10 @@ export function createMcpAppClient(
     signal?: AbortSignal
   ) =>
     ReadResourceResultSchema.parse(
-      await request(server, (client) =>
-        client.readResource({ uri }, signal && { signal })
+      await request(
+        server,
+        (client) => client.readResource({ uri }, signal && { signal }),
+        signal
       )
     )
 
