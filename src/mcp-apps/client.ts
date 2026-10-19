@@ -8,8 +8,11 @@ import {
 
 import {
   CallToolResultSchema,
+  MAX_MCP_APP_FILE_BYTES,
+  McpAppFileReadErrorDataSchema,
   ReadResourceResultSchema,
   type CallToolResult,
+  type McpAppFileReadFailure,
   type McpAppView,
   type ReadResourceResult,
 } from "../../protocol/mcp-apps"
@@ -76,6 +79,18 @@ export type McpAppClient = {
   appResource(server: McpAppEndpoint, uri: string): Promise<McpAppResource>
   /** One `resources/read`, as the server answered it. */
   readResource(server: McpAppEndpoint, uri: string): Promise<ReadResourceResult>
+  /**
+   * A view's read of its own file address, as the server answered it: up to
+   * `MAX_MCP_APP_FILE_BYTES` of decoded content. It fails as
+   * `McpAppFileError`, with the reason the server's JSON-RPC error gave in its
+   * `data`, `tooLarge` past the cap, and `unavailable` for any other failure,
+   * the request's abort through `signal` included.
+   */
+  readFile(
+    server: McpAppEndpoint,
+    uri: string,
+    signal?: AbortSignal
+  ): Promise<ReadResourceResult>
   callTool(
     server: McpAppEndpoint,
     name: string,
@@ -90,6 +105,33 @@ export class McpAppResourceError extends Error {
     this.name = "McpAppResourceError"
   }
 }
+
+/** A view's read of its own file address failed, for the reason it names. */
+export class McpAppFileError extends Error {
+  constructor(readonly reason: McpAppFileReadFailure) {
+    super(`MCP App file read failed: ${reason}`)
+    this.name = "McpAppFileError"
+  }
+}
+
+/**
+ * The bytes a read answers, against its cap: each text item's UTF-8, and each
+ * blob's base64 characters, or the bytes they decode to for a file.
+ */
+const bytesOf = (
+  { contents }: ReadResourceResult,
+  blob: "characters" | "decoded"
+) =>
+  contents.reduce(
+    (total, entry) =>
+      total +
+      ("text" in entry
+        ? Buffer.byteLength(entry.text)
+        : blob === "decoded"
+          ? Buffer.byteLength(entry.blob, "base64")
+          : entry.blob.length),
+    0
+  )
 
 /**
  * The App view `uri` names in a `resources/read` result: its HTML and its
@@ -132,9 +174,11 @@ export function createMcpAppClient(
     logger?: Logger
     /** How long a connect or one list page may take. */
     catalogTimeoutMs?: number
+    /** The most file content one file read answers. */
+    maxFileBytes?: number
   } = {}
 ): McpAppClient {
-  const { logger } = options
+  const { logger, maxFileBytes = MAX_MCP_APP_FILE_BYTES } = options
   const catalogRequest = {
     timeout: options.catalogTimeoutMs ?? MCP_CATALOG_TIMEOUT_MS,
   }
@@ -189,20 +233,26 @@ export function createMcpAppClient(
     return pooled.client
   }
 
-  /** One request; a failed connection is dropped so the next call reconnects. */
+  /**
+   * One request; a failed connection is dropped so the next call reconnects.
+   * A request its caller's `signal` ended keeps the connection every other
+   * request shares.
+   */
   async function request<T>(
     server: McpAppEndpoint,
-    run: (client: Client) => Promise<T>
+    run: (client: Client) => Promise<T>,
+    signal?: AbortSignal
   ) {
     const client = await connect(server)
     try {
       return await run(client)
     } catch (error) {
-      // A JSON-RPC error is the server answering; a timeout or anything else
-      // is the link.
+      // A JSON-RPC error is the server answering, and an abort the caller
+      // ending its own request, which the SDK cancelled alone; a timeout or
+      // anything else is the link.
       const key = keyOf(server)
       const pooled = pool.get(key)
-      const answered = error instanceof ProtocolError
+      const answered = error instanceof ProtocolError || signal?.aborted
       if (pooled && !answered) drop(key, pooled)
       throw error
     }
@@ -277,17 +327,42 @@ export function createMcpAppClient(
     return meta
   }
 
+  const read = async (
+    server: McpAppEndpoint,
+    uri: string,
+    signal?: AbortSignal
+  ) =>
+    ReadResourceResultSchema.parse(
+      await request(
+        server,
+        (client) => client.readResource({ uri }, signal && { signal }),
+        signal
+      )
+    )
+
   async function readResource(server: McpAppEndpoint, uri: string) {
-    const result = ReadResourceResultSchema.parse(
-      await request(server, (client) => client.readResource({ uri }))
-    )
-    const bytes = result.contents.reduce(
-      (total, entry) =>
-        total +
-        ("text" in entry ? Buffer.byteLength(entry.text) : entry.blob.length),
-      0
-    )
-    if (bytes > MAX_MCP_APP_HTML_BYTES) throw new McpAppResourceError("size")
+    const result = await read(server, uri)
+    if (bytesOf(result, "characters") > MAX_MCP_APP_HTML_BYTES)
+      throw new McpAppResourceError("size")
+    return result
+  }
+
+  async function readFile(
+    server: McpAppEndpoint,
+    uri: string,
+    signal?: AbortSignal
+  ) {
+    let result: ReadResourceResult
+    try {
+      result = await read(server, uri, signal)
+    } catch (error) {
+      const reason = McpAppFileReadErrorDataSchema.safeParse(
+        error instanceof ProtocolError ? error.data : undefined
+      ).data?.reason
+      throw new McpAppFileError(reason ?? "unavailable")
+    }
+    if (bytesOf(result, "decoded") > maxFileBytes)
+      throw new McpAppFileError("tooLarge")
     return result
   }
 
@@ -296,6 +371,7 @@ export function createMcpAppClient(
     tools: (server) => toolCache.get(keyOf(server)),
     refreshTools: (server) => toolCache.refresh(keyOf(server)),
     readResource,
+    readFile,
     // The draft spec: "Hosts MUST check both locations, preferring the
     // content item and falling back to the listing entry", each taken whole.
     async appResource(server, uri) {

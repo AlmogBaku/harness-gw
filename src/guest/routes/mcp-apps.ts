@@ -17,9 +17,11 @@ import {
   type AppSubject,
   type AppTarget,
 } from "../../routes/app-files"
+import { createFileReadQueue, GUEST_FILE_READS } from "../../routes/file-reads"
 import {
   createMcpAppLimits,
   handleMcpAppRequest,
+  JSON_TYPE,
   mcpAppParams,
   mcpAppRoutes,
 } from "../../routes/mcp-apps"
@@ -76,6 +78,7 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
     routes.options.now,
     routes.options.files?.ratePerSecond
   )
+  const fileReads = createFileReadQueue(GUEST_FILE_READS)
   const runtime = routes.options.runtime.runtime
   const configured = routes.options.files
   const files: AppFileGrant | undefined = configured && {
@@ -152,11 +155,16 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
         operation,
         request: context.req.raw,
         allow: limit(operation),
+        // One invitation reads one file at a time.
+        fileReads: (signal) => fileReads.take(identity.invitationId, signal),
         files,
         // A pass ends with the invitation that earned it.
         notAfter: identity.authorizationExpiresAt,
       })
-      if (outcome.ok) return context.json(outcome.body)
+      if (outcome.ok)
+        return "stream" in outcome
+          ? context.body(outcome.stream, 200, JSON_TYPE)
+          : context.json(outcome.body)
       return outcome.reason === "invalid_request"
         ? emptyError(400)
         : routes.projectedError(
@@ -165,7 +173,8 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
             ref,
             outcome.reason,
             outcome.status === 429 || outcome.status === 503,
-            outcome.status
+            outcome.status,
+            outcome.fileReason
           )
     })
   }

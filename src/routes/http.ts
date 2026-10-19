@@ -1,4 +1,5 @@
 import { ErrorResponseSchema } from "../../protocol"
+import type { McpAppFileReadFailure } from "../../protocol/mcp-apps"
 
 export type ErrorCode =
   | "unauthenticated"
@@ -38,7 +39,9 @@ const errorDescriptions: Record<ErrorCode, string> = {
 export function errorResponse(
   code: ErrorCode,
   status: number,
-  description?: string
+  description?: string,
+  /** Why a view's read of its own file address failed. */
+  reason?: McpAppFileReadFailure
 ) {
   return new Response(
     JSON.stringify(
@@ -47,6 +50,7 @@ export function errorResponse(
           code,
           description:
             description?.trim().slice(0, 512) || errorDescriptions[code],
+          ...(reason && { reason }),
         },
       })
     ),

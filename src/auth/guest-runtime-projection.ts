@@ -2,6 +2,7 @@ import {
   GuestRuntimeCapabilitiesResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
 } from "../../protocol"
+import type { McpAppFileReadFailure } from "../../protocol/mcp-apps"
 import type { GuestAuthorization } from "./guest-invitation"
 import {
   guestErrorDescription,
@@ -38,7 +39,9 @@ export function projectGuestError(
   authorization: GuestAuthorization,
   code: GuestPublicErrorCode,
   retryable: boolean,
-  status: number
+  status: number,
+  /** Why a view's read of its own file address failed. */
+  reason?: McpAppFileReadFailure
 ) {
   const projected = projectGuestOutbound(
     {
@@ -67,6 +70,7 @@ export function projectGuestError(
             description:
               projected.payload.description ??
               guestErrorDescription(projected.payload.code),
+            ...(reason && { reason }),
           },
         }),
         {

@@ -1,3 +1,4 @@
+import type { McpAppFileReadFailure } from "../../protocol/mcp-apps"
 import type {
   GuestOperation,
   VerifiedGuestIdentity,
@@ -115,7 +116,8 @@ export function createGuestRoutes(options: GuestAppOptions) {
       ref: string,
       code: GuestPublicErrorCode,
       retryable: boolean,
-      status: number
+      status: number,
+      reason?: McpAppFileReadFailure
     ) {
       const authorization = authorizer.authorize(identity, {
         agentId,
@@ -123,7 +125,7 @@ export function createGuestRoutes(options: GuestAppOptions) {
         operation: "errors:read",
       })
       return authorization
-        ? projectGuestError(authorization, code, retryable, status)
+        ? projectGuestError(authorization, code, retryable, status, reason)
         : emptyError(status)
     },
   }

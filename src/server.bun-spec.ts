@@ -1,11 +1,13 @@
 import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
 import { afterEach, describe, expect, it } from "bun:test"
 import { request } from "node:http"
+import { connect } from "node:net"
 
 import { HGW_ACP_PATH } from "../protocol/acp"
 import { createAcpService } from "./acp/service"
 import type { AcpConnectionContext, ActivityFeed, ReadState } from "./acp/types"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
+import { heldBody } from "./routes/file-reads"
 import { startGatewayServer } from "./server"
 
 const ORIGIN = "https://aos.example.test"
@@ -245,4 +247,91 @@ describe("real Bun WebSocket upgrade", () => {
     })
     expect(code).toBe(4408)
   })
+})
+
+/** Polls `done` every 20 ms for at most 5 s. */
+async function until(done: () => boolean) {
+  for (let waited = 0; !done() && waited < 5_000; waited += 20)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+}
+
+describe("a held file answer through the real Bun server", () => {
+  /** Far more than the socket buffers between Bun and a stalled reader. */
+  const TOTAL = 16 * 1024 * 1024
+
+  it.each(["reads the rest", "goes away"] as const)(
+    "keeps its turn while its reader stalls, and gives it back once the reader %s",
+    async (ending) => {
+      let released = 0
+      let pulled = 0
+      const lifecycle = startGatewayServer({
+        app: {
+          fetch: () => {
+            const body = heldBody(new Uint8Array(TOTAL), {
+              signal: new AbortController().signal,
+              release: () => (released += 1),
+            }).getReader()
+            // Counts what Bun pulls, one pull of the held body for each.
+            const counted = new ReadableStream<Uint8Array>(
+              {
+                async pull(controller) {
+                  const { done, value } = await body.read()
+                  if (done) return controller.close()
+                  pulled += value.byteLength
+                  controller.enqueue(value)
+                },
+                cancel: (reason) => body.cancel(reason),
+              },
+              { highWaterMark: 0 }
+            )
+            return new Response(counted)
+          },
+        },
+        origins: { allowedOrigins: [ORIGIN] },
+        host: "127.0.0.1",
+        port: 0,
+        shutdownGraceMs: 1_000,
+        installSignalHandlers: false,
+      })
+      lifecycles.push(lifecycle)
+      const port = portOf(lifecycle)
+      const socket = connect(port, "127.0.0.1")
+      let received = 0
+      const first = new Promise<void>((resolve) =>
+        socket.once("data", (chunk) => {
+          received += chunk.length
+          socket.pause()
+          resolve()
+        })
+      )
+      socket.write(
+        `GET /api/v1/file HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`
+      )
+      await first
+
+      // Bun pulls only as the socket drains, so its pulls stop, for ten polls
+      // in a row, well short of the whole answer, and the turn stays held.
+      let seen = -1
+      let quiet = 0
+      await until(() => {
+        quiet = pulled === seen ? quiet + 1 : 0
+        seen = pulled
+        return quiet >= 10
+      })
+      expect(pulled).toBeLessThan(TOTAL)
+      expect(released).toBe(0)
+      if (ending === "reads the rest") {
+        socket.on("data", (chunk) => (received += chunk.length))
+        socket.resume()
+      } else socket.destroy()
+      await until(() => released > 0)
+
+      expect(released).toBe(1)
+      if (ending === "reads the rest") {
+        await until(() => received > TOTAL)
+        expect(received).toBeGreaterThan(TOTAL)
+      }
+      socket.destroy()
+    }
+  )
 })

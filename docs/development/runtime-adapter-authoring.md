@@ -583,6 +583,7 @@ renders as an App card. Implement the optional `ServerRuntime.mcpApps`
 | `readResource(scope, toolCallId, uri)`             | A view's `resources/read` on its own server.                                           |
 | `serverView?(scope, server, uri, signal?)`         | A named server's view with no call, verified as `open`'s: a published Artifact's view. |
 | `serverResource?(scope, server, uri, signal?)`     | A named server's `ui://` resource with no call, as answered: that view's own reads.    |
+| `fileResource?(scope, owner, uri, signal?)`        | A view's read of its own file address, forwarded to the call's server or the viewer's. |
 
 Every method first finds the `toolCallId` in this Session's own native
 history, or among the running calls `observe` heard for that Session; the
@@ -591,7 +592,11 @@ reads as not found. A host that holds its views natively leaves `observe` out.
 `serverView` and `serverResource` are the one exception: they name a server,
 the configured viewer's, and never a call. The fallback implements both; leave
 them out where the native API reads a resource only for a call, as OpenClaw's
-does, and a published attachment then opens with no view. Only the fallback
+does, and a published attachment then opens with no view. The route matches a
+file address to the view's own subject before `fileResource` sees it (see
+[Reading a view's files](../protocol.md#reading-a-views-files)); leave it out
+where the native relay cannot forward one, and such a read answers
+`unavailable`. Only the fallback
 sets a view's `domain`, after checking it against the URL it dialed (see
 [Stable origins](../protocol.md#stable-origins)); a native view never carries
 one.

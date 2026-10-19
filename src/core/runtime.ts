@@ -625,6 +625,22 @@ export type ServerMcpApps = {
     signal?: AbortSignal
   ): Promise<ReadResourceResult>
   /**
+   * A view's read of its own file address, which the route has matched to the
+   * view's subject, forwarded as `resources/read` to the server that owns the
+   * view: the call's own, or the server this Session's Agent names `server`,
+   * the viewer of a published Artifact. The file route judges the address's
+   * pass when that server reads it. It answers up to `MAX_MCP_APP_FILE_BYTES`
+   * of content, stops when `signal` aborts, and fails as `McpAppFileError`
+   * with its reason. Absent where the runtime cannot forward one, as
+   * OpenClaw's native relay cannot.
+   */
+  fileResource?(
+    scope: SessionScope,
+    owner: { toolCallId: string } | { server: string },
+    uri: string,
+    signal?: AbortSignal
+  ): Promise<ReadResourceResult>
+  /**
    * Frees the running calls `observe` kept for this Session, once the gateway
    * deleted it or a recover found it gone.
    */

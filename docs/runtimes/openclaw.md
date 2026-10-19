@@ -86,7 +86,9 @@ openclaw mcp reload
 
 The gateway finds a view in the tool result's `details.mcpAppPreview`, opens it
 with `mcp.app.view`, and relays the view's requests through `mcp.app.callTool`
-and `mcp.app.readResource`. OpenClaw caps a view's HTML at 2 MiB. A view the
+and `mcp.app.readResource`. OpenClaw caps a view's HTML at 2 MiB. A view's
+read of its own file address is never relayed and answers `unavailable` (see
+[Reading a view's files](../protocol.md#reading-a-views-files)). A view the
 Gateway no longer holds, or any view while `mcp.apps.enabled` is off, shows
 the tool call's textual details. The tool shows as `mcp__NAME__TOOL`, resolved
 against the Session's `tools.effective` list. The gateway's `mcpApps` headers

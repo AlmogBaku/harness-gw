@@ -1,8 +1,13 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest"
 
+import { useFakeClock } from "../test/support/fake-clock"
 import { artifactIds } from "../test/support/history-artifacts"
 import { captureLogs } from "../test/support/log-capture"
-import type { McpAppFiles, McpAppView } from "../protocol/mcp-apps"
+import type {
+  McpAppFileReadFailure,
+  McpAppFiles,
+  McpAppView,
+} from "../protocol/mcp-apps"
 import { createGatewayApp, type GatewayAppOptions } from "./app"
 import {
   HermesAuthenticationError,
@@ -31,8 +36,8 @@ import {
   type SessionScope,
 } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
-import { McpAppResourceError } from "./mcp-apps/client"
-import { McpAppNotFoundError } from "./mcp-apps/fallback"
+import { McpAppFileError, McpAppResourceError } from "./mcp-apps/client"
+import { McpAppNotFoundError, McpAppRefusedError } from "./mcp-apps/fallback"
 import { appFileSettings, type AppFileOptions } from "./routes/app-files"
 
 const origin = "http://127.0.0.1:3000"
@@ -471,8 +476,11 @@ function artifactPath(sessionId = "stored", artifactId = "artifact-1") {
  * call no server matches, and a `null` reader a runtime that reads no files.
  * Its view gets the call's own input unless `viewInput` differs. The Session
  * publishes NOTES as `artifact-1`. Any server's view opens as one viewer page
- * on a stable origin, and its other `ui://` resources read as scripts, unless
- * `viewer` is `null`, a runtime that reads none.
+ * on a stable origin, and its other `ui://` resources read as scripts, and a
+ * view's read of its own file address is forwarded, unless `viewer` is `null`,
+ * a runtime like OpenClaw's that reads no resource without a call and forwards
+ * no file read. A call's server reads only its `ui://` resources, as the
+ * fallback's does.
  */
 function fileGateway(
   setup: {
@@ -508,13 +516,24 @@ function fileGateway(
       contents: [{ uri, mimeType: "text/javascript", text: "onmessage=0" }],
     })
   )
+  const readResource = vi.fn<ServerMcpApps["readResource"]>(
+    async (_scope, _toolCallId, uri) => {
+      if (!uri.startsWith("ui://")) throw new McpAppRefusedError()
+      return { contents: [] }
+    }
+  )
+  const fileResource = vi.fn<NonNullable<ServerMcpApps["fileResource"]>>(
+    async (_scope, _owner, uri) => ({ contents: [{ uri, blob: "JVBERi0x" }] })
+  )
   const mcpApps: ServerMcpApps = {
     describe: vi.fn(async () => true),
     open,
     toolCall,
     callTool: vi.fn(async () => ({ content: [] })),
-    readResource: vi.fn(async () => ({ contents: [] })),
-    ...(setup.viewer === null ? {} : { serverView, serverResource }),
+    readResource,
+    ...(setup.viewer === null
+      ? {}
+      : { serverView, serverResource, fileResource }),
   }
   Object.defineProperty(runtime, "mcpApps", { value: mcpApps })
   const artifact = vi
@@ -558,6 +577,8 @@ function fileGateway(
     artifact,
     serverView,
     serverResource,
+    readResource,
+    fileResource,
   }
 }
 
@@ -567,6 +588,18 @@ async function openView(gateway: ReturnType<typeof app>, sessionId = "stored") {
   expect(response.status).toBe(200)
   return (await response.json()) as McpAppView
 }
+
+/** A view's POST to `path`, as the browser sends it. */
+function post(gateway: ReturnType<typeof app>, path: string, body?: unknown) {
+  return gateway.request(`${origin}${path}`, {
+    method: "POST",
+    headers: { origin, "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+}
+
+/** The sandbox origin a view reads its file addresses from. */
+const SANDBOX_ORIGIN = "https://sandbox.example.com"
 
 describe("MCP App files", () => {
   const offer = {
@@ -744,7 +777,7 @@ describe("MCP App files", () => {
     ).toBe(200)
   })
 
-  it("passes on only the runtime headers a file needs, and lets only a view that sent a pass read the answer", async () => {
+  it("passes on only the runtime headers a file needs, and lets no other origin read the answer, pass or not", async () => {
     const { gateway, read } = fileGateway({
       call: {
         ...reportCall,
@@ -779,7 +812,6 @@ describe("MCP App files", () => {
       headers: {
         ...LISTENER_HEADERS,
         ...passed,
-        "access-control-allow-origin": "*",
         "content-disposition": "inline; filename*=UTF-8''report.pdf",
         "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
         "content-type": "application/pdf",
@@ -920,6 +952,208 @@ describe("MCP App files", () => {
     ).toBe(200)
   })
 
+  it("forwards a view's read of its own file address from any origin, and reads every other address as before", async () => {
+    const { gateway, fileResource, readResource, logs } = fileGateway()
+    const { files } = await openView(gateway)
+    const address = files?.addresses.path ?? ""
+    const own = `${SANDBOX_ORIGIN}${address}`
+    const read = (uri: string) =>
+      post(gateway, `${appPath()}/resources/read`, { uri })
+
+    const forwarded = await read(own)
+
+    expect(forwarded.status).toBe(200)
+    expect(await forwarded.json()).toEqual({
+      contents: [{ uri: own, blob: "JVBERi0x" }],
+    })
+    expect(fileResource).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "researcher", sessionId: "stored" }),
+      { toolCallId: "call-1" },
+      own,
+      expect.any(AbortSignal)
+    )
+    // The call's server refuses all but its `ui://` resources, as it did.
+    const query = `?pass=${passOf(address)}`
+    for (const uri of [
+      `${origin}${appPath("stored", "call-2")}/files/path${query}`,
+      `${origin}${appPath("other")}/files/path${query}`,
+      `${origin}${appPath()}/files/path/more${query}`,
+      `${origin}${appPath()}/files/${query}`,
+      `${address}`,
+      `ftp://sandbox.example.com${address}`,
+      `${SANDBOX_ORIGIN}/report.pdf`,
+    ])
+      expect((await read(uri)).status, uri).toBe(403)
+    expect(fileResource).toHaveBeenCalledTimes(1)
+    expect((await read("ui://aos-ui/chart")).status).toBe(200)
+    expect(readResource).toHaveBeenLastCalledWith(
+      expect.anything(),
+      "call-1",
+      "ui://aos-ui/chart"
+    )
+    expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
+  })
+
+  it.each<
+    [
+      string,
+      Parameters<typeof fileGateway>[0],
+      Error | undefined,
+      403 | 503,
+      McpAppFileReadFailure,
+    ]
+  >([
+    [
+      "a file its route denies",
+      {},
+      new McpAppFileError("denied"),
+      403,
+      "denied",
+    ],
+    [
+      "a file past the cap",
+      {},
+      new McpAppFileError("tooLarge"),
+      403,
+      "tooLarge",
+    ],
+    [
+      "a file its server cannot reach",
+      {},
+      new McpAppFileError("unreachable"),
+      503,
+      "unreachable",
+    ],
+    [
+      "a call whose server is out of reach",
+      {},
+      new McpAppNotFoundError(),
+      503,
+      "unavailable",
+    ],
+    [
+      "a runtime that forwards no file read",
+      { viewer: null },
+      undefined,
+      503,
+      "unavailable",
+    ],
+  ])(
+    "answers a read of %s with its status and reason",
+    async (_, setup, failure, status, reason) => {
+      const { gateway, fileResource } = fileGateway(setup)
+      if (failure) fileResource.mockRejectedValue(failure)
+      const { files } = await openView(gateway)
+
+      const response = await post(gateway, `${appPath()}/resources/read`, {
+        uri: `${SANDBOX_ORIGIN}${files?.addresses.path}`,
+      })
+
+      expect(response.status).toBe(status)
+      expect(await response.json()).toEqual({
+        error: {
+          code: status === 403 ? "forbidden" : "temporarily_unavailable",
+          description: expect.any(String),
+          reason,
+        },
+      })
+    }
+  )
+
+  it("holds a forwarded read's turn until its answer is written or cancelled, and gives none to a waiter whose request ended", async () => {
+    useFakeClock()
+    const { gateway, fileResource } = fileGateway()
+    const { files } = await openView(gateway)
+    const read = (signal?: AbortSignal) =>
+      gateway.request(`${origin}${appPath()}/resources/read`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          uri: `${SANDBOX_ORIGIN}${files?.addresses.path}`,
+        }),
+        ...(signal ? { signal } : {}),
+      })
+
+    // Four answers not yet read hold the listener's four turns.
+    const answers = await Promise.all(Array.from({ length: 4 }, () => read()))
+    const gone = new AbortController()
+    const abandoned = read(gone.signal)
+    const waiting = read()
+    // The reads run on the real event loop until both wait on the clock,
+    // beside each turn's TTL.
+    while (vi.getTimerCount() < 6)
+      await new Promise((resolve) => setImmediate(resolve))
+    gone.abort()
+    expect(fileResource).toHaveBeenCalledTimes(4)
+
+    expect(JSON.parse(await answers[0]!.text())).toMatchObject({
+      contents: [{ blob: "JVBERi0x" }],
+    })
+    expect((await waiting).status).toBe(200)
+    expect(fileResource).toHaveBeenCalledTimes(5)
+    await answers[1]!.body!.cancel()
+    expect((await read()).status).toBe(200)
+    expect(fileResource).toHaveBeenCalledTimes(6)
+    expect((await abandoned).status).toBe(503)
+  })
+
+  it("stops a forwarded read whose request ended, writes nothing for one, and answers one past its 120 s as unreachable", async () => {
+    const clock = useFakeClock()
+    const { gateway, fileResource } = fileGateway()
+    const signals: AbortSignal[] = []
+    // A read that runs until its signal aborts.
+    fileResource.mockImplementation(
+      (_scope, _owner, _uri, signal) =>
+        new Promise((_resolve, reject) => {
+          signals.push(signal!)
+          signal!.addEventListener("abort", () => reject(signal!.reason))
+        })
+    )
+    const { files } = await openView(gateway)
+    const read = (signal?: AbortSignal) =>
+      gateway.request(`${origin}${appPath()}/resources/read`, {
+        method: "POST",
+        headers: { origin, "content-type": "application/json" },
+        body: JSON.stringify({
+          uri: `${SANDBOX_ORIGIN}${files?.addresses.path}`,
+        }),
+        ...(signal ? { signal } : {}),
+      })
+    const started = async (count: number) => {
+      while (signals.length < count)
+        await new Promise((resolve) => setImmediate(resolve))
+    }
+    const unreachable = async (response: Response | Promise<Response>) => {
+      const answer = await response
+      expect(answer.status).toBe(503)
+      expect(await answer.json()).toMatchObject({
+        error: { code: "temporarily_unavailable", reason: "unreachable" },
+      })
+    }
+
+    // A read that finishes after its request ended writes nothing.
+    const finished = new AbortController()
+    fileResource.mockImplementationOnce(async (_scope, _owner, uri) => {
+      finished.abort()
+      return { contents: [{ uri, blob: "JVBERi0x" }] }
+    })
+    await unreachable(read(finished.signal))
+    const gone = new AbortController()
+    const abandoned = read(gone.signal)
+    await started(1)
+    gone.abort()
+    expect(signals[0]!.aborted).toBe(true)
+    await unreachable(abandoned)
+    const slow = read()
+    await started(2)
+    await clock.advance(119_999)
+    expect(signals[1]!.aborted).toBe(false)
+    await clock.advance(1)
+
+    await unreachable(slow)
+    expect(signals[1]!.aborted).toBe(true)
+  })
+
   it("limits file reads and renewals apart from the view's own requests", async () => {
     // One instant, so every request falls in one window.
     const { gateway } = fileGateway({
@@ -1034,16 +1268,6 @@ describe("Published Artifact views", () => {
     sessionId: "stored",
     artifactId: "artifact-1",
   }
-  const post = (
-    gateway: ReturnType<typeof app>,
-    path: string,
-    body?: unknown
-  ) =>
-    gateway.request(`${origin}${path}`, {
-      method: "POST",
-      headers: { origin, "content-type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    })
 
   it("opens an Artifact in the viewer with its server-side name and type, and serves its bytes", async () => {
     const { gateway, serverView, serverResource, logs } = fileGateway()
@@ -1093,7 +1317,6 @@ describe("Published Artifact views", () => {
       status: 200,
       headers: {
         ...LISTENER_HEADERS,
-        "access-control-allow-origin": "*",
         "content-disposition": "inline; filename*=UTF-8''notes.md",
         "content-length": "7",
         "content-security-policy": SANDBOX,
@@ -1129,6 +1352,37 @@ describe("Published Artifact views", () => {
     const renewed = await post(gateway, `${artifactPath()}/files`)
     expect(await renewed.json()).toEqual(view.files)
     expect(JSON.stringify(logs.records())).not.toContain(passOf(address))
+  })
+
+  it("forwards its view's read of its own file address to the viewer, and refuses every other address", async () => {
+    const { gateway, fileResource, serverResource } = fileGateway()
+    const view = (await (
+      await gateway.request(`${origin}${artifactPath()}`)
+    ).json()) as McpAppView
+    const address = view.files?.addresses.path ?? ""
+    const own = `${SANDBOX_ORIGIN}${address}`
+    const read = (uri: string) =>
+      post(gateway, `${artifactPath()}/resources/read`, { uri })
+
+    const forwarded = await read(own)
+    expect(forwarded.status).toBe(200)
+    await forwarded.text()
+    expect(fileResource).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "researcher", sessionId: "stored" }),
+      { server: "aos-ui" },
+      own,
+      expect.any(AbortSignal)
+    )
+    const query = `?pass=${passOf(address)}`
+    for (const uri of [
+      `${origin}${artifactPath("stored", "artifact-2")}/files/path${query}`,
+      `${origin}${artifactPath("other")}/files/path${query}`,
+      `${origin}${appPath()}/files/path${query}`,
+      `${SANDBOX_ORIGIN}/notes.md`,
+    ])
+      expect((await read(uri)).status, uri).toBe(403)
+    expect(fileResource).toHaveBeenCalledTimes(1)
+    expect(serverResource).not.toHaveBeenCalled()
   })
 
   it("names the viewer's file by the file id the runtime read it with", async () => {

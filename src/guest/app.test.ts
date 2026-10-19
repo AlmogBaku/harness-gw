@@ -3,6 +3,7 @@
 import { SignJWT } from "jose"
 import { describe, expect, it, vi } from "vitest"
 
+import { useFakeClock } from "../../test/support/fake-clock"
 import { artifactIds } from "../../test/support/history-artifacts"
 import { captureLogs } from "../../test/support/log-capture"
 import { INTERACTION_PROTOCOL } from "../../protocol"
@@ -26,6 +27,7 @@ import { withHistoryImageArtifacts } from "../core/history-image-artifacts"
 import { providerSessionId } from "../core/ids"
 import { SessionCoordinator } from "../core/session-coordinator"
 import { READY_LINK } from "../core/link"
+import { McpAppFileError } from "../mcp-apps/client"
 import { McpAppNotFoundError } from "../mcp-apps/fallback"
 import { appFileSettings, type AppFileOptions } from "../routes/app-files"
 import { createGuestApp } from "./app"
@@ -789,9 +791,9 @@ describe("guest app", () => {
   })
 })
 
-/** One of the invited Session's calls' MCP App path on the guest listener. */
-function guestApp(toolCallId = "call-1") {
-  return `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/tool-calls/${toolCallId}/app`
+/** One of an invited Session's calls' MCP App path on the guest listener. */
+function guestApp(toolCallId = "call-1", ref = REF) {
+  return `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${ref}/tool-calls/${toolCallId}/app`
 }
 
 /** The invited Session's published Artifact's view path on the guest listener. */
@@ -825,6 +827,9 @@ function fileHarness(
     async () =>
       new Response("%PDF-1", { headers: { "content-type": "application/pdf" } })
   )
+  const fileResource = vi.fn<NonNullable<ServerMcpApps["fileResource"]>>(
+    async (_scope, _owner, uri) => ({ contents: [{ uri, blob: "JVBERi0x" }] })
+  )
   const mcpApps: ServerMcpApps = {
     describe: vi.fn(async () => true),
     open: vi.fn(async () => ({ html: "<p>view</p>", toolInput: input })),
@@ -837,6 +842,7 @@ function fileHarness(
     readResource: vi.fn(async () => ({ contents: [] })),
     serverView: vi.fn(async () => ({ html: "<p>viewer</p>" })),
     serverResource: vi.fn(async () => ({ contents: [] })),
+    fileResource,
   }
   const reader: ServerFileReader = realPath
     ? { read, realPath: async (_: SessionScope, path: string) => path }
@@ -846,7 +852,7 @@ function fileHarness(
     agentFolder: vi.fn(async () => "/srv/agent"),
     readFile: reader,
   })
-  return { ...subject, files, read }
+  return { ...subject, files, read, fileResource }
 }
 
 /** Opens `call-1`'s view with the invitation `invite`. */
@@ -951,6 +957,101 @@ describe("guest MCP App files", () => {
     const renewed = await renew(ORIGIN)
     expect(renewed.status).toBe(200)
     expect(((await renewed.json()) as McpAppFiles).expiresAt).toBe(ends)
+  })
+
+  it("forwards a view's read of its own file address, and tells the guest why one failed", async () => {
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const invite = await token(subject.invitationService)
+    const { files } = await openGuestView(subject, invite)
+    const uri = `https://sandbox.example.com${files?.addresses.path}`
+    const read = () =>
+      subject.app.request(`${guestApp()}/resources/read`, {
+        method: "POST",
+        headers: {
+          ...headers(invite, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ uri }),
+      })
+
+    const forwarded = await read()
+    expect(forwarded.status).toBe(200)
+    // Its answer holds the invitation's one turn until it is read.
+    await forwarded.text()
+    expect(subject.fileResource).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: AGENT, sessionId: REF }),
+      { toolCallId: "call-1" },
+      uri,
+      expect.any(AbortSignal)
+    )
+    subject.fileResource.mockRejectedValueOnce(new McpAppFileError("denied"))
+    const denied = await read()
+    expect(denied.status).toBe(403)
+    expect(await denied.json()).toEqual({
+      error: {
+        code: "forbidden",
+        description: "You do not have permission to do that.",
+        reason: "denied",
+      },
+    })
+  })
+
+  it("holds a stalled answer's turn for its invitation alone, refuses its third waiter, and ends it at 120 s", async () => {
+    const clock = useFakeClock()
+    const subject = fileHarness({ guest: { agentFolder: true } })
+    const OTHER = "other_guest_ref"
+    const invites: Record<string, string> = {
+      [REF]: await token(subject.invitationService),
+      [OTHER]: await scopedToken({ ref: OTHER }),
+    }
+    const addresses: Record<string, string> = {}
+    for (const ref of [REF, OTHER]) {
+      const opened = await subject.app.request(guestApp("call-1", ref), {
+        headers: headers(invites[ref]!),
+      })
+      addresses[ref] = (
+        (await opened.json()) as McpAppView
+      ).files!.addresses.path!
+    }
+    const read = (ref: string) =>
+      subject.app.request(`${guestApp("call-1", ref)}/resources/read`, {
+        method: "POST",
+        headers: {
+          ...headers(invites[ref]!, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          uri: `https://sandbox.example.com${addresses[ref]}`,
+        }),
+      })
+    const unreachable = async (response: Response) => {
+      expect(response.status).toBe(503)
+      expect(await response.json()).toMatchObject({
+        error: { code: "temporarily_unavailable", reason: "unreachable" },
+      })
+    }
+
+    // An answer its reader never takes holds its invitation's one turn.
+    const stalled = await read(REF)
+    expect(stalled.status).toBe(200)
+    // Two more of its reads wait; a third is refused at once.
+    const waiting = [read(REF), read(REF), read(REF)]
+    const refused = await Promise.race(waiting)
+    await unreachable(refused)
+    // Another invitation's read proceeds.
+    const other = await read(OTHER)
+    expect(other.status).toBe(200)
+    await other.text()
+    // Its waiters give up at 30 s; the stalled answer ends at 120 s, which
+    // frees its invitation's turn.
+    await clock.advance(120_000)
+    for (const response of waiting)
+      if ((await response) !== refused) await unreachable(await response)
+    await expect(stalled.text()).rejects.toMatchObject({ name: "TimeoutError" })
+    const after = await read(REF)
+    expect(after.status).toBe(200)
+    await after.text()
+    expect(subject.fileResource).toHaveBeenCalledTimes(3)
   })
 
   it("refuses an operator's pass, even beside a valid invitation", async () => {
