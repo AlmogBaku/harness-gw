@@ -1041,11 +1041,17 @@ reads the file route server to server
   resources is read, and anything else answers 403.
 - **Where it goes:** a plain `resources/read` with the same `uri`, to the
   server that owns the view: the call's own, or the configured viewer for an
-  Artifact (`ServerMcpApps.fileResource`). That server sends the address's
-  path and query to the gateway it is configured to reach, never to the
-  origin the `uri` names, and answers the bytes as a `blob`. The gateway does
-  not judge the pass; the file route does when the server reads it. The
-  gateway logs the address's path, never its query.
+  Artifact (`ServerMcpApps.fileResource`). The gateway does not judge the
+  pass, and logs the address's path, never its query. The server reaches the
+  lane the address's origin names, at the internal route it is configured
+  with for that origin, sends the pass, refuses an address without one, and
+  answers the bytes as a `blob`. A pass is bound to its listener's role, so
+  an address aimed at the other lane is refused there.
+- **Turns:** each read holds its whole file, so the operator listener
+  forwards at most 4 at once, and the guest listener 2, with 1 per invitation
+  (`src/routes/file-reads.ts`). The rest wait their turn in arrival order, at
+  most 32 waiting and each for at most 30 s; a read past either answers
+  `unreachable`.
 - **Size:** up to 64 MiB of decoded file content (`MAX_MCP_APP_FILE_BYTES`),
   so a `blob` of at most 4·⌈64 MiB / 3⌉ base64 characters. Every other read
   keeps its 2 MiB.
@@ -1072,7 +1078,7 @@ listeners:
 | ------------- | ------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `denied`      | 403    | `forbidden`               | The file route refused the read: it answered the server 403                                                                             |
 | `tooLarge`    | 403    | `forbidden`               | The file is past `MAX_MCP_APP_FILE_BYTES`, by the server's count or the gateway's                                                       |
-| `unreachable` | 503    | `temporarily_unavailable` | The view's server could not reach the file route                                                                                        |
+| `unreachable` | 503    | `temporarily_unavailable` | The view's server could not reach the file route, or the read found no turn on the listener                                             |
 | `unavailable` | 503    | `temporarily_unavailable` | The gateway could not forward it: a runtime that forwards none (OpenClaw's native relay), no server or viewer it may dial, or no answer |
 
 No other answer names a `reason`. The SDK client's `readMcpAppResource`
