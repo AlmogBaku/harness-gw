@@ -712,7 +712,9 @@ pieces of output is masked piece by piece.
 `present_artifact` is an ordinary MCP App tool call on the wire. Its view
 (`ui://aos-ui/artifact` by default, configurable) reads the file through the
 file addresses the gateway grants when the view opens (see
-[HTTP API](#http-api)); the tool's MCP server never opens the file.
+[HTTP API](#http-api)), with `resources/read` (see
+[Reading a view's files](#reading-a-views-files)); the tool's MCP server
+never opens the file, and reads it only from the file route.
 
 ### MEDIA: and trusted-delivery Artifacts
 
@@ -951,7 +953,7 @@ tool call's view and `…/artifacts/:artifactId/app` for a published Artifact's:
 | ------ | ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET`  | (the view itself)         | Open the view: its resource, CSP domains and file addresses                                                                               |
 | `POST` | `/tools/call`             | A tool call's view calls its own server's tools                                                                                           |
-| `POST` | `/resources/read`         | Read one of the view server's `ui://` resources                                                                                           |
+| `POST` | `/resources/read`         | Read one of the view server's `ui://` resources, or one of the view's own file addresses through that server                              |
 | `POST` | `/files`                  | Renew the view's file addresses                                                                                                           |
 | `GET`  | `/files/:argument?pass=…` | Read the file an argument names, with the pass its address holds; only an admitted pass's answer carries `Access-Control-Allow-Origin: *` |
 
@@ -1017,6 +1019,65 @@ segment percent-encoded with quotes included, so whitespace, `;`, `,` and
 quotes reach the header only encoded; one ending in `/`, which would name every
 path below it, is dropped. Send locations without their passes when they travel
 in a URL.
+
+### Reading a view's files
+
+A view reads its file the MCP Apps way, with `resources/read` (the ext-apps
+SDK's `readServerResource`) on one of its own file addresses, and never
+fetches the address itself: its sandbox origin may sit on a network the
+listener does not. The host sends the read to `POST …/app/resources/read`
+like any other, and the gateway forwards it to the view's own server, which
+reads the file route server to server
+(`src/routes/mcp-apps.ts`, `isOwnFileAddress` in `src/routes/app-files.ts`).
+
+- **What is forwarded:** a `uri` that is an absolute `http(s)` URL whose path
+  is the view's own file route and one argument, encoded as `open` wrote it:
+  `/api/v1/agents/:agentId/sessions/:sessionId/tool-calls/:toolCallId/app/files/:argument`
+  for a tool call's view, and `…/artifacts/:artifactId/app/files/path` for a
+  published Artifact's, with the request's own Agent, Session and subject.
+  Only the path is matched: the origin is whatever the browser used, and the
+  query, pass included, goes on unread. A listener serving no files forwards
+  none. Any other `uri` keeps the rule above: one of the view server's `ui://`
+  resources is read, and anything else answers 403.
+- **Where it goes:** a plain `resources/read` with the same `uri`, to the
+  server that owns the view: the call's own, or the configured viewer for an
+  Artifact (`ServerMcpApps.fileResource`). That server sends the address's
+  path and query to the gateway it is configured to reach, never to the
+  origin the `uri` names, and answers the bytes as a `blob`. The gateway does
+  not judge the pass; the file route does when the server reads it. The
+  gateway logs the address's path, never its query.
+- **Size:** up to 64 MiB of decoded file content (`MAX_MCP_APP_FILE_BYTES`),
+  so a `blob` of at most 4·⌈64 MiB / 3⌉ base64 characters. Every other read
+  keeps its 2 MiB.
+- **Failure:** the view's server fails a read with a JSON-RPC error whose
+  `data` is `{ "reason": … }` (`McpAppFileReadErrorDataSchema`). The gateway
+  passes that reason on; an error without one, or with one it does not know,
+  reads as `unavailable`.
+
+A failed read answers with the listener's usual error body plus the
+`reason` (`McpAppFileReadFailureSchema`, `ErrorResponseSchema`), on both
+listeners:
+
+```json
+{
+  "error": {
+    "code": "forbidden",
+    "description": "You do not have permission to do that.",
+    "reason": "denied"
+  }
+}
+```
+
+| `reason`      | Status | `code`                    | Meaning                                                                                                                                 |
+| ------------- | ------ | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `denied`      | 403    | `forbidden`               | The file route refused the read: it answered the server 403                                                                             |
+| `tooLarge`    | 403    | `forbidden`               | The file is past `MAX_MCP_APP_FILE_BYTES`, by the server's count or the gateway's                                                       |
+| `unreachable` | 503    | `temporarily_unavailable` | The view's server could not reach the file route                                                                                        |
+| `unavailable` | 503    | `temporarily_unavailable` | The gateway could not forward it: a runtime that forwards none (OpenClaw's native relay), no server or viewer it may dial, or no answer |
+
+No other answer names a `reason`. The SDK client's `readMcpAppResource`
+rejects such an answer with `McpAppFileReadError`, an `HgwClientError` that
+carries the `reason`.
 
 ### Stable origins
 
