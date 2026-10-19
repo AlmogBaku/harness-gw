@@ -290,7 +290,7 @@ export function createMcpAppsFallback(
       )
       return client.readResource(endpoint, uri)
     },
-    async fileResource(scope, owner, uri) {
+    async fileResource(scope, owner, uri, signal) {
       const toolCallId = "toolCallId" in owner ? owner.toolCallId : undefined
       const endpoint =
         "toolCallId" in owner
@@ -302,7 +302,7 @@ export function createMcpAppsFallback(
         { server: endpoint.name },
         { operation: "resources/read", path: new URL(uri).pathname }
       )
-      return client.readFile(endpoint, uri)
+      return client.readFile(endpoint, uri, signal)
     },
     reportSessionGone(agentId, providerSessionId) {
       live.delete(sessionKey(agentId, providerSessionId))

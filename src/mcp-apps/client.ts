@@ -83,9 +83,14 @@ export type McpAppClient = {
    * A view's read of its own file address, as the server answered it: up to
    * `MAX_MCP_APP_FILE_BYTES` of decoded content. It fails as
    * `McpAppFileError`, with the reason the server's JSON-RPC error gave in its
-   * `data`, `tooLarge` past the cap, and `unavailable` for any other failure.
+   * `data`, `tooLarge` past the cap, and `unavailable` for any other failure,
+   * the request's abort through `signal` included.
    */
-  readFile(server: McpAppEndpoint, uri: string): Promise<ReadResourceResult>
+  readFile(
+    server: McpAppEndpoint,
+    uri: string,
+    signal?: AbortSignal
+  ): Promise<ReadResourceResult>
   callTool(
     server: McpAppEndpoint,
     name: string,
@@ -316,9 +321,15 @@ export function createMcpAppClient(
     return meta
   }
 
-  const read = async (server: McpAppEndpoint, uri: string) =>
+  const read = async (
+    server: McpAppEndpoint,
+    uri: string,
+    signal?: AbortSignal
+  ) =>
     ReadResourceResultSchema.parse(
-      await request(server, (client) => client.readResource({ uri }))
+      await request(server, (client) =>
+        client.readResource({ uri }, signal && { signal })
+      )
     )
 
   async function readResource(server: McpAppEndpoint, uri: string) {
@@ -328,10 +339,14 @@ export function createMcpAppClient(
     return result
   }
 
-  async function readFile(server: McpAppEndpoint, uri: string) {
+  async function readFile(
+    server: McpAppEndpoint,
+    uri: string,
+    signal?: AbortSignal
+  ) {
     let result: ReadResourceResult
     try {
-      result = await read(server, uri)
+      result = await read(server, uri, signal)
     } catch (error) {
       const reason = McpAppFileReadErrorDataSchema.safeParse(
         error instanceof ProtocolError ? error.data : undefined

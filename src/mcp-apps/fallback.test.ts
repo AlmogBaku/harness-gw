@@ -65,8 +65,15 @@ type DeclaredUi = {
   listed?: Record<string, unknown>
 }
 
-/** A resource's answer: its blob or text, or a JSON-RPC error with `data`. */
-type Answer = { blob: string } | { text: string } | { error: unknown }
+/**
+ * A resource's answer: its blob or text, a JSON-RPC error with `data`, or
+ * none ever.
+ */
+type Answer =
+  | { blob: string }
+  | { text: string }
+  | { error: unknown }
+  | { hangs: true }
 
 /**
  * A Streamable HTTP MCP App server, answered in process through `fetch`; given
@@ -143,6 +150,7 @@ function appServer({
     }))
     for (const [uri, answer] of Object.entries(reads ?? {}))
       server.registerResource(uri, uri, {}, () => {
+        if ("hangs" in answer) return new Promise<never>(() => {})
         if ("error" in answer)
           throw new ProtocolError(
             ProtocolErrorCode.InternalError,
@@ -573,6 +581,21 @@ describe("a view's read of its own file address", () => {
     await expect(forecastFile(apps)).rejects.toEqual(
       new McpAppFileError(reason)
     )
+  })
+
+  it("stops its read once its request's signal aborts", async () => {
+    const { apps } = fallback({ reads: { [CALL_FILE]: { hangs: true } } })
+    const request = new AbortController()
+
+    const read = apps.fileResource!(
+      scope,
+      { toolCallId: "call-forecast" },
+      CALL_FILE,
+      request.signal
+    )
+    request.abort()
+
+    await expect(read).rejects.toEqual(new McpAppFileError("unavailable"))
   })
 
   it("answers a file up to its cap, past the 2 MiB every other read keeps", async () => {

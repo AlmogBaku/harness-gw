@@ -630,8 +630,9 @@ export type ServerMcpApps = {
    * view: the call's own, or the server this Session's Agent names `server`,
    * the viewer of a published Artifact. The file route judges the address's
    * pass when that server reads it. It answers up to `MAX_MCP_APP_FILE_BYTES`
-   * of content and fails as `McpAppFileError` with its reason. Absent where
-   * the runtime cannot forward one, as OpenClaw's native relay cannot.
+   * of content, stops when `signal` aborts, and fails as `McpAppFileError`
+   * with its reason. Absent where the runtime cannot forward one, as
+   * OpenClaw's native relay cannot.
    */
   fileResource?(
     scope: SessionScope,
