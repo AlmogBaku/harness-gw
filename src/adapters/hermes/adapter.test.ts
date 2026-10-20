@@ -454,9 +454,11 @@ describe("Hermes server adapter", () => {
     const reconciled = await adapter.pendingInteractions("researcher", "stored")
 
     expect(router.calls("session.resume")).toHaveLength(2)
+    // Named, or Hermes runs the resumed Session on its own launch surface.
     expect(router.calls("session.resume")[0]?.params).toEqual({
       session_id: "stored",
       profile: "researcher",
+      source: "aos-ui",
       omit_messages: true,
     })
     expect(reconciled).toMatchObject({
@@ -1515,6 +1517,7 @@ describe("Hermes server adapter", () => {
     expect(router.calls("session.resume")[0]?.params).toEqual({
       session_id: "stored/1",
       profile: "researcher",
+      source: "aos-ui",
       omit_messages: true,
     })
   })

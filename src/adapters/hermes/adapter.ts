@@ -163,10 +163,42 @@ type NativeRecord = Record<string, unknown>
  * 401 for a rejected credential. None of these change on a retry.
  */
 /**
- * The platform every Session the gateway creates is recorded under, so Hermes can tell
- * AOS Sessions apart and scope the `aos-ui` tools to them.
+ * The platform every Session the gateway opens runs as, so Hermes can tell AOS Sessions
+ * apart and scope the `aos-ui` tools to them. Hermes runs a Session opened without one on
+ * its own launch surface (`desktop` under `HERMES_DESKTOP=1`, `tui_gateway/server.py`
+ * `_resolve_session_platform`) and tells the Agent it now answers there, with that
+ * surface's file and widget guidance, so a Session begun elsewhere must be resumed with it.
  */
 const HERMES_SESSION_SOURCE = "aos-ui"
+
+/** The requests that open a live Session, each run as the platform its `source` names. */
+const OPENS_A_SESSION: ReadonlySet<string> = new Set([
+  "session.create",
+  "session.resume",
+])
+
+/**
+ * `transport`, naming the AOS platform on every request that opens a live Session, so no
+ * caller can open one Hermes runs as another surface.
+ */
+function openingAsAos(transport: HermesRpcTransport): HermesRpcTransport {
+  const request: HermesRpcTransport["request"] = (method, params, ...options) =>
+    transport.request(
+      method,
+      OPENS_A_SESSION.has(method)
+        ? { ...params, source: HERMES_SESSION_SOURCE }
+        : params,
+      ...options
+    )
+  return new Proxy(transport, {
+    get(target, key) {
+      if (key === "request") return request
+      const value: unknown = Reflect.get(target, key)
+      // Bound to the transport itself, whose methods read its private fields.
+      return typeof value === "function" ? value.bind(target) : value
+    },
+  })
+}
 
 const UNREADABLE_ARTIFACT_STATUS: ReadonlySet<number> = new Set([
   400, 403, 404, 413,
@@ -555,8 +587,10 @@ export class HermesServerAdapter implements ServerRuntime {
     listener: () => void
   ) => Promise<() => void>
 
+  private readonly transport: HermesRpcTransport
+
   constructor(
-    private readonly transport: HermesRpcTransport,
+    native: HermesRpcTransport,
     options: {
       sessionIdleMs?: number
       log?: Logger
@@ -573,6 +607,9 @@ export class HermesServerAdapter implements ServerRuntime {
       media?: HermesMediaOptions
     } = {}
   ) {
+    // Everything below, and every part it hands the transport to, opens
+    // Sessions through this one.
+    const transport = (this.transport = openingAsAos(native))
     this.#media = options.media ?? {}
     this.#log = options.log
     this.link = transport.link ?? READY_LINK
@@ -888,7 +925,6 @@ export class HermesServerAdapter implements ServerRuntime {
       payload = await this.transport.request("session.create", {
         profile: agentId,
         title,
-        source: HERMES_SESSION_SOURCE,
         close_on_disconnect: false,
         // Hermes writes a seeded row at create time with the launch profile's
         // model, not this Agent's; following the profile keeps the Agent's.
@@ -2221,7 +2257,6 @@ export class HermesServerAdapter implements ServerRuntime {
     try {
       payload = await this.transport.request("session.create", {
         profile,
-        source: HERMES_SESSION_SOURCE,
         close_on_disconnect: false,
         ...(title ? { title } : {}),
       })
