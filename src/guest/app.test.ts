@@ -709,6 +709,38 @@ describe("guest app", () => {
     expect(call.status).toBe(404)
   })
 
+  it("tells a guest view that a runtime takes no context for its model", async () => {
+    const subject = harness({ existing: true })
+    const mcpApps: ServerMcpApps = {
+      describe: vi.fn(async () => true),
+      open: vi.fn(async () => ({ html: "<p>view</p>" })),
+      callTool: vi.fn(async () => ({ content: [] })),
+      readResource: vi.fn(async () => ({ contents: [] })),
+    }
+    Object.assign(subject.runtime, { mcpApps })
+    const invite = await token(subject.invitationService)
+
+    const update = await subject.app.request(
+      `${ORIGIN}/api/v1/agents/${AGENT}/sessions/${REF}/tool-calls/call-1/app/ui/update-model-context`,
+      {
+        method: "POST",
+        headers: {
+          ...headers(invite, true),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ structuredContent: { city: "Paris" } }),
+      }
+    )
+
+    expect(update.status).toBe(400)
+    await expect(update.json()).resolves.toEqual({
+      error: {
+        code: "unsupported",
+        description: "That is not supported here.",
+      },
+    })
+  })
+
   it("holds one invitation to a shared audio allowance in both directions, apart from any other invitation", async () => {
     const subject = harness()
     const invite = await token(subject.invitationService)

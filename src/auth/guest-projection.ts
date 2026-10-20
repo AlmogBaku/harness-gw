@@ -96,6 +96,7 @@ const publicErrorCodes = [
   "rate_limited",
   "request_failed",
   "temporarily_unavailable",
+  "unsupported",
 ] as const
 
 export type GuestPublicErrorCode = (typeof publicErrorCodes)[number]
@@ -116,6 +117,7 @@ const publicErrorDescriptions: Record<GuestPublicErrorCode, string> = {
   request_failed: "The request could not be completed.",
   temporarily_unavailable:
     "The service is temporarily unavailable. Please try again.",
+  unsupported: "That is not supported here.",
 }
 
 export function guestErrorDescription(code: GuestPublicErrorCode) {

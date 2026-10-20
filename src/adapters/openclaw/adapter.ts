@@ -227,6 +227,7 @@ export class OpenClawServerAdapter implements ServerRuntime {
           this.#history.mcpToolCall(agentId, sessionKey, toolCallId),
       },
       start: () => this.#start(),
+      ...(options.logger ? { logger: options.logger } : {}),
     })
     if (options.gatewayOrigin && options.deviceToken)
       this.readFile = createOpenClawFileReader({

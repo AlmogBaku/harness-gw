@@ -21,7 +21,7 @@ import * as ids from "../core/ids"
 import { MAX_MCP_APP_HTML_BYTES } from "./client"
 
 /** How long a tool call waits to learn whether it opens a view. */
-const DESCRIBE_TIMEOUT_MS = 1_500
+export const DESCRIBE_TIMEOUT_MS = 1_500
 
 /**
  * Only an MCP tool can declare a view: another server's reads

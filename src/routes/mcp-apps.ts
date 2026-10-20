@@ -1,5 +1,6 @@
 import {
   CallToolResultSchema,
+  McpAppModelContextRequestSchema,
   McpAppResourceReadRequestSchema,
   McpAppToolCallRequestSchema,
   McpAppViewSchema,
@@ -13,7 +14,11 @@ import { coreFailure } from "../core/failures"
 import * as ids from "../core/ids"
 import type { ServerMcpApps, ServerRuntime } from "../core/runtime"
 import { McpAppFileError, McpAppResourceError } from "../mcp-apps/client"
-import { McpAppNotFoundError, McpAppRefusedError } from "../mcp-apps/fallback"
+import {
+  McpAppNotFoundError,
+  McpAppRefusedError,
+  McpAppUnsupportedError,
+} from "../mcp-apps/fallback"
 import { isUiResourceUri } from "../mcp-apps/policy"
 import { maskJson } from "../redaction"
 import {
@@ -69,7 +74,12 @@ function maskedView(view: McpAppView) {
   })
 }
 
-export type McpAppOperation = "open" | "tools/call" | "resources/read" | "files"
+export type McpAppOperation =
+  | "open"
+  | "tools/call"
+  | "resources/read"
+  | "ui/update-model-context"
+  | "files"
 
 export type McpAppOutcome =
   | { ok: true; body: unknown }
@@ -81,6 +91,7 @@ export type McpAppOutcome =
         | "not_found"
         | "forbidden"
         | "invalid_request"
+        | "unsupported"
         | "rate_limited"
         | "temporarily_unavailable"
       status: 400 | 403 | 404 | 429 | 503
@@ -95,6 +106,7 @@ const failure = {
   not_found: { ok: false, reason: "not_found", status: 404 },
   forbidden: { ok: false, reason: "forbidden", status: 403 },
   invalid_request: { ok: false, reason: "invalid_request", status: 400 },
+  unsupported: { ok: false, reason: "unsupported", status: 400 },
   rate_limited: { ok: false, reason: "rate_limited", status: 429 },
   unavailable: { ok: false, reason: "temporarily_unavailable", status: 503 },
 } as const satisfies Record<string, McpAppOutcome>
@@ -212,7 +224,9 @@ async function handleArtifactRequest(
   subject: Extract<AppSubject, { artifactId: string }>
 ): Promise<McpAppOutcome> {
   const { scope, operation, request, files } = input
-  if (operation === "tools/call") return failure.not_found
+  // Only a tool call's view has a call to act through.
+  if (operation === "tools/call" || operation === "ui/update-model-context")
+    return failure.not_found
   const artifact = await subject.read(scope)
   const serverView = apps.serverView?.bind(apps)
   const serverResource = apps.serverResource?.bind(apps)
@@ -319,6 +333,13 @@ export async function handleMcpAppRequest(
         : failure.not_found
     }
     const json = await boundedJson(request, MAX_REQUEST_BYTES)
+    if (operation === "ui/update-model-context") {
+      const body = McpAppModelContextRequestSchema.safeParse(json)
+      if (!body.success) return failure.invalid_request
+      if (!apps.updateModelContext) return failure.unsupported
+      await apps.updateModelContext(scope, toolCallId, body.data)
+      return { ok: true, body: {} }
+    }
     if (operation === "tools/call") {
       const body = McpAppToolCallRequestSchema.safeParse(json)
       if (!body.success) return failure.invalid_request
@@ -352,6 +373,7 @@ export async function handleMcpAppRequest(
     )
       return failure.not_found
     if (error instanceof McpAppRefusedError) return failure.forbidden
+    if (error instanceof McpAppUnsupportedError) return failure.unsupported
     return failure.unavailable
   }
 }
@@ -370,8 +392,9 @@ type McpAppRoute = [method: "get" | "post", path: string, McpAppOperation]
 
 /**
  * One listener's MCP App routes under its Session path: a tool call's view
- * and a published Artifact's view. Only a tool call's view calls tools;
- * `filePaths` are where each view reads a file, on a listener serving files.
+ * and a published Artifact's view. Only a tool call's view calls tools and
+ * updates the model's context; `filePaths` are where each view reads a file,
+ * on a listener serving files.
  */
 export function mcpAppRoutes(
   sessionPath: string,
@@ -382,6 +405,7 @@ export function mcpAppRoutes(
   return {
     routes: [
       ["post", `${call}/tools/call`, "tools/call"],
+      ["post", `${call}/ui/update-model-context`, "ui/update-model-context"],
       ...bases.flatMap((base): McpAppRoute[] => [
         ["get", base, "open"],
         ["post", `${base}/resources/read`, "resources/read"],

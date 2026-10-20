@@ -1,3 +1,4 @@
+import type { Logger } from "../../../lifecycle"
 import {
   CallToolResultSchema,
   McpAppViewSchema,
@@ -8,6 +9,8 @@ import type {
   ServerMcpApps,
   SessionScope,
 } from "../../core/runtime"
+import { logViewOpened } from "../../mcp-apps/audit"
+import { McpAppUnsupportedError } from "../../mcp-apps/fallback"
 import {
   OpenClawClientRequestError,
   type OpenClawGatewayClient,
@@ -71,6 +74,7 @@ export function createOpenClawMcpApps(input: {
   client: Pick<OpenClawGatewayClient, "request">
   authority: OpenClawMcpAppAuthority
   start(): Promise<void>
+  logger?: Logger
 }): ServerMcpApps {
   const viewParams = async (scope: SessionScope, toolCallId: string) => {
     await input.start()
@@ -130,15 +134,17 @@ export function createOpenClawMcpApps(input: {
       }
     },
     async open(scope, toolCallId, signal) {
-      const view = record(
-        await request(
-          "mcp.app.view",
-          await viewParams(scope, toolCallId),
-          signal
-        )
-      )
+      const [answer, call] = await Promise.all([
+        viewParams(scope, toolCallId).then((params) =>
+          request("mcp.app.view", params, signal)
+        ),
+        input.authority
+          .mcpToolCall(scope.agentId, scope.providerSessionId, toolCallId)
+          .catch(() => undefined),
+      ])
+      const view = record(answer)
       // `permissions` and `prefersBorder` are not part of the native view.
-      return parsed(NativeViewSchema, {
+      const opened = parsed(NativeViewSchema, {
         html: view?.html,
         ...(view?.csp === undefined ? {} : { csp: view.csp }),
         ...(record(view?.toolInput) ? { toolInput: view?.toolInput } : {}),
@@ -146,6 +152,12 @@ export function createOpenClawMcpApps(input: {
           ? {}
           : { toolResult: view.toolResult }),
       })
+      logViewOpened(input.logger, scope, {
+        toolCallId,
+        ...(call ? { server: call.server, tool: call.tool } : {}),
+        ...(opened.csp ? { csp: opened.csp } : {}),
+      })
+      return opened
     },
     async callTool(scope, toolCallId, name, args) {
       return parsed(
@@ -165,6 +177,15 @@ export function createOpenClawMcpApps(input: {
           uri,
         })
       )
+    },
+    // OpenClaw feeds a view's context to the Session's next turn, once, out of
+    // its transcript, for a view its `mcp.app.view` says may send one.
+    async updateModelContext(scope, toolCallId, context) {
+      const params = await viewParams(scope, toolCallId)
+      const view = record(await request("mcp.app.view", params))
+      if (view?.updateModelContextSupported !== true)
+        throw new McpAppUnsupportedError()
+      await request("mcp.app.updateModelContext", { ...params, ...context })
     },
     async toolCall(scope, toolCallId) {
       await input.start()

@@ -980,6 +980,35 @@ describe("server-side Hermes history projection", () => {
 
   // Credentials are masked by the credentials middleware, for every runtime; this adapter drops
   // only what the provider keeps to itself.
+  it("flags a stored call as an App where Hermes kept its view's call on the tool row", () => {
+    const parts = projectedMessages([
+      assistantToolCall("assistant-apps", [
+        {
+          toolCallId: "call-view",
+          name: "mcp__weather__show_forecast",
+          args: {},
+        },
+        { toolCallId: "call-plain", name: "mcp__weather__lookup", args: {} },
+      ]),
+      {
+        ...toolRow("call-view", "mcp__weather__show_forecast", "Sunny"),
+        display_metadata: {
+          mcp_app: { server: "weather", tool: "show_forecast", arguments: {} },
+        },
+      },
+      toolRow("call-plain", "mcp__weather__lookup", "12 C"),
+    ]).flatMap(({ content }) => content)
+
+    expect(
+      parts.flatMap((part) =>
+        part.type === "tool-call" ? [[part.toolCallId, part.app]] : []
+      )
+    ).toEqual([
+      ["call-view", true],
+      ["call-plain", undefined],
+    ])
+  })
+
   it("preserves inspectable tool data while dropping provider metadata", () => {
     const messages = projectHermesHistory([
       {

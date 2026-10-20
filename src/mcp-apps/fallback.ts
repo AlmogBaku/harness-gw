@@ -9,6 +9,7 @@ import type {
   ServerMcpApps,
   SessionScope,
 } from "../core/runtime"
+import { logViewOpened } from "./audit"
 import type { McpAppClient, McpAppEndpoint } from "./client"
 import {
   declaredResourceUri,
@@ -63,6 +64,14 @@ export class McpAppRefusedError extends Error {
   constructor() {
     super("MCP App request refused")
     this.name = "McpAppRefusedError"
+  }
+}
+
+/** A view asked for what this runtime does not do, such as feeding its model. */
+export class McpAppUnsupportedError extends Error {
+  constructor() {
+    super("MCP App request unsupported")
+    this.name = "McpAppUnsupportedError"
   }
 }
 
@@ -248,6 +257,12 @@ export function createMcpAppsFallback(
         uri,
       })
       const resource = await client.appResource(resolved.endpoint, uri)
+      logViewOpened(logger, scope, {
+        toolCallId,
+        server: resolved.server,
+        tool: resolved.tool,
+        ...(resource.csp ? { csp: resource.csp } : {}),
+      })
       return {
         ...resource,
         ...(call.input ? { toolInput: call.input } : {}),
@@ -278,7 +293,12 @@ export function createMcpAppsFallback(
         { server: endpoint.name },
         { operation: "open", uri }
       )
-      return client.appResource(endpoint, uri)
+      const resource = await client.appResource(endpoint, uri)
+      logViewOpened(logger, scope, {
+        server: endpoint.name,
+        ...(resource.csp ? { csp: resource.csp } : {}),
+      })
+      return resource
     },
     async serverResource(scope, server, uri) {
       const endpoint = await namedUiServer(scope, server, uri)

@@ -385,11 +385,15 @@ describe("MCP App routes", () => {
           contents: [{ uri: "ui://board/data", text: "{}" }],
         })
       }
+      if (path.endsWith("/app/ui/update-model-context")) {
+        expect(init?.method).toBe("POST")
+        return Response.json({})
+      }
       throw new Error(`Unexpected normalized request: ${path}`)
     })
   }
 
-  it("opens a view, calls its tools, and reads its resources by tool call", async () => {
+  it("opens a view, calls its tools, reads its resources, and updates its model context by tool call", async () => {
     const fetcher = appFetcher()
     const client = new HgwRemoteClient({ fetcher })
     client.adoptSessionOwnership(SESSION_ID, AGENT_ID)
@@ -414,13 +418,24 @@ describe("MCP App routes", () => {
         }
       )
     ).resolves.toMatchObject({ contents: [{ uri: "ui://board/data" }] })
+    const context = {
+      content: [{ type: "text" as const, text: "Launch board selected" }],
+      structuredContent: { board: "launch" },
+    }
+    await expect(
+      client.updateMcpAppModelContext(SESSION_ID, "call/1", context)
+    ).resolves.toEqual({})
 
     const base = `/api/v1/agents/researcher/sessions/opaque-session-1${APP_PATH}`
     expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual([
       base,
       `${base}/tools/call`,
       `${base}/resources/read`,
+      `${base}/ui/update-model-context`,
     ])
+    expect(JSON.parse(String(fetcher.mock.calls[3]?.[1]?.body))).toEqual(
+      context
+    )
     expect(JSON.parse(String(fetcher.mock.calls[1]?.[1]?.body))).toEqual({
       name: "refresh",
       arguments: { board: "launch" },

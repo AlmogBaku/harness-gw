@@ -127,8 +127,12 @@ export function registerGuestMcpAppRoutes(app: Hono, routes: GuestRoutes) {
         })
       })
   for (const [method, path, operation] of guestRoutes) {
+    // A view's tool call and its context for the model both act as the
+    // guest's own message does.
     const permission: GuestOperation =
-      operation === "tools/call" ? "messages:create" : "artifacts:read"
+      operation === "tools/call" || operation === "ui/update-model-context"
+        ? "messages:create"
+        : "artifacts:read"
     app[method](path, async (context) => {
       const identity = await routes.authenticate(context.req.raw)
       if (!identity) return invitationError()

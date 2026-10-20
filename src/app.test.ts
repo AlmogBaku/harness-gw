@@ -38,7 +38,11 @@ import {
 } from "./core/runtime"
 import { SessionCoordinator } from "./core/session-coordinator"
 import { McpAppFileError, McpAppResourceError } from "./mcp-apps/client"
-import { McpAppNotFoundError, McpAppRefusedError } from "./mcp-apps/fallback"
+import {
+  McpAppNotFoundError,
+  McpAppRefusedError,
+  McpAppUnsupportedError,
+} from "./mcp-apps/fallback"
 import { appFileSettings, type AppFileOptions } from "./routes/app-files"
 
 const origin = "http://127.0.0.1:3000"
@@ -410,6 +414,64 @@ describe("gateway", () => {
     expect(call.status).toBe(404)
     expect(await call.json()).toMatchObject({ error: { code: "not_found" } })
   })
+
+  const context = {
+    content: [{ type: "text", text: "Paris is selected" }],
+    structuredContent: { city: "Paris" },
+  }
+
+  it.each<[string, ServerMcpApps["updateModelContext"], number, unknown]>([
+    ["takes it", async () => undefined, 200, {}],
+    [
+      "takes none",
+      undefined,
+      400,
+      { error: { code: "unsupported", description: expect.any(String) } },
+    ],
+    [
+      "takes none for this view",
+      async () => {
+        throw new McpAppUnsupportedError()
+      },
+      400,
+      { error: { code: "unsupported", description: expect.any(String) } },
+    ],
+  ])(
+    "hands a view's context for the model to its call's runtime, which %s",
+    async (_case, updateModelContext, status, body) => {
+      const runtime = new HermesServerAdapter({ request: vi.fn() })
+      vi.spyOn(runtime, "getSession").mockImplementation(async (agentId, id) =>
+        session(agentId, id)
+      )
+      const update = updateModelContext && vi.fn(updateModelContext)
+      const mcpApps: ServerMcpApps = {
+        describe: vi.fn(async () => true),
+        open: vi.fn(async () => ({ html: "<p>view</p>" })),
+        callTool: vi.fn(async () => ({ content: [] })),
+        readResource: vi.fn(async () => ({ contents: [] })),
+        ...(update ? { updateModelContext: update } : {}),
+      }
+      Object.defineProperty(runtime, "mcpApps", { value: mcpApps })
+
+      const response = await app(runtime).request(
+        `${origin}/api/v1/agents/researcher/sessions/stored/tool-calls/call-1/app/ui/update-model-context`,
+        {
+          method: "POST",
+          headers: { origin, "content-type": "application/json" },
+          body: JSON.stringify(context),
+        }
+      )
+
+      expect(response.status).toBe(status)
+      expect(await response.json()).toEqual(body)
+      if (update)
+        expect(update).toHaveBeenCalledWith(
+          expect.objectContaining({ providerSessionId: "stored" }),
+          "call-1",
+          context
+        )
+    }
+  )
 })
 
 const REPORT = "/srv/agent/report.pdf"

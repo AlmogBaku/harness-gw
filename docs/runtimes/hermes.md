@@ -174,8 +174,22 @@ hermes -p PROFILE config set mcp_servers.NAME.url https://apps.example.test/mcp
 hermes -p PROFILE mcp test NAME
 ```
 
-Hermes drops a tool's `_meta.ui` and has no API to read an MCP resource, so the
-gateway reads the view itself. It lists the profile's servers through
+A Hermes that hosts views itself (`mcp.app.view`, `mcp.app.read_resource`,
+`mcp.app.call_tool` and `mcp.app.update_model_context`, from
+NousResearch/hermes-agent#132426, unreleased) serves each view and its requests
+over its own MCP connection, on the Session's live binding. The gateway asks it
+first on every connection. Such a Hermes holds a call's view once it stores
+the call's result, so the App card opens when the call completes, on any server
+the call ran on. A view keeps the `_meta.ui.domain` it declares only when the
+URL the gateway would dial its server at keys it (see
+[Stable origins](../protocol.md#stable-origins)). A view's `ui/update-model-context` then reaches the model with
+the Session's next user prompt, wrapped as the server's untrusted output and
+out of the transcript.
+
+An older Hermes answers those methods unknown (`-32601`), and the gateway reads
+that connection's views itself. A view's `ui/update-model-context` then answers
+`unsupported`: such a Hermes takes no prompt text its transcript leaves out. The
+gateway lists the profile's servers through
 `GET /api/mcp/servers?profile=PROFILE` and connects to their URLs with its own
 MCP client:
 

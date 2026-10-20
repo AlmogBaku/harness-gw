@@ -38,6 +38,7 @@ const WRITES: ReadonlySet<string> = new Set([
   "chat.send",
   "config.patch",
   "mcp.app.callTool",
+  "mcp.app.updateModelContext",
   "question.resolve",
   "sessions.abort",
   "sessions.create",

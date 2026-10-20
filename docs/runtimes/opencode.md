@@ -117,6 +117,10 @@ OpenCode keeps no App views, so the gateway reads the server list from
   result; the tool is never called again to recover more.
 - The tool shows as `mcp__NAME__TOOL`, matched against the configured server
   names even when a name contains `_`.
+- A view's `ui/update-model-context` answers `unsupported`. The v2 prompt the
+  gateway sends takes text, files and agents only, nothing the model reads but
+  the transcript leaves out; only the older `POST /session/{id}/message` takes
+  a `synthetic` text part.
 
 MCP tools are not callable from the v2 session engine at the pinned `1.19.0`
 (see above), so Apps appear once upstream exposes them. This fallback is
