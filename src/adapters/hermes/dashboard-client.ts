@@ -17,6 +17,20 @@ const MutationSnapshotSchema = z.object({
   runtime_generation: z.number().int().nonnegative().nullable(),
 })
 
+/**
+ * Hermes holds the Session but refused the write as not found. Its REST
+ * authority edits an unrouted row only under a source one of its own local
+ * surfaces writes (`hermes_state_mutation_binding.py` `authorize_history`),
+ * so a Session created under any other label, `aos-ui` among them, takes no
+ * fenced write.
+ */
+export class HermesSessionWriteRefusedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Hermes refused a write to a Session it holds", options)
+    this.name = "HermesSessionWriteRefusedError"
+  }
+}
+
 export type HermesDashboardHttp = (
   path: string,
   init?: {
@@ -192,18 +206,24 @@ export class HermesDashboardClient {
       expected_revision: snapshot.runtime_revision,
       expected_generation: snapshot.runtime_generation,
     }
-    if (method === "PATCH")
-      return this.http(`${path}?${scope}`, {
-        method,
-        body: { ...body, ...fence },
+    try {
+      if (method === "PATCH")
+        return await this.http(`${path}?${scope}`, {
+          method,
+          body: { ...body, ...fence },
+        })
+      // A DELETE carries its fence in the query (`sessions.py:847`).
+      const query = new URLSearchParams({
+        profile,
+        request_id: fence.request_id,
+        expected_revision: String(fence.expected_revision),
+        expected_generation: String(fence.expected_generation),
       })
-    // A DELETE carries its fence in the query (`sessions.py:847`).
-    const query = new URLSearchParams({
-      profile,
-      request_id: fence.request_id,
-      expected_revision: String(fence.expected_revision),
-      expected_generation: String(fence.expected_generation),
-    })
-    return this.http(`${path}?${query}`, { method })
+      return await this.http(`${path}?${query}`, { method })
+    } catch (error) {
+      if (error instanceof HermesHttpError && error.status === 404)
+        throw new HermesSessionWriteRefusedError({ cause: error })
+      throw error
+    }
   }
 }

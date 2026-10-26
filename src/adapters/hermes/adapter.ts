@@ -26,6 +26,7 @@ import {
 import {
   HermesAuthenticationError,
   HermesHttpError,
+  HermesRpcRejectedError,
   HermesRpcUncertainError,
   HermesUnavailableError,
   throwUnavailable,
@@ -72,7 +73,10 @@ import {
   HermesInteractionPublicError,
   HermesInteractions,
 } from "./interactions"
-import { HermesDashboardClient } from "./dashboard-client"
+import {
+  HermesDashboardClient,
+  HermesSessionWriteRefusedError,
+} from "./dashboard-client"
 import {
   branchLiveSession,
   HermesForkRefusedError,
@@ -998,6 +1002,9 @@ export class HermesServerAdapter implements ServerRuntime {
       cause instanceof HermesSessionConflictError
     )
       return failureOf("revision_conflict", cause)
+    // Hermes holds the Session and keeps refusing this write: no retry helps.
+    if (cause instanceof HermesSessionWriteRefusedError)
+      return failureOf("unsupported", cause)
     // A write that went out with no known result may have landed, so the
     // browser reconciles before trying it again. A read never reaches here:
     // each read path reports the same lost answer as an outage.
@@ -2323,16 +2330,83 @@ export class HermesServerAdapter implements ServerRuntime {
       throw new HermesUnavailableError()
     // The native patch owns every flag's side effects: pinning a Session also
     // clears `hidden` and exempts the row from auto-archive.
-    return this.#mutateSession((dashboard) =>
-      dashboard.updateSession(profile, storedId, patch)
-    )
+    try {
+      return await this.#mutateSession((dashboard) =>
+        dashboard.updateSession(profile, storedId, patch)
+      )
+    } catch (error) {
+      // The dashboard socket still renames and archives a Session the REST
+      // authority refuses; Hermes has no other route for a pin or read state.
+      if (!(error instanceof HermesSessionWriteRefusedError)) throw error
+      if ("title" in patch) return this.#retitle(profile, storedId, patch.title)
+      if ("archived" in patch)
+        return this.#socketWrite("session.archive", {
+          session_id: storedId,
+          profile,
+          archived: patch.archived,
+        })
+      throw error
+    }
   }
 
   async deleteSession(profile: string, storedId: string) {
     await this.getSession(profile, storedId)
-    return this.#mutateSession((dashboard) =>
-      dashboard.deleteSession(profile, storedId)
-    )
+    try {
+      return await this.#mutateSession((dashboard) =>
+        dashboard.deleteSession(profile, storedId)
+      )
+    } catch (error) {
+      if (!(error instanceof HermesSessionWriteRefusedError)) throw error
+    }
+    // The socket delete refuses a Session live in Hermes' process, this
+    // gateway's own idle binding included; a running one stays refused.
+    const live = this.#attachments.bound({
+      agentId: profile,
+      providerSessionId: storedId,
+      sessionId: storedId,
+    })
+    if (live && !this.#resumedRunning(profile, storedId)) {
+      await this.#closeNativeSession(live)
+      this.#attachments.invalidate(live)
+    }
+    await this.#socketWrite("session.delete", {
+      session_id: storedId,
+      profile,
+    })
+  }
+
+  /** Renames the Session through its live binding, rebound once if stale. */
+  async #retitle(profile: string, storedId: string, title: string) {
+    for (let attempt = 0; ; attempt += 1) {
+      const { liveSessionId } = await this.#requireResumedSession(
+        profile,
+        storedId
+      )
+      try {
+        return await this.#socketWrite("session.title", {
+          session_id: liveSessionId,
+          title,
+        })
+      } catch (error) {
+        if (!(error instanceof HermesSessionNotFoundError) || attempt > 0)
+          throw error
+        this.#attachments.invalidate(liveSessionId)
+      }
+    }
+  }
+
+  /** One Session write on the dashboard socket, its refusals mapped. */
+  async #socketWrite(method: string, params: Record<string, unknown>) {
+    try {
+      await this.transport.request(method, params)
+    } catch (error) {
+      if (isSessionGone(error)) throw new HermesSessionNotFoundError()
+      // "cannot delete an active session" (`tui_gateway/methods_session.py`).
+      if (error instanceof HermesRpcRejectedError && error.code === 4023)
+        throw new HermesSessionConflictError()
+      if (error instanceof HermesRpcUncertainError) throw error
+      throwUnavailable(error)
+    }
   }
 
   /** One dashboard write to a Session already read, its refusals mapped. */
@@ -2347,7 +2421,11 @@ export class HermesServerAdapter implements ServerRuntime {
         throw new HermesSessionNotFoundError()
       if (error instanceof HermesHttpError && error.status === 409)
         throw new HermesSessionConflictError()
-      if (error instanceof HermesRpcUncertainError) throw error
+      if (
+        error instanceof HermesRpcUncertainError ||
+        error instanceof HermesSessionWriteRefusedError
+      )
+        throw error
       throw new HermesUnavailableError()
     }
   }

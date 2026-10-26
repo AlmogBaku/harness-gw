@@ -1945,6 +1945,108 @@ describe("Hermes server adapter", () => {
     }
   )
 
+  describe("a Session whose REST write Hermes refuses", () => {
+    // Hermes holds the row but takes no fenced write under the label it was
+    // created with, as for every Session created as `aos-ui`.
+    function refusing(handlers: Parameters<typeof rpcRouter>[0] = {}) {
+      const router = rpcRouter({
+        "session.title": async () => ({}),
+        "session.archive": async () => ({}),
+        "session.close": async () => ({}),
+        "session.delete": async () => ({}),
+        "commands.catalog": async () => ({ pairs: [] }),
+        ...handlers,
+      })
+      const http = vi.fn(async (path: string, init?: { method?: string }) => {
+        if (init?.method) throw new HermesHttpError(404)
+        if (path.startsWith("/api/sessions/stored/mutation-snapshot?"))
+          return { exists: true, runtime_revision: 0, runtime_generation: 0 }
+        if (path.startsWith("/api/sessions/stored?"))
+          return { id: "stored", profile: "researcher", title: "Owned" }
+        throw new Error(`unexpected ${path}`)
+      })
+      return { router, adapter: new HermesServerAdapter({ ...router, http }) }
+    }
+    const socketWrites = (router: ReturnType<typeof rpcRouter>) =>
+      ["session.title", "session.archive", "session.delete"].flatMap((method) =>
+        router.calls(method).map(({ params }) => [method, params])
+      )
+
+    it.each([
+      [
+        { title: "Renamed" },
+        ["session.title", { session_id: "live-secret", title: "Renamed" }],
+      ],
+      [
+        { archived: true },
+        [
+          "session.archive",
+          { session_id: "stored", profile: "researcher", archived: true },
+        ],
+      ],
+    ] as const)(
+      "writes %o on the dashboard socket instead",
+      async (patch, write) => {
+        const { router, adapter } = refusing()
+
+        await adapter.updateSession("researcher", "stored", patch)
+
+        expect(socketWrites(router)).toEqual([write])
+      }
+    )
+
+    it.each([{ pinned: true }, { unread: true }])(
+      "refuses %o as a change Hermes cannot store",
+      async (patch) => {
+        const { router, adapter } = refusing()
+
+        const failure = await adapter
+          .updateSession("researcher", "stored", patch)
+          .catch((cause: unknown) => cause)
+
+        expect(adapter.publicError(failure)?.kind).toBe("unsupported")
+        expect(socketWrites(router)).toEqual([])
+      }
+    )
+
+    it("deletes on the dashboard socket once the gateway's own idle binding is closed", async () => {
+      const { router, adapter } = refusing()
+      await adapter.slashCommands("researcher", "stored")
+
+      await adapter.deleteSession("researcher", "stored")
+
+      expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+        [{ session_id: "live-secret" }]
+      )
+      expect(socketWrites(router)).toEqual([
+        ["session.delete", { session_id: "stored", profile: "researcher" }],
+      ])
+    })
+
+    it("never closes a running Session, and reports Hermes refusing its delete as a conflict", async () => {
+      const { router, adapter } = refusing({
+        "session.resume": async () => ({
+          session_id: "live-secret",
+          running: true,
+        }),
+        "session.delete": async () => {
+          throw new HermesRpcRejectedError(
+            4023,
+            "cannot delete an active session"
+          )
+        },
+      })
+      await adapter.slashCommands("researcher", "stored")
+
+      const failure = await adapter
+        .deleteSession("researcher", "stored")
+        .catch((cause: unknown) => cause)
+
+      expect(adapter.publicError(failure)?.kind).toBe("revision_conflict")
+      expect(router.calls("session.close")).toEqual([])
+    })
+  })
+
   it("declares the native pin and read state available, and read state temporarily unavailable during an outage", async () => {
     const ready = new HermesServerAdapter({
       request: vi.fn(async () => ({ profiles: [profile()] })),
