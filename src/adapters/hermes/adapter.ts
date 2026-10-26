@@ -630,7 +630,6 @@ export class HermesServerAdapter implements ServerRuntime {
       const dashboard = this.#dashboard
       const apps = createHermesMcpApps({
         servers: (profile) => dashboard.listMcpServers(profile),
-        rawHistory: (scope) => this.#rawHistory(scope),
         scanHistory: (scope, find) => this.#scanRawHistory(scope, find),
         ...options.mcp,
         // A view's requests name the live Session this socket resumed.

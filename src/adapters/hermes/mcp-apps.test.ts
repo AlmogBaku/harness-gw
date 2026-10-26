@@ -206,6 +206,8 @@ const OLDER: Record<string, RpcHandler> = Object.fromEntries(
  * live as `live` names it, `live-1` by default, or `bound` already; the
  * gateway's own client reaches the weather server over HTTP and serves a view
  * of its own, unless `oauth` has the server sign in, which the gateway cannot.
+ * The Session's raw rows are `pages`, newest page first, as the adapter pages
+ * back through them.
  */
 function hermesApps(
   answers: Record<string, RpcHandler>,
@@ -213,10 +215,12 @@ function hermesApps(
     live = async () => "live-1",
     bound = () => "live-1",
     oauth = false,
+    pages = [ROWS],
   }: {
     live?: () => Promise<string>
     bound?: () => string | undefined
     oauth?: boolean
+    pages?: readonly (readonly unknown[])[]
   } = {}
 ) {
   const router = rpcRouter(answers)
@@ -250,8 +254,13 @@ function hermesApps(
         },
       ],
     }),
-    rawHistory: async () => ROWS,
-    scanHistory: async (_scope, find) => find(ROWS),
+    scanHistory: async (_scope, find) => {
+      for (const page of pages) {
+        const found = find(page)
+        if (found !== undefined) return found
+      }
+      return undefined
+    },
     client,
     logger: logs.logger,
     host: { transport: router, live, bound, invalidate },
@@ -532,5 +541,26 @@ describe("the Hermes MCP App host", () => {
     await router.connection.restored()
     await mcpApps.open(scope, "call-1")
     expect(asked("mcp.app.view")).toHaveLength(2)
+  })
+
+  it("hosts the view of a call pages before the newest, with the result stored after it", async () => {
+    const { mcpApps } = hermesApps(OLDER, {
+      pages: [
+        [
+          { role: "tool", tool_call_id: "call-1", content: HANDLER_JSON },
+          { role: "user", content: "Thanks" },
+        ],
+        ROWS,
+      ],
+    })
+
+    await expect(mcpApps.open(scope, "call-1")).resolves.toMatchObject({
+      html: "<p>gateway view</p>",
+      toolInput: { city: "Paris" },
+      toolResult: storedHermesToolResult(HANDLER_JSON, false),
+    })
+    await expect(mcpApps.open(scope, "call-unknown")).rejects.toBeInstanceOf(
+      McpAppNotFoundError
+    )
   })
 })

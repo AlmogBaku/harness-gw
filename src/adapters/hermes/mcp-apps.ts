@@ -241,7 +241,6 @@ type RelayedView = (
 
 export function createHermesMcpApps(input: {
   servers: (profile: string) => Promise<unknown>
-  rawHistory: (scope: SessionScope) => Promise<readonly unknown[]>
   /** The first answer `find` gives, reading the Session's raw rows page by page. */
   scanHistory<T>(
     scope: SessionScope,
@@ -261,10 +260,16 @@ export function createHermesMcpApps(input: {
   const fallback = createMcpAppsFallback(
     {
       servers: (scope) => servers.get(scope.agentId),
+      // A long Session's call sits pages past the newest one. Its result is
+      // stored after it, so the pages read up to the call's hold that too.
       async storedCall(scope, toolCallId) {
-        const rows = await input.rawHistory(scope)
+        let read: readonly unknown[] = []
+        const rows = await input.scanHistory(scope, (page) => {
+          read = [...page, ...read]
+          return nativeToolCall(page, toolCallId) && read
+        })
         const resolve = await names.load(scope.agentId)
-        return storedCall(rows, toolCallId, resolve)
+        return rows && storedCall(rows, toolCallId, resolve)
       },
     },
     input.client,
