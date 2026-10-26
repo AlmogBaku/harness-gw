@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { SPEECH_CALL_MS } from "../../core/limits"
-import { HermesDashboardClient } from "./dashboard-client"
+import {
+  HermesDashboardClient,
+  type HermesDashboardHttp,
+} from "./dashboard-client"
 
 describe("Hermes dashboard client", () => {
   it("wraps the dashboard Session routes without adding adapter behavior", async () => {
@@ -11,10 +14,6 @@ describe("Hermes dashboard client", () => {
     await client.listSessions("research profile", 50, 10)
     await client.getSession("research profile", "stored/1")
     await client.getSessionMessages("research profile", "stored/1", 200, 20)
-    await client.updateSession("research profile", "stored/1", {
-      title: "Renamed",
-    })
-    await client.deleteSession("research profile", "stored/1")
 
     expect(http.mock.calls).toEqual([
       [
@@ -24,18 +23,73 @@ describe("Hermes dashboard client", () => {
       [
         "/api/sessions/stored%2F1/messages?profile=research+profile&limit=200&offset=20&order=latest&include_compacted=true",
       ],
-      [
-        "/api/sessions/stored%2F1?profile=research%20profile",
-        {
-          method: "PATCH",
-          body: { title: "Renamed", profile: "research profile" },
-        },
-      ],
-      [
-        "/api/sessions/stored%2F1?profile=research%20profile",
-        { method: "DELETE", body: undefined },
-      ],
     ])
+  })
+
+  it("fences each Session write with the counters Hermes reports and a fresh request id", async () => {
+    const http = vi.fn<HermesDashboardHttp>(async (path) =>
+      path.includes("/mutation-snapshot")
+        ? {
+            session_id: "stored/1",
+            exists: true,
+            runtime_revision: 7,
+            runtime_generation: 3,
+          }
+        : { ok: true }
+    )
+    const client = new HermesDashboardClient(http)
+
+    await client.updateSession("research profile", "stored/1", {
+      title: "Renamed",
+    })
+    await client.deleteSession("research profile", "stored/1")
+
+    const [snapshot, patch, , remove] = http.mock.calls
+    expect(snapshot).toEqual([
+      "/api/sessions/stored%2F1/mutation-snapshot?profile=research%20profile",
+    ])
+    expect(patch).toEqual([
+      "/api/sessions/stored%2F1?profile=research%20profile",
+      {
+        method: "PATCH",
+        body: {
+          title: "Renamed",
+          profile: "research profile",
+          request_id: expect.any(String),
+          expected_revision: 7,
+          expected_generation: 3,
+        },
+      },
+    ])
+    // A DELETE has no body, so its fence rides in the query.
+    const url = new URL(remove![0], "http://hermes.test")
+    expect(url.pathname).toBe("/api/sessions/stored%2F1")
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      profile: "research profile",
+      request_id: expect.any(String),
+      expected_revision: "7",
+      expected_generation: "3",
+    })
+    expect(remove![1]).toEqual({ method: "DELETE" })
+    // Hermes refuses a reused id whose write differs.
+    expect(url.searchParams.get("request_id")).not.toBe(
+      (patch![1]!.body as { request_id: string }).request_id
+    )
+  })
+
+  it("sends no write to a Session gone since it was read", async () => {
+    const http = vi.fn(async () => ({
+      session_id: "stored/1",
+      exists: false,
+      runtime_revision: 0,
+      runtime_generation: null,
+    }))
+    const client = new HermesDashboardClient(http)
+
+    await expect(
+      client.deleteSession("research profile", "stored/1")
+    ).rejects.toMatchObject({ status: 404 })
+    expect(http).toHaveBeenCalledTimes(1)
   })
 
   it("wraps artifact and native audio routes with response bounds", async () => {
