@@ -3,8 +3,10 @@ import { describe, expect, it, vi } from "vitest"
 import { SPEECH_CALL_MS } from "../../core/limits"
 import {
   HermesDashboardClient,
+  HermesSessionWriteRefusedError,
   type HermesDashboardHttp,
 } from "./dashboard-client"
+import { HermesHttpError } from "./http"
 
 describe("Hermes dashboard client", () => {
   it("wraps the dashboard Session routes without adding adapter behavior", async () => {
@@ -90,6 +92,19 @@ describe("Hermes dashboard client", () => {
       client.deleteSession("research profile", "stored/1")
     ).rejects.toMatchObject({ status: 404 })
     expect(http).toHaveBeenCalledTimes(1)
+  })
+
+  it("tells a write Hermes refuses for a Session it holds apart from a gone Session", async () => {
+    const http = vi.fn<HermesDashboardHttp>(async (path) => {
+      if (path.includes("/mutation-snapshot"))
+        return { exists: true, runtime_revision: 0, runtime_generation: 0 }
+      throw new HermesHttpError(404)
+    })
+    const client = new HermesDashboardClient(http)
+
+    await expect(
+      client.updateSession("research profile", "stored/1", { pinned: true })
+    ).rejects.toBeInstanceOf(HermesSessionWriteRefusedError)
   })
 
   it("wraps artifact and native audio routes with response bounds", async () => {
