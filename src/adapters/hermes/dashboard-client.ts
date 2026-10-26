@@ -1,5 +1,21 @@
+import { randomUUID } from "node:crypto"
+
+import { z } from "zod"
+
 import { SPEECH_CALL_MS } from "../../core/limits"
 import type { SessionPatch } from "../../core/runtime"
+import { HermesHttpError } from "./http"
+
+/**
+ * The counters Hermes fences a Session write on
+ * (`hermes_cli/web_routers/sessions.py:586`). A stored Session always has an
+ * execution generation; an absent one answers `exists: false`.
+ */
+const MutationSnapshotSchema = z.object({
+  exists: z.boolean(),
+  runtime_revision: z.number().int().nonnegative(),
+  runtime_generation: z.number().int().nonnegative().nullable(),
+})
 
 export type HermesDashboardHttp = (
   path: string,
@@ -149,15 +165,45 @@ export class HermesDashboardClient {
     return this.http(`/api/mcp/servers?${query}`)
   }
 
-  private mutateSession(
+  /**
+   * Hermes commits a Session write only against the revision and execution
+   * generation it was prepared on, under the writer's own request id, and
+   * refuses one without them as a stale client (409,
+   * `hermes_cli/web_server_sessions.py:269`). The fence is read just before
+   * the write, as Hermes' own client does, so a change in between still
+   * refuses it as a conflict.
+   */
+  private async mutateSession(
     profile: string,
     storedId: string,
     method: "PATCH" | "DELETE",
-    body?: unknown
+    body?: Record<string, unknown>
   ) {
-    return this.http(
-      `/api/sessions/${encodeURIComponent(storedId)}?profile=${encodeURIComponent(profile)}`,
-      { method, body }
+    const path = `/api/sessions/${encodeURIComponent(storedId)}`
+    const scope = `profile=${encodeURIComponent(profile)}`
+    const snapshot = MutationSnapshotSchema.parse(
+      await this.http(`${path}/mutation-snapshot?${scope}`)
     )
+    // Gone since the caller read it, as the write itself would answer.
+    if (!snapshot.exists || snapshot.runtime_generation === null)
+      throw new HermesHttpError(404)
+    const fence = {
+      request_id: randomUUID(),
+      expected_revision: snapshot.runtime_revision,
+      expected_generation: snapshot.runtime_generation,
+    }
+    if (method === "PATCH")
+      return this.http(`${path}?${scope}`, {
+        method,
+        body: { ...body, ...fence },
+      })
+    // A DELETE carries its fence in the query (`sessions.py:847`).
+    const query = new URLSearchParams({
+      profile,
+      request_id: fence.request_id,
+      expected_revision: String(fence.expected_revision),
+      expected_generation: String(fence.expected_generation),
+    })
+    return this.http(`${path}?${query}`, { method })
   }
 }

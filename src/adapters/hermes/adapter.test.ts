@@ -1921,6 +1921,8 @@ describe("Hermes server adapter", () => {
       const http = vi.fn(async (path: string) => {
         if (path.startsWith("/api/sessions/stored%2F1?"))
           return { id: "stored/1", profile: "researcher", title: "One" }
+        if (path.startsWith("/api/sessions/stored%2F1/mutation-snapshot?"))
+          return { exists: true, runtime_revision: 4, runtime_generation: 2 }
         throw new Error(`unexpected ${path}`)
       })
       const adapter = new HermesServerAdapter({ request: vi.fn(), http })
@@ -1929,7 +1931,16 @@ describe("Hermes server adapter", () => {
 
       expect(http).toHaveBeenLastCalledWith(
         "/api/sessions/stored%2F1?profile=researcher",
-        { method: "PATCH", body: { ...patch, profile: "researcher" } }
+        {
+          method: "PATCH",
+          body: {
+            ...patch,
+            profile: "researcher",
+            request_id: expect.any(String),
+            expected_revision: 4,
+            expected_generation: 2,
+          },
+        }
       )
     }
   )
@@ -3280,8 +3291,14 @@ describe("Hermes server adapter", () => {
           baseUrl: "http://hermes.test",
           credentials: async () => ({}),
           fetcher: asFetch(
-            vi.fn(async (_url: FetchInput, init?: RequestInit) => {
+            vi.fn(async (url: FetchInput, init?: RequestInit) => {
               if (init?.method === "PATCH") throw new TypeError("fetch failed")
+              if (String(url).includes("/mutation-snapshot"))
+                return Response.json({
+                  exists: true,
+                  runtime_revision: 1,
+                  runtime_generation: 1,
+                })
               return Response.json({
                 id: "stored",
                 profile: "researcher",
