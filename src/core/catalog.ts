@@ -196,9 +196,17 @@ export function createCatalog({
       await runtime.updateSession(agentId, target.providerSessionId, {
         unread: false,
       })
-    } catch {
-      // A Session the provider has not created yet rejects the write. Read
-      // state is advisory: the optimistic row stands and a later list corrects.
+    } catch (cause) {
+      // Read state is advisory: the optimistic row stands and a later list
+      // corrects. A Session the provider has not stored yet, or cannot reach
+      // now, refuses as unavailable; any other refusal loses the read, which
+      // nothing else would show.
+      const failure = coreFailure(cause) ?? runtime.publicError(cause)
+      if (failure?.kind === "unavailable") return
+      logger.warn(
+        { agentId, sessionId, errorCode: failure?.code, err: cause },
+        "catalog.mark_read.failed"
+      )
     }
   }
 
