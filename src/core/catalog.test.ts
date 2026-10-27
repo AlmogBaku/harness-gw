@@ -6,6 +6,7 @@ import type { AgentCatalogEntry, Session } from "../../protocol"
 import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import { createCatalog } from "./catalog"
+import { failureOf, type PublicFailure } from "./failures"
 import * as ids from "./ids"
 import { READY_LINK } from "./link"
 import type { ServerRuntime } from "./runtime"
@@ -38,13 +39,14 @@ function harness(
     subscribeCatalogChanges?: ServerRuntime["subscribeCatalogChanges"]
     searchSessions?: ServerRuntime["searchSessions"]
     updateAgent?: ServerRuntime["updateAgent"]
+    publicError?: (cause: unknown) => PublicFailure | undefined
   } = {}
 ) {
   const updateSession = vi.fn(options.updateSession ?? (async () => undefined))
   // The runtime surface is wide; these tests reach for the list, the row, and
   // the change feed.
   const runtime = {
-    publicError: () => undefined,
+    publicError: options.publicError ?? (() => undefined),
     link: READY_LINK,
     subscribeCatalogChanges: options.subscribeCatalogChanges,
     searchSessions: options.searchSessions,
@@ -61,6 +63,7 @@ function harness(
     updateAgent: options.updateAgent,
   } as unknown as ServerRuntime
   const rows = createSessionRows()
+  const logs = captureLogs()
   const catalog = createCatalog({
     runtime,
     coordinator: {
@@ -68,9 +71,9 @@ function harness(
       endIfGone: () => false,
     },
     rows,
-    logger: captureLogs().logger,
+    logger: logs.logger,
   })
-  return { catalog, rows, updateSession }
+  return { catalog, rows, updateSession, logs }
 }
 
 describe("createCatalog", () => {
@@ -116,21 +119,40 @@ describe("createCatalog", () => {
     expect(titles).toEqual(["Weekly digest", "Renamed elsewhere"])
   })
 
-  it("keeps the optimistic read row when the provider rejects the write", async () => {
-    const { catalog, rows, updateSession } = harness({
-      updateSession: async () => {
-        throw new Error("Session not found")
-      },
-    })
-    rows.rememberList([row({ unread: true })])
+  it.each([
+    // A Session not stored yet, or a provider out of reach: nothing is lost.
+    { kind: "unavailable", logged: [] },
+    {
+      kind: "unsupported",
+      logged: [["catalog.mark_read.failed", "unsupported"]],
+    },
+  ] as const)(
+    "keeps the optimistic read row when the provider refuses the write as $kind",
+    async ({ kind, logged }) => {
+      const refusal = new Error("refused")
+      const { catalog, rows, updateSession, logs } = harness({
+        updateSession: async () => {
+          throw refusal
+        },
+        publicError: (cause) =>
+          cause === refusal ? failureOf(kind, cause) : undefined,
+      })
+      rows.rememberList([row({ unread: true })])
 
-    await expect(catalog.markRead(AGENT, SESSION)).resolves.toBeUndefined()
+      await expect(catalog.markRead(AGENT, SESSION)).resolves.toBeUndefined()
 
-    expect(updateSession).toHaveBeenCalledWith(AGENT, `stored-${SESSION}`, {
-      unread: false,
-    })
-    expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
-  })
+      expect(updateSession).toHaveBeenCalledWith(AGENT, `stored-${SESSION}`, {
+        unread: false,
+      })
+      expect(rows.get(AGENT, SESSION)?.unread).toBe(false)
+      expect(
+        logs
+          .records()
+          .filter(({ level }) => level === "warn")
+          .map(({ message, fields }) => [message, fields.errorCode])
+      ).toEqual(logged)
+    }
+  )
 
   it.each([
     {
