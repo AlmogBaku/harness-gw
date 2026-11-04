@@ -281,22 +281,21 @@ describe("projectHermesToolCall", () => {
 describe("projectHermesToolOutcome", () => {
   it("classifies a semantic failure envelope and the native flag alike", () => {
     expect(
-      projectHermesToolOutcome("call-1", "read_file", { success: false })
-        .isError
+      projectHermesToolOutcome("read_file", { success: false }).isError
     ).toBe(true)
     expect(
-      projectHermesToolOutcome("call-1", "read_file", "contents", true).isError
+      projectHermesToolOutcome("read_file", "contents", true).isError
     ).toBe(true)
-    expect(
-      projectHermesToolOutcome("call-1", "read_file", "contents").isError
-    ).toBe(false)
+    expect(projectHermesToolOutcome("read_file", "contents").isError).toBe(
+      false
+    )
   })
 
   it("keeps a failed command's hint beside its exit code", () => {
     const hint =
       "Exit 124: the command hit its timeout. Raise timeout= (foreground max 600s)."
     expect(
-      projectHermesToolOutcome("call-1", "terminal", {
+      projectHermesToolOutcome("terminal", {
         output: "[Command timed out after 2s]",
         exit_code: 124,
         error: null,
@@ -317,62 +316,32 @@ describe("projectHermesToolOutcome", () => {
       `${JSON.stringify(value)}\n</untrusted_tool_result>`
     const chart = { type: "bar", title: "Revenue", data: [{ q: "Q1", v: 3 }] }
     expect(
-      projectHermesToolOutcome(
-        "call-2b",
-        "render_chart",
-        wrapped("render_chart", chart)
-      ).result
+      projectHermesToolOutcome("render_chart", wrapped("render_chart", chart))
+        .result
     ).toEqual(chart)
   })
 
-  it("collapses a text_to_speech receipt to a status and trusts its media, unless media artifacts are off", () => {
+  it("collapses a text_to_speech receipt to a status that names no path", () => {
     const audio = "/home/alice/voice/brief.mp3"
-    const receipt = {
-      success: true,
-      file_path: audio,
-      file_paths: [audio],
-      media_tag: `MEDIA:${audio}`,
-    }
     expect(
-      projectHermesToolOutcome("call-4", "text_to_speech", receipt, false, {
-        mediaArtifacts: false,
+      projectHermesToolOutcome("text_to_speech", {
+        success: true,
+        file_path: audio,
+        file_paths: [audio],
+        media_tag: `MEDIA:${audio}`,
       })
-    ).toEqual({
-      isError: false,
-      result: { status: "completed" },
-      parts: [],
-      trustedMedia: [],
-    })
-    const outcome = projectHermesToolOutcome(
-      "call-4",
-      "text_to_speech",
-      receipt
-    )
-    expect(outcome.result).toEqual({ status: "completed" })
-    expect(outcome.trustedMedia).toEqual([audio])
-    expect(outcome.parts).toMatchObject([
-      {
-        type: "data",
-        name: "hgw.artifact",
-        data: { filename: "brief.mp3", mimeType: "audio/mpeg" },
-      },
-    ])
+    ).toEqual({ isError: false, result: { status: "completed" } })
     expect(
-      projectHermesToolOutcome("call-5", "text_to_speech", {
+      projectHermesToolOutcome("text_to_speech", {
         success: false,
         error: "voice unavailable",
       })
-    ).toMatchObject({
-      isError: true,
-      result: { status: "failed" },
-      parts: [],
-      trustedMedia: [],
-    })
+    ).toEqual({ isError: true, result: { status: "failed" } })
   })
 
   it("projects recorded question answers", () => {
     expect(
-      projectHermesToolOutcome("call-6", "question", {
+      projectHermesToolOutcome("question", {
         responses: [
           {
             question: "Where do you live?",
@@ -388,7 +357,7 @@ describe("projectHermesToolOutcome", () => {
 
   it("keeps every chosen value of a multi-select answer Hermes records as a list", () => {
     expect(
-      projectHermesToolOutcome("call-6b", "question", {
+      projectHermesToolOutcome("question", {
         responses: [
           {
             question: "Which areas do you want included?",
@@ -410,20 +379,5 @@ describe("projectHermesToolOutcome", () => {
         { question: "What would make this week a win?", answers: [] },
       ],
     })
-  })
-
-  it("suppresses artifacts and media on a failed tool", () => {
-    const outcome = projectHermesToolOutcome(
-      "call-8",
-      "present_artifact",
-      {
-        ok: true,
-        type: "hgw.artifact",
-        artifact: { id: "a", filename: "a.md" },
-      },
-      true
-    )
-    expect(outcome.isError).toBe(true)
-    expect(outcome.parts).toEqual([])
   })
 })

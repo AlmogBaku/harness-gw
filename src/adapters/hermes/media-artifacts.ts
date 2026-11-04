@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto"
 import { safeArtifactPath } from "../../core/artifact-path"
-import { MediaLineFilter, mediaReference } from "./media-lines"
+import { MediaLineFilter } from "./media-lines"
 import {
   containsPrivateValue,
   isRecord,
-  parseJson,
   rowText,
   trimmedText,
-  unwrappedToolText,
   utf8BytesWithin,
 } from "./native"
 import { parseJsonOrValue } from "../todos"
@@ -64,11 +62,6 @@ const MEDIA_LINE_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
   zip: "application/zip",
 }
 
-function parsedRecord(value: unknown) {
-  const parsed = parseJson(value)
-  return isRecord(parsed) ? parsed : undefined
-}
-
 function extensionOf(filename: string) {
   return filename.match(/\.([A-Za-z0-9]+)$/u)?.[1]?.toLowerCase()
 }
@@ -105,27 +98,6 @@ function safeMediaReference(
   return mimeType ? { filename, mimeType } : undefined
 }
 
-function resultReferences(result: Record<string, unknown>) {
-  const values = [
-    ...(typeof result.file_path === "string" ? [result.file_path] : []),
-    ...(Array.isArray(result.file_paths)
-      ? result.file_paths.filter(
-          (value): value is string => typeof value === "string"
-        )
-      : []),
-  ]
-  return new Set(values)
-}
-
-function taggedReferences(result: Record<string, unknown>) {
-  if (typeof result.media_tag !== "string") return new Set<string>()
-  return new Set(
-    result.media_tag
-      .split(/\r?\n/u)
-      .flatMap((line) => mediaReference(line) ?? [])
-  )
-}
-
 function artifactId(scope: string, reference: string) {
   const digest = createHash("sha256")
     .update(scope)
@@ -151,33 +123,6 @@ function mediaArtifact(
     reference,
     descriptor: { id, ...media, source: { type: "provider", reference: id } },
   }
-}
-
-/**
- * Grants artifact authority to audio paths repeated in a successful, native
- * Hermes TTS receipt. An assistant MEDIA line is authority of its own, projected
- * by {@link HermesMediaTextFilter}; this receipt only covers what TTS delivered.
- */
-export function projectHermesMediaArtifacts(
-  toolCallId: string,
-  toolName: string,
-  raw: unknown
-): HermesMediaArtifact[] {
-  if (toolName !== "text_to_speech" || !toolCallId) return []
-  const result = parsedRecord(raw)
-  if (!result || result.success !== true) return []
-  const emitted = resultReferences(result)
-  const tagged = taggedReferences(result)
-  const seen = new Set<string>()
-  const artifacts: HermesMediaArtifact[] = []
-  for (const reference of emitted) {
-    if (!tagged.has(reference) || seen.has(reference)) continue
-    seen.add(reference)
-    const audio = safeMediaReference(reference, AUDIO_MIME_BY_EXTENSION)
-    if (!audio) continue
-    artifacts.push(mediaArtifact(toolCallId, reference, audio))
-  }
-  return artifacts
 }
 
 // ---------------------------------------------------------------------------
@@ -270,12 +215,9 @@ function mediaLineArtifact(reference: string) {
 
 /**
  * Incrementally removes Hermes MEDIA lines without exposing paths. A readable
- * line becomes an artifact. Once TTS delivered media this generation, every
- * line is that delivery's marker — Hermes may name a copy of the audio — so it
- * leaves quietly rather than publishing the same speech twice.
+ * line becomes an artifact.
  */
 export class HermesMediaTextFilter {
-  readonly #trusted = new Set<string>()
   readonly #published = new Set<string>()
   #artifacts: HermesMediaArtifact[] = []
   readonly #lines?: MediaLineFilter
@@ -284,17 +226,9 @@ export class HermesMediaTextFilter {
    * With `mediaArtifacts` off the deployment publishes no media, so the text
    * passes through as Hermes wrote it, MEDIA lines included.
    */
-  constructor(
-    trustedReferences: Iterable<string> = [],
-    { mediaArtifacts = true }: HermesMediaOptions = {}
-  ) {
-    for (const reference of trustedReferences) this.#trusted.add(reference)
+  constructor({ mediaArtifacts = true }: HermesMediaOptions = {}) {
     if (mediaArtifacts)
       this.#lines = new MediaLineFilter((reference) => this.#claim(reference))
-  }
-
-  trust(reference: string) {
-    this.#trusted.add(reference)
   }
 
   write(value: string) {
@@ -313,8 +247,6 @@ export class HermesMediaTextFilter {
   }
 
   #claim(reference: string) {
-    // Accepted trade-off: a TTS turn's MEDIA lines are its delivery markers, so none publishes.
-    if (this.#trusted.size > 0) return true
     const artifact = mediaLineArtifact(reference)
     if (!artifact) return false
     if (!this.#published.has(artifact.descriptor.id)) {
@@ -327,11 +259,10 @@ export class HermesMediaTextFilter {
 
 export function projectHermesMediaText(
   text: string,
-  trustedReferences: Iterable<string>,
   options: HermesMediaOptions = {}
 ) {
   if (options.mediaArtifacts === false) return { text, artifacts: [] }
-  const filter = new HermesMediaTextFilter(trustedReferences)
+  const filter = new HermesMediaTextFilter()
   const projected = `${filter.write(text)}${filter.finish()}`
   return {
     text: projected.replace(/\n$/u, ""),
@@ -359,29 +290,20 @@ function safeArtifactToken(value: string, maxLength: number) {
 
 /** The media a durable row delivers, keyed by the artifact id each one reads as. */
 function rowMedia(row: Record<string, unknown>): HermesMediaArtifact[] {
-  if (row.role === "tool") {
-    const content = unwrappedToolText(row.content ?? row.result)
-    const toolCallId = trimmedText(row.tool_call_id ?? row.toolCallId) ?? ""
-    const toolName = trimmedText(row.tool_name ?? row.toolName)
-    return toolName
-      ? projectHermesMediaArtifacts(toolCallId, toolName, content)
-      : []
-  }
   if (trimmedText(row.display_kind)) return []
   const text = rowText(row, parseJsonOrValue(row.content))
   // The directive the operator's own turn persisted is authority for the image
   // it attached, and an assistant's MEDIA line for the file it delivered: only a
   // reference this Session's transcript still carries can be read back.
   if (row.role === "user") return projectHermesAttachedImages(text).artifacts
-  if (row.role === "assistant")
-    return projectHermesMediaText(text, []).artifacts
+  if (row.role === "assistant") return projectHermesMediaText(text).artifacts
   return []
 }
 
 /**
  * Resolve one already-published artifact id to its native reference by scanning
- * authoritative history newest-first. Only a tool receipt, an attached image or
- * an assistant MEDIA line grants authority, and every reference it resolves to
+ * authoritative history newest-first. Only an attached image or an assistant
+ * MEDIA line grants authority, and every reference it resolves to
  * is an absolute path {@link safeArtifactPath} accepts.
  */
 export function publishedArtifact(

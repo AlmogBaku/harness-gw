@@ -327,9 +327,9 @@ describe("Hermes server adapter", () => {
   })
 
   it("reports a media artifact the provider can no longer read as not found", async () => {
-    // A default `text_to_speech` delivery lands in the media cache Hermes prunes
-    // at a 24-hour age, so its receipt outlives its bytes and `read-data-url`
-    // answers 404.
+    // A default `text_to_speech` file lands in the media cache Hermes prunes
+    // at a 24-hour age, so the reply's MEDIA line outlives its bytes and
+    // `read-data-url` answers 404.
     const audioPath = "/home/alice/.hermes/cache/audio/tts_20260915_184023.mp3"
     const messages = [
       {

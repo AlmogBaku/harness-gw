@@ -1011,11 +1011,9 @@ export class HermesTurnEngine {
     const toolCallId = stableNativeId(payload.tool_id)
     if (!toolCallId) return
     const outcome = projectHermesToolOutcome(
-      toolCallId,
       tool.name,
       payload.result,
-      payload.is_error === true,
-      this.#media
+      payload.is_error === true
     )
     if (tool.name === "terminal" && !outcome.isError)
       this.#announceTerminal(active, toolCallId, payload)
@@ -1035,13 +1033,6 @@ export class HermesTurnEngine {
       const todos = projectTodos(payload.result, TODO_STATUS_ALIASES)
       if (todos !== undefined) this.#emitPlan(active, todos)
     }
-    for (const reference of outcome.trustedMedia)
-      active.mediaFilter.trust(reference)
-    for (const part of outcome.parts)
-      this.#emit(active, {
-        kind: TurnEventKind.ArtifactPublished,
-        artifact: part.data,
-      })
   }
 
   /**

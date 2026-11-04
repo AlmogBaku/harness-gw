@@ -3495,7 +3495,7 @@ describe("HermesRunEngine", () => {
     ])
   })
 
-  it("publishes one trusted TTS artifact when the socket reattaches mid tool", async () => {
+  it("publishes TTS audio once, from the reply's MEDIA line, when the socket reattaches mid tool", async () => {
     const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
     const turn = nativeTurn("live-secret", 1)
     const start = turn.messageStart("message-media")
@@ -5155,7 +5155,7 @@ describe("live and refreshed Hermes tool projection agree", () => {
       { toolName: "render_chart" },
     ],
     [
-      "projects a text_to_speech receipt and its trusted media identically",
+      "publishes no artifact from a text_to_speech receipt, live or replayed",
       {
         toolCallId: "tts-parity",
         name: "text_to_speech",
@@ -5168,27 +5168,8 @@ describe("live and refreshed Hermes tool projection agree", () => {
           provider: "edge",
         },
       },
-      {
-        isError: false,
-        result: { status: "completed" },
-        artifacts: [
-          expect.objectContaining({
-            filename: "brief.mp3",
-            mimeType: "audio/mpeg",
-          }),
-        ],
-      },
+      { isError: false, result: { status: "completed" }, artifacts: [] },
       audio,
-    ],
-    [
-      "classifies a failed text_to_speech receipt identically",
-      {
-        toolCallId: "tts-failed-parity",
-        name: "text_to_speech",
-        args: { text: "Quarterly update" },
-        result: { success: false, error: "voice unavailable" },
-      },
-      { isError: true, result: { status: "failed" }, artifacts: [] },
     ],
     [
       "projects a batched clarification and its recorded answers identically",

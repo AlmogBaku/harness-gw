@@ -10,7 +10,6 @@ import {
   toolRow,
   userRow,
 } from "./test-utils/history-rows"
-import { jsonObject } from "./test-utils/json-object"
 
 /** The projection of rows that store no activity, as its messages. */
 function projectedMessages(...args: Parameters<typeof projectHermesHistory>) {
@@ -61,9 +60,8 @@ describe("server-side Hermes history projection", () => {
     ])
   })
 
-  it("restores trusted TTS media and suppresses a redundant copied marker", () => {
+  it("restores TTS audio only where the Agent's reply delivered it", () => {
     const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
-    const copiedPath = "/home/alice/voice-memos/out/copied-brief.mp3"
     const messages = projectedMessages([
       {
         id: "assistant-tts",
@@ -93,37 +91,28 @@ describe("server-side Hermes history projection", () => {
       {
         id: "assistant-final",
         role: "assistant",
-        content: `Your brief is ready.\nMEDIA:${copiedPath}`,
+        content: `Your brief is ready.\nMEDIA:${audioPath}`,
       },
     ])
 
-    // The call's response and the one after it, which still trusts its media.
+    // The tool's result is the call's record, not a delivery: only the reply's
+    // MEDIA line shows the audio.
     expect(messages).toHaveLength(2)
-    const artifact = messages[0]?.content.find(
-      (part) => part.type === "data" && part.name === "hgw.artifact"
-    )
-    expect(artifact).toMatchObject({
-      type: "data",
-      name: "hgw.artifact",
-      data: {
-        filename: "quick-brief.mp3",
-        mimeType: "audio/mpeg",
-      },
-    })
-    const artifactData =
-      artifact?.type === "data" ? jsonObject(artifact.data) : undefined
-    expect(artifactData?.source).toEqual({
-      type: "provider",
-      reference:
-        typeof artifactData?.id === "string" ? artifactData.id : undefined,
-    })
-    expect(messages[1]?.content).toEqual([
+    expect(
+      messages[0]?.content.some(
+        (part) => part.type === "data" && part.name === "hgw.artifact"
+      )
+    ).toBe(false)
+    expect(messages[1]?.content).toMatchObject([
       { type: "text", text: "Your brief is ready." },
+      {
+        type: "data",
+        name: "hgw.artifact",
+        data: { filename: "quick-brief.mp3", mimeType: "audio/mpeg" },
+      },
     ])
     expect(JSON.stringify(messages)).not.toContain("MEDIA:")
     expect(JSON.stringify(messages)).not.toContain(audioPath)
-    expect(JSON.stringify(messages)).not.toContain(copiedPath)
-    expect(JSON.stringify(messages)).not.toContain("Media unavailable")
   })
 
   it("restores one artifact per MEDIA reference however many rows repeat it", () => {

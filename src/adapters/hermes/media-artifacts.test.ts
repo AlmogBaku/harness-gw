@@ -3,69 +3,13 @@ import { describe, expect, it } from "vitest"
 import {
   HermesMediaTextFilter,
   projectHermesAttachedImages,
-  projectHermesMediaArtifacts,
   projectHermesMediaText,
   publishedArtifact,
 } from "./media-artifacts"
 
-const audioPath = "/home/alice/voice-memos/out/quick-brief.mp3"
 const imagePath = "/home/alice/.hermes/images/upload_20260920_024035_1.png"
 
 describe("Hermes native media projection", () => {
-  it("projects only explicitly delivered TTS audio as an opaque artifact", () => {
-    const artifacts = projectHermesMediaArtifacts(
-      "tts-call",
-      "text_to_speech",
-      JSON.stringify({
-        success: true,
-        file_path: audioPath,
-        file_paths: [audioPath],
-        media_tag: `MEDIA:${audioPath}`,
-        provider: "edge",
-      })
-    )
-
-    expect(artifacts).toHaveLength(1)
-    expect(artifacts[0]).toMatchObject({
-      reference: audioPath,
-      descriptor: {
-        filename: "quick-brief.mp3",
-        mimeType: "audio/mpeg",
-      },
-    })
-    expect(artifacts[0]?.descriptor.id).toMatch(/^hermes-media-[a-f0-9]{32}$/u)
-    expect(artifacts[0]?.descriptor.source).toEqual({
-      type: "provider",
-      reference: artifacts[0]?.descriptor.id,
-    })
-    expect(JSON.stringify(artifacts[0]?.descriptor)).not.toContain(audioPath)
-  })
-
-  it("rejects failed, non-TTS, and non-delivered path claims", () => {
-    const receipt = {
-      success: true,
-      file_path: audioPath,
-      file_paths: [audioPath],
-      media_tag: `MEDIA:${audioPath}`,
-    }
-
-    expect(
-      projectHermesMediaArtifacts("tts-call", "read_file", receipt)
-    ).toEqual([])
-    expect(
-      projectHermesMediaArtifacts("tts-call", "text_to_speech", {
-        ...receipt,
-        success: false,
-      })
-    ).toEqual([])
-    expect(
-      projectHermesMediaArtifacts("tts-call", "text_to_speech", {
-        ...receipt,
-        media_tag: "MEDIA:/home/alice/private/credentials.txt",
-      })
-    ).toEqual([])
-  })
-
   it("redacts a MEDIA line naming a sensitive file without granting an artifact", () => {
     const filter = new HermesMediaTextFilter()
     const output = [
@@ -117,7 +61,7 @@ describe("Hermes native media projection", () => {
     for (const chunk of text.match(/.{1,5}/gsu) ?? []) live.write(chunk)
     live.finish()
     const [streamed] = live.takeArtifacts()
-    const replayed = projectHermesMediaText(text, [])
+    const replayed = projectHermesMediaText(text)
 
     expect(replayed.text).toBe("Chart attached.")
     expect(replayed.artifacts.map(({ descriptor }) => descriptor)).toEqual([
@@ -134,24 +78,6 @@ describe("Hermes native media projection", () => {
     })
   })
 
-  it("publishes no second artifact for a MEDIA line repeating trusted TTS audio", () => {
-    const filter = new HermesMediaTextFilter()
-    filter.trust(audioPath)
-
-    expect(filter.write(`Listen.\nMEDIA:${audioPath}\n`)).toBe("Listen.\n")
-    expect(filter.takeArtifacts()).toEqual([])
-  })
-
-  it("suppresses a redundant unmatched marker after trusted media was delivered", () => {
-    const filter = new HermesMediaTextFilter([audioPath])
-    const output = [
-      filter.write("MEDIA:/home/alice/voice-memos/out/copied-brief.mp3"),
-      filter.finish(),
-    ].join("")
-
-    expect(output).toBe("")
-  })
-
   it("preserves blank lines that delimit Markdown blocks", () => {
     const markdown = [
       "- Last list item",
@@ -165,35 +91,7 @@ describe("Hermes native media projection", () => {
       "**Pick:** DevTools",
     ].join("\n")
 
-    expect(projectHermesMediaText(markdown, []).text).toBe(markdown)
-  })
-})
-
-describe("Hermes published artifact authority", () => {
-  it("resolves trusted TTS media through its opaque artifact id", () => {
-    const rows = [
-      {
-        role: "tool",
-        tool_call_id: "tts-call",
-        tool_name: "text_to_speech",
-        content: JSON.stringify({
-          success: true,
-          file_path: audioPath,
-          file_paths: [audioPath],
-          media_tag: `MEDIA:${audioPath}`,
-        }),
-      },
-    ]
-    const [media] = projectHermesMediaArtifacts(
-      "tts-call",
-      "text_to_speech",
-      rows[0]!.content
-    )
-
-    expect(publishedArtifact(rows, media!.descriptor.id)).toEqual({
-      reference: audioPath,
-      filename: "quick-brief.mp3",
-    })
+    expect(projectHermesMediaText(markdown).text).toBe(markdown)
   })
 })
 

@@ -716,12 +716,11 @@ file addresses the gateway grants when the view opens (see
 [Reading a view's files](#reading-a-views-files)); the tool's MCP server
 never opens the file, and reads it only from the file route.
 
-### MEDIA: and trusted-delivery Artifacts
+### MEDIA: Artifacts
 
-An Artifact from a `MEDIA:` line or a trusted native delivery receipt (such as
-Hermes text-to-speech) reaches a client as an ACP `resource_link` content
-block inside the turn's `agent_message_chunk` (or `user_message_chunk`), both
-live and on replay (`src/acp/translate/updates.ts`):
+An Artifact from a `MEDIA:` line in the Agent's reply reaches a client as an
+ACP `resource_link` content block inside the turn's `agent_message_chunk` (or
+`user_message_chunk`), both live and on replay (`src/acp/translate/updates.ts`):
 
 ```json
 {

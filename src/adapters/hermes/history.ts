@@ -309,8 +309,6 @@ export function projectHermesHistory(
   /** Activity rows, each after the messages that preceded it. */
   const activities: { before: number; message: HermesActivityMessage }[] = []
   const calls = new Map<string, { messageIndex: number; partIndex: number }>()
-  /** The media each turn's calls returned, keyed by the turn's first row. */
-  const mediaReferences = new Map<number, Set<string>>()
   /** The newest row time each merged message was built from, in epoch ms. */
   const completions = new Map<number, number>()
   /**
@@ -340,13 +338,6 @@ export function projectHermesHistory(
     if (newest === undefined || ms > newest) completions.set(messageIndex, ms)
   }
 
-  /** Keeps every open call of one turn addressing its part after an insertion. */
-  function shifted(messageIndex: number, afterPartIndex: number, by: number) {
-    for (const [id, call] of calls)
-      if (call.messageIndex === messageIndex && call.partIndex > afterPartIndex)
-        calls.set(id, { ...call, partIndex: call.partIndex + by })
-  }
-
   rows.forEach((value, index) => {
     if (!isRecord(value)) return
     const role = trimmedText(value.role)
@@ -368,11 +359,9 @@ export function projectHermesHistory(
         ? canonicalToolName(resultToolName, resolve)
         : part.toolName
       const outcome = projectHermesToolOutcome(
-        toolCallId,
         toolName,
         value.content ?? value.result,
-        value.is_error === true,
-        media
+        value.is_error === true
       )
       const diffs = outcome.isError
         ? undefined
@@ -389,17 +378,6 @@ export function projectHermesHistory(
         result: outcome.result,
         ...(outcome.isError ? { isError: true } : {}),
         ...(diffs ? { diffs } : {}),
-      }
-      // Live publishes an artifact the moment its tool result lands, so the
-      // stored turn places it there too rather than at the turn's end.
-      if (outcome.parts.length > 0) {
-        content.splice(target.partIndex + 1, 0, ...outcome.parts)
-        shifted(target.messageIndex, target.partIndex, outcome.parts.length)
-      }
-      if (outcome.trustedMedia.length) {
-        const trusted = mediaReferences.get(turn.index) ?? new Set()
-        for (const reference of outcome.trustedMedia) trusted.add(reference)
-        mediaReferences.set(turn.index, trusted)
       }
       messages[target.messageIndex] = { ...message, content }
       contributed(target.messageIndex, value)
@@ -466,11 +444,7 @@ export function projectHermesHistory(
       role === "user" ? projectHermesUserContent(text, rowMessageId) : undefined
     const assistantContent =
       role === "assistant" && !interrupted
-        ? projectHermesMediaText(
-            text,
-            mediaReferences.get(turn.index) ?? [],
-            media
-          )
+        ? projectHermesMediaText(text, media)
         : undefined
     const visibleText = interrupted
       ? ""

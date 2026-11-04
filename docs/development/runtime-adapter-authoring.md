@@ -504,9 +504,11 @@ stable for that Agent and Session; never put a native path in it or in any
 public tool argument or result.
 
 Emit a descriptor only from an authoritative source: a harness's own native
-media delivery (Hermes `MEDIA:` lines, OpenClaw `artifacts.download`), an
-uploaded attachment, or a trusted native delivery tool such as Hermes
-text-to-speech.
+media delivery (Hermes `MEDIA:` lines in the Agent's reply, OpenClaw
+`artifacts.download`) or an uploaded attachment. A tool's result is the Agent's
+working record, never a delivery, even when it names a file, as Hermes
+text-to-speech does: the file reaches the operator only when the Agent
+delivers it.
 `src/adapters/hermes/media-lines.ts` (`MediaLineFilter`) strips
 `MEDIA:` lines from streamed prose across deltas and replaces an unclaimed one
 with `[Media unavailable]`. It is private to the Hermes adapter and parses

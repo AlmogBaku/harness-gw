@@ -255,7 +255,7 @@ export function generationState(media: HermesMediaOptions) {
   return {
     textStarted: false,
     streamedText: "" as string | undefined,
-    mediaFilter: new HermesMediaTextFilter([], media),
+    mediaFilter: new HermesMediaTextFilter(media),
     streamedReasoning: "",
   }
 }
