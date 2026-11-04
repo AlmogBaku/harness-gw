@@ -213,14 +213,15 @@ This fallback is temporary and goes away once Hermes serves MCP Apps itself.
 
 Sessions the gateway creates carry `source: "aos-ui"`. An Artifact is published
 by an assistant `MEDIA:/absolute/path` line, Hermes's own delivery convention.
+A tool's result is never one, even when it names a file: the `MEDIA:` path a
+`text_to_speech` result carries shows only once the Agent delivers it.
 The gateway removes each `MEDIA:` line from the prose, validates the path, and
 reads the bytes through `GET /api/fs/read-data-url`. A path that is relative,
 traverses, or names a credential file such as `.env` or `auth.json` is refused.
 
 Set `runtime.mediaArtifacts: false` to turn this off. A `MEDIA:` line then
 stays in the message text as written, so every reader of the Session, guests
-included, sees the file's native path, and a text-to-speech receipt publishes no
-audio Artifact. Images attached to a user message stay Artifacts either way,
+included, sees the file's native path. Images attached to a user message stay Artifacts either way,
 because they belong to the gateway's own attachment flow rather than to Hermes's
 delivery convention.
 

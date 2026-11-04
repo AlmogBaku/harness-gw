@@ -27,10 +27,6 @@ import {
   utf8BytesWithin,
 } from "./native"
 import { parseJsonOrValue } from "../todos"
-import {
-  projectHermesMediaArtifacts,
-  type HermesMediaOptions,
-} from "./media-artifacts"
 
 /** Hermes' native tool names AOS renames. */
 export const CANONICAL_TOOL_NAMES = new Map<string, string>([
@@ -559,55 +555,25 @@ function publicToolResult(
   return projectHermesToolResult(value, isError)
 }
 
-type HermesMediaDescriptor = ReturnType<
-  typeof projectHermesMediaArtifacts
->[number]["descriptor"]
-
-export type HermesToolDataPart = {
-  type: "data"
-  name: string
-  data: HermesMediaDescriptor
-}
-
 export type HermesToolOutcome = {
   /** Whether the tool failed, from the native flag or its result envelope. */
   isError: boolean
   /** The inspectable result the operator sees. */
   result: HermesPublicJsonValue
-  /** Public artifact descriptors this outcome publishes, in emission order. */
-  parts: HermesToolDataPart[]
-  /** Native references this outcome grants media authority to. */
-  trustedMedia: string[]
 }
 
 /**
- * The public outcome of one native Hermes tool call: error classification, the
- * inspectable result, and the artifact descriptors the outcome publishes. A
- * failed tool publishes nothing, and neither does any tool when the deployment
- * turns `mediaArtifacts` off.
+ * The public outcome of one native Hermes tool call: error classification and
+ * the inspectable result. A tool's result is the Agent's working record, never
+ * a delivery: a file reaches the operator only when the Agent delivers it.
  */
 export function projectHermesToolOutcome(
-  toolCallId: string,
   name: string,
   wrapped: unknown,
-  nativeIsError = false,
-  { mediaArtifacts = true }: HermesMediaOptions = {}
+  nativeIsError = false
 ): HermesToolOutcome {
   const result = unwrappedToolText(wrapped)
   const canonicalName = canonicalToolName(name)
   const isError = hermesToolResultIsError(result, nativeIsError)
-  const media =
-    isError || !mediaArtifacts
-      ? []
-      : projectHermesMediaArtifacts(toolCallId, canonicalName, result)
-  return {
-    isError,
-    result: publicToolResult(canonicalName, result, isError),
-    parts: media.map(({ descriptor }) => ({
-      type: "data" as const,
-      name: "hgw.artifact",
-      data: descriptor,
-    })),
-    trustedMedia: media.map(({ reference }) => reference),
-  }
+  return { isError, result: publicToolResult(canonicalName, result, isError) }
 }
