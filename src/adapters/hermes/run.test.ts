@@ -539,6 +539,15 @@ describe("HermesRunEngine", () => {
         },
         "HGW_REWIND_CONFLICT",
       ],
+      [
+        "Hermes refused the rewind's row",
+        async () =>
+          ({
+            acknowledgement: "rejected",
+            reason: "rewind-conflict",
+          }) as const,
+        "HGW_REWIND_CONFLICT",
+      ],
     ])(
       "ends the receipt unstored once %s: Hermes stored nothing of the prompt",
       async (_case, submit, code) => {

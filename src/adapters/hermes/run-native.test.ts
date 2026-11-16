@@ -98,6 +98,8 @@ describe("Hermes native submit outcomes", () => {
     [4007, "session-gone"],
     [4009, "busy"],
     [4090, "unknown"],
+    // Only a rewind's 4018 is a conflict: Hermes uses the code for any failure.
+    [4018, "unknown"],
     [5070, "storage"],
     [-32600, "invalid"],
     [undefined, "unknown"],
@@ -325,6 +327,32 @@ describe("Hermes native submit outcomes", () => {
       },
       "hermes.rewind.submit"
     )
+  })
+
+  it("reports a rewind whose row Hermes cannot place as a conflict", async () => {
+    const { native } = runtime(
+      {
+        "prompt.submit": async () => {
+          throw new HermesRpcRejectedError(
+            4018,
+            "target user message is no longer in session history"
+          )
+        },
+      },
+      [{ row_id: 12, role: "user", text: "Original" }]
+    )
+
+    await expect(
+      native.submit("live-secret", {
+        scope,
+        text: "Edited",
+        turnId: "edit-run",
+        rewindSourceId: "hermes-row-12",
+      })
+    ).resolves.toMatchObject({
+      acknowledgement: "rejected",
+      reason: "rewind-conflict",
+    })
   })
 
   // Hermes takes the text a rewind submits as the turn's new text, so a Retry
