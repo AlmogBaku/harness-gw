@@ -142,6 +142,7 @@ const REFUSAL_FAILURES: Record<
   "session-limit": TURN_FAILURES.sessionLimit,
   storage: TURN_FAILURES.commandRejected,
   invalid: TURN_FAILURES.commandRejected,
+  "rewind-conflict": TURN_FAILURES.rewindConflict,
   unknown: TURN_FAILURES.commandRejected,
 }
 

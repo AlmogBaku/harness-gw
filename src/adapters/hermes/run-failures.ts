@@ -124,7 +124,7 @@ export const TURN_FAILURES = {
   rewindConflict: {
     code: "HGW_REWIND_CONFLICT",
     message:
-      "This response can no longer be regenerated because Hermes history changed.",
+      "This message can no longer be edited or retried because Hermes history changed.",
   },
   commandWithAttachments: {
     code: "HGW_COMMAND_WITH_ATTACHMENTS",

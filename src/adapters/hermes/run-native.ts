@@ -117,6 +117,7 @@ export type HermesSubmitRejection =
   | "session-limit"
   | "storage"
   | "invalid"
+  | "rewind-conflict"
   | "unknown"
 
 /**
@@ -279,6 +280,13 @@ const REJECTION_BY_SLOT_REASON = new Map<string, HermesSubmitRejection>([
   ["SESSION_NOT_OWNED", "in-use"],
   ["MAX_CONCURRENT_SESSIONS", "session-limit"],
 ])
+
+/**
+ * How Hermes refuses a rewind whose user row it cannot place in the Session
+ * (`tui_gateway/methods_prompt.py` `_STALE_TARGET_MSG`). Hermes gives other
+ * failures the same code, so it names a conflict only on a truncating submit.
+ */
+const STALE_REWIND_TARGET = 4018
 
 function rejectionReason(error: HermesRpcRejectedError): HermesSubmitRejection {
   if (isSessionGone(error)) return "session-gone"
@@ -677,9 +685,16 @@ export class HermesNativeRuntime implements HermesTurnNative {
       )
     } catch (error) {
       const outcome = this.#writeOutcome("prompt.submit", liveSessionId, error)
-      return outcome.acknowledgement === "rejected"
-        ? { ...outcome, refused: { params } }
-        : outcome
+      if (outcome.acknowledgement !== "rejected") return outcome
+      const stale =
+        params.confirm_truncate === true &&
+        error instanceof HermesRpcRejectedError &&
+        error.code === STALE_REWIND_TARGET
+      return {
+        ...outcome,
+        ...(stale && { reason: "rewind-conflict" as const }),
+        refused: { params },
+      }
     }
     return submittedOutcome(result)
   }
