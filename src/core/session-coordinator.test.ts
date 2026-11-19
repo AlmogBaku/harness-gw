@@ -1172,6 +1172,166 @@ describe("SessionCoordinator", () => {
     })
   })
 
+  describe("a Session a create made and no prompt reached", () => {
+    const IDLE_MS = 1_000
+
+    /**
+     * A coordinator whose creates make `scope`'s Session, discarded as
+     * `discard` answers, with turns that start as `start` does.
+     */
+    function retaining({
+      discard = vi.fn(async () => true),
+      start = vi.fn(async () => new EventSource()),
+    }: {
+      discard?: (...args: unknown[]) => Promise<boolean>
+      start?: ServerTurnEngine["start"]
+    } = {}) {
+      const createSession = vi.fn(async (agentId: string) => ({
+        session: { id: scope.sessionId, agentId },
+      }))
+      const sessions = coordinator(
+        { start, recover: vi.fn(async () => new EventSource()) },
+        {
+          unpromptedIdleMs: IDLE_MS,
+          readings: readings({
+            createSession,
+            forkSession: vi.fn(async (agentId: string) => ({
+              session: { id: otherScope.sessionId, agentId },
+            })),
+            resolveProviderSessionId: (_agentId, id) => providerSessionId(id),
+            discardSession: discard,
+          }),
+        }
+      )
+      const create = (clientId?: string) =>
+        sessions.createSession(
+          scope.agentId,
+          clientId === undefined ? {} : { clientId },
+          "operator"
+        )
+      return { sessions, discard, create, createSession }
+    }
+
+    it("is listed to nobody, and discarded once nothing holds it for the idle window", async () => {
+      const clock = useFakeClock()
+      const { sessions, discard, create } = retaining()
+      await create()
+      expect(sessions.unprompted(scope)).toBe(true)
+
+      const leave = sessions.hold(scope)
+      await clock.advance(IDLE_MS)
+      expect(discard).not.toHaveBeenCalled()
+      leave()
+      await clock.advance(IDLE_MS - 1)
+      expect(discard).not.toHaveBeenCalled()
+      await clock.advance(1)
+      expect(discard).toHaveBeenCalledExactlyOnceWith(
+        scope.agentId,
+        scope.providerSessionId
+      )
+    })
+
+    it("is discarded at once on close, and not while another membership holds it", async () => {
+      const { sessions, discard, create } = retaining()
+      await create()
+      const operator = sessions.hold(scope)
+      // A guest's membership of the same native Session holds it as well.
+      const guest = sessions.hold(scope)
+
+      operator()
+      await sessions.closed(scope)
+      expect(discard).not.toHaveBeenCalled()
+      guest()
+      await sessions.closed(scope)
+      expect(discard).toHaveBeenCalledTimes(1)
+    })
+
+    it("finds a Session being discarded gone, for a resume and a prompt alike", async () => {
+      let discarded!: (kept: boolean) => void
+      const { sessions, create } = retaining({
+        discard: () => new Promise<boolean>((done) => (discarded = done)),
+      })
+      await create()
+      const closing = sessions.closed(scope)
+
+      expect(() => sessions.refuseDiscarded(scope)).toThrow(
+        ServerSessionNotFoundError
+      )
+      await expect(
+        sessions.start(scope, input("run-1"), access("one"))
+      ).rejects.toThrow(ServerSessionNotFoundError)
+      discarded(true)
+      await closing
+      expect(sessions.unprompted(scope)).toBe(true)
+    })
+
+    it.each([
+      [
+        "a prompt went to the runtime, unconfirmed",
+        // A start that never answers is one the runtime may have taken.
+        () => new Promise<never>(() => {}),
+        async ({ sessions }: ReturnType<typeof retaining>) => {
+          void sessions.start(scope, input("run-1"), access("one"))
+        },
+      ],
+      [
+        "a repeat of its create answered it after a prompt",
+        async () => new EventSource(),
+        async ({ sessions, create }: ReturnType<typeof retaining>) => {
+          await sessions.start(scope, input("run-1"), access("one"))
+          await create("create-1")
+        },
+      ],
+    ] as const)(
+      "is listed and kept for good once %s",
+      async (_, start, after) => {
+        const clock = useFakeClock()
+        const retained = retaining({ start: vi.fn(start) })
+        const { sessions, discard, create } = retained
+        await create("create-1")
+        await after(retained)
+        await clock.advance(0)
+
+        expect(sessions.unprompted(scope)).toBe(false)
+        await sessions.closed(scope)
+        await clock.advance(IDLE_MS)
+        expect(discard).not.toHaveBeenCalled()
+      }
+    )
+
+    it("never marks a forked Session", async () => {
+      const { sessions } = retaining()
+      await sessions.forkSession(scope)
+      expect(sessions.unprompted(otherScope)).toBe(false)
+    })
+
+    it.each([
+      // The runtime found a message or a running turn: it is a conversation.
+      [
+        "kept by the runtime is listed again",
+        async (): Promise<boolean> => false,
+        false,
+      ],
+      [
+        "it failed to free waits out another idle window",
+        async (): Promise<boolean> => {
+          throw new Error("Runtime unavailable")
+        },
+        true,
+      ],
+    ] as const)("leaves one %s", async (_, answer, retried) => {
+      const clock = useFakeClock()
+      const discard = vi.fn(answer)
+      const { sessions, create } = retaining({ discard })
+      await create()
+      await sessions.closed(scope)
+
+      expect(sessions.unprompted(scope)).toBe(retried)
+      await clock.advance(IDLE_MS)
+      expect(discard).toHaveBeenCalledTimes(retried ? 2 : 1)
+    })
+  })
+
   describe("answering a paused turn's requests", () => {
     const questions = [question("question-1"), question("question-2")]
     const replyTo = (requestId: string) => ({

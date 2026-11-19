@@ -103,7 +103,8 @@ export type Catalog = {
 
 export type CatalogOptions = {
   runtime: ServerRuntime
-  coordinator: Pick<SessionCoordinator, "state" | "endIfGone">
+  coordinator: Pick<SessionCoordinator, "state" | "endIfGone"> &
+    Partial<Pick<SessionCoordinator, "unprompted">>
   rows: SessionRows
   /** Where the runtime's change feed writes why it failed. */
   logger: Logger
@@ -151,11 +152,19 @@ export function createCatalog({
       : runtime.listSessions(agentId, limit, offset)
   }
 
-  /** Sessions a read returned, remembered, as members are shown them. */
-  function remembered(sessions: readonly Session[]) {
+  /**
+   * Sessions a read returned, remembered, as members are shown them. One a
+   * create here made and no prompt reached yet is no conversation of anyone's
+   * History, so no list shows it.
+   */
+  function remembered(read: readonly Session[]) {
+    const sessions = read.filter((session) => {
+      const target = scope(session.agentId, session.id)
+      return !target || !coordinator.unprompted?.(target)
+    })
     rows.rememberList(sessions)
-    return sessions.map((read) =>
-      overlaid(rows.get(read.agentId, read.id) ?? read)
+    return sessions.map((session) =>
+      overlaid(rows.get(session.agentId, session.id) ?? session)
     )
   }
 

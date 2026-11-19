@@ -732,6 +732,11 @@ export async function harness(options: HarnessOptions = {}) {
   const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
     rows.delete(sessionId)
   })
+  // A Session no prompt reached holds nothing, so the runtime frees it.
+  const discardSession = vi.fn(async (_agentId: string, sessionId: string) => {
+    rows.delete(sessionId)
+    return true
+  })
   const createSession = vi.fn(async (agentId: string, title?: string) => {
     rows.set(
       CREATED,
@@ -818,6 +823,7 @@ export async function harness(options: HarnessOptions = {}) {
     ...(options.childHistory ? { childHistory: options.childHistory } : {}),
     updateSession,
     deleteSession,
+    discardSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,
     models: async () => {
       await options.beforeModels?.()
@@ -1050,6 +1056,7 @@ export async function harness(options: HarnessOptions = {}) {
     forkSession,
     updateSession,
     deleteSession,
+    discardSession,
     updateModel,
     updateAgent,
     listAllSessions,

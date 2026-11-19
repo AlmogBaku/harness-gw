@@ -144,6 +144,38 @@ describe("OpenClaw ServerRuntime assembly", () => {
     )
   })
 
+  it.each([
+    ["holds no message and runs no turn", [], {}, true],
+    [
+      "holds a message",
+      [{ id: "answer-1", role: "assistant", content: "Hi", timestamp: 1 }],
+      {},
+      false,
+    ],
+    ["runs a turn", [], { hasActiveRun: true }, false],
+  ] as const)(
+    "deletes a Session it discards only while OpenClaw shows it empty and idle: one that %s",
+    async (_, messages, run, discarded) => {
+      const native = client()
+      const request = vi.fn(async (method: string, params?: never) =>
+        method === "chat.history"
+          ? {
+              messages,
+              sessionInfo: { hasActiveRun: false, activeRunIds: [], ...run },
+            }
+          : native.request(method, params)
+      )
+      const adapter = adapterOver(stubOpenClawClient(request))
+
+      await expect(
+        adapter.discardSession("research", sessionKey)
+      ).resolves.toBe(discarded)
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.delete")
+      ).toHaveLength(discarded ? 1 : 0)
+    }
+  )
+
   it("creates native Sessions without imposing a title", async () => {
     const gateway = client()
     const adapter = adapterOver(gateway)

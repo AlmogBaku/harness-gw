@@ -1011,6 +1011,14 @@ export function createChannels(options: CreateChannelsOptions) {
       return coordinator.createSession(agentId, input, principalId)
     },
 
+    /**
+     * Discards a Session a member closed, where a create here made it, no
+     * prompt reached it, and nothing else holds it.
+     */
+    closed(scope: SessionScope) {
+      return coordinator.closed(scope)
+    },
+
     /** Whether the runtime forks Sessions. */
     get forks() {
       return coordinator.forks
@@ -1140,6 +1148,8 @@ class Membership {
       this.#subscription?.close()
       this.#subscription = undefined
     })
+    // A Session a member is on, joining or joined, is never discarded.
+    if (hasSession(scope)) owner.stack.defer(options.coordinator.hold(scope))
     this.#delivery = {
       sendTurn: ({ messageId, content }) =>
         this.#rebuilding
@@ -1342,6 +1352,7 @@ class Membership {
   ): Promise<{ history?: SessionHistoryResponse }> {
     // A fresh invitation has no history to replay and no turn to follow.
     if (this.pending) return {}
+    this.#options.coordinator.refuseDiscarded(this.#scope)
     this.#stated = undefined
     this.#restating = true
     try {

@@ -57,6 +57,12 @@ export const RECONCILE_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
  */
 export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
 
+/**
+ * How long nothing may hold a Session created and never prompted before the
+ * gateway discards it, where the runtime sets no idle window of its own.
+ */
+export const UNPROMPTED_IDLE_MS = 5 * 60_000
+
 /** How long a member that fell behind keeps its place for its view to rejoin. */
 export const PAUSED_DEADLINE_MS = 30_000
 

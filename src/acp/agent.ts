@@ -896,11 +896,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       async (command) => {
         const membership = sessions.membership(command.sessionId)
         if (!membership) throw notFound()
+        const { scope } = membership
         try {
           await membership.cancel()
         } finally {
           sessions.part(command.sessionId)
         }
+        // A Session no prompt reached, which nothing else holds, is freed now.
+        await context.channels.closed(scope)
       },
       requestId
     )

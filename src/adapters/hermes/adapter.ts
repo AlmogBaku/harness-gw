@@ -2375,6 +2375,31 @@ export class HermesServerAdapter implements ServerRuntime {
     })
   }
 
+  /**
+   * Frees a Session this gateway created and never prompted. Hermes lists no
+   * Session before its first turn and keeps such a draft only in its live
+   * Session, so closing that frees it. A fresh resume says whether it is
+   * still that draft: one Hermes since stored, or runs, is kept.
+   */
+  async discardSession(profile: string, storedId: string) {
+    const { liveSessionId } = await this.#attachments.ensure(
+      { agentId: profile, providerSessionId: storedId, sessionId: storedId },
+      { refresh: true }
+    )
+    const resumed = this.#attachmentInfo.get(
+      attachmentInfoKey(profile, storedId)
+    )
+    if (
+      !resumed ||
+      !isUnpersistedDraft(resumed, profile, storedId) ||
+      this.#resumedRunning(profile, storedId)
+    )
+      return false
+    await this.#closeNativeSession(liveSessionId)
+    this.#attachments.invalidate(liveSessionId)
+    return true
+  }
+
   /** Renames the Session through its live binding, rebound once if stale. */
   async #retitle(profile: string, storedId: string, title: string) {
     for (let attempt = 0; ; attempt += 1) {

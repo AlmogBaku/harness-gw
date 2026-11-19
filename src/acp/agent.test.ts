@@ -21,6 +21,7 @@ import {
   HGW_REPLAY_BEFORE,
   HGW_REPLAY_POSITION,
   HgwHistoryCursorSchema,
+  HgwSessionSearchResponseSchema,
   formatArtifactUri,
   type HgwActivityNotification,
 } from "../../protocol/acp"
@@ -404,6 +405,57 @@ describe("AOS ACP agent", () => {
     })
     expect(test.faults.calls("models")).toHaveLength(2)
     test.close()
+  })
+
+  it("lists a created Session to nobody until a prompt reaches it, and frees one closed unprompted", async () => {
+    const test = await harness()
+    const ids = async () =>
+      [
+        ...(await test.agent.request(methods.agent.session.list, {})).sessions,
+        ...HgwSessionSearchResponseSchema.parse(
+          await test.agent.request(HGW_METHODS.sessions.search, {
+            _meta: { [HGW_META_KEY]: { query: "Untitled" } },
+          })
+        ).sessions,
+      ].map(({ sessionId }) => sessionId)
+    await test.create()
+    expect(await ids()).not.toContain(CREATED)
+    // Another connection on the Session holds it through the creator's close.
+    const other = await test.connect("connection-2")
+    const close = (browser: Browser) =>
+      browser.agent.request(methods.agent.session.close, { sessionId: CREATED })
+    await other.agent.request(methods.agent.session.resume, {
+      sessionId: CREATED,
+      cwd: "/",
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+    })
+
+    await close(test)
+    expect(test.discardSession).not.toHaveBeenCalled()
+    await close(other)
+
+    expect(test.discardSession).toHaveBeenCalledTimes(1)
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+      })
+    ).rejects.toMatchObject({ code: notFound().code })
+
+    // A prompted Session is a conversation: listed, and kept once closed.
+    const prompted = await harness()
+    await prompted.create()
+    await prompt(prompted, "Hello", CREATED)
+    expect(
+      (await prompted.agent.request(methods.agent.session.list, {})).sessions
+    ).toContainEqual(expect.objectContaining({ sessionId: CREATED }))
+    await prompted.agent.request(methods.agent.session.close, {
+      sessionId: CREATED,
+    })
+    expect(prompted.discardSession).not.toHaveBeenCalled()
+    test.close()
+    other.close()
+    prompted.close()
   })
 
   it("creates one Session for a repeated client id and refuses the id for another create", async () => {

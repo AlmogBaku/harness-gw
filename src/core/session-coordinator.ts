@@ -30,6 +30,7 @@ import {
 
 import {
   ServerRequestStaleError,
+  ServerSessionNotFoundError,
   ServerTurnConflictError,
   ServerTurnCapacityError,
   ServerTurnEndedError,
@@ -46,6 +47,7 @@ import {
 import type { MemberScope, WorkspaceCapabilities } from "./member"
 import {
   SessionContextResponseSchema,
+  SessionCreateResponseSchema,
   SessionModelsResponseSchema,
   SessionWorkspaceCapabilitiesResponseSchema,
   type Session,
@@ -61,7 +63,9 @@ import {
   RECONCILE_BACKOFF,
   RETRY_BUDGET,
   UNCERTAINTY_DEADLINE_MS,
+  UNPROMPTED_IDLE_MS,
 } from "./limits"
+import * as ids from "./ids"
 import { coreFailure } from "./failures"
 import { retryBudget } from "./link"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
@@ -217,9 +221,16 @@ export type SessionCoordinatorOptions = {
     | "updateModel"
     | "createSession"
     | "forkSession"
+    | "discardSession"
     | "publicError"
     | "link"
-  >
+  > &
+    Partial<Pick<ServerRuntime, "resolveProviderSessionId">>
+  /**
+   * How long nothing may hold a Session created here and never prompted
+   * before it is discarded.
+   */
+  unpromptedIdleMs?: number
   maxActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
@@ -1016,6 +1027,17 @@ export class SessionCoordinator {
   /** Each send's landing alone: a repeat subscribes on its own. */
   readonly #sends: ClientAdmissions<void>
   readonly #creates: ClientAdmissions<unknown>
+  /**
+   * The Sessions a create here made and no prompt has reached, by session
+   * key: left out of every list, and discarded once nothing holds them. One
+   * `discarding` stays so, and a resume or prompt finds it gone.
+   */
+  readonly #unprompted = new Map<
+    string,
+    { scope: SessionScope; discarding: boolean; idle?: unknown }
+  >()
+  /** How many memberships, of either listener, are on each Session. */
+  readonly #holders = new Map<string, number>()
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
@@ -1509,14 +1531,133 @@ export class SessionCoordinator {
     if (this.#closed) throw new Error("Session coordinator is closed")
     const create = () =>
       this.options.readings.createSession(agentId, input.title)
-    if (input.clientId === undefined) return create()
+    // Only the create that ran marks its Session: a repeat answers one that
+    // a prompt may have reached since.
+    const marked = () =>
+      create().then((created) => {
+        this.#markUnprompted(agentId, created)
+        return created
+      })
+    if (input.clientId === undefined) return marked()
     const key = clientKey(principalId, agentId, input.clientId)
     const fingerprint = admissionFingerprint({ title: input.title })
     const repeated = this.#creates.repeated(principalId, key, fingerprint)
     if (repeated) return repeated
-    const created = create()
+    const created = marked()
     this.#creates.remember(principalId, key, fingerprint, created)
     return created
+  }
+
+  /**
+   * Marks the Session a create made as unprompted, keyed by its native
+   * Session, so every listener's members of it count. Nothing holds it until
+   * its creator joins, so its idle window starts now.
+   */
+  #markUnprompted(agentId: string, created: unknown) {
+    const { readings } = this.options
+    const parsed = SessionCreateResponseSchema.safeParse(created)
+    if (!readings.discardSession || !parsed.success) return
+    const { id } = parsed.data.session
+    const providerSessionId = readings.resolveProviderSessionId?.(agentId, id)
+    if (!providerSessionId) return
+    const scope = { agentId, providerSessionId, sessionId: ids.sessionId(id) }
+    const marked = { scope, discarding: false }
+    this.#unprompted.set(scopeKey(scope), marked)
+    this.#idleUnprompted(scopeKey(scope))
+  }
+
+  /**
+   * Whether a create here made the Session and no prompt reached it, or it is
+   * being discarded: a list shows it to nobody.
+   */
+  unprompted(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    return this.#unprompted.has(scopeKey(scope))
+  }
+
+  /**
+   * Holds a Session for one membership, of either listener, until the
+   * returned release: a held Session is never discarded. The last release
+   * of an unprompted one starts its idle window.
+   */
+  hold(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    const key = scopeKey(scope)
+    this.#holders.set(key, (this.#holders.get(key) ?? 0) + 1)
+    const marked = this.#unprompted.get(key)
+    if (marked) this.#clearIdle(marked)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      const count = (this.#holders.get(key) ?? 0) - 1
+      if (count > 0) {
+        this.#holders.set(key, count)
+        return
+      }
+      this.#holders.delete(key)
+      this.#idleUnprompted(key)
+    }
+  }
+
+  /**
+   * Discards an unprompted Session at once, as `session/close` ends one,
+   * where nothing else holds it.
+   */
+  closed(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    return this.#discard(scopeKey(scope))
+  }
+
+  #clearIdle(marked: { idle?: unknown }) {
+    this.#clock.clearTimeout(marked.idle)
+    marked.idle = undefined
+  }
+
+  /** Starts the idle window of an unprompted Session nothing holds. */
+  #idleUnprompted(key: string) {
+    const marked = this.#unprompted.get(key)
+    if (!marked || marked.discarding || this.#holders.has(key)) return
+    this.#clearIdle(marked)
+    marked.idle = this.#clock.setTimeout(() => {
+      marked.idle = undefined
+      this.#discard(key).catch((err: unknown) =>
+        this.#logger.error({ err }, "session.discard.failed")
+      )
+    }, this.options.unpromptedIdleMs ?? UNPROMPTED_IDLE_MS)
+  }
+
+  /**
+   * Discards an unprompted Session nothing holds, in one checked step: the
+   * mark and the holders are read and the Session taken as discarding in the
+   * same turn, so no join or prompt lands between, and any after finds it
+   * gone. Then the runtime frees it. One it keeps, holding a message, is no
+   * longer unprompted; one it fails to free is marked again for its next
+   * idle window.
+   */
+  async #discard(key: string) {
+    const marked = this.#unprompted.get(key)
+    const { readings } = this.options
+    if (!marked || marked.discarding || this.#holders.has(key)) return
+    if (!readings.discardSession || this.#closed) return
+    marked.discarding = true
+    this.#clearIdle(marked)
+    const { agentId, providerSessionId, sessionId } = marked.scope
+    try {
+      const discarded = await readings.discardSession(
+        agentId,
+        providerSessionId
+      )
+      this.#logger.info({ agentId, sessionId, discarded }, "session.discarded")
+      if (!discarded) this.#unprompted.delete(key)
+    } catch (err) {
+      this.#logger.warn({ err, agentId, sessionId }, "session.discard.failed")
+      marked.discarding = false
+      this.#idleUnprompted(key)
+    }
+  }
+
+  /** Refuses a Session being discarded, as the runtime will once it is. */
+  refuseDiscarded(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    if (this.#unprompted.get(scopeKey(scope))?.discarding)
+      throw new ServerSessionNotFoundError()
   }
 
   /** Whether the runtime forks Sessions. */
@@ -1708,6 +1849,10 @@ export class SessionCoordinator {
     const deadline = this.#deadline()
     try {
       const at = Date.now()
+      // From the moment a prompt goes to the runtime, the Session is one a
+      // list shows and nothing discards, whether or not the start lands.
+      this.refuseDiscarded(scope)
+      this.#unprompted.delete(key)
       const handle = await this.#startNative(scope, input, stage, deadline)
       const execution: Execution = this.#createExecution({
         scope,
@@ -2160,6 +2305,7 @@ export class SessionCoordinator {
   close() {
     if (this.#closed) return
     this.#closed = true
+    for (const marked of this.#unprompted.values()) this.#clearIdle(marked)
     this.#closing.abort(new Error("Session coordinator is closed"))
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()

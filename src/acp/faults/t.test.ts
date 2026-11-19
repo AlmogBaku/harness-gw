@@ -25,6 +25,7 @@ import {
   READING_BACKOFF,
   RECONCILE_BACKOFF,
   UNCERTAINTY_DEADLINE_MS,
+  UNPROMPTED_IDLE_MS,
 } from "../../core/limits"
 import type { ServerTurnListener } from "../../core/runtime"
 import { createGuestConnection } from "../../guest/acp"
@@ -1145,7 +1146,9 @@ describe("gateway fault table", () => {
       )
 
     for (const browser of t.browsers) browser.close()
-    await clock.advance(0)
+    // A Session a row created and never prompted is discarded once nothing
+    // has held it for its idle window.
+    await clock.advance(UNPROMPTED_IDLE_MS)
     assertLeakFree(t.gateway)
   })
 })

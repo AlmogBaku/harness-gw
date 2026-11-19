@@ -76,7 +76,7 @@ runWireContract(
       // (`opencode/adapter.ts:454`), so no thought level is offered.
       thoughtLevelDefault: "the adapter offers no OpenCode thought level",
       setupAnswerCarriesLists:
-        "OpenCode names a Session's model only once a message sets it",
+        "the adapter reads no models before the native row names a model",
       // OpenCode streams every part it stores (`message.part.updated`) and
       // has no setting that withholds tool or reasoning parts.
       quietStreamPassedThrough: "OpenCode has no quieter stream",
