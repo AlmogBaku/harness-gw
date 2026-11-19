@@ -1,3 +1,5 @@
+import { INTERACTION_PROTOCOL } from "../protocol"
+
 import type { HgwWorkspaceCapabilities } from "./hgw-client"
 
 type Capabilities = HgwWorkspaceCapabilities
@@ -43,4 +45,55 @@ export function sessionCapabilities({
       ...content,
     },
   }
+}
+
+/**
+ * A Session that reports its models and context, and takes steering, Edit
+ * and Retry, approvals, and questions.
+ */
+export function composerCapabilities(): Capabilities {
+  return sessionCapabilities({
+    workspace: {
+      models: {
+        status: "available",
+        scope: "session",
+        selection: "native-session",
+        choices: "provider-reported",
+      },
+      context: {
+        status: "available",
+        scope: "session",
+        source: "provider-usage-or-estimate",
+        breakdown: "provider-categories",
+      },
+    },
+    interactions: {
+      steering: {
+        status: "available",
+        scope: "active-turn",
+        semantics: "visible-user-message",
+        input: "text",
+        fallback: "provider-queue",
+      },
+      rewind: { status: "available", scope: "user-turn" },
+      approvals: {
+        status: "available",
+        protocol: INTERACTION_PROTOCOL,
+        scope: "turn",
+        choices: [{ value: "once", scope: "request" }],
+        maxPending: 8,
+      },
+      questions: {
+        status: "available",
+        protocol: INTERACTION_PROTOCOL,
+        scope: "turn",
+        answerModes: ["single", "multiple", "free-text"],
+        cancellation: "native-empty-answer",
+        maxQuestions: 8,
+        maxChoicesPerQuestion: 8,
+        maxAnswerValuesPerQuestion: 8,
+        maxStringBytes: 4_096,
+      },
+    },
+  })
 }

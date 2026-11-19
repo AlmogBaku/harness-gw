@@ -316,9 +316,22 @@ export const HgwHistoryPageTagSchema = readObject({
 })
 
 /**
+ * `_meta.hgw` of a `session/new`, `session/fork`, or `session/resume` answer:
+ * the Session's capabilities, beside the answer's own `availableCommands` as
+ * `available_commands_update._meta.hgw` carries them beside its commands
+ * (`HgwAvailableCommandsMetaSchema`), in the same shape. A client reads it
+ * apart from the rest of a resume's `_meta.hgw`, so a capability it cannot
+ * read costs only the capabilities, never the join.
+ */
+export const HgwSessionSetupResponseMetaSchema = readObject({
+  capabilities: SessionWorkspaceCapabilitiesResponseSchema,
+})
+
+/**
  * `ResumeSessionResponse._meta.hgw`. `position` is the turn and sequence the
  * joined Session's stream stands at, which a later resume continues from.
- * The Session's row, execution, models and capabilities follow the answer as
+ * The capabilities `HgwSessionSetupResponseMetaSchema` reads ride in the same
+ * `_meta.hgw`; the Session's row, execution and usage follow the answer as
  * updates.
  */
 export const HgwSessionResumeResponseMetaSchema = readObject({

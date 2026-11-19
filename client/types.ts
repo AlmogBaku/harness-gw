@@ -1,5 +1,6 @@
 import type {
   AgentCapabilities,
+  AvailableCommand,
   ContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
@@ -25,6 +26,7 @@ import type {
   HgwSteerRequestSchema,
   HgwSteerResponseSchema,
 } from "../protocol/acp"
+import type { HgwWorkspaceCapabilities } from "./hgw-client"
 
 /**
  * The browser-side seam over one ACP v2 WebSocket connection to the gateway.
@@ -90,6 +92,19 @@ export type AcpSessionReplayListener = () =>
   | void
 
 /**
+ * What a Session reports of its setup: its config options, its slash commands,
+ * and the capabilities that travel with the commands. A `session/new`,
+ * `session/resume`, or `session/fork` answer carries all three, and a
+ * `config_option_update` or `available_commands_update` one part. Each field
+ * is the complete list it names; one left out is unchanged.
+ */
+export type AcpSessionSetup = {
+  readonly configOptions?: readonly SessionConfigOption[]
+  readonly availableCommands?: readonly AvailableCommand[]
+  readonly capabilities?: HgwWorkspaceCapabilities
+}
+
+/**
  * Where one opened Session stands: `joining` until the gateway has joined it,
  * `joined` while it follows the Session, `unavailable` while a failed join
  * waits out its backoff or one the transport refuses waits for the next, and
@@ -119,6 +134,14 @@ export type AcpSessionListener = {
    * may return a callback, called once that replay has settled either way.
    */
   replay?: AcpSessionReplayListener
+  /**
+   * The Session's setup: on subscribe, what it has reported so far by answer
+   * or update, then what each later setup answer reports, such as a rejoin's
+   * `session/resume`. Live updates of those lists reach `update` alone. An
+   * answer never replaces a list an update reported after the answer was
+   * asked for, which is the newer one.
+   */
+  setup?: (setup: AcpSessionSetup) => void
   state?: (state: AcpSessionState) => void
 }
 
@@ -162,8 +185,10 @@ export interface AcpConnection {
   login(token: string): Promise<void>
 
   /**
-   * The new Session's row, capabilities and config options follow as updates.
-   * The browser holds the shared address, so it names the Agent.
+   * Creates a Session, opened in its grace: it parts unless a listener
+   * subscribes within it, and one that does is handed the setup the answer
+   * reported. Its row follows as an update. The browser holds the shared
+   * address, so it names the Agent.
    */
   newSession(
     meta: z.infer<typeof HgwSessionNewMetaSchema> & { agentId: string }
@@ -171,7 +196,7 @@ export interface AcpConnection {
   /**
    * Forks a Session into a new one holding its conversation so far, where
    * `capabilities.session.fork` says the gateway forks; the gateway joins
-   * this connection to it, as `newSession` does.
+   * this connection to it, and it opens in its grace, as `newSession` does.
    */
   forkSession(sessionId: string): Promise<{ sessionId: string }>
   listSessions(

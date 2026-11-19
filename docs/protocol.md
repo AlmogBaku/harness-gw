@@ -279,7 +279,8 @@ Agent's rows; a list on one Agent's address answers either as an error.
 listed or resumed returns invalid params naming the per-Agent address; on an
 Agent's address a Session that is already gone deletes successfully.
 
-**`session/fork`** (operator listener only): answers `{ sessionId }` of a new
+**`session/fork`** (operator listener only): answers the `sessionId` and setup
+(see [Response `_meta.hgw` shapes](#response-_metahgw-shapes)) of a new
 Session holding the conversation so far, and joins the connection to it as
 `session/new` joins its creator; the original Session is left as it is. It
 follows `session/new`'s `cwd`, `mcpServers` and `additionalDirectories` rules,
@@ -363,17 +364,31 @@ before this rule applies.
 
 ### Response `_meta.hgw` shapes
 
-**`session/new`** response: `{ sessionId }` as a top-level result field, with no
-`_meta.hgw`. The Session row (`session_info_update`), capabilities
-(`available_commands_update._meta.hgw.capabilities`), models, and usage arrive
-as events after the answer.
+**Setup answers.** The `session/new`, `session/fork`, and `session/resume`
+answers carry the Session's setup, as ACP v2 asks of a setup response: its
+config options (model and effort) in `configOptions`, its slash commands in
+`availableCommands`, and the capabilities beyond those commands in
+`_meta.hgw.capabilities` (`HgwSessionSetupResponseMetaSchema`,
+`protocol/acp.ts`), the same shape `available_commands_update._meta.hgw`
+carries beside its commands. A later change arrives as a
+`config_option_update` or `available_commands_update`, each replacing its whole
+list. The SDK client keeps a list an update reported after it sent the request
+over the one the answer carries, which is then the older; it reads a list the
+answer leaves out, or a `capabilities` it cannot read, as unchanged; and it
+hands the setup it holds to each listener that subscribes later
+(`AcpSessionListener.setup`), so a Session subscribed to in its creation's
+grace shows its models and commands at once.
+
+**`session/new`** response: `sessionId` as a top-level result field and the
+setup above. The Session row (`session_info_update`) and usage arrive as events
+after the answer.
 
 **`session/resume`** response (`HgwSessionResumeResponseMetaSchema`, `protocol/acp.ts`):
-`{ position?, history? }` in `_meta.hgw` — nothing else. `position` is
+the setup above, and `{ position?, history? }` beside the capabilities in
+`_meta.hgw`. `position` is
 the turn and sequence the joined Session stands at; a later resume continues
 from it. Session info (`session_info_update`), execution state (`state_update`),
-capabilities (`available_commands_update._meta.hgw.capabilities`), models, and
-usage arrive as events after the answer. When the journal cannot answer `from`
+and usage arrive as events after the answer. When the journal cannot answer `from`
 (`ReplayCursorLostError`, `core/channel.ts`), the gateway rebuilds the Session
 from history as a `start` resume does: the retained messages arrive as standard
 `session/update`s before the answer, the live turn follows them, and the answer

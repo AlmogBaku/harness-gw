@@ -8,10 +8,12 @@ import {
   createAcpComposerStore,
   foldTurnUsage,
 } from "./acp-workspace-client-composer"
+import { composerCapabilities } from "./test-capabilities"
 import type {
   AcpConnection,
   AcpSessionListener,
   AcpSessionReplayListener,
+  AcpSessionSetup,
   AcpSessionUpdateListener,
 } from "./types"
 
@@ -45,16 +47,27 @@ function configOptions(model: string, effort: string): SessionConfigOption[] {
   ]
 }
 
-/** The three connection seams the store uses; the rest is never reached. */
-function createStore({ reported = true, deferred = false } = {}) {
+/**
+ * The three connection seams the store uses; the rest is never reached. A
+ * `held` setup is handed with the subscription, as the connection hands what
+ * a Session already reported.
+ */
+function createStore({
+  reported = true,
+  deferred = false,
+  held,
+}: { reported?: boolean; deferred?: boolean; held?: AcpSessionSetup } = {}) {
   /** Each deferred write's answer, sent when the test calls it. */
   const answers: (() => void)[] = []
   let onUpdate: AcpSessionUpdateListener = () => undefined
   let onReplay: AcpSessionReplayListener = () => undefined
+  let onSetup: (setup: AcpSessionSetup) => void = () => undefined
   const connection = {
     subscribe: (_: string, listener: AcpSessionListener) => {
       if (listener.update) onUpdate = listener.update
       if (listener.replay) onReplay = listener.replay
+      if (listener.setup) onSetup = listener.setup
+      if (held) onSetup(held)
       return () => undefined
     },
     setConfigOption: (_: string, configId: string, value: string) => {
@@ -89,7 +102,15 @@ function createStore({ reported = true, deferred = false } = {}) {
         ...(cost ? { cost } : {}),
       }
     )
-  return { store, emit, idle, release, answers, replay: () => onReplay() }
+  return {
+    store,
+    emit,
+    idle,
+    release,
+    answers,
+    replay: () => onReplay(),
+    setup: (setup: AcpSessionSetup) => onSetup(setup),
+  }
 }
 
 const USAGE = { inputTokens: 100, outputTokens: 20, totalTokens: 120 }
@@ -169,6 +190,40 @@ describe("createAcpComposerStore model feed", () => {
     expect(listener).toHaveBeenCalledTimes(1)
     release()
     expect(store.models(SESSION_ID)).toBeUndefined()
+  })
+
+  it("folds a held Session's setup as its updates fold, keeping a list a later setup leaves out", () => {
+    const commands = [
+      { type: "command" as const, name: "plan", description: "Plan the work" },
+    ]
+    // Handed with the subscription, so it reads before anything else arrives.
+    const { store, setup } = createStore({
+      reported: false,
+      held: {
+        configOptions: configOptions("opus", "high"),
+        availableCommands: commands,
+        capabilities: composerCapabilities(),
+      },
+    })
+    expect(store.models(SESSION_ID)).toMatchObject({
+      selectedId: "opus",
+      effortId: "high",
+    })
+    const offered = {
+      status: "available",
+      scope: "session",
+      commands: [{ name: "plan", description: "Plan the work" }],
+    }
+    expect(store.capabilities(SESSION_ID)?.workspace.slashCommands).toEqual(
+      offered
+    )
+
+    setup({ configOptions: configOptions("sonnet", "low") })
+
+    expect(store.models(SESSION_ID)?.selectedId).toBe("sonnet")
+    expect(store.capabilities(SESSION_ID)?.workspace.slashCommands).toEqual(
+      offered
+    )
   })
 
   it("keeps one feed and one reading until the model changes", () => {

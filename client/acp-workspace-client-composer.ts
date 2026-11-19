@@ -5,11 +5,9 @@ import {
   type SessionConfigSelectOption,
   type Usage,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
-import type { z } from "zod"
 
 import type { SlashCommand } from "../protocol"
 import {
-  HgwAvailableCommandsMetaSchema,
   HgwStateMetaSchema,
   HgwUsageMetaSchema,
   type HgwCost,
@@ -26,7 +24,8 @@ import type {
   HgwModelChoices,
   HgwWorkspaceCapabilities,
 } from "./hgw-client"
-import type { AcpConnection } from "./types"
+import { setupOfUpdate } from "./connection"
+import type { AcpConnection, AcpSessionSetup } from "./types"
 
 /**
  * The composer's provider-authoritative Session projection over ACP config
@@ -39,10 +38,6 @@ import type { AcpConnection } from "./types"
 /** `SessionConfigOption.category` of the two options the composer drives. */
 const MODEL_CATEGORY = "model"
 const EFFORT_CATEGORY = "thought_level"
-
-type AcpCapabilities = z.infer<
-  typeof HgwAvailableCommandsMetaSchema
->["capabilities"]
 
 type UsageUpdate = Extract<SessionUpdate, { sessionUpdate: "usage_update" }>
 
@@ -69,7 +64,7 @@ export type AcpTurnUsage = {
 type SessionEntry = {
   /** What the Session reports it supports, with its commands folded in. */
   capabilities?: HgwWorkspaceCapabilities
-  reported?: AcpCapabilities
+  reported?: HgwWorkspaceCapabilities
   commands?: SlashCommand[]
   projection: AcpModelProjection
   /** The model the projection names, the same reference until it changes. */
@@ -244,7 +239,7 @@ export function foldTurnUsage(
 
 /** Slash commands stay part of the capability projection the composer reads. */
 function capabilitiesOf(
-  capabilities: AcpCapabilities,
+  capabilities: HgwWorkspaceCapabilities,
   commands: SlashCommand[] | undefined
 ): HgwWorkspaceCapabilities {
   if (!commands) return capabilities
@@ -289,34 +284,56 @@ export function createAcpComposerStore(connection: AcpConnection) {
     for (const listener of registry.get(sessionId) ?? []) listener()
   }
 
-  /** Every projection change goes through here, so the feed follows each one. */
+  /** The Session's entry, which the first thing it reports starts. */
+  function entryOf(sessionId: string) {
+    const known = sessions.get(sessionId) ?? { projection: {}, writes: 0 }
+    sessions.set(sessionId, known)
+    return known
+  }
+
+  /**
+   * Every projection change goes through here, so the feed follows each one;
+   * whoever changes it tells the Session's listeners.
+   */
   function project(
     known: SessionEntry,
     sessionId: string,
     next: AcpModelProjection
   ) {
     known.projection = next
-    notify(listeners, sessionId)
     const current = currentOf(next, known.current)
     if (current === known.current) return
     known.current = current
     notify(modelListeners, sessionId)
   }
 
+  /**
+   * Folds what the Session reports of its setup, from an update or a setup
+   * answer alike: each list it names replaces the one held, and one it leaves
+   * out stays.
+   */
+  function settle(
+    known: SessionEntry,
+    sessionId: string,
+    { configOptions, availableCommands, capabilities }: AcpSessionSetup
+  ) {
+    if (configOptions) project(known, sessionId, projectModels(configOptions))
+    if (availableCommands)
+      known.commands = availableCommands.map(({ name, description }) => ({
+        name,
+        description,
+      }))
+    if (capabilities) known.reported = capabilities
+    if (known.reported)
+      known.capabilities = capabilitiesOf(known.reported, known.commands)
+    notify(listeners, sessionId)
+  }
+
   function accept(sessionId: string, update: SessionUpdate, meta: unknown) {
-    const known = sessions.get(sessionId) ?? { projection: {}, writes: 0 }
-    sessions.set(sessionId, known)
-    if (SessionUpdate.isConfigOptionUpdate(update)) {
-      project(known, sessionId, projectModels(update.configOptions))
-    } else if (SessionUpdate.isAvailableCommandsUpdate(update)) {
-      known.commands = update.availableCommands.map(
-        ({ name, description }) => ({ name, description })
-      )
-      const aos = HgwAvailableCommandsMetaSchema.safeParse(meta)
-      if (aos.success) known.reported = aos.data.capabilities
-      if (known.reported)
-        known.capabilities = capabilitiesOf(known.reported, known.commands)
-      notify(listeners, sessionId)
+    const known = entryOf(sessionId)
+    const setup = setupOfUpdate(update, meta)
+    if (setup) {
+      settle(known, sessionId, setup)
     } else if (SessionUpdate.isUsageUpdate(update)) {
       const context = projectContext(update, meta)
       if (!context) return
@@ -335,10 +352,16 @@ export function createAcpComposerStore(connection: AcpConnection) {
     }
   }
 
-  /** Folds the Session's updates until the returned release. */
+  /**
+   * Folds the Session's updates and setup answers until the returned release.
+   * The setup the Session already reported comes with the subscription, so a
+   * Session held right after it is created reads its models and commands at
+   * once.
+   */
   function subscribe(sessionId: string) {
     const leave = connection.subscribe(sessionId, {
       update: (update, meta) => accept(sessionId, update, meta),
+      setup: (setup) => settle(entryOf(sessionId), sessionId, setup),
       // A from-start replay restates every settled turn, so the spend it
       // folds starts over rather than counting each turn twice.
       replay: () => {
@@ -389,7 +412,10 @@ export function createAcpComposerStore(connection: AcpConnection) {
     const next = projectModels(
       await connection.setConfigOption(sessionId, configId, valueId)
     )
-    if (!stale(sessionId, known, generation)) project(known, sessionId, next)
+    if (!stale(sessionId, known, generation)) {
+      project(known, sessionId, next)
+      notify(listeners, sessionId)
+    }
     if (!next.models) throw new Error("The Session reports no models")
     return next.models
   }

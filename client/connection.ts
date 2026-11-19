@@ -14,6 +14,7 @@ import {
   type ParamsParser,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type ResumeSessionResponse,
   type SendRequestOptions,
   type Stream,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
@@ -47,6 +48,7 @@ import {
   HgwActivityNotificationSchema,
   HgwAgentUpdateResponseSchema,
   HgwAgentsListResponseSchema,
+  HgwAvailableCommandsMetaSchema,
   HgwChunkMetaSchema,
   HgwComposerPrefillNotificationSchema,
   HgwErrorNotificationSchema,
@@ -56,6 +58,7 @@ import {
   HgwSessionResumeResponseMetaSchema,
   HgwSessionSearchMetaSchema,
   HgwSessionSearchResponseSchema,
+  HgwSessionSetupResponseMetaSchema,
   HgwSteerResponseSchema,
   type HgwHistoryCursor,
   type HgwInitializeMeta,
@@ -80,6 +83,7 @@ import type {
   AcpHistoryPage,
   AcpPendingRequest,
   AcpSessionListener,
+  AcpSessionSetup,
   AcpSessionState,
 } from "./types"
 
@@ -241,6 +245,59 @@ function hgwMetaOf(meta: unknown): Record<string, unknown> | undefined {
   const parsed = HgwEnvelopeSchema.safeParse(meta)
   return parsed.success ? parsed.data[HGW_META_KEY] : undefined
 }
+
+/**
+ * What a `config_option_update` or `available_commands_update` reports of its
+ * Session's setup, from the update and its `_meta.hgw`; undefined for any
+ * other update. Capabilities this client cannot read are left out, never the
+ * commands they travel with.
+ */
+export function setupOfUpdate(
+  update: SessionUpdate,
+  meta: unknown
+): AcpSessionSetup | undefined {
+  if (SessionUpdate.isConfigOptionUpdate(update))
+    return { configOptions: update.configOptions }
+  if (!SessionUpdate.isAvailableCommandsUpdate(update)) return undefined
+  const capabilities =
+    HgwAvailableCommandsMetaSchema.safeParse(meta).data?.capabilities
+  return {
+    availableCommands: update.availableCommands,
+    ...(capabilities ? { capabilities } : {}),
+  }
+}
+
+/**
+ * What a `session/new`, `session/resume`, or `session/fork` answer reports of
+ * its Session's setup. A list the answer leaves out, or sends as `null`,
+ * stays as it was, so a gateway that answers with none changes nothing.
+ */
+function setupOfAnswer(
+  answer: Pick<
+    ResumeSessionResponse,
+    "configOptions" | "availableCommands" | "_meta"
+  >
+): AcpSessionSetup {
+  const capabilities = HgwSessionSetupResponseMetaSchema.safeParse(
+    hgwMetaOf(answer._meta)
+  ).data?.capabilities
+  return {
+    ...(answer.configOptions ? { configOptions: answer.configOptions } : {}),
+    ...(answer.availableCommands
+      ? { availableCommands: answer.availableCommands }
+      : {}),
+    ...(capabilities ? { capabilities } : {}),
+  }
+}
+
+/**
+ * How many reports of each of a Session's lists this connection has kept;
+ * capabilities travel with the commands, so they count as commands.
+ */
+type SetupReports = { configOptions: number; commands: number }
+
+/** What a Session reported before it was opened here: nothing. */
+const NO_REPORTS: Readonly<SetupReports> = { configOptions: 0, commands: 0 }
 
 /** One of the gateway's ACP listener paths as a WebSocket URL from `base`. */
 export function acpSocketUrl(path: string, base: string) {
@@ -709,6 +766,13 @@ export function createAcpConnection(
     /** Why the transport refused the join, while the Session stays refused. */
     refusal?: unknown
     grace?: unknown
+    /**
+     * The newest setup the Session reported, by answer or update, which a
+     * listener that subscribes later is handed.
+     */
+    setup: AcpSessionSetup
+    /** How many reports of each list `setup` has taken. */
+    readonly reports: SetupReports
   }
   const sessions = new Map<string, OpenSession>()
   // The gateway answers `notFound` for a Session a fresh connection has not
@@ -942,6 +1006,8 @@ export function createAcpConnection(
         deliverChild(open, params.sessionId, params.update, meta)
         return
       }
+      const reported = setupOfUpdate(params.update, meta)
+      if (reported) report(open, reported)
       for (const { listener } of open.listeners)
         callEach(
           listener.update ? [listener.update] : [],
@@ -1182,6 +1248,7 @@ export function createAcpConnection(
       ? { settles: [...open.listeners].flatMap(settleOf), delivered: false }
       : undefined
     open.replaying = replaying
+    const asked = { ...open.reports }
     let replayed = false
     try {
       const response = await requestOn(
@@ -1212,6 +1279,7 @@ export function createAcpConnection(
       // Recorded before the replay settles, so whoever it settles reads the
       // cursor of the transcript it now holds.
       if (meta.history) open.history = meta.history
+      hand(open, report(open, setupOfAnswer(response), asked))
       if (fromStart) {
         open.replayed = true
         replayed = true
@@ -1253,6 +1321,48 @@ export function createAcpConnection(
   function settleOf({ listener }: Subscription) {
     const settle = listener.replay?.()
     return settle ? [settle] : []
+  }
+
+  /**
+   * Keeps what reported the Session's setup and answers what it kept. An
+   * update always reports the newest lists. An answer was asked for when the
+   * Session had taken the `asked` reports: a list reported since then may be
+   * newer than the answer's, and the gateway reports every change as an
+   * update too, so the answer leaves that list be and loses nothing by it.
+   */
+  function report(
+    open: OpenSession,
+    reported: AcpSessionSetup,
+    asked?: Readonly<SetupReports>
+  ): AcpSessionSetup {
+    const fresh = (list: keyof SetupReports) =>
+      asked === undefined || open.reports[list] === asked[list]
+    const { configOptions, availableCommands, capabilities } = reported
+    const kept: AcpSessionSetup = {
+      ...(configOptions && fresh("configOptions") ? { configOptions } : {}),
+      ...(availableCommands && fresh("commands") ? { availableCommands } : {}),
+      ...(capabilities && fresh("commands") ? { capabilities } : {}),
+    }
+    if (kept.configOptions) open.reports.configOptions += 1
+    if (kept.availableCommands || kept.capabilities) open.reports.commands += 1
+    open.setup = { ...open.setup, ...kept }
+    return kept
+  }
+
+  /** Hands the Session's listeners, or only those named, a setup that holds anything. */
+  function hand(
+    open: OpenSession,
+    setup: AcpSessionSetup,
+    listeners: Iterable<Subscription> = open.listeners
+  ) {
+    if (Object.keys(setup).length === 0) return
+    for (const { listener } of listeners)
+      callEach(
+        listener.setup ? [listener.setup] : [],
+        logger,
+        "acp.listener.failed",
+        setup
+      )
   }
 
   function notOpen() {
@@ -1327,6 +1437,8 @@ export function createAcpConnection(
       // Session whole to this listener too.
       if (known.replaying && !known.replaying.delivered)
         known.replaying.settles.push(...settleOf(subscription))
+      // No answer or update restates the setup for this listener alone.
+      hand(known, known.setup, [subscription])
       return () => leave(sessionId, known, subscription)
     }
     const open = openSession(sessionId, [subscription], false)
@@ -1348,6 +1460,8 @@ export function createAcpConnection(
       state: "joining",
       replayed: created,
       replayOwed: false,
+      setup: {},
+      reports: { ...NO_REPORTS },
     }
     sessions.set(sessionId, open)
     const initial = !joinable ? "detached" : created ? "joined" : "joining"
@@ -1370,6 +1484,29 @@ export function createAcpConnection(
     if (!open.listeners.delete(subscription) || open.listeners.size > 0) return
     if (sessions.get(sessionId) !== open) return
     open.grace = clock.setTimeout(() => part(sessionId, open), PART_GRACE_MS)
+  }
+
+  /**
+   * Opens a Session the gateway just joined this connection to, by a create
+   * or a fork, in its grace, keeping the setup its answer reported for the
+   * listener that comes to it. Nothing reported the Session before it was
+   * made, so only a report since it opened here is newer than the answer.
+   */
+  function openCreated(
+    sessionId: string,
+    answer: Parameters<typeof setupOfAnswer>[0]
+  ) {
+    let open = sessions.get(sessionId)
+    if (!open) {
+      const created = openSession(sessionId, [], true)
+      // It parts in its grace unless a listener comes to it.
+      created.grace = clock.setTimeout(
+        () => part(sessionId, created),
+        PART_GRACE_MS
+      )
+      open = created
+    }
+    hand(open, report(open, setupOfAnswer(answer), NO_REPORTS))
   }
 
   /**
@@ -1620,23 +1757,16 @@ export function createAcpConnection(
     login,
 
     async newSession(meta) {
-      const { sessionId } = await request("short", (agent, options) =>
+      const created = await request("short", (agent, options) =>
         agent.request(
           methods.agent.session.new,
           { cwd: AGENT_CWD, _meta: { [HGW_META_KEY]: meta } },
           options
         )
       )
-      owners.set(sessionId, meta.agentId)
-      // It parts in its grace unless a listener comes to it.
-      if (!sessions.has(sessionId)) {
-        const open = openSession(sessionId, [], true)
-        open.grace = clock.setTimeout(
-          () => part(sessionId, open),
-          PART_GRACE_MS
-        )
-      }
-      return { sessionId }
+      owners.set(created.sessionId, meta.agentId)
+      openCreated(created.sessionId, created)
+      return { sessionId: created.sessionId }
     },
 
     async forkSession(sessionId) {
@@ -1649,15 +1779,7 @@ export function createAcpConnection(
       )
       const agentId = owners.get(sessionId)
       if (agentId !== undefined) owners.set(forked.sessionId, agentId)
-      // The gateway joined this connection to it; it parts in its grace
-      // unless a listener comes to it.
-      if (!sessions.has(forked.sessionId)) {
-        const open = openSession(forked.sessionId, [], true)
-        open.grace = clock.setTimeout(
-          () => part(forked.sessionId, open),
-          PART_GRACE_MS
-        )
-      }
+      openCreated(forked.sessionId, forked)
       return { sessionId: forked.sessionId }
     },
 
@@ -1744,16 +1866,30 @@ export function createAcpConnection(
     },
 
     async setConfigOption(sessionId, configId, value) {
+      // Where the Session stood when the write last went out, which a resend
+      // after a rejoin moves on.
+      let asked: { open: OpenSession; reports: SetupReports } | undefined
       const response = await request(
         "medium",
-        (agent, options) =>
-          agent.request(
+        (agent, options) => {
+          const open = sessions.get(sessionId)
+          asked = open && { open, reports: { ...open.reports } }
+          return agent.request(
             methods.agent.session.setConfigOption,
             { sessionId, configId, type: "id", value },
             options
-          ),
+          )
+        },
         { sessionId }
       )
+      // The writer projects the answer itself. Kept, it is what a later
+      // listener is handed, and it outdates an answer asked for before it.
+      if (asked && sessions.get(sessionId) === asked.open)
+        report(
+          asked.open,
+          { configOptions: response.configOptions },
+          asked.reports
+        )
       return response.configOptions
     },
 
