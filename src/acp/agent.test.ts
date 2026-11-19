@@ -47,6 +47,7 @@ import { translateHistory } from "./translate/history"
 import { invalidParams, notFound } from "./validation"
 import {
   AGENT,
+  CAPABILITIES,
   CONNECTION,
   CREATED,
   FORKED,
@@ -80,6 +81,20 @@ import {
   waitFor,
   withoutStates,
 } from "./test-harness"
+
+/**
+ * The setup an operator's answer carries for the harness's Session: its
+ * model options and commands, and its capabilities in `_meta.hgw`.
+ */
+const ANSWERED_SETUP = {
+  configOptions: [
+    expect.objectContaining({ configId: "model", currentValue: "sonnet" }),
+  ],
+  availableCommands: [
+    { type: "command", name: "plan", description: "Draft a plan" },
+  ],
+  _meta: { [HGW_META_KEY]: { capabilities: CAPABILITIES } },
+}
 
 /** Every `_meta.hgw.sequence` the recorded run-stream updates carry, in order. */
 function sequencesOf(recorder: Recorder) {
@@ -247,7 +262,7 @@ describe("AOS ACP agent", () => {
       cwd: "/",
     })
 
-    expect(forked).toEqual({ sessionId: FORKED })
+    expect(forked).toEqual({ sessionId: FORKED, ...ANSWERED_SETUP })
     expect(test.forkSession).toHaveBeenCalledWith(AGENT, SESSION)
     await test.recorder.wait(
       (entry) =>
@@ -302,12 +317,12 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers a created Session's id alone and joins its creator to the Session's row, commands, model options and usage", async () => {
+  it("answers a created Session's id and setup, and joins its creator to the Session's row, commands, model options and usage", async () => {
     const test = await harness()
 
     const created = await test.create()
 
-    expect(created).toEqual({ sessionId: CREATED })
+    expect(created).toEqual({ sessionId: CREATED, ...ANSWERED_SETUP })
     await test.recorder.wait(
       () => updates(test.recorder).length === 4,
       "the created Session's readings"
@@ -361,6 +376,33 @@ describe("AOS ACP agent", () => {
         },
       },
     ])
+    // The answer's one read of each seeds the readings its creator joins.
+    expect(test.faults.calls("models")).toHaveLength(1)
+    expect(test.faults.calls("workspaceCapabilities")).toHaveLength(1)
+    test.close()
+  })
+
+  it("answers a create whose model read fails with no config options, and sends them once its readings read them", async () => {
+    const test = await harness()
+    test.faults.failOnce("models")
+
+    const created = await test.create()
+
+    // The gateway holds no model reading for a new Session, so the answer
+    // has none to tell; the commands it read still travel.
+    expect(created).toEqual({
+      sessionId: CREATED,
+      availableCommands: ANSWERED_SETUP.availableCommands,
+      _meta: ANSWERED_SETUP._meta,
+    })
+    const followed = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("config_option_update"),
+      "the created Session's model options"
+    )
+    expect(followed.params).toMatchObject({
+      update: { configOptions: ANSWERED_SETUP.configOptions },
+    })
+    expect(test.faults.calls("models")).toHaveLength(2)
     test.close()
   })
 
@@ -566,10 +608,16 @@ describe("AOS ACP agent", () => {
       replayFrom: { type: "start" },
     })
 
-    // The answer says only where the replay ended; the row and the model
-    // options follow it as updates.
+    // The answer carries the setup and where the replay ended; the row
+    // follows it as an update.
     expect(resumed).toEqual({
-      _meta: { [HGW_META_KEY]: { history: expect.any(Object) } },
+      ...ANSWERED_SETUP,
+      _meta: {
+        [HGW_META_KEY]: {
+          ...ANSWERED_SETUP._meta[HGW_META_KEY],
+          history: expect.any(Object),
+        },
+      },
     })
     expect(updates(test.recorder)[0]).toMatchObject({
       sessionId: SESSION,
@@ -3603,6 +3651,11 @@ const HistoryReplySchema = z.object({
   _meta: z.object({ hgw: z.object({ history: HgwHistoryCursorSchema }) }),
 })
 
+/** The history cursor a resume or page answer reports. */
+function historyOf(answer: unknown) {
+  return HistoryReplySchema.parse(answer)._meta.hgw.history
+}
+
 /** Reads the page older than `cursor`, as a browser scrolling back does. */
 function older(
   browser: Browser,
@@ -3740,9 +3793,9 @@ describe("History pages", () => {
     const page = await older(test, cursorOf(5))
 
     const sent = pageUpdates(test.recorder, from)
-    expect(page).toEqual({
-      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
-    })
+    expect(historyOf(page)).toEqual({ nextCursor: cursorOf(10) })
+    // A page read is a resume, whose answer restates the setup.
+    expect(page).toMatchObject(ANSWERED_SETUP)
     expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 5, 5)
     expect(sent.map((update) => update.messageId)).toEqual(
       conversation(12)
@@ -3765,7 +3818,7 @@ describe("History pages", () => {
     const last = test.recorder.entries.length
     const oldest = await older(test, cursorOf(10))
 
-    expect(oldest).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
+    expect(historyOf(oldest)).toEqual({})
     expect(pageUpdates(test.recorder, last)).toHaveLength(2)
     test.close()
   })
@@ -3938,8 +3991,8 @@ describe("History pages", () => {
       code: notFound().code,
     })
     await test.create()
-    await expect(older(test, cursorOf(5), CREATED)).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
+    expect(historyOf(await older(test, cursorOf(5), CREATED))).toEqual({
+      nextCursor: cursorOf(10),
     })
     await open(test)
     await test.agent.request(methods.agent.session.close, {
@@ -3982,8 +4035,8 @@ describe("History pages", () => {
     await test.list()
     await open(test)
 
-    await expect(older(test, cursorOf(18))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
+    expect(historyOf(await older(test, cursorOf(18)))).toEqual({
+      truncated: true,
     })
     await expect(older(test, cursorOf(20))).rejects.toMatchObject(
       INVALID_PARAMS
@@ -3997,8 +4050,8 @@ describe("History pages", () => {
     })
     await cut.list()
     await open(cut)
-    await expect(older(cut, cursorOf(10))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
+    expect(historyOf(await older(cut, cursorOf(10)))).toEqual({
+      truncated: true,
     })
     // A runtime at its reach may still count rows past it; no cursor leads there.
     cut.history.mockResolvedValueOnce({
@@ -4010,8 +4063,8 @@ describe("History pages", () => {
       nextOffset: 6,
       truncated: true,
     })
-    await expect(older(cut, cursorOf(5))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
+    expect(historyOf(await older(cut, cursorOf(5)))).toEqual({
+      truncated: true,
     })
     cut.close()
   })
@@ -4033,9 +4086,7 @@ describe("History pages", () => {
       nextOffset: 5,
     })
 
-    await expect(older(test, cursorOf(5))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: {} } },
-    })
+    expect(historyOf(await older(test, cursorOf(5)))).toEqual({})
     test.close()
   })
 

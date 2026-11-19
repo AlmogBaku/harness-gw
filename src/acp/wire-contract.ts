@@ -43,6 +43,7 @@ import {
   HGW_ACP_PATH,
   HGW_AUTH_METHOD_INVITE,
   HgwAvailableCommandsMetaSchema,
+  HgwSessionSetupResponseMetaSchema,
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
   HGW_METHODS,
@@ -79,6 +80,7 @@ export type WireContractRow =
   | "everyThoughtAndCallLive"
   | "quietStreamPassedThrough"
   | "forkJoinsNewSession"
+  | "setupAnswerCarriesLists"
   | "childAnnouncedBeforeItsEvents"
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
@@ -424,6 +426,49 @@ type WireAsk = Readonly<{
 type WireClient = ReturnType<typeof connectClient>
 
 /** A Session on `agentId`, created as the plain client's one setup step. */
+type SetupAnswer = {
+  configOptions?: unknown
+  availableCommands?: unknown
+  _meta?: Record<string, unknown> | null
+}
+
+/**
+ * A setup answer's commands and capabilities, and its config options unless
+ * `models` says the runtime reads none: each list is there as a list, never
+ * `null`, as ACP has every setup answer carry it.
+ */
+function expectSetupAnswer(answer: SetupAnswer, models = true) {
+  if (models) expect(answer.configOptions).toEqual(expect.any(Array))
+  else expect(answer).not.toHaveProperty("configOptions")
+  expect(answer.availableCommands).toEqual(expect.any(Array))
+  HgwSessionSetupResponseMetaSchema.parse(answer._meta?.[HGW_META_KEY])
+}
+
+/**
+ * A created Session's answer and a fresh connection's resume of it, each
+ * checked as a setup answer; both read the same Session, so both tell the
+ * same.
+ */
+async function createAndResume(
+  { clock, connectPlain }: WireHarness,
+  models: boolean
+) {
+  const plain = connectPlain()
+  await until(clock, plain.initialize())
+  const created = await until(
+    clock,
+    plain.connection.agent.request(methods.agent.session.new, {
+      cwd: plain.folder,
+    })
+  )
+  const reader = connectPlain()
+  await until(clock, reader.initialize())
+  const resumed = await until(clock, resumeFromStart(reader, created.sessionId))
+  for (const answer of [created, resumed]) expectSetupAnswer(answer, models)
+  expect(resumed.configOptions).toEqual(created.configOptions)
+  expect(resumed.availableCommands).toEqual(created.availableCommands)
+}
+
 async function newSession({ connection, folder }: WireClient) {
   const { sessionId } = await connection.agent.request(
     methods.agent.session.new,
@@ -1205,6 +1250,19 @@ export function runWireContract(
           expect(
             agentSide(reader.updates).messages.map(({ text }) => text)
           ).toContain("The file lists three names.")
+        }
+      )
+
+      row(
+        "setupAnswerCarriesLists",
+        "answers a create and a resume with the Session's config options, commands and capabilities",
+        (harness) => createAndResume(harness, true),
+        {
+          gapCheck: {
+            title:
+              "answers a create and a resume with the Session's commands and capabilities, and no config options it cannot read",
+            body: (harness) => createAndResume(harness, false),
+          },
         }
       )
 

@@ -29,6 +29,7 @@ import {
   unhandledKind,
   type MemberConnection,
   type MemberEvent,
+  type MemberSetup,
   type SessionNotice,
   type TurnStream,
   type WorkspaceEvent,
@@ -195,20 +196,42 @@ function sessionInfoUpdate(row: SessionRow): SessionUpdate {
   }
 }
 
-function commandsUpdate(capabilities: WorkspaceCapabilities): SessionUpdate {
+/** A Session's slash commands as ACP lists them. */
+function commandsOf(capabilities: WorkspaceCapabilities) {
   const { slashCommands } = capabilities.workspace
+  return (
+    slashCommands.status === "available" ? slashCommands.commands : []
+  ).map(({ name, description }) => ({
+    // A skill is a command too: the `skill` variant is not in the spec yet.
+    type: "command" as const,
+    name,
+    description: description ?? "",
+  }))
+}
+
+function commandsUpdate(capabilities: WorkspaceCapabilities): SessionUpdate {
   return {
     sessionUpdate: "available_commands_update",
-    availableCommands: (slashCommands.status === "available"
-      ? slashCommands.commands
-      : []
-    ).map(({ name, description }) => ({
-      // A skill is a command too: the `skill` variant is not in the spec yet.
-      type: "command" as const,
-      name,
-      description: description ?? "",
-    })),
+    availableCommands: commandsOf(capabilities),
     _meta: { [HGW_META_KEY]: { capabilities } },
+  }
+}
+
+/**
+ * The setup fields of a `session/new`, `session/resume`, or `session/fork`
+ * answer, from what the member's stack showed of its readings: the config
+ * options and commands as their updates carry them, and the capabilities in
+ * `_meta.hgw` (`HgwSessionSetupResponseMetaSchema`). A reading the stack hid,
+ * or none the gateway holds, leaves its field out, never `null`.
+ */
+export function setupAnswer(
+  translators: Pick<AcpConnectionContext["translators"], "configOptionsOf">,
+  { models, capabilities }: MemberSetup
+) {
+  return {
+    ...(models ? { configOptions: translators.configOptionsOf(models) } : {}),
+    ...(capabilities ? { availableCommands: commandsOf(capabilities) } : {}),
+    meta: capabilities ? { capabilities } : {},
   }
 }
 

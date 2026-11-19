@@ -1536,6 +1536,10 @@ export function createAcpConnection(
       const { history } = HgwHistoryPageResponseMetaSchema.parse(
         hgwMetaOf(response._meta)
       )
+      // A page read is a resume, whose answer restates the setup as every
+      // resume's does.
+      if (sessions.get(sessionId) === open)
+        hand(open, report(open, setupOfAnswer(response)))
       return { updates, history }
     } finally {
       if (open.page === updates) open.page = undefined

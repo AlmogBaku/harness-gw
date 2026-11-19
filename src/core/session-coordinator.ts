@@ -43,7 +43,7 @@ import {
   type ServerTurnHandle,
   type SessionScope,
 } from "./runtime"
-import type { WorkspaceCapabilities } from "./member"
+import type { MemberScope, WorkspaceCapabilities } from "./member"
 import {
   SessionContextResponseSchema,
   SessionModelsResponseSchema,
@@ -1114,6 +1114,32 @@ export class SessionCoordinator {
       for (const leave of leaves) leave?.()
       this.#removeSubscriber(key)
     }
+  }
+
+  /**
+   * The model options and capabilities a setup answer to `membershipId`
+   * carries, each read at most once and seeded for that member's own
+   * subscription, so the runtime is not read again when it joins; one that
+   * cannot be read answers the reading held, or none, and follows as an
+   * update once its subscription reads it.
+   */
+  setupReadings(
+    scope: MemberScope,
+    membershipId: string
+  ): Promise<
+    [SessionModelsResponse | undefined, WorkspaceCapabilities | undefined]
+  > {
+    const { providerSessionId } = scope
+    return Promise.all([
+      providerSessionId === undefined
+        ? undefined
+        : this.#models.take(
+            scopeKey({ ...scope, providerSessionId }),
+            { ...scope, providerSessionId },
+            membershipId
+          ),
+      this.#capabilities.take(capabilityKey(scope), scope, membershipId),
+    ])
   }
 
   /**

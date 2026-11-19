@@ -245,7 +245,13 @@ function createGatewayAgent(
         if (options.slowResume)
           await new Promise((resolve) => setTimeout(resolve, 20))
         return {
-          _meta: { [HGW_META_KEY]: history === undefined ? {} : { history } },
+          ...answered(),
+          _meta: {
+            [HGW_META_KEY]: {
+              ...(history === undefined ? {} : { history }),
+              ...answeredMeta(),
+            },
+          },
         }
       }
       if (options.reportedDuringResume) {
@@ -1319,6 +1325,20 @@ describe("ACP connection", () => {
 
     // A child's transcript is part of the page that named it, and its
     // positions are that page's, never the live turn's.
+    it("takes the setup a page's answer restates, as every resume answer's", async () => {
+      const gateway = createGatewayAgent({ page: olderPage })
+      const connection = connectInProcess(gateway)
+      const setup = vi.fn()
+      connection.subscribe(SESSION_ID, { agentId: AGENT_ID, setup })
+      await connection.joined(SESSION_ID)
+
+      gateway.answerSetup(setupOn("opus"))
+      await connection.resumePage(SESSION_ID, "cursor-1")
+
+      expect(setup.mock.calls.at(-1)).toEqual([setupOn("opus")])
+      connection.close()
+    })
+
     it("gives the child listener a child transcript a page carries, moving no rejoin position", async () => {
       const clock = useFakeClock()
       const gateway = createGatewayAgent({

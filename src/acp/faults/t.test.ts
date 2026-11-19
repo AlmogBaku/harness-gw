@@ -368,13 +368,8 @@ const ROWS: Row[] = [
       // Models are an operator feed a guest is not granted.
       expect(updatesOf(t.guest, "config_option_update")).toEqual([])
     },
+    // The answer's one read fails; the operator's readings take it again.
     calls: { models: 2 },
-    transitions: {
-      reading: [
-        ["reading", "backing-off"],
-        ["backing-off", "reading"],
-      ],
-    },
   },
   {
     operation: "context",
@@ -413,14 +408,9 @@ const ROWS: Row[] = [
       for (const member of members(t))
         expect(updatesOf(member, "available_commands_update")).toHaveLength(1)
     },
-    // Each member reads its own: the operator's twice, the guest's once.
+    // Each member reads its own: the operator's answer fails and its
+    // readings take it again, and the guest's answer reads it once.
     calls: { workspaceCapabilities: 3 },
-    transitions: {
-      reading: [
-        ["reading", "backing-off"],
-        ["backing-off", "reading"],
-      ],
-    },
   },
   // --- fails once: a join is refused at once, and its repeat lands.
   {

@@ -60,6 +60,11 @@ type CellState<T, C, S> = {
   cause?: C
   /** Consecutive failed reads, which the backoff doubles on. */
   failures: number
+  /**
+   * The subscriber a setup answer took `last` for, whose subscription then
+   * reads nothing again; the next subscription or report spends it.
+   */
+  seeded?: string
   log: Logger
 }
 
@@ -271,6 +276,10 @@ export class SessionReporter<
   subscribe(key: string, scope: S, id: string, listener: ReadingListener<T>) {
     const cell = this.#cell(key, scope)
     cell.listeners.set(id, listener)
+    if (cell.seeded !== undefined) {
+      if (cell.seeded === id) cell.stale = false
+      cell.seeded = undefined
+    }
     if (cell.last) deliver(cell, id, cell.last.value)
     if (cell.stale) {
       const state = cell.owner.actor.getSnapshot().value
@@ -300,6 +309,7 @@ export class SessionReporter<
     const cell = this.#cells.get(key)
     if (!cell) return
     cell.stale = true
+    cell.seeded = undefined
     const owed =
       cell.owner.actor.getSnapshot().value === "reading" ? cell.next : cell.owed
     let owes = false
@@ -309,6 +319,30 @@ export class SessionReporter<
         owes = true
       }
     if (owes) cell.owner.actor.send({ type: "read", cause })
+  }
+
+  /**
+   * The value an answer to subscriber `id` carries, read at most once. A cell
+   * someone follows answers what it holds, which its own reads keep current.
+   * Any other is read once, within the request: the value stands for `id`'s
+   * subscription, which then reads nothing again. A failed read answers what
+   * the cell holds, and `id`'s subscription reads it again, with its retries.
+   */
+  async take(key: string, scope: S, id: string): Promise<T | undefined> {
+    const cell = this.#cell(key, scope)
+    if (cell.listeners.size > 0) return cell.last?.value
+    try {
+      const value = await this.options.read(scope, undefined)
+      cell.last = { value }
+      cell.seeded = id
+      return value
+    } catch (err) {
+      cell.log.warn(
+        { kind: this.options.publicError(err)?.kind ?? "unclassified" },
+        "reading.failed"
+      )
+      return cell.last?.value
+    }
   }
 
   close() {

@@ -91,6 +91,7 @@ runWireContract(
       // `ModelChoiceSchema.thinkingLevels` is not mapped to efforts yet, so no
       // thought level is offered.
       thoughtLevelDefault: "the adapter offers no OpenClaw thought level",
+      setupAnswerCarriesLists: "the fake OpenClaw serves no models.list",
       // A Session's `verboseLevel` is a free string in the pinned protocol,
       // which does not say what any level withholds from the stream.
       quietStreamPassedThrough:

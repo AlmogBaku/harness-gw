@@ -172,6 +172,17 @@ function appCards(recorder: Recorder) {
   )
 }
 
+/** The `_meta.hgw` an ACP payload carries. */
+function metaOf(payload: unknown) {
+  return (payload as { _meta: Record<string, object> })._meta[HGW_META_KEY]
+}
+
+/** The capabilities a recorded `available_commands_update` carried. */
+function capabilitiesOf(entry: { params?: unknown }) {
+  const { update } = entry.params as { update: unknown }
+  return (metaOf(update) as { capabilities: unknown }).capabilities
+}
+
 /** A stored conversation whose reasoning, edit, and setup turn are operator-only. */
 const HISTORY: SessionHistoryResponse = {
   sessionId: STORED,
@@ -570,6 +581,7 @@ function harness(options: HarnessOptions = {}) {
     deleteSession,
     runtimeInfo,
     resolveInvitedSession,
+    workspaceCapabilities,
     forkSession,
     childHistory,
     listAllSessions,
@@ -947,13 +959,19 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
 
-    // The answer says only where the replay ended.
-    expect(resumed).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
     const commands = await test.recorder.wait(
       (entry) =>
         JSON.stringify(entry.params).includes("available_commands_update"),
       "the invited Session's commands"
     )
+    // The answer tells the guest what its commands event shows, and where the
+    // replay ended: no model options, and none of the operator's commands.
+    expect(resumed).toEqual({
+      availableCommands: [],
+      _meta: {
+        [HGW_META_KEY]: { history: {}, capabilities: capabilitiesOf(commands) },
+      },
+    })
     expect(commands.params).toMatchObject({
       sessionId: REF,
       update: {
@@ -971,7 +989,9 @@ describe("guest ACP listener", () => {
         },
       },
     })
-    expect(JSON.stringify(commands.params)).not.toContain("Draft a plan")
+    expect(JSON.stringify([commands.params, resumed])).not.toContain(
+      "Draft a plan"
+    )
     expect(test.history).toHaveBeenCalledWith(AGENT, STORED, 500, 0)
     const replayed = JSON.stringify(updates(test.recorder))
     expect(replayed).toContain("Safe answer")
@@ -1039,7 +1059,6 @@ describe("guest ACP listener", () => {
 
     const resumed = await test.resume(REF, true)
 
-    expect(resumed).toEqual({ _meta: { [HGW_META_KEY]: {} } })
     expect(test.resolveInvitedSession).toHaveBeenCalledWith(
       AGENT,
       REF,
@@ -1051,12 +1070,17 @@ describe("guest ACP listener", () => {
       expect.anything()
     )
     expect(test.history).not.toHaveBeenCalled()
-    // What the guest can do there is all it is shown before its first Send.
-    await test.recorder.wait(
+    // What the guest can do there is all it is shown before its first Send,
+    // in the answer as in the update that follows it.
+    const commands = await test.recorder.wait(
       (entry) =>
         JSON.stringify(entry.params).includes("available_commands_update"),
       "the invited Session's commands"
     )
+    expect(resumed).toEqual({
+      availableCommands: [],
+      _meta: { [HGW_META_KEY]: { capabilities: capabilitiesOf(commands) } },
+    })
     expect(updates(test.recorder)).toMatchObject([
       {
         sessionId: REF,
@@ -1434,7 +1458,11 @@ describe("guest ACP listener", () => {
     const from = test.recorder.entries.length
     const page = await test.older(cursor)
 
-    expect(page).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
+    // A page read is a resume, whose answer restates what the guest is shown.
+    expect(page).toEqual({
+      ...resumed,
+      _meta: { [HGW_META_KEY]: { ...metaOf(resumed), history: {} } },
+    })
     expect(test.history).toHaveBeenLastCalledWith(AGENT, STORED, 500, 500)
     const sent = test.recorder.entries
       .slice(from)
@@ -2098,7 +2126,11 @@ describe("guest scope and commands", () => {
     const test = harness({ existing: true, readings: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
-    await test.resume(REF, true)
+    // The answer's read of what the guest can do fails, so it has no command
+    // list to tell, and never the readings it hides.
+    test.workspaceCapabilities.mockRejectedValueOnce(new Error("cold"))
+    const resumed = await test.resume(REF, true)
+    expect(resumed).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
 
     const other = await test.coordinator.start(
       {

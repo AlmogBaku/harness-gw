@@ -42,6 +42,7 @@ import {
   type CommandResults,
   type Member,
   type MemberScope,
+  type MemberSetup,
   type PromptPart,
   type SessionEvent,
   type SessionNotice,
@@ -961,6 +962,7 @@ export function createChannels(options: CreateChannelsOptions) {
       view?: ResumeView
     ): Promise<CommandResults["resume"]> {
       const resumed = await membership.resume(position, view)
+      const setup = await membership.setup()
       membership.joined()
       if (
         !membership.pending &&
@@ -971,7 +973,7 @@ export function createChannels(options: CreateChannelsOptions) {
           .catch((err: unknown) =>
             logger.error({ err }, "channel.adopt.failed")
           )
-      return resumed
+      return { ...resumed, setup }
     },
 
     /**
@@ -991,7 +993,8 @@ export function createChannels(options: CreateChannelsOptions) {
         // only by reading an empty page there.
         if (older.offset > page.total) throw new CommandRefusedError("invalid")
         await membership.showOlderPage(page, older)
-        return { page }
+        // Every resume answer restates the setup, a page read's as well.
+        return { page, setup: await membership.setup() }
       } catch (cause) {
         membership.endIfGone(cause)
         throw cause
@@ -1213,20 +1216,7 @@ class Membership {
     const declines = new Set<string>()
     let shown: ReturnType<typeof runEvents>
     try {
-      shown = runEvents(
-        this.#member.middleware,
-        {
-          // A child's event is the child's, under its own id.
-          sessionId:
-            event.kind === "child"
-              ? event.event.childSessionId
-              : event.kind === "child-history"
-                ? event.childSessionId
-                : this.#addressed.sessionId,
-          ...event,
-        },
-        { decline: (requestId) => declines.add(requestId) }
-      )
+      shown = this.#shown(event, (requestId) => declines.add(requestId))
     } catch (cause) {
       // A stack that throws costs this event alone, through the caller's own
       // handling of a failed send, never the members or events after it.
@@ -1249,6 +1239,57 @@ class Membership {
           )
         )
     return sent
+  }
+
+  /** One event as this member's stack shows it, or `undefined` when hidden. */
+  #shown(event: SessionEvent, decline: (requestId: string) => void) {
+    return runEvents(
+      this.#member.middleware,
+      {
+        // A child's event is the child's, under its own id.
+        sessionId:
+          event.kind === "child"
+            ? event.event.childSessionId
+            : event.kind === "child-history"
+              ? event.childSessionId
+              : this.#addressed.sessionId,
+        ...event,
+      },
+      { decline }
+    )
+  }
+
+  /**
+   * What a setup answer tells this member of its Session: the model options
+   * and capabilities as the `model` and `commands` events its stack would
+   * show it, so it is told only what its stream shows. Each is read at most
+   * once and seeded for this member's own readings; one that cannot be read
+   * answers the reading held, and its change follows as an update. Take it
+   * before `joined`, which lets those updates go.
+   */
+  async setup(): Promise<MemberSetup> {
+    const [models, capabilities] =
+      await this.#options.coordinator.setupReadings(
+        this.#addressed,
+        this.#options.membershipId
+      )
+    const shown = (event: SessionEvent) => {
+      try {
+        return this.#shown(event, () => undefined)
+      } catch (err) {
+        // As a stack that throws on an event costs it that event alone.
+        this.#options.logger.warn({ err }, "membership.setup.hidden")
+        return undefined
+      }
+    }
+    const model = models && shown({ kind: "model", models })
+    const commands = capabilities && shown({ kind: "commands", capabilities })
+    return {
+      ...(model?.kind === "model" ? { models: model.models } : {}),
+      ...(commands?.kind === "commands"
+        ? { capabilities: commands.capabilities }
+        : {}),
+    }
   }
 
   /**

@@ -75,6 +75,8 @@ runWireContract(
       // `ProviderConfig` model `variants` are not mapped to efforts yet
       // (`opencode/adapter.ts:454`), so no thought level is offered.
       thoughtLevelDefault: "the adapter offers no OpenCode thought level",
+      setupAnswerCarriesLists:
+        "OpenCode names a Session's model only once a message sets it",
       // OpenCode streams every part it stores (`message.part.updated`) and
       // has no setting that withholds tool or reasoning parts.
       quietStreamPassedThrough: "OpenCode has no quieter stream",
