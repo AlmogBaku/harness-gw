@@ -111,6 +111,11 @@ A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
 itself before the gateway reads it, so the client never sends one: it refuses
 an oversized prompt or steer locally with `requestTooLarge`.
 
+ACP uses no JSON-RPC batches. A frame holding a JSON array is answered with one
+`-32600` Invalid Request error whose `id` is `null`, and none of its messages
+runs. A guest reads that answer as it reads every error reply (see
+[Guest listener](#guest-listener)).
+
 ## Handshake: `initialize` and `auth/login`
 
 `initialize` always answers `protocolVersion: 2`, whatever the client
@@ -236,8 +241,7 @@ Guest errors carry only a public code (`PUBLIC_ERRORS`,
 `src/acp/validation.ts`): an error reply keeps its JSON-RPC code
 with the code's public name as its message, and an `_hgw/error` notification
 keeps only a public code. Any other failure reads `-31013`
-`temporarily_unavailable`. In a batched reply each entry is redacted
-independently; a successful entry in the same batch is unaffected.
+`temporarily_unavailable`.
 
 ## Session lifecycle methods
 

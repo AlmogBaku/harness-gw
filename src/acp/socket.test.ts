@@ -109,49 +109,44 @@ describe("ACP WebSocket shim", () => {
     expect(closed).toEqual([{ code: 1008, reason: "ACP rate exceeded" }])
   })
 
-  it("writes each error reply, batched or not, as its public code alone", () => {
+  it("writes each error reply as its public code alone", () => {
     const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
     const unavailable = {
       code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
       message: "temporarily_unavailable",
     }
 
-    socket.socket.send(
-      JSON.stringify([
-        { jsonrpc: "2.0", id: 1, result: {} },
-        {
-          jsonrpc: "2.0",
-          id: 2,
-          error: {
-            code: HGW_JSONRPC_ERRORS.turnInProgress,
-            message: "internal detail 7f3a",
-            data: "internal detail 7f3a",
-          },
+    for (const message of [
+      { jsonrpc: "2.0", id: 1, result: {} },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        error: {
+          code: HGW_JSONRPC_ERRORS.turnInProgress,
+          message: "internal detail 7f3a",
+          data: "internal detail 7f3a",
         },
-        {
-          jsonrpc: "2.0",
-          id: 3,
-          error: { code: "internal detail 7f3a", message: "private" },
-        },
-      ])
-    )
-    socket.socket.send(
-      JSON.stringify({ jsonrpc: "2.0", id: 4, error: "internal detail 7f3a" })
-    )
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: { code: "internal detail 7f3a", message: "private" },
+      },
+      { jsonrpc: "2.0", id: 4, error: "internal detail 7f3a" },
+    ])
+      socket.socket.send(JSON.stringify(message))
 
     expect(sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
-      [
-        { jsonrpc: "2.0", id: 1, result: {} },
-        {
-          jsonrpc: "2.0",
-          id: 2,
-          error: {
-            code: HGW_JSONRPC_ERRORS.turnInProgress,
-            message: "turn_in_progress",
-          },
+      { jsonrpc: "2.0", id: 1, result: {} },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        error: {
+          code: HGW_JSONRPC_ERRORS.turnInProgress,
+          message: "turn_in_progress",
         },
-        { jsonrpc: "2.0", id: 3, error: unavailable },
-      ],
+      },
+      { jsonrpc: "2.0", id: 3, error: unavailable },
       { jsonrpc: "2.0", id: 4, error: unavailable },
     ])
   })

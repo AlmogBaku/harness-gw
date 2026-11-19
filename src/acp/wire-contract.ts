@@ -53,6 +53,7 @@ import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredGateway } from "../composition"
 import { stubUnreachableTransports, until } from "../core/runtime-contract"
 import { CredentialValues } from "../redaction"
+import { PUBLIC_ERRORS } from "./validation"
 
 /** The contract's rows, each named for the rule it protects. */
 export type WireContractRow =
@@ -1824,23 +1825,20 @@ export function runWireListenerContract(
     `${name} ACP listener wire contract`,
     withTransportsStubbed(() => {
       it(
-        "answers version 2 to an initialize asking for any version, alone or as a batch's only entry",
+        "answers version 2 to an initialize asking for any version",
         wireCase(createRuntime, async ({ gateway, clock }) => {
           const answers: unknown[] = []
-          for (const version of [1, 3])
-            for (const batched of [false, true]) {
-              const raw = await until(
-                clock,
-                rawSocket(gateway.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
-              )
-              const frame = rawInitialize(version)
-              raw.send(JSON.stringify(batched ? [frame] : frame))
-              const answer = await until(clock, raw.next())
-              answers.push(batched ? (answer as unknown[])[0] : answer)
-            }
+          for (const version of [1, 3]) {
+            const raw = await until(
+              clock,
+              rawSocket(gateway.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
+            )
+            raw.send(JSON.stringify(rawInitialize(version)))
+            answers.push(await until(clock, raw.next()))
+          }
 
           expect(answers).toEqual(
-            Array.from({ length: 4 }, () =>
+            Array.from({ length: 2 }, () =>
               expect.objectContaining({
                 id: 1,
                 result: expect.objectContaining({ protocolVersion: 2 }),
@@ -1863,27 +1861,11 @@ export function runWireListenerContract(
             "{not json",
             JSON.stringify({ ...rawInitialize(2), params: null }),
             JSON.stringify({ ...rawInitialize(2), params: [] }),
-            JSON.stringify([{ ...rawInitialize(2), params: null }]),
           ]) {
             const raw = await open()
             raw.send(frame)
             answers.push(await until(clock, raw.next()))
           }
-          const raw = await open()
-          raw.send(JSON.stringify(rawInitialize(2)))
-          await until(clock, raw.next())
-          raw.send(
-            JSON.stringify([
-              7,
-              {
-                jsonrpc: "2.0",
-                id: 2,
-                method: methods.agent.session.list,
-                params: {},
-              },
-            ])
-          )
-          answers.push(await until(clock, raw.next()))
 
           const error = (id: number | null, code: number) =>
             expect.objectContaining({
@@ -1894,17 +1876,12 @@ export function runWireListenerContract(
             error(null, -32700),
             error(1, -32602),
             error(1, -32602),
-            [error(1, -32602)],
-            [
-              error(null, -32600),
-              expect.objectContaining({ id: 2, result: expect.anything() }),
-            ],
           ])
         })
       )
 
       it(
-        "refuses an initialize batched with other entries",
+        "refuses a batch with one invalid request answer and runs none of it",
         wireCase(createRuntime, async ({ gateway, clock }) => {
           const raw = await until(
             clock,
@@ -1921,9 +1898,26 @@ export function runWireListenerContract(
               },
             ])
           )
+          // Answered after anything the batch ran would be.
+          raw.send(JSON.stringify(rawInitialize(2, 3)))
+          const answers = [
+            await until(clock, raw.next()),
+            await until(clock, raw.next()),
+          ]
 
-          // The SDK refuses it by closing the socket, answering nothing.
-          expect(await until(clock, raw.next())).toEqual({ closed: 1002 })
+          expect(answers).toEqual([
+            {
+              jsonrpc: "2.0",
+              id: null,
+              error: expect.objectContaining({
+                code: RequestError.invalidRequest().code,
+              }),
+            },
+            expect.objectContaining({
+              id: 3,
+              result: expect.objectContaining({ protocolVersion: 2 }),
+            }),
+          ])
         })
       )
 
@@ -2166,7 +2160,7 @@ export function runWireListenerContract(
       )
 
       it(
-        "shows a guest each batched reply as its public code and name alone",
+        "shows a guest each error reply as its public code and name alone, a batch's refusal too",
         wireCase(createRuntime, async ({ gateway, agentId, clock }) => {
           const guest = gateway.guest!
           const ref = "wire-contract"
@@ -2196,42 +2190,43 @@ export function runWireListenerContract(
             JSON.stringify([
               {
                 jsonrpc: "2.0",
-                id: 3,
+                id: 4,
                 method: HGW_METHODS.session.focus,
                 params: {},
               },
-              {
-                jsonrpc: "2.0",
-                id: 4,
-                method: HGW_METHODS.session.part,
-                // The SDK's invalid-params reply echoes an unknown key.
-                params: { sessionId: ref, "internal detail 7f3a": true },
-              },
-              {
-                jsonrpc: "2.0",
-                method: methods.agent.session.cancel,
-                params: { sessionId: ref },
-              },
             ])
           )
-          const reply = await until(clock, raw.next())
+          raw.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 3,
+              method: HGW_METHODS.session.part,
+              // The SDK's invalid-params reply echoes an unknown key.
+              params: { sessionId: ref, "internal detail 7f3a": true },
+            })
+          )
+          const replies = [
+            await until(clock, raw.next()),
+            await until(clock, raw.next()),
+          ]
 
-          expect(JSON.stringify(reply)).not.toContain("internal detail 7f3a")
-          // A batch's replies come in the order they settle.
-          expect(reply).toHaveLength(2)
-          expect(reply).toEqual(
-            expect.arrayContaining([
-              { jsonrpc: "2.0", id: 3, result: {} },
-              {
-                jsonrpc: "2.0",
-                id: 4,
-                error: {
-                  code: RequestError.invalidParams().code,
-                  message: "invalid_request",
-                },
+          expect(JSON.stringify(replies)).not.toContain("internal detail 7f3a")
+          expect(replies).toEqual([
+            // As every guest error reply reads.
+            {
+              jsonrpc: "2.0",
+              id: null,
+              error: PUBLIC_ERRORS.reply(RequestError.invalidRequest().code),
+            },
+            {
+              jsonrpc: "2.0",
+              id: 3,
+              error: {
+                code: RequestError.invalidParams().code,
+                message: "invalid_request",
               },
-            ])
-          )
+            },
+          ])
         })
       )
 
