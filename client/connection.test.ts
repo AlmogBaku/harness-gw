@@ -140,6 +140,8 @@ function createGatewayAgent(
      * made while the resume was out; the answer waits until it is read.
      */
     reportedDuringResume?: SessionUpdate
+    /** Answers `session/close` and `session/delete` with `-32002`. */
+    gone?: boolean
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -160,6 +162,10 @@ function createGatewayAgent(
   })
   const answeredMeta = () =>
     setup?.capabilities ? { capabilities: setup.capabilities } : {}
+  const goneOr = <T>(answer: T) => {
+    if (options.gone) throw RequestError.resourceNotFound()
+    return answer
+  }
   const app = agent({ name: "fake-harness-gw" })
     .onRequest(methods.agent.initialize, ({ params }) => {
       record("initialize", params)
@@ -276,10 +282,14 @@ function createGatewayAgent(
     })
     .onRequest(methods.agent.session.close, ({ params }) => {
       record(methods.agent.session.close, params)
-      return {}
+      return goneOr({})
     })
     .onRequest(methods.agent.session.delete, ({ params }) => {
       record(methods.agent.session.delete, params)
+      return goneOr({})
+    })
+    .onRequest(HGW_METHODS.session.part, z.unknown(), ({ params }) => {
+      record(HGW_METHODS.session.part, params)
       return {}
     })
     .onNotification(methods.agent.session.cancel, ({ params }) => {
@@ -967,6 +977,40 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  it("closes a created Session, forgetting it at once and never parting it", async () => {
+    const clock = useFakeClock()
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
+    const { sessionId } = await connection.newSession({ agentId: AGENT_ID })
+
+    await connection.closeSession(sessionId)
+    expect(gateway.callsOf(methods.agent.session.close)).toEqual([
+      { sessionId },
+    ])
+    expect(connection.sessionState(sessionId)).toBeUndefined()
+
+    // Its grace ends with nothing left to part.
+    await clock.advance(PART_GRACE_MS)
+    expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
+    connection.close()
+  })
+
+  it.each(["closeSession", "deleteSession"] as const)(
+    "takes a -32002 answer to %s as done: the Session is gone already",
+    async (method) => {
+      const gateway = createGatewayAgent({ gone: true })
+      const connection = connectInProcess(gateway)
+
+      await expect(connection[method](SESSION_ID)).resolves.toBeUndefined()
+      expect(gateway.calls.at(-1)?.method).toBe(
+        method === "closeSession"
+          ? methods.agent.session.close
+          : methods.agent.session.delete
+      )
+      connection.close()
+    }
+  )
+
   it.each([
     // ACP's invalid params: a field this runtime cannot take.
     [RequestError.invalidParams().code, "unsupported"],
@@ -1072,7 +1116,7 @@ describe("ACP connection", () => {
 
     leave()
     await clock.advance(PART_GRACE_MS)
-    expect(gateway.callsOf(methods.agent.session.close)).toHaveLength(0)
+    expect(gateway.callsOf(HGW_METHODS.session.part)).toHaveLength(0)
     connection.close()
   })
 

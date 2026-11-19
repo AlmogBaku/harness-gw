@@ -253,7 +253,10 @@ keeps only a public code. Any other failure reads `-31013`
 detaches this connection. `_hgw/session/part` (`HgwSessionPartRequestSchema`,
 `protocol/acp.ts`) only detaches this connection; the Session's work and all other
 members continue. `session/delete` of a Session not known to this connection
-succeeds rather than returning not-found.
+succeeds rather than returning not-found. The SDK client parts a Session its
+last listener left, after a 2 s grace, and closes one only when asked
+(`closeSession`), forgetting it at once with no part; as ACP asks, it takes a
+`-32002` answer to `session/close` or `session/delete` as success.
 
 ### Request `_meta.hgw` shapes
 

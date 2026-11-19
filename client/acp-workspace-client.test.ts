@@ -255,6 +255,9 @@ function createFakeConnection() {
       else effort = value
       return configOptions(model, effort)
     },
+    async closeSession(sessionId) {
+      record("closeSession", sessionId)
+    },
     async deleteSession(sessionId) {
       record("deleteSession", sessionId)
     },

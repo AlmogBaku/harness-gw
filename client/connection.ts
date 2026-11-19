@@ -1509,11 +1509,10 @@ export function createAcpConnection(
     hand(open, report(open, setupOfAnswer(answer), NO_REPORTS))
   }
 
-  /**
-   * Drops a Session no listener came back to, and tells the gateway so. Its
-   * work goes on: `session/close` would stop it.
-   */
-  function part(sessionId: string, open: OpenSession) {
+  /** Drops an opened Session here: its owner stops, and nothing rejoins it. */
+  function forget(sessionId: string, open: OpenSession) {
+    clock.clearTimeout(open.grace)
+    open.grace = undefined
     sessions.delete(sessionId)
     owners.delete(sessionId)
     for (const [child, parent] of children)
@@ -1521,6 +1520,14 @@ export function createAcpConnection(
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
+  }
+
+  /**
+   * Drops a Session no listener came back to, and tells the gateway so. Its
+   * work goes on: `session/close` would stop it.
+   */
+  function part(sessionId: string, open: OpenSession) {
+    forget(sessionId, open)
     if (open.state === "gone") return
     request("short", (agent, options) =>
       agent.request(HGW_METHODS.session.part, { sessionId }, options)
@@ -1891,6 +1898,16 @@ export function createAcpConnection(
           asked.reports
         )
       return response.configOptions
+    },
+
+    async closeSession(sessionId) {
+      // Forgotten first, so neither its grace nor a reconnect parts or
+      // rejoins the Session this closes.
+      const open = sessions.get(sessionId)
+      if (open) forget(sessionId, open)
+      await request("short", (agent, options) =>
+        agent.request(methods.agent.session.close, { sessionId }, options)
+      )
     },
 
     async deleteSession(sessionId) {
