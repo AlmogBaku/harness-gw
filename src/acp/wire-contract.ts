@@ -486,8 +486,8 @@ async function reload({ clock, connectPlain }: WireHarness, sessionId: string) {
 }
 
 /**
- * An Edit of the user message `rewindSourceId` with `text`, or with none a
- * Retry, which sends that message's own text again; answers as the prompt did.
+ * An Edit of the user message `rewindSourceId` with `text`, or a Retry, which
+ * sends that message's own text again; answers as the prompt did.
  */
 function rewindPrompt(
   { connection }: WireClient,
@@ -497,7 +497,7 @@ function rewindPrompt(
 ) {
   return connection.agent.request(methods.agent.session.prompt, {
     sessionId,
-    prompt: text ? [{ type: "text", text }] : [],
+    prompt: [{ type: "text", text }],
     _meta: { [HGW_META_KEY]: { rewindSourceId } },
   })
 }
@@ -1288,15 +1288,23 @@ export function runWireContract(
               agent: agentSide(updates).messages.map(({ text }) => text),
             }
           }
-          /** Rewinds the user message, plays its turn, and reads again. */
+          /**
+           * Rewinds the user message with `text`, or with none its own text,
+           * plays its turn, and reads again.
+           */
           const rewound = async (
             { users }: Awaited<ReturnType<typeof stored>>,
-            text: string
+            text?: string
           ) => {
             const idle = plain.nextIdle()
             await until(
               clock,
-              rewindPrompt(plain, sessionId, users[0]!.id, text)
+              rewindPrompt(
+                plain,
+                sessionId,
+                users[0]!.id,
+                text ?? users[0]!.text
+              )
             )
             await until(clock, turn.firstResponse())
             await until(clock, turn.secondResponse())
@@ -1305,7 +1313,7 @@ export function runWireContract(
           }
           const played = await stored()
           const edited = await rewound(played, "list the folders")
-          const retried = await rewound(edited, "")
+          const retried = await rewound(edited)
 
           const texts = ({ users }: typeof played) =>
             users.map(({ text }) => text)
@@ -1330,7 +1338,7 @@ export function runWireContract(
 
       row(
         "guestRetryOfSlashRefused",
-        "refuses a guest's Retry of a slash command it was shown, its text empty or padding alone, and writes no rewind",
+        "refuses a guest's Retry of a slash command it was shown, its own text or padding alone, and writes no rewind",
         async (harness) => {
           const { clock, invite, rewinds } = harness
           const said = ["/compact", "  /compact", "\u200B/compact"]
@@ -1339,8 +1347,8 @@ export function runWireContract(
           await until(clock, resumeFromStart(guest, GUEST_REF))
           const shown = userSide(guest.updates)
           const answers: unknown[] = []
-          for (const { id } of shown)
-            for (const text of ["", " \u200B "])
+          for (const { id, text: own } of shown)
+            for (const text of [own, " \u200B "])
               answers.push(
                 await until(
                   clock,

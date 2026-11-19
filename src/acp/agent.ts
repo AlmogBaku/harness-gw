@@ -58,6 +58,7 @@ import {
   isUnadvertisedBlock,
   promptParts,
   promptText,
+  withoutResentLinks,
 } from "./prompt-content"
 import {
   admits,
@@ -783,7 +784,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       admit(methods.agent.session.prompt, "send", params)
       const meta = parseMeta(HgwPromptMetaSchema, params._meta)
       if (params.prompt.some(isUnadvertisedBlock)) throw invalidParams()
-      const text = promptText(params.prompt)
+      const blocks =
+        meta.rewindSourceId === undefined
+          ? params.prompt
+          : withoutResentLinks(
+              params.prompt,
+              meta.attachmentStageId !== undefined
+            )
+      const text = promptText(blocks)
       // A turn of attachments alone carries no text: its stage supplies the turn,
       // or, for a rewind, the turn it replaces.
       if (
@@ -800,7 +808,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         "send",
         {
           sessionId: params.sessionId,
-          content: promptParts(params.prompt),
+          content: promptParts(blocks),
           text,
           ...meta,
         },

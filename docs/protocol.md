@@ -319,10 +319,15 @@ from.
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
 the user message an Edit or Retry replaces; a Session offers it only where its
 capabilities report `interactions.rewind` available, since what a rewind undoes
-with the turns, such as restored files, is the runtime's. `clientId` becomes the
-turn's `turnId`; a retry with the same `clientId` returns the first answer
-unchanged. The response carries the minted user-message id as the top-level
-`messageId` field (SDK 1.5.0 `PromptResponse`). As ACP reads an error answer
+with the turns, such as restored files, is the runtime's. As ACP allows no empty
+`prompt`, a rewind resends the blocks of the message it replaces, an Edit with
+its new text in place of the old. Its files are the replaced row's, which the
+runtime re-attaches where it can, so a rewind takes no `resource_link` but
+those into a stage its `attachmentStageId` names, and one left with no text is
+a Retry. `clientId` becomes the turn's `turnId`; a retry with the same
+`clientId` returns the first answer unchanged. The response carries the minted
+user-message id as the top-level `messageId` field (SDK 1.5.0
+`PromptResponse`). As ACP reads an error answer
 as a prompt never inserted, the answer waits for the runtime's storage receipt
 and names the id it stored the prompt under. A prompt the runtime may have
 stored without proving it, because its receipt outlasted the admission

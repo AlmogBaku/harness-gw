@@ -2752,25 +2752,56 @@ describe("Session rooms", () => {
     test.close()
   })
 
-  it("sends a rewind with no text as the turn it replaces", async () => {
-    const test = await harness({ providerIds: true })
-    await test.list()
+  // A rewind resends the blocks of the message it replaces, whose files the
+  // turn re-attaches from the row it replaces.
+  const resentLink = {
+    type: "resource_link" as const,
+    uri: formatArtifactUri("notes"),
+    name: "notes.txt",
+  }
+  it.each([
+    [
+      "a Retry of attachments alone",
+      [resentLink],
+      { rewindSourceId: "user-1" },
+      "",
+    ],
+    [
+      "a rewind with text",
+      [{ type: "text" as const, text: "Summarize" }, resentLink],
+      { rewindSourceId: "user-1" },
+      "Summarize",
+    ],
+    [
+      "a prompt that is no rewind",
+      [{ type: "text" as const, text: "Summarize" }, resentLink],
+      {},
+      `Summarize\n[notes.txt](${resentLink.uri})`,
+    ],
+  ])(
+    "sends %s as its text, a rewind without the links it resent",
+    async (_label, blocks, meta, text) => {
+      const test = await harness({ providerIds: true })
+      await test.list()
 
-    await prompt(test, [], SESSION, { rewindSourceId: "user-1" })
+      await prompt(test, blocks, SESSION, meta)
 
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    expect(test.start.mock.calls[0]?.[1]).toMatchObject({
-      prompt: "",
-      rewindSourceId: "user-1",
-    })
-    test.close()
-  })
+      await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+      expect(test.start.mock.calls[0]?.[1]).toMatchObject({
+        prompt: text,
+        ...meta,
+      })
+      test.close()
+    }
+  )
 
   it("refuses a prompt with neither text nor attachments", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
 
-    await expect(prompt(test, [])).rejects.toMatchObject(INVALID_PARAMS)
+    await expect(
+      prompt(test, [{ type: "text", text: "" }])
+    ).rejects.toMatchObject(INVALID_PARAMS)
     expect(test.start).not.toHaveBeenCalled()
     test.close()
   })

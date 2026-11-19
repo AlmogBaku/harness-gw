@@ -27,6 +27,21 @@ function isStagedLink(uri: string) {
 }
 
 /**
+ * A rewind's blocks without the links it resent. A rewind resends the blocks
+ * of the message it replaces, whose files the turn re-attaches from the row it
+ * replaces, so the only links it takes are those into a stage it names.
+ */
+export function withoutResentLinks(
+  prompt: readonly ContentBlock[],
+  staged: boolean
+) {
+  return prompt.filter(
+    (block) =>
+      !ContentBlock.isResourceLink(block) || (staged && isStagedLink(block.uri))
+  )
+}
+
+/**
  * ACP text blocks joined the way the normalized wire carries a turn, each
  * link the stage does not supply written as a Markdown link.
  */
