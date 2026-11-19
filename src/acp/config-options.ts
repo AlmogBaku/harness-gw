@@ -31,16 +31,17 @@ function modelGroupsOf(
 }
 
 export const configOptionsOf = ((models) => {
-  const options: SessionConfigOption[] = [
-    {
+  const options: SessionConfigOption[] = []
+  // ACP refuses a select with no choices, so an empty catalog offers none.
+  if (models.options.length)
+    options.push({
       type: "select",
       configId: MODEL_CONFIG_ID,
       name: "Model",
       category: "model",
       currentValue: models.selectedId,
       options: modelGroupsOf(models.options),
-    },
-  ]
+    })
   const efforts = models.options.find(
     (option) => option.id === models.selectedId
   )?.efforts

@@ -121,6 +121,11 @@ describe("configOptionsOf", () => {
   ])("omits the thought level for %s", (_label, selectedId) => {
     expect(configOptionsOf({ ...models, selectedId })).toHaveLength(1)
   })
+
+  // ACP refuses a select with no choices.
+  it("offers no selector for an empty catalog", () => {
+    expect(configOptionsOf({ selectedId: "sonnet", options: [] })).toEqual([])
+  })
 })
 
 describe("configWriteOf", () => {
