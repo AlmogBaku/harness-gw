@@ -269,8 +269,9 @@ export function setupOfUpdate(
 
 /**
  * What a `session/new`, `session/resume`, or `session/fork` answer reports of
- * its Session's setup. A list the answer leaves out, or sends as `null`,
- * stays as it was, so a gateway that answers with none changes nothing.
+ * its Session's setup. Each list is the Session's whole list, so one the
+ * answer leaves out, or sends as `null`, is none, as ACP reads it. The
+ * capabilities are this gateway's own, so ones it leaves out stay as held.
  */
 function setupOfAnswer(
   answer: Pick<
@@ -282,22 +283,11 @@ function setupOfAnswer(
     hgwMetaOf(answer._meta)
   ).data?.capabilities
   return {
-    ...(answer.configOptions ? { configOptions: answer.configOptions } : {}),
-    ...(answer.availableCommands
-      ? { availableCommands: answer.availableCommands }
-      : {}),
+    configOptions: answer.configOptions ?? [],
+    availableCommands: answer.availableCommands ?? [],
     ...(capabilities ? { capabilities } : {}),
   }
 }
-
-/**
- * How many reports of each of a Session's lists this connection has kept;
- * capabilities travel with the commands, so they count as commands.
- */
-type SetupReports = { configOptions: number; commands: number }
-
-/** What a Session reported before it was opened here: nothing. */
-const NO_REPORTS: Readonly<SetupReports> = { configOptions: 0, commands: 0 }
 
 /** One of the gateway's ACP listener paths as a WebSocket URL from `base`. */
 export function acpSocketUrl(path: string, base: string) {
@@ -771,8 +761,6 @@ export function createAcpConnection(
      * listener that subscribes later is handed.
      */
     setup: AcpSessionSetup
-    /** How many reports of each list `setup` has taken. */
-    readonly reports: SetupReports
   }
   const sessions = new Map<string, OpenSession>()
   // The gateway answers `notFound` for a Session a fresh connection has not
@@ -1248,7 +1236,6 @@ export function createAcpConnection(
       ? { settles: [...open.listeners].flatMap(settleOf), delivered: false }
       : undefined
     open.replaying = replaying
-    const asked = { ...open.reports }
     let replayed = false
     try {
       const response = await requestOn(
@@ -1279,7 +1266,7 @@ export function createAcpConnection(
       // Recorded before the replay settles, so whoever it settles reads the
       // cursor of the transcript it now holds.
       if (meta.history) open.history = meta.history
-      hand(open, report(open, setupOfAnswer(response), asked))
+      hand(open, report(open, setupOfAnswer(response)))
       if (fromStart) {
         open.replayed = true
         replayed = true
@@ -1324,29 +1311,13 @@ export function createAcpConnection(
   }
 
   /**
-   * Keeps what reported the Session's setup and answers what it kept. An
-   * update always reports the newest lists. An answer was asked for when the
-   * Session had taken the `asked` reports: a list reported since then may be
-   * newer than the answer's, and the gateway reports every change as an
-   * update too, so the answer leaves that list be and loses nothing by it.
+   * Keeps what reported the Session's setup, in the order it arrived, and
+   * answers it: an answer and an update alike replace each list they name, as
+   * ACP has a client apply them, so the newest to arrive stands.
    */
-  function report(
-    open: OpenSession,
-    reported: AcpSessionSetup,
-    asked?: Readonly<SetupReports>
-  ): AcpSessionSetup {
-    const fresh = (list: keyof SetupReports) =>
-      asked === undefined || open.reports[list] === asked[list]
-    const { configOptions, availableCommands, capabilities } = reported
-    const kept: AcpSessionSetup = {
-      ...(configOptions && fresh("configOptions") ? { configOptions } : {}),
-      ...(availableCommands && fresh("commands") ? { availableCommands } : {}),
-      ...(capabilities && fresh("commands") ? { capabilities } : {}),
-    }
-    if (kept.configOptions) open.reports.configOptions += 1
-    if (kept.availableCommands || kept.capabilities) open.reports.commands += 1
-    open.setup = { ...open.setup, ...kept }
-    return kept
+  function report(open: OpenSession, reported: AcpSessionSetup) {
+    open.setup = { ...open.setup, ...reported }
+    return reported
   }
 
   /** Hands the Session's listeners, or only those named, a setup that holds anything. */
@@ -1461,7 +1432,6 @@ export function createAcpConnection(
       replayed: created,
       replayOwed: false,
       setup: {},
-      reports: { ...NO_REPORTS },
     }
     sessions.set(sessionId, open)
     const initial = !joinable ? "detached" : created ? "joined" : "joining"
@@ -1489,8 +1459,7 @@ export function createAcpConnection(
   /**
    * Opens a Session the gateway just joined this connection to, by a create
    * or a fork, in its grace, keeping the setup its answer reported for the
-   * listener that comes to it. Nothing reported the Session before it was
-   * made, so only a report since it opened here is newer than the answer.
+   * listener that comes to it.
    */
   function openCreated(
     sessionId: string,
@@ -1506,7 +1475,7 @@ export function createAcpConnection(
       )
       open = created
     }
-    hand(open, report(open, setupOfAnswer(answer), NO_REPORTS))
+    hand(open, report(open, setupOfAnswer(answer)))
   }
 
   /** Drops an opened Session here: its owner stops, and nothing rejoins it. */
@@ -1873,30 +1842,21 @@ export function createAcpConnection(
     },
 
     async setConfigOption(sessionId, configId, value) {
-      // Where the Session stood when the write last went out, which a resend
-      // after a rejoin moves on.
-      let asked: { open: OpenSession; reports: SetupReports } | undefined
       const response = await request(
         "medium",
-        (agent, options) => {
-          const open = sessions.get(sessionId)
-          asked = open && { open, reports: { ...open.reports } }
-          return agent.request(
+        (agent, options) =>
+          agent.request(
             methods.agent.session.setConfigOption,
             { sessionId, configId, type: "id", value },
             options
-          )
-        },
+          ),
         { sessionId }
       )
-      // The writer projects the answer itself. Kept, it is what a later
-      // listener is handed, and it outdates an answer asked for before it.
-      if (asked && sessions.get(sessionId) === asked.open)
-        report(
-          asked.open,
-          { configOptions: response.configOptions },
-          asked.reports
-        )
+      // The answer is the whole list as of the write, which ACP has a client
+      // take. The writer projects it itself; kept, a later listener is
+      // handed it.
+      const open = sessions.get(sessionId)
+      if (open) report(open, { configOptions: response.configOptions })
       return response.configOptions
     },
 

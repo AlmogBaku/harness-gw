@@ -94,9 +94,10 @@ export type AcpSessionReplayListener = () =>
 /**
  * What a Session reports of its setup: its config options, its slash commands,
  * and the capabilities that travel with the commands. A `session/new`,
- * `session/resume`, or `session/fork` answer carries all three, and a
- * `config_option_update` or `available_commands_update` one part. Each field
- * is the complete list it names; one left out is unchanged.
+ * `session/resume`, or `session/fork` answer carries both lists, one it omits
+ * read as none, and the capabilities when it names them; a
+ * `config_option_update` or `available_commands_update` carries one list. Each
+ * list is the Session's whole list, and a field left out here is unchanged.
  */
 export type AcpSessionSetup = {
   readonly configOptions?: readonly SessionConfigOption[]
@@ -138,8 +139,8 @@ export type AcpSessionListener = {
    * The Session's setup: on subscribe, what it has reported so far by answer
    * or update, then what each later setup answer reports, such as a rejoin's
    * `session/resume`. Live updates of those lists reach `update` alone. An
-   * answer never replaces a list an update reported after the answer was
-   * asked for, which is the newer one.
+   * answer and an update alike replace the lists they name, in the order they
+   * arrive, as ACP has a client apply them.
    */
   setup?: (setup: AcpSessionSetup) => void
   state?: (state: AcpSessionState) => void

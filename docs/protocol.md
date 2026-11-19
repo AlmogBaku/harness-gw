@@ -375,10 +375,11 @@ config options (model and effort) in `configOptions`, its slash commands in
 `protocol/acp.ts`), the same shape `available_commands_update._meta.hgw`
 carries beside its commands. A later change arrives as a
 `config_option_update` or `available_commands_update`, each replacing its whole
-list. The SDK client keeps a list an update reported after it sent the request
-over the one the answer carries, which is then the older; it reads a list the
-answer leaves out, or a `capabilities` it cannot read, as unchanged; and it
-hands the setup it holds to each listener that subscribes later
+list. As ACP has a client do, the SDK client applies answers and updates in
+the order they arrive, each replacing the lists it names, and reads a list an
+answer omits as none. `capabilities` are this gateway's own: an answer without
+them, or with ones the client cannot read, leaves those it holds. It hands the
+setup it holds to each listener that subscribes later
 (`AcpSessionListener.setup`), so a Session subscribed to in its creation's
 grace shows its models and commands at once.
 

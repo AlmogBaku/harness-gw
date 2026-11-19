@@ -862,12 +862,12 @@ describe("ACP connection", () => {
   })
 
   it.each([
-    // The answer was asked for before the switch, so its list is older.
-    ["while the resume was out", true, []],
-    ["after its answer", false, ["sonnet"]],
+    // The answer replaces what came before it, as ACP has a client apply it.
+    ["before the resume answered", true, "sonnet"],
+    ["after its answer", false, "opus"],
   ] as const)(
-    "keeps the model a switch reported %s over the one a resume answered",
-    async (_, duringResume, answered) => {
+    "holds the model of whichever arrived last of a resume's answer and a switch reported %s",
+    async (_, duringResume, held) => {
       const gateway = createGatewayAgent({
         setup: { configOptions: [modelOption("sonnet")] },
         ...(duringResume ? { reportedDuringResume: switchedTo("opus") } : {}),
@@ -880,33 +880,40 @@ describe("ACP connection", () => {
       if (!duringResume) await gateway.pushUpdate(switchedTo("opus"))
       await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1))
 
-      expect(setup.mock.calls).toEqual(
-        answered.map((model) => [{ configOptions: [modelOption(model)] }])
-      )
+      // The answer names no commands, so it holds none.
+      const answered = { configOptions: [modelOption("sonnet")] }
+      expect(setup.mock.calls).toEqual([
+        [{ ...answered, availableCommands: [] }],
+      ])
       const later = vi.fn()
       connection.subscribe(SESSION_ID, { setup: later })
       expect(later.mock.calls).toEqual([
-        [{ configOptions: [modelOption("opus")] }],
+        [{ configOptions: [modelOption(held)], availableCommands: [] }],
       ])
       connection.close()
     }
   )
 
-  it("leaves the setup a resume answers nothing of as it was", async () => {
+  it("reads a list a resume answer leaves out as none, and keeps capabilities it leaves out", async () => {
     const gateway = createGatewayAgent({ setup: setupOn("opus") })
     const connection = connectInProcess(gateway)
-    const setup = vi.fn()
-    connection.subscribe(SESSION_ID, { agentId: AGENT_ID, setup })
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
     await connection.joined(SESSION_ID)
 
-    // As an older gateway answers, or a Session with no lists.
     gateway.answerSetup(undefined)
     await connection.replay(SESSION_ID)
 
-    expect(setup).toHaveBeenCalledTimes(1)
     const later = vi.fn()
     connection.subscribe(SESSION_ID, { setup: later })
-    expect(later.mock.calls).toEqual([[setupOn("opus")]])
+    expect(later.mock.calls).toEqual([
+      [
+        {
+          configOptions: [],
+          availableCommands: [],
+          capabilities: composerCapabilities(),
+        },
+      ],
+    ])
     connection.close()
   })
 
