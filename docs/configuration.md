@@ -82,7 +82,7 @@ Used for both `listen` and `guest.listen`.
 | --------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------- |
 | `baseUrl`       | HTTP URL | —        | The `hermes serve` base URL (e.g. `http://127.0.0.1:9119`).                                                            |
 | `tokenFile`     | path     | —        | Absolute path to a file containing the Hermes server token.                                                            |
-| `sessionIdleMs` | integer  | `300000` | Milliseconds after the last subscriber disconnects before the gateway closes a warm Session attachment. 1000–86400000. |
+| `sessionIdleMs` | integer  | `300000` | Milliseconds after the last subscriber disconnects before the gateway closes a warm Session attachment, and before it discards a Session it created that nobody prompted. 1000–86400000. |
 
 #### `kind: "opencode"`
 
