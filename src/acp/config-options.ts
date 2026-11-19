@@ -1,7 +1,7 @@
 import type {
   SessionConfigOption,
   SessionConfigSelectGroup,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import type { SessionModelsResponse } from "../../protocol"
 

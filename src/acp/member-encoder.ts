@@ -6,7 +6,7 @@ import {
   type AgentContext,
   type CreateElicitationResponse,
   type RequestPermissionResponse,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import type {
   SessionContextResponse,
@@ -203,6 +203,8 @@ function commandsUpdate(capabilities: WorkspaceCapabilities): SessionUpdate {
       ? slashCommands.commands
       : []
     ).map(({ name, description }) => ({
+      // A skill is a command too: the `skill` variant is not in the spec yet.
+      type: "command" as const,
       name,
       description: description ?? "",
     })),

@@ -7,7 +7,7 @@ import {
   type JsonRpcId,
   type NewSessionRequest,
   type ResumeSessionRequest,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   createOwner,

@@ -1,5 +1,5 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
-import { methods } from "@agentclientprotocol/sdk/experimental/v2"
+import { methods } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   ACP_PROTOCOL_VERSION,

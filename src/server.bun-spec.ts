@@ -1,4 +1,7 @@
-import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  AGENT_METHODS,
+  agent,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { afterEach, describe, expect, it } from "bun:test"
 import { request } from "node:http"
 import { connect } from "node:net"

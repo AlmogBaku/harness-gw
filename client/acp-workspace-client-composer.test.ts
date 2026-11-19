@@ -1,7 +1,7 @@
 import type {
   SessionConfigOption,
   SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 
 import {

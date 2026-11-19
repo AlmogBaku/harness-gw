@@ -11,7 +11,7 @@ import {
   type RequestPermissionResponse,
   type ResumeSessionRequest,
   type UpdateSessionNotification,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { expect, vi } from "vitest"
 import { z } from "zod"
 

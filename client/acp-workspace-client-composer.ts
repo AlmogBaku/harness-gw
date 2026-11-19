@@ -4,7 +4,7 @@ import {
   type SessionConfigSelectGroup,
   type SessionConfigSelectOption,
   type Usage,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { z } from "zod"
 
 import type { SlashCommand } from "../protocol"

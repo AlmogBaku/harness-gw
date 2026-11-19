@@ -5,7 +5,7 @@ import {
   type AgentContext,
   type SessionConfigOption,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 

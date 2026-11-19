@@ -5,7 +5,7 @@ import {
   RequestError,
   SessionUpdate,
   type CreateElicitationResponse,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 

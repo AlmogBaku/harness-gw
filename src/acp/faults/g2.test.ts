@@ -1,4 +1,4 @@
-import { methods } from "@agentclientprotocol/sdk/experimental/v2"
+import { methods } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import { HGW_METHODS } from "../../../protocol/acp"

@@ -7,7 +7,7 @@ import type {
   RequestPermissionResponse,
   SessionConfigOption,
   SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { z } from "zod"
 
 import type { Clock, Logger } from "../../lifecycle"

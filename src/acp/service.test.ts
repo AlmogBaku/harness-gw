@@ -1,4 +1,7 @@
-import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  AGENT_METHODS,
+  agent,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import { OPERATOR_PRINCIPAL } from "../core/principal"

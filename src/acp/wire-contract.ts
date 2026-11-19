@@ -27,9 +27,8 @@ import {
   RequestError,
   SessionConfigOption,
   SessionUpdate,
-  type AnyWireMessage,
   type ContentBlock,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -340,13 +339,10 @@ function connectClient(
       })
     )
   const connection = app.connect(
-    createWebSocketStream<AnyWireMessage>(
-      `wss://${new URL(origin).host}${path}`,
-      {
-        WebSocket: bridge.WebSocket,
-        headers: { Origin: origin },
-      }
-    )
+    createWebSocketStream(`wss://${new URL(origin).host}${path}`, {
+      WebSocket: bridge.WebSocket,
+      headers: { Origin: origin },
+    })
   )
   /** Settles with the next update `matches` accepts. */
   const next = <T extends SessionUpdate>(
@@ -534,6 +530,16 @@ async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
     _meta: { [HGW_META_KEY]: { token } },
   })
   return client
+}
+
+/** The code of each error answer the gateway sent `client`, in order. */
+function errorCodes(client: WireClient) {
+  return client.bridge.sockets().flatMap(({ frames }) =>
+    frames.flatMap((raw) => {
+      const { error } = JSON.parse(raw) as { error?: { code?: unknown } }
+      return error ? [error.code] : []
+    })
+  )
 }
 
 /** Every frame the gateway sent `client` that names `id` anywhere in it. */
@@ -2129,8 +2135,14 @@ export function runWireListenerContract(
 
           expect(await closed).toBe("closed")
           expect(states(reader.updates).at(-1)).toBe("idle:cancelled")
-          expect(await close(plain)).toBe(RequestError.resourceNotFound().code)
+          // The SDK's client reads a close of a Session gone as done, so the
+          // answer that says so is read off the wire.
+          expect(await close(plain)).toBe("closed")
+          expect(errorCodes(plain)).toEqual([
+            RequestError.resourceNotFound().code,
+          ])
           expect(await close(reader)).toBe("closed")
+          expect(errorCodes(reader)).toEqual([])
         })
       )
 
@@ -2148,6 +2160,8 @@ export function runWireListenerContract(
               })
             )
           ).resolves.toEqual({})
+          // The SDK's client reads a not-found answer as done too.
+          expect(errorCodes(plain)).toEqual([])
         })
       )
 

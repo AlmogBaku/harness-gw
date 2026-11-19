@@ -1,4 +1,4 @@
-import type { UnknownVariant } from "@agentclientprotocol/sdk/experimental/v2"
+import type { UnknownVariant } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { z } from "zod"
 
 import {

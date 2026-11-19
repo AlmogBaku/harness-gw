@@ -2,7 +2,7 @@ import type {
   SessionConfigOption,
   SessionInfo,
   SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 import type { z } from "zod"
 
@@ -1188,7 +1188,9 @@ describe("ACP workspace client", () => {
     emitUpdate(
       {
         sessionUpdate: "available_commands_update",
-        availableCommands: [{ name: "plan", description: "Plan the work" }],
+        availableCommands: [
+          { type: "command", name: "plan", description: "Plan the work" },
+        ],
       },
       { capabilities: capabilities() }
     )
@@ -1407,7 +1409,7 @@ describe("ACP workspace client", () => {
       setListed({
         ...listEntry(),
         updatedAt: newerAt,
-      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
+      } as import("@agentclientprotocol/sdk/experimental/v2/unstable").SessionInfo)
       const [first] = await client.getSessionMetadata([SESSION_ID])
       expect(first?.updatedAt).toBe(newerAt)
 
@@ -1415,7 +1417,7 @@ describe("ACP workspace client", () => {
       setListed({
         ...listEntry(),
         updatedAt: "2026-09-19T10:00:00Z",
-      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
+      } as import("@agentclientprotocol/sdk/experimental/v2/unstable").SessionInfo)
       await client.listSessions()
 
       const [after] = await client.getSessionMetadata([SESSION_ID])

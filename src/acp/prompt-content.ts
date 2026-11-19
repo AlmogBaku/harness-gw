@@ -1,4 +1,4 @@
-import { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
+import { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   HGW_ATTACHMENT_URI_SCHEME,

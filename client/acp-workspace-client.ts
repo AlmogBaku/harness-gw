@@ -1,4 +1,4 @@
-import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2"
+import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   backoffDelay,

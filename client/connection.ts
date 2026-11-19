@@ -5,7 +5,7 @@ import {
   SessionUpdate,
   type AgentApp,
   type AgentCapabilities,
-  type AnyWireMessage,
+  type AnyMessage,
   type ClientConnection,
   type ClientContext,
   type ContentBlock,
@@ -15,8 +15,8 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SendRequestOptions,
-  type WireStream,
-} from "@agentclientprotocol/sdk/experimental/v2"
+  type Stream,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   createWebSocketStream,
   type WebSocketConstructor,
@@ -288,13 +288,10 @@ function subscribeKeyed<Listener>(
  * Adds an `onReceived` callback on every inbound frame, used to drive the
  * inbound-silence timer without coupling logging to liveness tracking.
  */
-function trackedInbound(
-  stream: WireStream,
-  onReceived: () => void
-): WireStream {
+function trackedInbound(stream: Stream, onReceived: () => void): Stream {
   return {
     readable: stream.readable.pipeThrough(
-      new TransformStream<AnyWireMessage, AnyWireMessage>({
+      new TransformStream<AnyMessage, AnyMessage>({
         transform(frame, controller) {
           onReceived()
           controller.enqueue(frame)
@@ -1475,7 +1472,7 @@ export function createAcpConnection(
       : app.connect(
           loggedStream(
             trackedInbound(
-              createWebSocketStream<AnyWireMessage>(options.url, {
+              createWebSocketStream(options.url, {
                 WebSocket: observedSocket(
                   options.socketConstructor ?? globalThis.WebSocket,
                   () => opened.resolve(),

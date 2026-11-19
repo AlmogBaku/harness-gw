@@ -1,4 +1,7 @@
-import { client, methods } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  client,
+  methods,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import {

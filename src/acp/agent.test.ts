@@ -4,7 +4,7 @@ import {
   RequestError,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
@@ -321,7 +321,9 @@ describe("AOS ACP agent", () => {
         sessionId: CREATED,
         update: {
           sessionUpdate: "available_commands_update",
-          availableCommands: [{ name: "plan", description: "Draft a plan" }],
+          availableCommands: [
+            { type: "command", name: "plan", description: "Draft a plan" },
+          ],
         },
       },
       {
@@ -1182,6 +1184,7 @@ describe("AOS ACP agent", () => {
       sessionId: SESSION,
       archived: true,
     })
+    await settled()
 
     expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       archived: true,
@@ -1192,6 +1195,7 @@ describe("AOS ACP agent", () => {
       sessionId: SESSION,
       title: "Renamed",
     })
+    await settled()
 
     // A title leaves the catalog's membership and order alone.
     expect(relists(test.recorder)).toHaveLength(1)

@@ -5,7 +5,7 @@ import {
   type ToolCallContent,
   type ToolCallUpdate,
   type Usage,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { z } from "zod"
 
 import {
