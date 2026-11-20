@@ -17,6 +17,16 @@ export const READING_RETRIES = 5
  */
 export const RETRY_BUDGET = { burst: 32, perSecond: 16 }
 
+/**
+ * How long a setup answer (`session/new`, `session/resume`, `session/fork`)
+ * waits on a model or capability read it starts. A healthy native read
+ * answers well inside it, while one slow enough to miss it would hold the
+ * answer, and a first message waiting on its create, up to the adapter's own
+ * deadline; past it the answer carries what the gateway holds, and the read
+ * still lands as an update.
+ */
+export const SETUP_READ_MS = 2_000
+
 /** The backoff a native link redials on, with full jitter. */
 export const LINK_BACKOFF = { baseMs: 250, capMs: 5_000 }
 

@@ -64,6 +64,7 @@ import {
   DISCARDED_REFUSAL_MS,
   RECONCILE_BACKOFF,
   RETRY_BUDGET,
+  SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
   UNPROMPTED_IDLE_MS,
 } from "./limits"
@@ -233,6 +234,8 @@ export type SessionCoordinatorOptions = {
    * before it is discarded.
    */
   unpromptedIdleMs?: number
+  /** How long a setup answer waits on a reading it reads (`SETUP_READ_MS`). */
+  setupReadMs?: number
   maxActiveExecutions: number
   /** Bounds each subscriber's queue and, as the same limit, each turn's journal. */
   maxSubscriberEvents: number
@@ -1156,9 +1159,10 @@ export class SessionCoordinator {
   /**
    * The model options and capabilities a setup answer to `membershipId`
    * carries, each read at most once and seeded for that member's own
-   * subscription, so the runtime is not read again when it joins; one that
-   * cannot be read answers the reading held, or none, and follows as an
-   * update once its subscription reads it.
+   * subscription, so the runtime is not read again when it joins. A read
+   * waits `setupReadMs` at most: one that cannot be read in time answers the
+   * reading held, or none, and follows as an update once it lands, or once
+   * the member's subscription reads it.
    */
   setupReadings(
     scope: MemberScope,
@@ -1167,15 +1171,22 @@ export class SessionCoordinator {
     [SessionModelsResponse | undefined, WorkspaceCapabilities | undefined]
   > {
     const { providerSessionId } = scope
+    const within = this.options.setupReadMs ?? SETUP_READ_MS
     return Promise.all([
       providerSessionId === undefined
         ? undefined
         : this.#models.take(
             scopeKey({ ...scope, providerSessionId }),
             { ...scope, providerSessionId },
-            membershipId
+            membershipId,
+            within
           ),
-      this.#capabilities.take(capabilityKey(scope), scope, membershipId),
+      this.#capabilities.take(
+        capabilityKey(scope),
+        scope,
+        membershipId,
+        within
+      ),
     ])
   }
 

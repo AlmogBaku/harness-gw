@@ -69,6 +69,9 @@ import {
 import type { SessionRow } from "./session-rows"
 import { FanoutOverflowError } from "./subscriber-fanout"
 
+/** The readings a setup answer tells, as the coordinator read them. */
+type SetupReadings = Awaited<ReturnType<SessionCoordinator["setupReadings"]>>
+
 /**
  * A channel is one provider Session; its members are the connections that
  * have joined it. The coordinator already fans a turn's stream out to many
@@ -948,7 +951,8 @@ export function createChannels(options: CreateChannelsOptions) {
      * the newest page alone for a member that `paged` older history itself.
      * The view reads the history, then the
      * live events the journal buffered, then the Session's state, before the
-     * answer. The join lands once the answer is written, and the Session's
+     * answer; the setup it tells is read beside all that, and built from
+     * after it. The join lands once the answer is written, and the Session's
      * readings and row reach the member as events after it. A Session waiting
      * on input asks its runtime whether the wait still stands, which the
      * answer does not wait for. A resume the journal serves asks the provider
@@ -961,8 +965,12 @@ export function createChannels(options: CreateChannelsOptions) {
       position: ResumePosition,
       view?: ResumeView
     ): Promise<CommandResults["resume"]> {
-      const resumed = await membership.resume(position, view)
-      const setup = await membership.setup()
+      // The setup is read beside the replay, and told after it.
+      const [resumed, readings] = await Promise.all([
+        membership.resume(position, view),
+        membership.readSetup(),
+      ])
+      const setup = await membership.setup(readings)
       membership.joined()
       if (
         !membership.pending &&
@@ -1270,19 +1278,28 @@ class Membership {
   }
 
   /**
-   * What a setup answer tells this member of its Session: the model options
-   * and capabilities as the `model` and `commands` events its stack would
-   * show it, so it is told only what its stream shows. Each is read at most
-   * once and seeded for this member's own readings; one that cannot be read
-   * answers the reading held, and its change follows as an update. Take it
-   * before `joined`, which lets those updates go.
+   * Reads what a setup answer tells this member, each reading at most once
+   * and seeded for this member's own readings; one that cannot be read in
+   * time answers the reading held, and its value follows as an update. A
+   * Session being discarded is refused, as its resume is, and read no more.
    */
-  async setup(): Promise<MemberSetup> {
-    const [models, capabilities] =
-      await this.#options.coordinator.setupReadings(
-        this.#addressed,
-        this.#options.membershipId
-      )
+  async readSetup(): Promise<SetupReadings> {
+    if (!this.pending) this.#options.coordinator.refuseDiscarded(this.#scope)
+    return this.#options.coordinator.setupReadings(
+      this.#addressed,
+      this.#options.membershipId
+    )
+  }
+
+  /**
+   * What a setup answer tells this member of its Session: the model options
+   * and capabilities `readings` holds, read now when none is given, as the
+   * `model` and `commands` events its stack would show it, so it is told only
+   * what its stream shows. Take it before `joined`, which lets those updates
+   * go.
+   */
+  async setup(readings?: SetupReadings): Promise<MemberSetup> {
+    const [models, capabilities] = readings ?? (await this.readSetup())
     const shown = (event: SessionEvent) => {
       try {
         return this.#shown(event, () => undefined)

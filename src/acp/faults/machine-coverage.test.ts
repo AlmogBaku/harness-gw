@@ -56,6 +56,9 @@ const MACHINES: [string, () => AnyStateMachine, boolean][] = [
           owed: new Set(),
           next: new Set(),
           failures: 0,
+          changed: false,
+          takers: new Set<never>(),
+          seeded: new Set(),
           log: logger,
         },
         {

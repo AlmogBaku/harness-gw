@@ -35,6 +35,7 @@ import {
 import {
   ADMISSION_DEADLINE_MS,
   READING_BACKOFF,
+  SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
 } from "../core/limits"
 import {
@@ -405,6 +406,47 @@ describe("AOS ACP agent", () => {
     })
     expect(test.faults.calls("models")).toHaveLength(2)
     test.close()
+  })
+
+  it("answers a create without waiting out a slow model read, whose options follow once it lands, read once", async () => {
+    const asked = Promise.withResolvers<void>()
+    const read = gate()
+    const test = await harness({
+      beforeModels: () => {
+        asked.resolve()
+        return read.held
+      },
+    })
+    useUsageTimers()
+    try {
+      let answer: unknown
+      void test.create().then((created) => (answer = created))
+      await asked.promise
+
+      await vi.advanceTimersByTimeAsync(SETUP_READ_MS - 1)
+      expect(answer).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(answer).toEqual({
+        sessionId: CREATED,
+        availableCommands: ANSWERED_SETUP.availableCommands,
+        _meta: ANSWERED_SETUP._meta,
+      })
+      // It lands before its creator's readings join, the tick after the
+      // answer, and they take it as read.
+      read.release()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(
+        updates(test.recorder).filter(
+          ({ update }) => update.sessionUpdate === "config_option_update"
+        )
+      ).toMatchObject([
+        { update: { configOptions: ANSWERED_SETUP.configOptions } },
+      ])
+      expect(test.faults.calls("models")).toHaveLength(1)
+      test.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("lists a created Session to nobody until a prompt reaches it, and frees one closed unprompted", async () => {
@@ -1032,6 +1074,24 @@ describe("AOS ACP agent", () => {
           : undefined
     )
     expect(order.filter(Boolean)).toEqual(["resume-resolved", "usage_update"])
+    test.close()
+  })
+
+  it("reads a resume's setup beside its replay, and answers with it after the replay", async () => {
+    const page = gate()
+    const test = await harness({ beforeHistory: () => page.held })
+    await test.list()
+
+    const resumed = test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+    await waitFor(() => expect(test.faults.calls("models")).toHaveLength(1))
+    expect(test.faults.calls("workspaceCapabilities")).toHaveLength(1)
+    page.release()
+
+    expect(await resumed).toMatchObject(ANSWERED_SETUP)
     test.close()
   })
 

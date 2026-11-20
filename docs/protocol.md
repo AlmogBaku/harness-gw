@@ -408,10 +408,14 @@ the `model` or `commands` event it is, so it tells a member only what its
 stream would show: a guest's answer has no `configOptions`, and its commands
 and capabilities are the guest projection, with none of the operator's
 commands. A field the stack hides, or a reading the gateway does not hold, is
-left out, never `null`. Each reading is read at most once for the answer, and
-the member's readings take that value when its join lands rather than asking
-the runtime again; one whose read fails answers what the gateway already holds,
-and its update follows once a later read succeeds. The OpenCode adapter reads a
+left out, never `null`. Each reading is read at most once for the answer, one
+read at a time with any other read of it, and a resume reads it beside its
+replay; the member's readings take that value when its join lands rather than
+asking the runtime again, unless a change was reported while it was read. The
+answer waits on a read 2 s at most (`SETUP_READ_MS`): one still in flight then,
+or one that fails, answers what the gateway already holds, or leaves the field
+out; the one in flight still lands, as an update after the answer, and a
+failed one's update follows once a later read succeeds. The OpenCode adapter reads a
 Session's models only once its native row names a model, which a new Session's
 may not yet, and then its answer has no `configOptions`. The same readings still follow every answer as
 `config_option_update` and `available_commands_update` updates, for every

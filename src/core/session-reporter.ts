@@ -60,13 +60,24 @@ type CellState<T, C, S> = {
   cause?: C
   /** Consecutive failed reads, which the backoff doubles on. */
   failures: number
+  /** A report came since the read in flight began, so it may predate it. */
+  changed: boolean
   /**
-   * The subscriber a setup answer took `last` for, whose subscription then
-   * reads nothing again; the next subscription or report spends it.
+   * The setup answers taken from the cell's next read, by the subscriber each
+   * answers; each settles as that read lands, or with nothing as it fails,
+   * unless its deadline settled it first.
    */
-  seeded?: string
+  takers: Set<Taker<T>>
+  /**
+   * The subscribers a setup answer took a read for that no report has
+   * followed, whose subscriptions then read nothing again; the next
+   * subscription or report spends them.
+   */
+  seeded: Set<string>
   log: Logger
 }
+
+type Taker<T> = { id: string; settle(landed?: { value: T }): void }
 
 type AnyCell<T> = CellState<T, unknown, unknown>
 
@@ -75,6 +86,20 @@ function deliver<T>(cell: AnyCell<T>, id: string, value: T) {
   cell.listeners
     .get(id)?.(value)
     .catch((err: unknown) => cell.log.error({ err }, "reading.delivery.failed"))
+}
+
+/**
+ * Settles every setup answer waiting on the read that just ended, with what
+ * it landed. One that began after the cell's last report seeds each answer's
+ * subscriber not yet subscribed, an answer its deadline already settled too:
+ * that subscription is then given the value and reads nothing again.
+ */
+function settleTakers<T>(cell: AnyCell<T>, landed?: { value: T }) {
+  for (const { id, settle } of cell.takers) {
+    if (landed && !cell.changed && !cell.listeners.has(id)) cell.seeded.add(id)
+    settle(landed)
+  }
+  cell.takers.clear()
 }
 
 /**
@@ -90,6 +115,7 @@ function land<T>(cell: AnyCell<T>, value: T) {
   // Nobody reports the changes of a cell nobody subscribes to.
   cell.stale = cell.owed.size > 0 || cell.listeners.size === 0
   for (const id of owed) deliver(cell, id, value)
+  settleTakers(cell, { value })
 }
 
 /** A failed read owes its re-read to everyone owed this one or the next. */
@@ -164,6 +190,9 @@ export function readingMachine<T, C, S extends ReadingScope>(
         },
       },
       reading: {
+        entry: () => {
+          cell.changed = false
+        },
         invoke: {
           src: "read",
           onDone: [
@@ -184,10 +213,14 @@ export function readingMachine<T, C, S extends ReadingScope>(
               target: "idle",
               actions: ({ event }) => {
                 failed(event.error)
+                // A read only setup answers waited on ends nothing: the
+                // member it answers finds the Session gone once it joins.
+                const owed = cell.owed.size + cell.next.size > 0
                 cell.owed.clear()
                 cell.next.clear()
                 cell.failures = 0
-                gone?.(cell.scope, event.error)
+                settleTakers(cell)
+                if (owed) gone?.(cell.scope, event.error)
               },
             },
             {
@@ -198,6 +231,8 @@ export function readingMachine<T, C, S extends ReadingScope>(
               actions: ({ event }) => {
                 failed(event.error)
                 defer(cell)
+                // An answer waits on no retry: it tells what the cell holds.
+                settleTakers(cell)
               },
             },
             {
@@ -207,6 +242,7 @@ export function readingMachine<T, C, S extends ReadingScope>(
                 failed(event.error)
                 cell.owed.clear()
                 cell.next.clear()
+                settleTakers(cell)
               },
             },
           ],
@@ -276,16 +312,18 @@ export class SessionReporter<
   subscribe(key: string, scope: S, id: string, listener: ReadingListener<T>) {
     const cell = this.#cell(key, scope)
     cell.listeners.set(id, listener)
-    if (cell.seeded !== undefined) {
-      if (cell.seeded === id) cell.stale = false
-      cell.seeded = undefined
+    if (cell.seeded.size > 0) {
+      if (cell.seeded.has(id)) cell.stale = false
+      cell.seeded.clear()
     }
     if (cell.last) deliver(cell, id, cell.last.value)
     if (cell.stale) {
       const state = cell.owner.actor.getSnapshot().value
       // A read in flight serves a subscriber, unless a change came since.
       const joins =
-        state === "reading" && cell.next.size > 0 ? cell.next : cell.owed
+        state === "reading" && (cell.next.size > 0 || cell.changed)
+          ? cell.next
+          : cell.owed
       joins.add(id)
       // A cell backing off keeps its schedule.
       if (state === "idle") cell.owner.actor.send({ type: "read" })
@@ -309,9 +347,11 @@ export class SessionReporter<
     const cell = this.#cells.get(key)
     if (!cell) return
     cell.stale = true
-    cell.seeded = undefined
-    const owed =
-      cell.owner.actor.getSnapshot().value === "reading" ? cell.next : cell.owed
+    cell.seeded.clear()
+    const reading = cell.owner.actor.getSnapshot().value === "reading"
+    // What the read in flight lands may predate this change.
+    if (reading) cell.changed = true
+    const owed = reading ? cell.next : cell.owed
     let owes = false
     for (const id of ids ?? cell.listeners.keys())
       if (cell.listeners.has(id)) {
@@ -322,32 +362,40 @@ export class SessionReporter<
   }
 
   /**
-   * The value an answer to subscriber `id` carries, read at most once. A cell
-   * someone follows answers what it holds, which its own reads keep current.
-   * Any other is read once, within the request: the value stands for `id`'s
-   * subscription, which then reads nothing again. A failed read answers what
-   * the cell holds, and `id`'s subscription reads it again, with its retries.
+   * The value an answer to subscriber `id` carries. A cell someone follows
+   * answers what it holds, which its own reads keep current. Any other waits
+   * on its next read, the one in flight or one it starts, for at most
+   * `withinMs`: one that lands in time is the answer. One that fails, or is
+   * still in flight at the deadline, answers what the cell holds, and one in
+   * flight still lands, as an update for `id` once it subscribes. Unless a
+   * report came while it was read, what lands stands for `id`'s
+   * subscription, which then reads nothing again; after a failure it reads
+   * again, with its retries.
    */
-  async take(key: string, scope: S, id: string): Promise<T | undefined> {
+  async take(
+    key: string,
+    scope: S,
+    id: string,
+    withinMs: number
+  ): Promise<T | undefined> {
     const cell = this.#cell(key, scope)
     if (cell.listeners.size > 0) return cell.last?.value
-    try {
-      const value = await this.options.read(scope, undefined)
-      cell.last = { value }
-      cell.seeded = id
-      return value
-    } catch (err) {
-      cell.log.warn(
-        { kind: this.options.publicError(err)?.kind ?? "unclassified" },
-        "reading.failed"
-      )
-      return cell.last?.value
-    }
+    const { clock } = this.options
+    const landed = Promise.withResolvers<{ value: T } | undefined>()
+    // Kept past the deadline: a read landing before `id` subscribes seeds it.
+    cell.takers.add({ id, settle: landed.resolve })
+    const deadline = clock.setTimeout(() => landed.resolve(undefined), withinMs)
+    // One read at a time: an answer joins the cell's read in flight.
+    if (cell.owner.actor.getSnapshot().value === "idle")
+      cell.owner.actor.send({ type: "read" })
+    const read = await landed.promise
+    clock.clearTimeout(deadline)
+    return read ? read.value : cell.last?.value
   }
 
   close() {
     this.#unlink()
-    for (const cell of this.#cells.values()) cell.owner.dispose()
+    for (const cell of this.#cells.values()) this.#dispose(cell)
     this.#cells.clear()
   }
 
@@ -355,8 +403,14 @@ export class SessionReporter<
   release(key: string) {
     const cell = this.#cells.get(key)
     if (!cell || cell.listeners.size > 0) return
-    cell.owner.dispose()
+    this.#dispose(cell)
     this.#cells.delete(key)
+  }
+
+  /** Disposes a cell's owner; an answer waiting on its read tells what it holds. */
+  #dispose(cell: Cell<T, C, S>) {
+    cell.owner.dispose()
+    settleTakers(cell)
   }
 
   /**
@@ -388,6 +442,9 @@ export class SessionReporter<
       owed: new Set(),
       next: new Set(),
       failures: 0,
+      changed: false,
+      takers: new Set(),
+      seeded: new Set(),
       log: logger.child(bindings),
     }
     const cell = Object.assign(state, {
