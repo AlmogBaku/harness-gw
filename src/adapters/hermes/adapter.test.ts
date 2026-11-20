@@ -3530,6 +3530,38 @@ describe("Hermes server adapter", () => {
     )
   })
 
+  it("finds a draft Hermes restarted out of gone, writing its key no row", async () => {
+    // Restarted, Hermes holds no live draft for the key: a lazy resume finds
+    // it gone, and any other writes the key an empty row and opens it
+    // (`_resume_locate`, tui_gateway/methods_session.py).
+    const rows: unknown[] = []
+    const router = rpcRouter({
+      "session.resume": async (params) => {
+        if (params.lazy === true)
+          throw new HermesRpcRejectedError(4007, "session not found")
+        rows.push(params.session_id)
+        return {
+          session_id: "live-draft",
+          session_key: "draft",
+          message_count: 0,
+          messages: [],
+          info: { model: "contract-model" },
+          running: false,
+        }
+      },
+    })
+    const adapter = new HermesServerAdapter(router)
+
+    const answered = await adapter.discardSession("researcher", "draft").then(
+      (discarded) => discarded,
+      (cause: unknown) => adapter.publicError(cause)?.kind
+    )
+
+    expect(answered).toBe("gone")
+    expect(rows).toEqual([])
+    expect(router.calls("session.close")).toEqual([])
+  })
+
   describe("retained failed turn", () => {
     const inflight = {
       user: "Summarize the filing",
