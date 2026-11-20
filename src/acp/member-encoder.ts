@@ -222,15 +222,19 @@ function commandsUpdate(capabilities: WorkspaceCapabilities): SessionUpdate {
  * answer, from what the member's stack showed of its readings: the config
  * options and commands as their updates carry them, and the capabilities in
  * `_meta.hgw` (`HgwSessionSetupResponseMetaSchema`). A reading the stack hid,
- * or none the gateway holds, leaves its field out, never `null`.
+ * or none the gateway holds, leaves its field out, never `null`, and so does
+ * an empty list, as ACP serializes one ("omission or `[]` means none"); an
+ * update still carries `[]`, which clears the list.
  */
 export function setupAnswer(
   translators: Pick<AcpConnectionContext["translators"], "configOptionsOf">,
   { models, capabilities }: MemberSetup
 ) {
+  const configOptions = models ? translators.configOptionsOf(models) : []
+  const availableCommands = capabilities ? commandsOf(capabilities) : []
   return {
-    ...(models ? { configOptions: translators.configOptionsOf(models) } : {}),
-    ...(capabilities ? { availableCommands: commandsOf(capabilities) } : {}),
+    ...(configOptions.length > 0 ? { configOptions } : {}),
+    ...(availableCommands.length > 0 ? { availableCommands } : {}),
     meta: capabilities ? { capabilities } : {},
   }
 }

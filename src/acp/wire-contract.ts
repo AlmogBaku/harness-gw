@@ -434,13 +434,16 @@ type SetupAnswer = {
 
 /**
  * A setup answer's commands and capabilities, and its config options unless
- * `models` says the runtime reads none: each list is there as a list, never
- * `null`, as ACP has every setup answer carry it.
+ * `models` says the runtime reads none. A list is a list with entries or left
+ * out, never `null` and never `[]`, as ACP serializes a setup answer.
  */
 function expectSetupAnswer(answer: SetupAnswer, models = true) {
   if (models) expect(answer.configOptions).toEqual(expect.any(Array))
   else expect(answer).not.toHaveProperty("configOptions")
-  expect(answer.availableCommands).toEqual(expect.any(Array))
+  for (const list of [answer.configOptions, answer.availableCommands]) {
+    expect(list).not.toBeNull()
+    expect(list).not.toEqual([])
+  }
   HgwSessionSetupResponseMetaSchema.parse(answer._meta?.[HGW_META_KEY])
 }
 

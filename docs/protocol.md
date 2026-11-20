@@ -408,7 +408,9 @@ the `model` or `commands` event it is, so it tells a member only what its
 stream would show: a guest's answer has no `configOptions`, and its commands
 and capabilities are the guest projection, with none of the operator's
 commands. A field the stack hides, or a reading the gateway does not hold, is
-left out, never `null`. Each reading is read at most once for the answer, one
+left out, never `null`, and so is an empty list, as ACP serializes one
+("omission or `[]` means none"); an update still carries `[]`, which clears
+its list. Each reading is read at most once for the answer, one
 read at a time with any other read of it, and a resume reads it beside its
 replay; the member's readings take that value when its join lands rather than
 asking the runtime again, unless a change was reported while it was read. The
@@ -429,8 +431,9 @@ setup it holds to each listener that subscribes later
 grace shows its models and commands at once.
 
 **`session/new`** response: `sessionId` as a top-level result field and the
-setup above. The Session row (`session_info_update`) and usage arrive as events
-after the answer.
+setup above. The creator's join lands once the answer is written, so the
+Session row (`session_info_update`), usage, and each reading again arrive as
+events after the answer, never before it; `session/fork` answers the same way.
 
 **`session/resume`** response (`HgwSessionResumeResponseMetaSchema`, `protocol/acp.ts`):
 the setup above, and `{ position?, history? }` beside the capabilities in

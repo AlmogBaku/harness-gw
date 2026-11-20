@@ -965,9 +965,9 @@ describe("guest ACP listener", () => {
       "the invited Session's commands"
     )
     // The answer tells the guest what its commands event shows, and where the
-    // replay ended: no model options, and none of the operator's commands.
+    // replay ended: no model options, and none of the operator's commands,
+    // its empty list left out as ACP serializes one.
     expect(resumed).toEqual({
-      availableCommands: [],
       _meta: {
         [HGW_META_KEY]: { history: {}, capabilities: capabilitiesOf(commands) },
       },
@@ -1078,7 +1078,6 @@ describe("guest ACP listener", () => {
       "the invited Session's commands"
     )
     expect(resumed).toEqual({
-      availableCommands: [],
       _meta: { [HGW_META_KEY]: { capabilities: capabilitiesOf(commands) } },
     })
     expect(updates(test.recorder)).toMatchObject([

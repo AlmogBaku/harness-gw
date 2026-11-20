@@ -319,12 +319,15 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers a created Session's id and setup, and joins its creator to the Session's row, commands, model options and usage", async () => {
+  it("answers a created Session's id and setup, and joins its creator to the Session's row, commands, model options and usage, after the answer", async () => {
     const test = await harness()
 
     const created = await test.create()
+    const answeredAfter = updates(test.recorder).length
 
     expect(created).toEqual({ sessionId: CREATED, ...ANSWERED_SETUP })
+    // ACP has initial state in the answer rather than in updates before it.
+    expect(answeredAfter).toBe(0)
     await test.recorder.wait(
       () => updates(test.recorder).length === 4,
       "the created Session's readings"

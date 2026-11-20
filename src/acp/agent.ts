@@ -411,14 +411,19 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
 
   /**
    * Joins a Session the connection just created or forked, as its creator,
-   * and takes what the answer tells it; the row, and each reading again,
-   * follow the answer as updates.
+   * and reads what the answer tells it. The join lands with `landCreated`.
    */
-  async function joinCreated(client: AgentContext, sessionId: string) {
-    const membership = sessions.join(client, sessions.scope(sessionId))
-    const setup = await membership.setup()
-    membership.joined()
-    return setup
+  function joinCreated(client: AgentContext, sessionId: string) {
+    return sessions.join(client, sessions.scope(sessionId)).setup()
+  }
+
+  /**
+   * Lands the creator's join as its answer goes out, past every layer of its
+   * stack: the row, and each reading again, follow the answer as updates, as
+   * ACP has initial state in the answer rather than in updates before it.
+   */
+  function landCreated(sessionId: string) {
+    sessions.membership(sessionId)?.joined()
   }
 
   /** Whether this client reads older pages itself (`initialize`). */
@@ -637,6 +642,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         },
         requestId
       )
+      landCreated(sessionId)
       return { sessionId, ...answered(setup) }
     }
   )
@@ -665,6 +671,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         },
         requestId
       )
+      landCreated(sessionId)
       return { sessionId, ...answered(setup) }
     }
   )
