@@ -61,7 +61,7 @@ import {
   ADMISSION_DEADLINE_MS,
   CLIENT_ADMISSIONS,
   DISCARD_ATTEMPTS,
-  DISCARDED_REFUSAL_MS,
+  DISCARDED_REFUSALS,
   RECONCILE_BACKOFF,
   RETRY_BUDGET,
   SETUP_READ_MS,
@@ -234,6 +234,11 @@ export type SessionCoordinatorOptions = {
    * before it is discarded.
    */
   unpromptedIdleMs?: number
+  /**
+   * How many of the Sessions it discarded the coordinator still finds gone
+   * itself, the most recent kept (`DISCARDED_REFUSALS`).
+   */
+  discardedRefusals?: number
   /** How long a setup answer waits on a reading it reads (`SETUP_READ_MS`). */
   setupReadMs?: number
   maxActiveExecutions: number
@@ -1049,11 +1054,11 @@ export class SessionCoordinator {
     }
   >()
   /**
-   * The Sessions discarded here, by session key, each with the timer that
-   * forgets it: until then the gateway finds it gone itself, as Hermes would
-   * make it anew (`DISCARDED_REFUSAL_MS`).
+   * The Sessions discarded here, by session key, oldest first: the gateway
+   * finds each gone itself, as Hermes would make it anew, until the bound
+   * (`DISCARDED_REFUSALS`) drops it.
    */
-  readonly #discarded = new Map<string, unknown>()
+  readonly #discarded = new Set<string>()
   /** How many memberships, of either listener, are on each Session. */
   readonly #holders = new Map<string, number>()
 
@@ -1594,7 +1599,7 @@ export class SessionCoordinator {
 
   /**
    * Whether a create here made the Session and no prompt reached it, or it is
-   * being or was just discarded: a list shows it to nobody.
+   * being or was discarded: a list shows it to nobody.
    */
   unprompted(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const key = scopeKey(scope)
@@ -1657,9 +1662,10 @@ export class SessionCoordinator {
    * same turn, so no join or prompt lands between, and any after finds it
    * gone. Then the runtime frees it, and its mark ends: one the runtime kept,
    * holding a message, is listed again, and one it freed, or already found
-   * gone, is found gone here for `DISCARDED_REFUSAL_MS`. One it fails to free
-   * is tried again after its next idle window, `DISCARD_ATTEMPTS` times in
-   * all, and then left be, listed.
+   * gone, is found gone here from then on, however long after, while it is
+   * among the last `DISCARDED_REFUSALS` discarded. One it fails to free is
+   * tried again after its next idle window, `DISCARD_ATTEMPTS` times in all,
+   * and then left be, listed.
    */
   async #discard(key: string) {
     const marked = this.#unprompted.get(key)
@@ -1689,19 +1695,18 @@ export class SessionCoordinator {
     }
     this.#logger.info({ agentId, sessionId, discarded }, "session.discarded")
     this.#unprompted.delete(key)
-    if (discarded && !this.#closed)
-      this.#discarded.set(
-        key,
-        this.#clock.setTimeout(
-          () => this.#discarded.delete(key),
-          DISCARDED_REFUSAL_MS
-        )
-      )
+    if (!discarded || this.#closed) return
+    this.#discarded.add(key)
+    const bound = this.options.discardedRefusals ?? DISCARDED_REFUSALS
+    if (this.#discarded.size > bound) {
+      const oldest = this.#discarded.values().next().value
+      if (oldest !== undefined) this.#discarded.delete(oldest)
+    }
   }
 
   /**
-   * Refuses a Session being or just discarded, as OpenCode and OpenClaw would
-   * once it is: Hermes would make it anew.
+   * Refuses a Session being or already discarded, as OpenCode and OpenClaw
+   * would once it is: Hermes would make it anew.
    */
   refuseDiscarded(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const key = scopeKey(scope)
@@ -2355,9 +2360,6 @@ export class SessionCoordinator {
     if (this.#closed) return
     this.#closed = true
     for (const marked of this.#unprompted.values()) this.#clearIdle(marked)
-    for (const timer of this.#discarded.values())
-      this.#clock.clearTimeout(timer)
-    this.#discarded.clear()
     this.#closing.abort(new Error("Session coordinator is closed"))
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()

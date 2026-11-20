@@ -27,7 +27,6 @@ import {
   ADMISSION_DEADLINE_MS,
   CLIENT_ADMISSIONS,
   DISCARD_ATTEMPTS,
-  DISCARDED_REFUSAL_MS,
   RECONCILE_BACKOFF,
   UNCERTAINTY_DEADLINE_MS,
 } from "./limits"
@@ -1178,23 +1177,27 @@ describe("SessionCoordinator", () => {
     const IDLE_MS = 1_000
 
     /**
-     * A coordinator whose creates make `scope`'s Session, discarded as
-     * `discard` answers, with turns that start as `start` does.
+     * A coordinator whose creates make `scope`'s Session, or the stored one
+     * their title names, discarded as `discard` answers, with turns that start
+     * as `start` does.
      */
     function retaining({
       discard = vi.fn(async () => true),
       start = vi.fn(async () => new EventSource()),
+      discardedRefusals,
     }: {
       discard?: (...args: unknown[]) => Promise<boolean>
       start?: ServerTurnEngine["start"]
+      discardedRefusals?: number
     } = {}) {
-      const createSession = vi.fn(async (agentId: string) => ({
-        session: { id: scope.sessionId, agentId },
+      const createSession = vi.fn(async (agentId: string, title?: string) => ({
+        session: { id: title ?? scope.sessionId, agentId },
       }))
       const sessions = coordinator(
         { start, recover: vi.fn(async () => new EventSource()) },
         {
           unpromptedIdleMs: IDLE_MS,
+          ...(discardedRefusals === undefined ? {} : { discardedRefusals }),
           readings: readings({
             createSession,
             forkSession: vi.fn(async (agentId: string) => ({
@@ -1248,7 +1251,7 @@ describe("SessionCoordinator", () => {
       expect(discard).toHaveBeenCalledTimes(1)
     })
 
-    it("finds a Session gone while it is discarded and for the refusal window after, for a resume and a prompt alike, and then forgets it", async () => {
+    it("finds a Session gone while it is discarded and from then on, however long after, for a resume and a prompt alike", async () => {
       const clock = useFakeClock()
       let discarded!: (kept: boolean) => void
       const { sessions, create } = retaining({
@@ -1269,11 +1272,33 @@ describe("SessionCoordinator", () => {
       await refused("run-1")
       discarded(true)
       await closing
-      await clock.advance(DISCARDED_REFUSAL_MS - 1)
+      // A browser that slept a day through resumes its draft on waking.
+      await clock.advance(24 * 60 * 60_000)
       await refused("run-2")
-      await clock.advance(1)
-      expect(() => sessions.refuseDiscarded(scope)).not.toThrow()
-      expect(sessions.unprompted(scope)).toBe(false)
+    })
+
+    it("finds gone only the Sessions it discarded last, as many as its bound", async () => {
+      const { sessions } = retaining({ discardedRefusals: 2 })
+      const [oldest, ...recent] = ["stored-1", "stored-2", "stored-3"].map(
+        (id) => ({
+          agentId: scope.agentId,
+          providerSessionId: providerSessionId(id),
+        })
+      )
+      for (const target of [oldest!, ...recent]) {
+        await sessions.createSession(
+          target.agentId,
+          { title: target.providerSessionId },
+          "operator"
+        )
+        await sessions.closed(target)
+      }
+
+      expect(() => sessions.refuseDiscarded(oldest!)).not.toThrow()
+      for (const target of recent)
+        expect(() => sessions.refuseDiscarded(target)).toThrow(
+          ServerSessionNotFoundError
+        )
     })
 
     it.each([

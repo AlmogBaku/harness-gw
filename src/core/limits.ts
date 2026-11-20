@@ -80,12 +80,13 @@ export const UNPROMPTED_IDLE_MS = 5 * 60_000
 export const DISCARD_ATTEMPTS = 3
 
 /**
- * How long the gateway still answers a Session it discarded as not found,
- * itself: Hermes makes a server-minted draft anew for any resume of its key,
- * so a client that held one would bring it back. It is the window a repeat of
- * its create may still answer that Session (`CLIENT_ADMISSIONS.ttlMs`).
+ * How many of the Sessions it discarded the gateway still answers as not
+ * found itself, the most recent kept: Hermes makes a server-minted draft anew
+ * for any resume of its key, so a client that held one would bring it back,
+ * however long after. A browser holds a few drafts at most, so the bound only
+ * keeps the record finite.
  */
-export const DISCARDED_REFUSAL_MS = CLIENT_ADMISSIONS.ttlMs
+export const DISCARDED_REFUSALS = 4_096
 
 /** How long a member that fell behind keeps its place for its view to rejoin. */
 export const PAUSED_DEADLINE_MS = 30_000

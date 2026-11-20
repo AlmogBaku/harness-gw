@@ -20,7 +20,6 @@ import { AttachmentStageRegistry } from "../../core/attachment-stages"
 import { TurnEventKind } from "../../core/events"
 import {
   ADMISSION_DEADLINE_MS,
-  DISCARDED_REFUSAL_MS,
   JOIN_DEADLINE_MS,
   LINK_BACKOFF,
   READING_BACKOFF,
@@ -1150,9 +1149,8 @@ describe("gateway fault table", () => {
 
     for (const browser of t.browsers) browser.close()
     // A Session a row created and never prompted is discarded once nothing
-    // has held it for its idle window, and forgotten after its refusal window.
+    // has held it for its idle window.
     await clock.advance(UNPROMPTED_IDLE_MS)
-    await clock.advance(DISCARDED_REFUSAL_MS)
     assertLeakFree(t.gateway)
   })
 })
