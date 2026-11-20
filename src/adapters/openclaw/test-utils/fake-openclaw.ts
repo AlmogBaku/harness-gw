@@ -29,6 +29,7 @@ import {
   PROTOCOL_VERSION,
   validateChatHistoryParams,
   validateChatSendParams,
+  validateModelsListParams,
   validateSessionsAbortParams,
   validateSessionsCreateParams,
   validateSessionsListParams,
@@ -117,6 +118,14 @@ export function idleTurns(): ServerTurnEngine {
 /** The folder `agents.list` names for the Agent, as the release resolves it. */
 export const AGENT_WORKSPACE = "/srv/openclaw/research"
 const SESSION_KEY = "agent:research:main"
+/**
+ * The Gateway's model catalog, as `models.list` answers it; every Session
+ * runs the first, the Agent's configured default, which its row names.
+ */
+const MODELS = [
+  { id: "claude-sonnet-4", name: "Claude Sonnet 4", provider: "anthropic" },
+  { id: "gpt-5", name: "GPT-5", provider: "openai" },
+] as const
 const LOST_CLOSE_CODE = 1006
 /** The native tool a run spawns a child Session with. */
 const SPAWN_TOOL = "sessions_spawn"
@@ -535,6 +544,10 @@ export function fakeOpenClaw() {
       totalTokens: 1_200,
       contextTokens: 200_000,
       estimatedCostUsd: 0.42,
+      // The selected model, the configured default (`modelOverrideSource`).
+      model: MODELS[0].id,
+      modelProvider: MODELS[0].provider,
+      modelOverrideSource: null,
       ...(listed.label === undefined ? {} : { label: listed.label }),
       ...(listed.displayName === undefined
         ? {}
@@ -780,6 +793,10 @@ export function fakeOpenClaw() {
       }
       case "sessions.create":
         return create(params)
+      case "models.list":
+        if (!validateModelsListParams(params))
+          throw invalidRequest("invalid models.list params")
+        return { models: MODELS.map((model) => ({ ...model })) }
       case "sessions.rewind":
         return rewind(params)
       case "sessions.messages.subscribe":
