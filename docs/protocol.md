@@ -114,7 +114,9 @@ an oversized prompt or steer locally with `requestTooLarge`.
 ACP uses no JSON-RPC batches. A frame holding a JSON array is answered with one
 `-32600` Invalid Request error whose `id` is `null`, and none of its messages
 runs. A guest reads that answer as it reads every error reply (see
-[Guest listener](#guest-listener)).
+[Guest listener](#guest-listener)). The gateway writes no batch either; one
+written all the same reaches a guest with each entry made public as a lone
+reply is.
 
 ## Handshake: `initialize` and `auth/login`
 

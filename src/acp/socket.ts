@@ -264,9 +264,15 @@ function frameSize(raw: string | Uint8Array) {
     : raw.byteLength
 }
 
-/** One serialized message as `shown` makes it public. */
+/**
+ * One serialized frame as `shown` makes it public. The SDK writes no batch,
+ * but its v2 entrypoints are experimental, so an array is made public entry
+ * by entry rather than passed on as it is.
+ */
 function publicFrame(raw: string, shown: PublicErrors) {
   const frame = JSON.parse(raw) as unknown
+  if (Array.isArray(frame))
+    return JSON.stringify(frame.map((message) => publicMessage(message, shown)))
   const message = publicMessage(frame, shown)
   return message === frame ? raw : JSON.stringify(message)
 }
