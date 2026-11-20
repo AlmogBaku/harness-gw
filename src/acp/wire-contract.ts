@@ -171,6 +171,11 @@ export type WireRuntime = Readonly<{
   /** Absent only when every row that plays a turn is a gap. */
   turn?: WireTurn
   /**
+   * Whether the runtime offers slash commands, which every setup answer then
+   * lists; one that offers none leaves them out.
+   */
+  commands?: boolean
+  /**
    * Stores the Session the invitation `ref` names on the Agent, as the
    * runtime finds the one an invitation reserved, and makes it the Session
    * `turn` plays. Each of `said` is stored in it in order as a user message
@@ -223,6 +228,8 @@ type WireHarness = Readonly<{
   /** The Agent's folder, the one `cwd` its Sessions take. */
   folder: string
   turn: WireTurn
+  /** Whether the runtime offers slash commands (`WireRuntime.commands`). */
+  commands: boolean
   /** The runtime's hooks, each failing the row that calls it if absent. */
   invite: NonNullable<WireRuntime["invite"]>
   rewinds: NonNullable<WireRuntime["rewinds"]>
@@ -442,13 +449,22 @@ type SetupAnswer = {
 }
 
 /**
- * A setup answer's commands and capabilities, and its config options unless
- * `models` says the runtime reads none. A list is a list with entries or left
- * out, never `null` and never `[]`, as ACP serializes a setup answer.
+ * A setup answer's capabilities, its config options unless `models` says the
+ * runtime reads none, and its commands, each a `command`, unless `commands`
+ * says it offers none. A list is a list with entries or left out, never
+ * `null` and never `[]`, as ACP serializes a setup answer.
  */
-function expectSetupAnswer(answer: SetupAnswer, models = true) {
+function expectSetupAnswer(
+  answer: SetupAnswer,
+  { models, commands }: { models: boolean; commands: boolean }
+) {
   if (models) expect(answer.configOptions).toEqual(expect.any(Array))
   else expect(answer).not.toHaveProperty("configOptions")
+  if (commands) {
+    expect(answer.availableCommands).toEqual(expect.any(Array))
+    for (const command of answer.availableCommands as unknown[])
+      expect(command).toMatchObject({ type: "command" })
+  } else expect(answer).not.toHaveProperty("availableCommands")
   for (const list of [answer.configOptions, answer.availableCommands]) {
     expect(list).not.toBeNull()
     expect(list).not.toEqual([])
@@ -462,7 +478,7 @@ function expectSetupAnswer(answer: SetupAnswer, models = true) {
  * same.
  */
 async function createAndResume(
-  { clock, connectPlain }: WireHarness,
+  { clock, connectPlain, commands }: WireHarness,
   models: boolean
 ) {
   const plain = connectPlain()
@@ -476,7 +492,8 @@ async function createAndResume(
   const reader = connectPlain()
   await until(clock, reader.initialize())
   const resumed = await until(clock, resumeFromStart(reader, created.sessionId))
-  for (const answer of [created, resumed]) expectSetupAnswer(answer, models)
+  for (const answer of [created, resumed])
+    expectSetupAnswer(answer, { models, commands })
   expect(resumed.configOptions).toEqual(created.configOptions)
   expect(resumed.availableCommands).toEqual(created.availableCommands)
 }
@@ -880,6 +897,7 @@ function wireCase(
         agentId: runtime.agentId,
         folder: runtime.folder,
         turn: runtime.turn ?? NO_TURN,
+        commands: runtime.commands ?? false,
         invite: (ref, said) =>
           runtime.invite
             ? runtime.invite(ref, said)
