@@ -1638,6 +1638,27 @@ export class SessionCoordinator {
     return this.#discard(scopeKey(scope))
   }
 
+  /**
+   * Runs an operator's write to a Session, which keeps it: one a create here
+   * made and no prompt reached is listed again and never discarded once the
+   * write lands, as after its first prompt. One being or already discarded is
+   * refused first, and none is discarded while the write runs.
+   */
+  async keep<T>(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    write: () => Promise<T>
+  ): Promise<T> {
+    this.refuseDiscarded(scope)
+    const release = this.hold(scope)
+    try {
+      const written = await write()
+      this.#unprompted.delete(scopeKey(scope))
+      return written
+    } finally {
+      release()
+    }
+  }
+
   #clearIdle(marked: { idle?: unknown }) {
     this.#clock.clearTimeout(marked.idle)
     marked.idle = undefined

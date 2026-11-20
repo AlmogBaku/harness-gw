@@ -453,7 +453,7 @@ describe("AOS ACP agent", () => {
     }
   })
 
-  it("lists a created Session to nobody until a prompt reaches it, and frees one closed unprompted once a guest on it leaves too", async () => {
+  it("lists a created Session to nobody until a prompt or the operator's update reaches it, and frees one closed unprompted once a guest on it leaves too", async () => {
     // The guest's invitation reaches the Session the operator creates.
     const test = await harness({ invited: CREATED })
     const ids = async () =>
@@ -486,20 +486,31 @@ describe("AOS ACP agent", () => {
       })
     ).rejects.toMatchObject({ code: notFound().code })
 
-    // A prompted Session is a conversation: listed, and kept once closed.
-    const prompted = await harness()
-    await prompted.create()
-    await prompt(prompted, "Hello", CREATED)
-    expect(
-      (await prompted.agent.request(methods.agent.session.list, {})).sessions
-    ).toContainEqual(expect.objectContaining({ sessionId: CREATED }))
-    await prompted.agent.request(methods.agent.session.close, {
-      sessionId: CREATED,
-    })
-    expect(prompted.discardSession).not.toHaveBeenCalled()
+    // A Session a prompt reached is a conversation, and one the operator
+    // renamed (an OpenCode invitation finds its Session by its title) is kept
+    // on purpose: each is listed, and kept once closed.
+    for (const keep of [
+      (browser: Browser) => prompt(browser, "Hello", CREATED),
+      (browser: Browser) =>
+        browser.agent.request(HGW_METHODS.session.update, {
+          sessionId: CREATED,
+          title: "aos-invite:ref-1",
+        }),
+    ]) {
+      const kept = await harness()
+      await kept.create()
+      await keep(kept)
+      expect(
+        (await kept.agent.request(methods.agent.session.list, {})).sessions
+      ).toContainEqual(expect.objectContaining({ sessionId: CREATED }))
+      await kept.agent.request(methods.agent.session.close, {
+        sessionId: CREATED,
+      })
+      expect(kept.discardSession).not.toHaveBeenCalled()
+      kept.close()
+    }
     test.close()
     guest.close()
-    prompted.close()
   })
 
   it("creates one Session for a repeated client id and refuses the id for another create", async () => {

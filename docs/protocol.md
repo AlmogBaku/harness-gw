@@ -261,8 +261,10 @@ last listener left, after a 2 s grace, and closes one only when asked
 `-32002` answer to `session/close` or `session/delete` as success.
 
 A Session a `session/new` created is **unprompted** until the first prompt is
-sent to its runtime, whether or not the runtime confirms the start. Only the
-create that ran marks it, never a repeat of its `clientId`, and the mark is the
+sent to its runtime, whether or not the runtime confirms the start, or until
+an `_hgw/session/update` of it (a rename, pin, archive, or read mark)
+succeeds: an operator who acts on a Session keeps it. Only the create that
+ran marks it, never a repeat of its `clientId`, and the mark is the
 native Session's, so a member of either listener counts. Forked and invited
 Sessions are never marked. While marked, it is left out of `session/list` and
 `_hgw/sessions/search`, so a draft is no History row even on a runtime that

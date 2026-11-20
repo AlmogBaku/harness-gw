@@ -104,7 +104,7 @@ export type Catalog = {
 export type CatalogOptions = {
   runtime: ServerRuntime
   coordinator: Pick<SessionCoordinator, "state" | "endIfGone"> &
-    Partial<Pick<SessionCoordinator, "unprompted">>
+    Partial<Pick<SessionCoordinator, "unprompted" | "keep">>
   rows: SessionRows
   /** Where the runtime's change feed writes why it failed. */
   logger: Logger
@@ -219,6 +219,25 @@ export function createCatalog({
     }
   }
 
+  async function update(target: SessionScope, patch: SessionPatch) {
+    if ("unread" in patch && !patch.unread)
+      return markRead(target.agentId, target.sessionId)
+    await onSession(target, () =>
+      runtime.updateSession(target.agentId, target.providerSessionId, patch)
+    )
+    // A detail read carries no read state and an unread write changes
+    // nothing else, so the write settles the row itself.
+    if ("unread" in patch && patch.unread === true) {
+      rows.markUnread(target.agentId, target.sessionId)
+      return
+    }
+    await read(target)
+    // Archiving and pinning move the Session's membership and order in the
+    // list, which only a relist settles; a runtime's change feed may be
+    // debounced or absent. A rename or a read marker moves neither.
+    if ("archived" in patch || "pinned" in patch) invalidate()
+  }
+
   return {
     rows,
     info: () => runtime.runtimeInfo(),
@@ -293,24 +312,11 @@ export function createCatalog({
       return unsubscribe
     },
 
-    async update(target, patch) {
-      if ("unread" in patch && !patch.unread)
-        return markRead(target.agentId, target.sessionId)
-      await onSession(target, () =>
-        runtime.updateSession(target.agentId, target.providerSessionId, patch)
-      )
-      // A detail read carries no read state and an unread write changes
-      // nothing else, so the write settles the row itself.
-      if ("unread" in patch && patch.unread === true) {
-        rows.markUnread(target.agentId, target.sessionId)
-        return
-      }
-      await read(target)
-      // Archiving and pinning move the Session's membership and order in the
-      // list, which only a relist settles; a runtime's change feed may be
-      // debounced or absent. A rename or a read marker moves neither.
-      if ("archived" in patch || "pinned" in patch) invalidate()
-    },
+    // An operator's write keeps the Session it lands on, as a prompt does.
+    update: (target, patch) =>
+      coordinator.keep
+        ? coordinator.keep(target, () => update(target, patch))
+        : update(target, patch),
 
     markRead,
 
