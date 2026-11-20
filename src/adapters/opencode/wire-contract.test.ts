@@ -41,6 +41,7 @@ runWireContract(
         return opencode.scope.sessionId
       },
       rewinds: () => opencode.reverts(),
+      discards: () => opencode.deletes(),
     }
   },
   {

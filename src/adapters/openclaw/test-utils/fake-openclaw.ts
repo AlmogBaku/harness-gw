@@ -32,6 +32,7 @@ import {
   validateModelsListParams,
   validateSessionsAbortParams,
   validateSessionsCreateParams,
+  validateSessionsDeleteParams,
   validateSessionsListParams,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
@@ -793,6 +794,11 @@ export function fakeOpenClaw() {
       }
       case "sessions.create":
         return create(params)
+      case "sessions.delete":
+        if (!validateSessionsDeleteParams(params))
+          throw invalidRequest("invalid sessions.delete params")
+        session(params.key).deleted = true
+        return { ok: true, key: params.key, deleted: true, archived: [] }
       case "models.list":
         if (!validateModelsListParams(params))
           throw invalidRequest("invalid models.list params")

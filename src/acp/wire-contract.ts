@@ -81,6 +81,8 @@ export type WireContractRow =
   | "quietStreamPassedThrough"
   | "forkJoinsNewSession"
   | "setupAnswerCarriesLists"
+  | "unpromptedSessionFreed"
+  | "promptedSessionKept"
   | "childAnnouncedBeforeItsEvents"
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
@@ -188,6 +190,12 @@ export type WireRuntime = Readonly<{
    * gap.
    */
   childReads?(childId: string): number
+  /**
+   * How many Sessions the runtime freed so far as a discard frees one: its
+   * native delete, or Hermes' close of a live draft. Absent only when every
+   * row that counts them is a gap.
+   */
+  discards?(): number
 }>
 
 export type WireContractOptions = {
@@ -219,6 +227,7 @@ type WireHarness = Readonly<{
   invite: NonNullable<WireRuntime["invite"]>
   rewinds: NonNullable<WireRuntime["rewinds"]>
   childReads: NonNullable<WireRuntime["childReads"]>
+  discards: NonNullable<WireRuntime["discards"]>
   clock: Clock
   /** Connects a client to `service`, closed with the case. */
   connect(
@@ -505,6 +514,10 @@ async function playTurn(
   await until(clock, turn.firstResponse())
   await until(clock, turn.secondResponse())
   await until(clock, idle)
+}
+
+function closeSession({ connection }: WireClient, sessionId: string) {
+  return connection.agent.request(methods.agent.session.close, { sessionId })
 }
 
 function prompt({ connection }: WireClient, sessionId: string, text: string) {
@@ -878,6 +891,10 @@ function wireCase(
         childReads: (childId) => {
           if (!runtime.childReads) throw lacks("count of child reads")
           return runtime.childReads(childId)
+        },
+        discards: () => {
+          if (!runtime.discards) throw lacks("count of discards")
+          return runtime.discards()
         },
         clock,
         connect,
@@ -1266,6 +1283,33 @@ export function runWireContract(
               "answers a create and a resume with the Session's commands and capabilities, and no config options it cannot read",
             body: (harness) => createAndResume(harness, false),
           },
+        }
+      )
+
+      row(
+        "unpromptedSessionFreed",
+        "frees a Session its client created and closed with no prompt, in the runtime itself",
+        async (harness) => {
+          const { clock, discards } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+
+          await until(clock, closeSession(plain, sessionId))
+
+          expect(discards()).toBe(1)
+        }
+      )
+
+      row(
+        "promptedSessionKept",
+        "keeps a Session a prompt reached once its client closes it",
+        async (harness) => {
+          const { clock, turn, discards } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+
+          await until(clock, closeSession(plain, sessionId))
+
+          expect(discards()).toBe(0)
         }
       )
 

@@ -47,6 +47,8 @@ function hermesRuntime(): WireRuntime {
     rewinds: () => hermes.truncations().length,
     childReads: (childId) =>
       hermes.httpRequests(`/api/sessions/${childId}/messages`).length,
+    // Hermes frees a draft by closing its live Session.
+    discards: () => hermes.closedSessions().length,
   }
 }
 
