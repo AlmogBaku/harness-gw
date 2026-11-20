@@ -5,7 +5,7 @@ import {
   SessionUpdate,
   type AgentApp,
   type AgentCapabilities,
-  type AnyWireMessage,
+  type AnyMessage,
   type ClientConnection,
   type ClientContext,
   type ContentBlock,
@@ -14,9 +14,10 @@ import {
   type ParamsParser,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type ResumeSessionResponse,
   type SendRequestOptions,
-  type WireStream,
-} from "@agentclientprotocol/sdk/experimental/v2"
+  type Stream,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import {
   createWebSocketStream,
   type WebSocketConstructor,
@@ -47,6 +48,7 @@ import {
   HgwActivityNotificationSchema,
   HgwAgentUpdateResponseSchema,
   HgwAgentsListResponseSchema,
+  HgwAvailableCommandsMetaSchema,
   HgwChunkMetaSchema,
   HgwComposerPrefillNotificationSchema,
   HgwErrorNotificationSchema,
@@ -56,6 +58,7 @@ import {
   HgwSessionResumeResponseMetaSchema,
   HgwSessionSearchMetaSchema,
   HgwSessionSearchResponseSchema,
+  HgwSessionSetupResponseMetaSchema,
   HgwSteerResponseSchema,
   type HgwHistoryCursor,
   type HgwInitializeMeta,
@@ -80,6 +83,7 @@ import type {
   AcpHistoryPage,
   AcpPendingRequest,
   AcpSessionListener,
+  AcpSessionSetup,
   AcpSessionState,
 } from "./types"
 
@@ -242,6 +246,49 @@ function hgwMetaOf(meta: unknown): Record<string, unknown> | undefined {
   return parsed.success ? parsed.data[HGW_META_KEY] : undefined
 }
 
+/**
+ * What a `config_option_update` or `available_commands_update` reports of its
+ * Session's setup, from the update and its `_meta.hgw`; undefined for any
+ * other update. Capabilities this client cannot read are left out, never the
+ * commands they travel with.
+ */
+export function setupOfUpdate(
+  update: SessionUpdate,
+  meta: unknown
+): AcpSessionSetup | undefined {
+  if (SessionUpdate.isConfigOptionUpdate(update))
+    return { configOptions: update.configOptions }
+  if (!SessionUpdate.isAvailableCommandsUpdate(update)) return undefined
+  const capabilities =
+    HgwAvailableCommandsMetaSchema.safeParse(meta).data?.capabilities
+  return {
+    availableCommands: update.availableCommands,
+    ...(capabilities ? { capabilities } : {}),
+  }
+}
+
+/**
+ * What a `session/new`, `session/resume`, or `session/fork` answer reports of
+ * its Session's setup. Each list is the Session's whole list, so one the
+ * answer leaves out, or sends as `null`, is none, as ACP reads it. The
+ * capabilities are this gateway's own, so ones it leaves out stay as held.
+ */
+function setupOfAnswer(
+  answer: Pick<
+    ResumeSessionResponse,
+    "configOptions" | "availableCommands" | "_meta"
+  >
+): AcpSessionSetup {
+  const capabilities = HgwSessionSetupResponseMetaSchema.safeParse(
+    hgwMetaOf(answer._meta)
+  ).data?.capabilities
+  return {
+    configOptions: answer.configOptions ?? [],
+    availableCommands: answer.availableCommands ?? [],
+    ...(capabilities ? { capabilities } : {}),
+  }
+}
+
 /** One of the gateway's ACP listener paths as a WebSocket URL from `base`. */
 export function acpSocketUrl(path: string, base: string) {
   const url = new URL(path, base)
@@ -288,13 +335,10 @@ function subscribeKeyed<Listener>(
  * Adds an `onReceived` callback on every inbound frame, used to drive the
  * inbound-silence timer without coupling logging to liveness tracking.
  */
-function trackedInbound(
-  stream: WireStream,
-  onReceived: () => void
-): WireStream {
+function trackedInbound(stream: Stream, onReceived: () => void): Stream {
   return {
     readable: stream.readable.pipeThrough(
-      new TransformStream<AnyWireMessage, AnyWireMessage>({
+      new TransformStream<AnyMessage, AnyMessage>({
         transform(frame, controller) {
           onReceived()
           controller.enqueue(frame)
@@ -712,6 +756,11 @@ export function createAcpConnection(
     /** Why the transport refused the join, while the Session stays refused. */
     refusal?: unknown
     grace?: unknown
+    /**
+     * The newest setup the Session reported, by answer or update, which a
+     * listener that subscribes later is handed.
+     */
+    setup: AcpSessionSetup
   }
   const sessions = new Map<string, OpenSession>()
   // The gateway answers `notFound` for a Session a fresh connection has not
@@ -945,6 +994,8 @@ export function createAcpConnection(
         deliverChild(open, params.sessionId, params.update, meta)
         return
       }
+      const reported = setupOfUpdate(params.update, meta)
+      if (reported) report(open, reported)
       for (const { listener } of open.listeners)
         callEach(
           listener.update ? [listener.update] : [],
@@ -1215,6 +1266,7 @@ export function createAcpConnection(
       // Recorded before the replay settles, so whoever it settles reads the
       // cursor of the transcript it now holds.
       if (meta.history) open.history = meta.history
+      hand(open, report(open, setupOfAnswer(response)))
       if (fromStart) {
         open.replayed = true
         replayed = true
@@ -1256,6 +1308,32 @@ export function createAcpConnection(
   function settleOf({ listener }: Subscription) {
     const settle = listener.replay?.()
     return settle ? [settle] : []
+  }
+
+  /**
+   * Keeps what reported the Session's setup, in the order it arrived, and
+   * answers it: an answer and an update alike replace each list they name, as
+   * ACP has a client apply them, so the newest to arrive stands.
+   */
+  function report(open: OpenSession, reported: AcpSessionSetup) {
+    open.setup = { ...open.setup, ...reported }
+    return reported
+  }
+
+  /** Hands the Session's listeners, or only those named, a setup that holds anything. */
+  function hand(
+    open: OpenSession,
+    setup: AcpSessionSetup,
+    listeners: Iterable<Subscription> = open.listeners
+  ) {
+    if (Object.keys(setup).length === 0) return
+    for (const { listener } of listeners)
+      callEach(
+        listener.setup ? [listener.setup] : [],
+        logger,
+        "acp.listener.failed",
+        setup
+      )
   }
 
   function notOpen() {
@@ -1330,6 +1408,8 @@ export function createAcpConnection(
       // Session whole to this listener too.
       if (known.replaying && !known.replaying.delivered)
         known.replaying.settles.push(...settleOf(subscription))
+      // No answer or update restates the setup for this listener alone.
+      hand(known, known.setup, [subscription])
       return () => leave(sessionId, known, subscription)
     }
     const open = openSession(sessionId, [subscription], false)
@@ -1351,6 +1431,7 @@ export function createAcpConnection(
       state: "joining",
       replayed: created,
       replayOwed: false,
+      setup: {},
     }
     sessions.set(sessionId, open)
     const initial = !joinable ? "detached" : created ? "joined" : "joining"
@@ -1376,10 +1457,31 @@ export function createAcpConnection(
   }
 
   /**
-   * Drops a Session no listener came back to, and tells the gateway so. Its
-   * work goes on: `session/close` would stop it.
+   * Opens a Session the gateway just joined this connection to, by a create
+   * or a fork, in its grace, keeping the setup its answer reported for the
+   * listener that comes to it.
    */
-  function part(sessionId: string, open: OpenSession) {
+  function openCreated(
+    sessionId: string,
+    answer: Parameters<typeof setupOfAnswer>[0]
+  ) {
+    let open = sessions.get(sessionId)
+    if (!open) {
+      const created = openSession(sessionId, [], true)
+      // It parts in its grace unless a listener comes to it.
+      created.grace = clock.setTimeout(
+        () => part(sessionId, created),
+        PART_GRACE_MS
+      )
+      open = created
+    }
+    hand(open, report(open, setupOfAnswer(answer)))
+  }
+
+  /** Drops an opened Session here: its owner stops, and nothing rejoins it. */
+  function forget(sessionId: string, open: OpenSession) {
+    clock.clearTimeout(open.grace)
+    open.grace = undefined
     sessions.delete(sessionId)
     owners.delete(sessionId)
     for (const [child, parent] of children)
@@ -1387,6 +1489,14 @@ export function createAcpConnection(
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
+  }
+
+  /**
+   * Drops a Session no listener came back to, and tells the gateway so. Its
+   * work goes on: `session/close` would stop it.
+   */
+  function part(sessionId: string, open: OpenSession) {
+    forget(sessionId, open)
     if (open.state === "gone") return
     request("short", (agent, options) =>
       agent.request(HGW_METHODS.session.part, { sessionId }, options)
@@ -1426,6 +1536,10 @@ export function createAcpConnection(
       const { history } = HgwHistoryPageResponseMetaSchema.parse(
         hgwMetaOf(response._meta)
       )
+      // A page read is a resume, whose answer restates the setup as every
+      // resume's does.
+      if (sessions.get(sessionId) === open)
+        hand(open, report(open, setupOfAnswer(response)))
       return { updates, history }
     } finally {
       if (open.page === updates) open.page = undefined
@@ -1475,7 +1589,7 @@ export function createAcpConnection(
       : app.connect(
           loggedStream(
             trackedInbound(
-              createWebSocketStream<AnyWireMessage>(options.url, {
+              createWebSocketStream(options.url, {
                 WebSocket: observedSocket(
                   options.socketConstructor ?? globalThis.WebSocket,
                   () => opened.resolve(),
@@ -1623,23 +1737,16 @@ export function createAcpConnection(
     login,
 
     async newSession(meta) {
-      const { sessionId } = await request("short", (agent, options) =>
+      const created = await request("short", (agent, options) =>
         agent.request(
           methods.agent.session.new,
           { cwd: AGENT_CWD, _meta: { [HGW_META_KEY]: meta } },
           options
         )
       )
-      owners.set(sessionId, meta.agentId)
-      // It parts in its grace unless a listener comes to it.
-      if (!sessions.has(sessionId)) {
-        const open = openSession(sessionId, [], true)
-        open.grace = clock.setTimeout(
-          () => part(sessionId, open),
-          PART_GRACE_MS
-        )
-      }
-      return { sessionId }
+      owners.set(created.sessionId, meta.agentId)
+      openCreated(created.sessionId, created)
+      return { sessionId: created.sessionId }
     },
 
     async forkSession(sessionId) {
@@ -1652,15 +1759,7 @@ export function createAcpConnection(
       )
       const agentId = owners.get(sessionId)
       if (agentId !== undefined) owners.set(forked.sessionId, agentId)
-      // The gateway joined this connection to it; it parts in its grace
-      // unless a listener comes to it.
-      if (!sessions.has(forked.sessionId)) {
-        const open = openSession(forked.sessionId, [], true)
-        open.grace = clock.setTimeout(
-          () => part(forked.sessionId, open),
-          PART_GRACE_MS
-        )
-      }
+      openCreated(forked.sessionId, forked)
       return { sessionId: forked.sessionId }
     },
 
@@ -1757,7 +1856,22 @@ export function createAcpConnection(
           ),
         { sessionId }
       )
+      // The answer is the whole list as of the write, which ACP has a client
+      // take. The writer projects it itself; kept, a later listener is
+      // handed it.
+      const open = sessions.get(sessionId)
+      if (open) report(open, { configOptions: response.configOptions })
       return response.configOptions
+    },
+
+    async closeSession(sessionId) {
+      // Forgotten first, so neither its grace nor a reconnect parts or
+      // rejoins the Session this closes.
+      const open = sessions.get(sessionId)
+      if (open) forget(sessionId, open)
+      await request("short", (agent, options) =>
+        agent.request(methods.agent.session.close, { sessionId }, options)
+      )
     },
 
     async deleteSession(sessionId) {

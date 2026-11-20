@@ -64,6 +64,7 @@ runWireContract(
       },
       rewinds: () => openclaw.requested("sessions.rewind"),
       childReads: (childId) => openclaw.historyReads(childId),
+      discards: () => openclaw.requested("sessions.delete"),
     }
   },
   {

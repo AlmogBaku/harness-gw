@@ -1,4 +1,4 @@
-import { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2"
+import { ContentBlock } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   HGW_ATTACHMENT_URI_SCHEME,
@@ -24,6 +24,21 @@ export function isUnadvertisedBlock(block: ContentBlock) {
 
 function isStagedLink(uri: string) {
   return uri.startsWith(HGW_ATTACHMENT_URI_SCHEME)
+}
+
+/**
+ * A rewind's blocks without the links it resent. A rewind resends the blocks
+ * of the message it replaces, whose files the turn re-attaches from the row it
+ * replaces, so the only links it takes are those into a stage it names.
+ */
+export function withoutResentLinks(
+  prompt: readonly ContentBlock[],
+  staged: boolean
+) {
+  return prompt.filter(
+    (block) =>
+      !ContentBlock.isResourceLink(block) || (staged && isStagedLink(block.uri))
+  )
 }
 
 /**

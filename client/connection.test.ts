@@ -5,7 +5,7 @@ import {
   type AgentContext,
   type SessionConfigOption,
   type SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
@@ -28,8 +28,9 @@ import { captureLogs } from "../test/support/log-capture"
 
 import { createAcpConnection } from "./connection"
 import { PART_GRACE_MS, REQUEST_DEADLINE_MS } from "./limits"
+import { composerCapabilities } from "./test-capabilities"
 import { pipedSockets } from "./test-socket"
-import type { AcpPendingRequest } from "./types"
+import type { AcpConnection, AcpPendingRequest, AcpSessionSetup } from "./types"
 
 const SESSION_ID = "session-1"
 /** The Session a fork of `SESSION_ID` makes. */
@@ -55,6 +56,25 @@ function modelOption(currentValue: string): SessionConfigOption {
       { value: "sonnet", name: "Sonnet" },
       { value: "opus", name: "Opus" },
     ],
+  }
+}
+
+/** What a Session that runs on `model` reports of its setup. */
+function setupOn(model: string): AcpSessionSetup {
+  return {
+    configOptions: [modelOption(model)],
+    availableCommands: [
+      { type: "command", name: "plan", description: "Plan the work" },
+    ],
+    capabilities: composerCapabilities(),
+  }
+}
+
+/** A switch of the Session onto `model`, as its update reports it. */
+function switchedTo(model: string): SessionUpdate {
+  return {
+    sessionUpdate: "config_option_update",
+    configOptions: [modelOption(model)],
   }
 }
 
@@ -110,6 +130,18 @@ function createGatewayAgent(
     searchResults?: readonly unknown[]
     /** Advertises `session/fork`, which answers `FORKED_ID`. */
     forks?: boolean
+    /**
+     * The setup `session/new`, `session/fork`, and each resume that reads no
+     * page answer with, until `answerSetup` changes it.
+     */
+    setup?: AcpSessionSetup
+    /**
+     * An update each such resume reports before it answers, as a change
+     * made while the resume was out; the answer waits until it is read.
+     */
+    reportedDuringResume?: SessionUpdate
+    /** Answers `session/close` and `session/delete` with `-32002`. */
+    gone?: boolean
   } = {}
 ) {
   const calls: AgentCall[] = []
@@ -117,6 +149,22 @@ function createGatewayAgent(
   let logins = 0
   const record = (method: string, params: unknown) => {
     calls.push({ method, params })
+  }
+  let setup = options.setup
+  /** A setup answer's lists, and the `_meta.hgw` its capabilities ride in. */
+  const answered = () => ({
+    ...(setup?.configOptions
+      ? { configOptions: [...setup.configOptions] }
+      : {}),
+    ...(setup?.availableCommands
+      ? { availableCommands: [...setup.availableCommands] }
+      : {}),
+  })
+  const answeredMeta = () =>
+    setup?.capabilities ? { capabilities: setup.capabilities } : {}
+  const goneOr = <T>(answer: T) => {
+    if (options.gone) throw RequestError.resourceNotFound()
+    return answer
   }
   const app = agent({ name: "fake-harness-gw" })
     .onRequest(methods.agent.initialize, ({ params }) => {
@@ -158,7 +206,11 @@ function createGatewayAgent(
     })
     .onRequest(methods.agent.session.new, ({ params }) => {
       record(methods.agent.session.new, params)
-      return { sessionId: SESSION_ID }
+      return {
+        sessionId: SESSION_ID,
+        ...answered(),
+        _meta: { [HGW_META_KEY]: answeredMeta() },
+      }
     })
     .onRequest(methods.agent.session.list, ({ params }) => {
       record(methods.agent.session.list, params)
@@ -193,19 +245,35 @@ function createGatewayAgent(
         if (options.slowResume)
           await new Promise((resolve) => setTimeout(resolve, 20))
         return {
-          _meta: { [HGW_META_KEY]: history === undefined ? {} : { history } },
+          ...answered(),
+          _meta: {
+            [HGW_META_KEY]: {
+              ...(history === undefined ? {} : { history }),
+              ...answeredMeta(),
+            },
+          },
         }
+      }
+      if (options.reportedDuringResume) {
+        await peer?.notify(methods.client.session.update, {
+          sessionId: params.sessionId,
+          update: options.reportedDuringResume,
+        })
+        // The browser reads each frame in a task of its own.
+        await new Promise((resolve) => setTimeout(resolve, 0))
       }
       if (options.slowResume)
         await new Promise((resolve) => setTimeout(resolve, 20))
       record(RESUME_REPLIED, params)
       const replayed = replayFrom?.type === "start"
       return {
+        ...answered(),
         _meta: {
           [HGW_META_KEY]: {
             ...(replayed && options.history
               ? { history: options.history }
               : {}),
+            ...answeredMeta(),
           },
         },
       }
@@ -220,10 +288,14 @@ function createGatewayAgent(
     })
     .onRequest(methods.agent.session.close, ({ params }) => {
       record(methods.agent.session.close, params)
-      return {}
+      return goneOr({})
     })
     .onRequest(methods.agent.session.delete, ({ params }) => {
       record(methods.agent.session.delete, params)
+      return goneOr({})
+    })
+    .onRequest(HGW_METHODS.session.part, z.unknown(), ({ params }) => {
+      record(HGW_METHODS.session.part, params)
       return {}
     })
     .onNotification(methods.agent.session.cancel, ({ params }) => {
@@ -269,7 +341,11 @@ function createGatewayAgent(
     })
     .onRequest(methods.agent.session.fork, ({ params }) => {
       record(methods.agent.session.fork, params)
-      return { sessionId: FORKED_ID }
+      return {
+        sessionId: FORKED_ID,
+        ...answered(),
+        _meta: { [HGW_META_KEY]: answeredMeta() },
+      }
     })
     .onRequest(HGW_METHODS.session.focus, z.unknown(), ({ params }) => {
       record(HGW_METHODS.session.focus, params)
@@ -282,6 +358,10 @@ function createGatewayAgent(
   return {
     app,
     calls,
+    /** What later setup answers report. */
+    answerSetup(next: AcpSessionSetup | undefined) {
+      setup = next
+    },
     callsOf: (method: string) =>
       calls.flatMap((call) => (call.method === method ? [call.params] : [])),
     paramsOf: (method: string) =>
@@ -434,6 +514,34 @@ describe("ACP connection", () => {
     expect(connection.sessionState(FORKED_ID)).toBeDefined()
     connection.close()
   })
+
+  it.each([
+    [
+      "created",
+      (connection: AcpConnection) =>
+        connection.newSession({ agentId: AGENT_ID }),
+    ],
+    [
+      "forked",
+      (connection: AcpConnection) => connection.forkSession(SESSION_ID),
+    ],
+  ] as const)(
+    "hands a listener that comes to a %s Session in its grace the setup its answer reported",
+    async (_, open) => {
+      const gateway = createGatewayAgent({
+        forks: true,
+        setup: setupOn("opus"),
+      })
+      const connection = connectInProcess(gateway)
+      const { sessionId } = await open(connection)
+
+      // Handed with the subscription: no answer or update follows to bring it.
+      const setup = vi.fn()
+      connection.subscribe(sessionId, { setup })
+      expect(setup.mock.calls).toEqual([[setupOn("opus")]])
+      connection.close()
+    }
+  )
 
   // ACP v2 child Sessions arrive on the same connection, under their own id,
   // announced first on the Session that owns them.
@@ -759,6 +867,62 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  it.each([
+    // The answer replaces what came before it, as ACP has a client apply it.
+    ["before the resume answered", true, "sonnet"],
+    ["after its answer", false, "opus"],
+  ] as const)(
+    "holds the model of whichever arrived last of a resume's answer and a switch reported %s",
+    async (_, duringResume, held) => {
+      const gateway = createGatewayAgent({
+        setup: { configOptions: [modelOption("sonnet")] },
+        ...(duringResume ? { reportedDuringResume: switchedTo("opus") } : {}),
+      })
+      const connection = connectInProcess(gateway)
+      const setup = vi.fn()
+      const update = vi.fn()
+      connection.subscribe(SESSION_ID, { agentId: AGENT_ID, setup, update })
+      await connection.joined(SESSION_ID)
+      if (!duringResume) await gateway.pushUpdate(switchedTo("opus"))
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1))
+
+      // The answer names no commands, so it holds none.
+      const answered = { configOptions: [modelOption("sonnet")] }
+      expect(setup.mock.calls).toEqual([
+        [{ ...answered, availableCommands: [] }],
+      ])
+      const later = vi.fn()
+      connection.subscribe(SESSION_ID, { setup: later })
+      expect(later.mock.calls).toEqual([
+        [{ configOptions: [modelOption(held)], availableCommands: [] }],
+      ])
+      connection.close()
+    }
+  )
+
+  it("reads a list a resume answer leaves out as none, and keeps capabilities it leaves out", async () => {
+    const gateway = createGatewayAgent({ setup: setupOn("opus") })
+    const connection = connectInProcess(gateway)
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
+    await connection.joined(SESSION_ID)
+
+    gateway.answerSetup(undefined)
+    await connection.replay(SESSION_ID)
+
+    const later = vi.fn()
+    connection.subscribe(SESSION_ID, { setup: later })
+    expect(later.mock.calls).toEqual([
+      [
+        {
+          configOptions: [],
+          availableCommands: [],
+          capabilities: composerCapabilities(),
+        },
+      ],
+    ])
+    connection.close()
+  })
+
   it("writes Session config, lifecycle, and AOS extension requests", async () => {
     const gateway = createGatewayAgent()
     const connection = connectInProcess(gateway)
@@ -810,6 +974,55 @@ describe("ACP connection", () => {
     })
     connection.close()
   })
+
+  it("hands a later listener the model a config write settled", async () => {
+    const gateway = createGatewayAgent({ setup: setupOn("sonnet") })
+    const connection = connectInProcess(gateway)
+    const { sessionId } = await connection.newSession({ agentId: AGENT_ID })
+
+    await connection.setConfigOption(sessionId, "model", "opus")
+
+    const later = vi.fn()
+    connection.subscribe(sessionId, { setup: later })
+    expect(later.mock.calls).toEqual([
+      [{ ...setupOn("sonnet"), configOptions: [modelOption("opus")] }],
+    ])
+    connection.close()
+  })
+
+  it("closes a created Session, forgetting it at once and never parting it", async () => {
+    const clock = useFakeClock()
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
+    const { sessionId } = await connection.newSession({ agentId: AGENT_ID })
+
+    await connection.closeSession(sessionId)
+    expect(gateway.callsOf(methods.agent.session.close)).toEqual([
+      { sessionId },
+    ])
+    expect(connection.sessionState(sessionId)).toBeUndefined()
+
+    // Its grace ends with nothing left to part.
+    await clock.advance(PART_GRACE_MS)
+    expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
+    connection.close()
+  })
+
+  it.each(["closeSession", "deleteSession"] as const)(
+    "takes a -32002 answer to %s as done: the Session is gone already",
+    async (method) => {
+      const gateway = createGatewayAgent({ gone: true })
+      const connection = connectInProcess(gateway)
+
+      await expect(connection[method](SESSION_ID)).resolves.toBeUndefined()
+      expect(gateway.calls.at(-1)?.method).toBe(
+        method === "closeSession"
+          ? methods.agent.session.close
+          : methods.agent.session.delete
+      )
+      connection.close()
+    }
+  )
 
   it.each([
     // ACP's invalid params: a field this runtime cannot take.
@@ -916,7 +1129,7 @@ describe("ACP connection", () => {
 
     leave()
     await clock.advance(PART_GRACE_MS)
-    expect(gateway.callsOf(methods.agent.session.close)).toHaveLength(0)
+    expect(gateway.callsOf(HGW_METHODS.session.part)).toHaveLength(0)
     connection.close()
   })
 
@@ -1112,6 +1325,20 @@ describe("ACP connection", () => {
 
     // A child's transcript is part of the page that named it, and its
     // positions are that page's, never the live turn's.
+    it("takes the setup a page's answer restates, as every resume answer's", async () => {
+      const gateway = createGatewayAgent({ page: olderPage })
+      const connection = connectInProcess(gateway)
+      const setup = vi.fn()
+      connection.subscribe(SESSION_ID, { agentId: AGENT_ID, setup })
+      await connection.joined(SESSION_ID)
+
+      gateway.answerSetup(setupOn("opus"))
+      await connection.resumePage(SESSION_ID, "cursor-1")
+
+      expect(setup.mock.calls.at(-1)).toEqual([setupOn("opus")])
+      connection.close()
+    })
+
     it("gives the child listener a child transcript a page carries, moving no rejoin position", async () => {
       const clock = useFakeClock()
       const gateway = createGatewayAgent({

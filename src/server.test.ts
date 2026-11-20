@@ -1,4 +1,7 @@
-import { AGENT_METHODS, agent } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  AGENT_METHODS,
+  agent,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { useFakeClock } from "../test/support/fake-clock"

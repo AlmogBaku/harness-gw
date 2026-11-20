@@ -135,6 +135,8 @@ export function fakeOpenCode() {
   let title = SESSION.title
   /** How many requests reached one of OpenCode's revert routes. */
   let reverts = 0
+  /** How many times `DELETE /session/:id` deleted the Session. */
+  let deletes = 0
   /** How many turns `storeSession` stored. */
   let storedTurns = 0
 
@@ -423,6 +425,15 @@ export function fakeOpenCode() {
         return serverStream(request.signal)
     }
     if (deleted) return json({}, 404)
+    // The release deletes a Session on its older route, answering `true`.
+    if (
+      request.method === "DELETE" &&
+      url.pathname === `/session/${SESSION_ID}`
+    ) {
+      deleted = true
+      deletes += 1
+      return json(true)
+    }
     switch (url.pathname) {
       case session:
         return json({ data: sessionRow() })
@@ -536,6 +547,8 @@ export function fakeOpenCode() {
 
     /** How many requests reached one of OpenCode's revert routes. */
     reverts: () => reverts,
+    /** How many times the Session was deleted natively. */
+    deletes: () => deletes,
 
     /** The wire contract's turn: two model responses, each its own step. */
     turn: {

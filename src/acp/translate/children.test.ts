@@ -1,4 +1,4 @@
-import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
+import { RequestError } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import { HGW_META_KEY } from "../../../protocol/acp"

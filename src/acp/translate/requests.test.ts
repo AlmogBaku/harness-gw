@@ -1,7 +1,7 @@
 import type {
   CreateElicitationResponse,
   RequestPermissionOutcome,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import {

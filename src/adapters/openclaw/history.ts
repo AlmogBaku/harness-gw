@@ -415,6 +415,8 @@ export type OpenClawHistoryOperations = Readonly<{
     agentId: string,
     sessionKey: string
   ): Promise<{ state: "running" | "idle" }>
+  /** Whether the Session holds no message and runs no turn, as OpenClaw reads. */
+  unused(agentId: string, sessionKey: string): Promise<boolean>
   /** The MCP App view this Session's own `toolCallId` result opened. */
   mcpAppViewId(
     agentId: string,
@@ -731,6 +733,12 @@ export function createOpenClawHistory(input: {
       return {
         state: execution(history).status === "running" ? "running" : "idle",
       }
+    },
+    async unused(agentId, sessionKey) {
+      const history = await authoritativeHistory(agentId, sessionKey, 1, 0)
+      return (
+        history.messages.length === 0 && execution(history).status === "idle"
+      )
     },
   }
 }

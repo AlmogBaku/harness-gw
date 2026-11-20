@@ -1,7 +1,7 @@
 import type {
   SessionUpdate,
   StateUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import { HGW_META_KEY, type HgwChildSessionMeta } from "../../../protocol/acp"
 import {

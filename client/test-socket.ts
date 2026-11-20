@@ -1,7 +1,7 @@
 import type {
   AgentApp,
-  AnyWireMessage,
-} from "@agentclientprotocol/sdk/experimental/v2"
+  AnyMessage,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { WebSocketConstructor } from "@agentclientprotocol/sdk/experimental/ws-client"
 import type { Logger } from "../lifecycle"
 import { createAcpLogger } from "./log"
@@ -21,9 +21,9 @@ const CLOSED = 3
 export class PipedSocket extends EventTarget {
   readyState = CONNECTING
   /** The browser's frames as they reach the agent, in wire order. */
-  readonly sent: AnyWireMessage[] = []
-  readonly #inbound?: WritableStreamDefaultWriter<AnyWireMessage>
-  readonly #outbound?: ReadableStreamDefaultReader<AnyWireMessage>
+  readonly sent: AnyMessage[] = []
+  readonly #inbound?: WritableStreamDefaultWriter<AnyMessage>
+  readonly #outbound?: ReadableStreamDefaultReader<AnyMessage>
   #halfOpen = false
   #held: string[] | undefined
 
@@ -31,8 +31,8 @@ export class PipedSocket extends EventTarget {
   constructor(app: AgentApp | undefined) {
     super()
     if (app) {
-      const inbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
-      const outbound = new TransformStream<AnyWireMessage, AnyWireMessage>()
+      const inbound = new TransformStream<AnyMessage, AnyMessage>()
+      const outbound = new TransformStream<AnyMessage, AnyMessage>()
       app.connect({ readable: inbound.readable, writable: outbound.writable })
       this.#inbound = inbound.writable.getWriter()
       this.#outbound = outbound.readable.getReader()
@@ -47,7 +47,7 @@ export class PipedSocket extends EventTarget {
     })
   }
 
-  async #pump(reader: ReadableStreamDefaultReader<AnyWireMessage>) {
+  async #pump(reader: ReadableStreamDefaultReader<AnyMessage>) {
     for (;;) {
       const next = await reader.read().catch(() => undefined)
       // The agent ending its side is the gateway closing the socket.
@@ -66,7 +66,7 @@ export class PipedSocket extends EventTarget {
     if (this.readyState !== OPEN || this.#halfOpen) return
     if (this.#held) this.#held.push(data)
     else if (this.#inbound) {
-      const frame = JSON.parse(data) as AnyWireMessage
+      const frame = JSON.parse(data) as AnyMessage
       this.sent.push(frame)
       this.#inbound
         .write(frame)

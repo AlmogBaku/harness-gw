@@ -362,6 +362,18 @@ export class OpenClawServerAdapter implements ServerRuntime {
     await this.#workspace.deleteSession(agentId, providerSessionId)
   }
 
+  /**
+   * Deletes a Session this gateway created and never prompted, which OpenClaw
+   * lists from its create, once its own read shows the Session holds no
+   * message and runs no turn; one that does is kept.
+   */
+  async discardSession(agentId: string, providerSessionId: string) {
+    await this.#start()
+    if (!(await this.#history.unused(agentId, providerSessionId))) return false
+    await this.#workspace.deleteSession(agentId, providerSessionId)
+    return true
+  }
+
   async workspaceCapabilities(
     agentId: string,
     publicSessionId: string

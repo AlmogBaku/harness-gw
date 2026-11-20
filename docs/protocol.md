@@ -111,6 +111,13 @@ A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
 itself before the gateway reads it, so the client never sends one: it refuses
 an oversized prompt or steer locally with `requestTooLarge`.
 
+ACP uses no JSON-RPC batches. A frame holding a JSON array is answered with one
+`-32600` Invalid Request error whose `id` is `null`, and none of its messages
+runs. A guest reads that answer as it reads every error reply (see
+[Guest listener](#guest-listener)). The gateway writes no batch either; one
+written all the same reaches a guest with each entry made public as a lone
+reply is.
+
 ## Handshake: `initialize` and `auth/login`
 
 `initialize` always answers `protocolVersion: 2`, whatever the client
@@ -236,8 +243,7 @@ Guest errors carry only a public code (`PUBLIC_ERRORS`,
 `src/acp/validation.ts`): an error reply keeps its JSON-RPC code
 with the code's public name as its message, and an `_hgw/error` notification
 keeps only a public code. Any other failure reads `-31013`
-`temporarily_unavailable`. In a batched reply each entry is redacted
-independently; a successful entry in the same batch is unaffected.
+`temporarily_unavailable`.
 
 ## Session lifecycle methods
 
@@ -249,7 +255,40 @@ independently; a successful entry in the same batch is unaffected.
 detaches this connection. `_hgw/session/part` (`HgwSessionPartRequestSchema`,
 `protocol/acp.ts`) only detaches this connection; the Session's work and all other
 members continue. `session/delete` of a Session not known to this connection
-succeeds rather than returning not-found.
+succeeds rather than returning not-found. The SDK client parts a Session its
+last listener left, after a 2 s grace, and closes one only when asked
+(`closeSession`), forgetting it at once with no part; as ACP asks, it takes a
+`-32002` answer to `session/close` or `session/delete` as success.
+
+A Session a `session/new` created is **unprompted** until the first prompt is
+sent to its runtime, whether or not the runtime confirms the start, or until
+an `_hgw/session/update` of it (a rename, pin, archive, or read mark)
+succeeds: an operator who acts on a Session keeps it. Only the create that
+ran marks it, never a repeat of its `clientId`, and the mark is the
+native Session's, so a member of either listener counts. Forked and invited
+Sessions are never marked. While marked, it is left out of `session/list` and
+`_hgw/sessions/search`, so a draft is no History row even on a runtime that
+lists a Session from its create. Once nothing holds it, at once after
+`session/close` and otherwise once no member has been on it for the idle
+window (the Hermes `runtime.sessionIdleMs`, 300 s by default and on every
+other runtime), the gateway discards it in one checked step: it reads the mark
+and that no member, joining or joined, of either listener, is on the Session,
+and takes it as discarding in the same turn. From then on a resume or a prompt
+of it answers `-32002`, and a client that still wants it creates a new one. The
+runtime then frees it (`discardSession`): Hermes, which lists no Session before
+its first turn, closes its live Session; OpenCode and OpenClaw delete it only
+after their own read shows no message and no running turn, and keep any other,
+which is listed again. A Session the runtime already reports gone counts as
+discarded. Once the discard settles the mark ends. A discarded Session stays
+`-32002` here however long after, among the last 4096 the gateway discarded
+(`DISCARDED_REFUSALS`), and out of every list: OpenCode and OpenClaw answer
+not found for it themselves, but Hermes makes a server-minted draft anew for
+any resume of its key, so the gateway's own answer is what keeps a client
+that held one from bringing it back. A discard that fails for any other
+reason leaves the Session marked for its next idle window, three attempts in all
+(`DISCARD_ATTEMPTS`), after which the gateway leaves it be and lists it. A
+gateway restart forgets every mark, so it can leave a Session behind, never
+delete one.
 
 ### Request `_meta.hgw` shapes
 
@@ -275,7 +314,8 @@ Agent's rows; a list on one Agent's address answers either as an error.
 listed or resumed returns invalid params naming the per-Agent address; on an
 Agent's address a Session that is already gone deletes successfully.
 
-**`session/fork`** (operator listener only): answers `{ sessionId }` of a new
+**`session/fork`** (operator listener only): answers the `sessionId` and setup
+(see [Response `_meta.hgw` shapes](#response-_metahgw-shapes)) of a new
 Session holding the conversation so far, and joins the connection to it as
 `session/new` joins its creator; the original Session is left as it is. It
 follows `session/new`'s `cwd`, `mcpServers` and `additionalDirectories` rules,
@@ -319,10 +359,15 @@ from.
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
 the user message an Edit or Retry replaces; a Session offers it only where its
 capabilities report `interactions.rewind` available, since what a rewind undoes
-with the turns, such as restored files, is the runtime's. `clientId` becomes the
-turn's `turnId`; a retry with the same `clientId` returns the first answer
-unchanged. The response carries the minted user-message id as the top-level
-`messageId` field (SDK 1.5.0 `PromptResponse`). As ACP reads an error answer
+with the turns, such as restored files, is the runtime's. As ACP allows no empty
+`prompt`, a rewind resends the blocks of the message it replaces, an Edit with
+its new text in place of the old. Its files are the replaced row's, which the
+runtime re-attaches where it can, so a rewind takes no `resource_link` but
+those into a stage its `attachmentStageId` names, and one left with no text is
+a Retry. `clientId` becomes the turn's `turnId`; a retry with the same
+`clientId` returns the first answer unchanged. The response carries the minted
+user-message id as the top-level `messageId` field (SDK 1.5.0
+`PromptResponse`). As ACP reads an error answer
 as a prompt never inserted, the answer waits for the runtime's storage receipt
 and names the id it stored the prompt under. A prompt the runtime may have
 stored without proving it, because its receipt outlasted the admission
@@ -354,17 +399,52 @@ before this rule applies.
 
 ### Response `_meta.hgw` shapes
 
-**`session/new`** response: `{ sessionId }` as a top-level result field, with no
-`_meta.hgw`. The Session row (`session_info_update`), capabilities
-(`available_commands_update._meta.hgw.capabilities`), models, and usage arrive
-as events after the answer.
+**Setup answers.** The `session/new`, `session/fork`, and `session/resume`
+answers carry the Session's setup, as ACP v2 asks of a setup response: its
+config options (model and effort) in `configOptions`, its slash commands in
+`availableCommands`, and the capabilities beyond those commands in
+`_meta.hgw.capabilities` (`HgwSessionSetupResponseMetaSchema`,
+`protocol/acp.ts`), the same shape `available_commands_update._meta.hgw`
+carries beside its commands. Every resume answer carries them, a `_hgw/before`
+page read's included, as ACP has every `session/resume` answer do whether or
+not it replays. Each is the reading passed through the member's own stack as
+the `model` or `commands` event it is, so it tells a member only what its
+stream would show: a guest's answer has no `configOptions`, and its commands
+and capabilities are the guest projection, with none of the operator's
+commands. A field the stack hides, or a reading the gateway does not hold, is
+left out, never `null`, and so is an empty list, as ACP serializes one
+("omission or `[]` means none"); an update still carries `[]`, which clears
+its list. Each reading is read at most once for the answer, one
+read at a time with any other read of it, and a resume reads it beside its
+replay; the member's readings take that value when its join lands rather than
+asking the runtime again, unless a change was reported while it was read. The
+answer waits on a read 2 s at most (`SETUP_READ_MS`): one still in flight then,
+or one that fails, answers what the gateway already holds, or leaves the field
+out; the one in flight still lands, as an update after the answer, and a
+failed one's update follows once a later read succeeds. The OpenCode adapter reads a
+Session's models only once its native row names a model, which a new Session's
+may not yet, and then its answer has no `configOptions`. The same readings still follow every answer as
+`config_option_update` and `available_commands_update` updates, for every
+member, and each later change arrives as one of them, replacing its whole
+list. As ACP has a client do, the SDK client applies answers and updates in
+the order they arrive, each replacing the lists it names, and reads a list an
+answer omits as none. `capabilities` are this gateway's own: an answer without
+them, or with ones the client cannot read, leaves those it holds. It hands the
+setup it holds to each listener that subscribes later
+(`AcpSessionListener.setup`), so a Session subscribed to in its creation's
+grace shows its models and commands at once.
+
+**`session/new`** response: `sessionId` as a top-level result field and the
+setup above. The creator's join lands once the answer is written, so the
+Session row (`session_info_update`), usage, and each reading again arrive as
+events after the answer, never before it; `session/fork` answers the same way.
 
 **`session/resume`** response (`HgwSessionResumeResponseMetaSchema`, `protocol/acp.ts`):
-`{ position?, history? }` in `_meta.hgw` — nothing else. `position` is
+the setup above, and `{ position?, history? }` beside the capabilities in
+`_meta.hgw`. `position` is
 the turn and sequence the joined Session stands at; a later resume continues
 from it. Session info (`session_info_update`), execution state (`state_update`),
-capabilities (`available_commands_update._meta.hgw.capabilities`), models, and
-usage arrive as events after the answer. When the journal cannot answer `from`
+and usage arrive as events after the answer. When the journal cannot answer `from`
 (`ReplayCursorLostError`, `core/channel.ts`), the gateway rebuilds the Session
 from history as a `start` resume does: the retained messages arrive as standard
 `session/update`s before the answer, the live turn follows them, and the answer
@@ -404,14 +484,15 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   client keeps them out of the turn position and every live listener. A page
   never carries `plan_update`; the Todo plan and a restored failed turn come
   only with the newest page.
-- The response carries only `_meta.hgw.history`
-  (`HgwHistoryPageResponseMetaSchema`). A missing `nextCursor` means the
+- The response carries `_meta.hgw.history`
+  (`HgwHistoryPageResponseMetaSchema`) beside the Session's setup, as every
+  resume answer does (see [Response `_meta.hgw` shapes](#response-_metahgw-shapes)). A missing `nextCursor` means the
   beginning. `truncated: true` with no cursor means the gateway's bound stopped
   the reading, or the runtime's own reach did, and the thread says earlier
   messages can't be loaded.
 - A page is read only for a Session this connection has resumed, whether by
   a resume, `session/new`, or a prompt, one at a time per Session. It never
-  resumes, restates configuration or usage, or reports execution. A cursor that does not decode, or points past the
+  resumes, restates usage, or reports execution. A cursor that does not decode, or points past the
   history, is invalid params.
 - An accepted rewind deletes the newest rows, so it marks the client's cursor
   stale and drops a page still loading; the next load resumes from `start`
@@ -453,6 +534,10 @@ history passes the plan alone.
 | `session_info_update`       | Session metadata changes                                                                                          |
 | `available_commands_update` | Slash commands and capabilities in `_meta.hgw.capabilities` (`HgwAvailableCommandsMetaSchema`, `protocol/acp.ts`) |
 | `config_option_update`      | Current model and effort-level selection                                                                          |
+
+A setup answer carries the Session's config options and commands (see
+[Response `_meta.hgw` shapes](#response-_metahgw-shapes)); `config_option_update`
+and `available_commands_update` restate them after it and report each change.
 
 `usage_update` carries the used and total token counts in its own fields, and
 the provider's attribution and provenance in `_meta.hgw` (`source`,

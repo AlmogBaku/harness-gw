@@ -27,9 +27,8 @@ import {
   RequestError,
   SessionConfigOption,
   SessionUpdate,
-  type AnyWireMessage,
   type ContentBlock,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -44,6 +43,7 @@ import {
   HGW_ACP_PATH,
   HGW_AUTH_METHOD_INVITE,
   HgwAvailableCommandsMetaSchema,
+  HgwSessionSetupResponseMetaSchema,
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
   HGW_METHODS,
@@ -54,6 +54,7 @@ import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredGateway } from "../composition"
 import { stubUnreachableTransports, until } from "../core/runtime-contract"
 import { CredentialValues } from "../redaction"
+import { PUBLIC_ERRORS } from "./validation"
 
 /** The contract's rows, each named for the rule it protects. */
 export type WireContractRow =
@@ -79,6 +80,9 @@ export type WireContractRow =
   | "everyThoughtAndCallLive"
   | "quietStreamPassedThrough"
   | "forkJoinsNewSession"
+  | "setupAnswerCarriesLists"
+  | "unpromptedSessionFreed"
+  | "promptedSessionKept"
   | "childAnnouncedBeforeItsEvents"
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
@@ -167,6 +171,11 @@ export type WireRuntime = Readonly<{
   /** Absent only when every row that plays a turn is a gap. */
   turn?: WireTurn
   /**
+   * Whether the runtime offers slash commands, which every setup answer then
+   * lists; one that offers none leaves them out.
+   */
+  commands?: boolean
+  /**
    * Stores the Session the invitation `ref` names on the Agent, as the
    * runtime finds the one an invitation reserved, and makes it the Session
    * `turn` plays. Each of `said` is stored in it in order as a user message
@@ -186,6 +195,12 @@ export type WireRuntime = Readonly<{
    * gap.
    */
   childReads?(childId: string): number
+  /**
+   * How many Sessions the runtime freed so far as a discard frees one: its
+   * native delete, or Hermes' close of a live draft. Absent only when every
+   * row that counts them is a gap.
+   */
+  discards?(): number
 }>
 
 export type WireContractOptions = {
@@ -213,10 +228,13 @@ type WireHarness = Readonly<{
   /** The Agent's folder, the one `cwd` its Sessions take. */
   folder: string
   turn: WireTurn
+  /** Whether the runtime offers slash commands (`WireRuntime.commands`). */
+  commands: boolean
   /** The runtime's hooks, each failing the row that calls it if absent. */
   invite: NonNullable<WireRuntime["invite"]>
   rewinds: NonNullable<WireRuntime["rewinds"]>
   childReads: NonNullable<WireRuntime["childReads"]>
+  discards: NonNullable<WireRuntime["discards"]>
   clock: Clock
   /** Connects a client to `service`, closed with the case. */
   connect(
@@ -340,13 +358,10 @@ function connectClient(
       })
     )
   const connection = app.connect(
-    createWebSocketStream<AnyWireMessage>(
-      `wss://${new URL(origin).host}${path}`,
-      {
-        WebSocket: bridge.WebSocket,
-        headers: { Origin: origin },
-      }
-    )
+    createWebSocketStream(`wss://${new URL(origin).host}${path}`, {
+      WebSocket: bridge.WebSocket,
+      headers: { Origin: origin },
+    })
   )
   /** Settles with the next update `matches` accepts. */
   const next = <T extends SessionUpdate>(
@@ -427,6 +442,62 @@ type WireAsk = Readonly<{
 type WireClient = ReturnType<typeof connectClient>
 
 /** A Session on `agentId`, created as the plain client's one setup step. */
+type SetupAnswer = {
+  configOptions?: unknown
+  availableCommands?: unknown
+  _meta?: Record<string, unknown> | null
+}
+
+/**
+ * A setup answer's capabilities, its config options unless `models` says the
+ * runtime reads none, and its commands, each a `command`, unless `commands`
+ * says it offers none. A list is a list with entries or left out, never
+ * `null` and never `[]`, as ACP serializes a setup answer.
+ */
+function expectSetupAnswer(
+  answer: SetupAnswer,
+  { models, commands }: { models: boolean; commands: boolean }
+) {
+  if (models) expect(answer.configOptions).toEqual(expect.any(Array))
+  else expect(answer).not.toHaveProperty("configOptions")
+  if (commands) {
+    expect(answer.availableCommands).toEqual(expect.any(Array))
+    for (const command of answer.availableCommands as unknown[])
+      expect(command).toMatchObject({ type: "command" })
+  } else expect(answer).not.toHaveProperty("availableCommands")
+  for (const list of [answer.configOptions, answer.availableCommands]) {
+    expect(list).not.toBeNull()
+    expect(list).not.toEqual([])
+  }
+  HgwSessionSetupResponseMetaSchema.parse(answer._meta?.[HGW_META_KEY])
+}
+
+/**
+ * A created Session's answer and a fresh connection's resume of it, each
+ * checked as a setup answer; both read the same Session, so both tell the
+ * same.
+ */
+async function createAndResume(
+  { clock, connectPlain, commands }: WireHarness,
+  models: boolean
+) {
+  const plain = connectPlain()
+  await until(clock, plain.initialize())
+  const created = await until(
+    clock,
+    plain.connection.agent.request(methods.agent.session.new, {
+      cwd: plain.folder,
+    })
+  )
+  const reader = connectPlain()
+  await until(clock, reader.initialize())
+  const resumed = await until(clock, resumeFromStart(reader, created.sessionId))
+  for (const answer of [created, resumed])
+    expectSetupAnswer(answer, { models, commands })
+  expect(resumed.configOptions).toEqual(created.configOptions)
+  expect(resumed.availableCommands).toEqual(created.availableCommands)
+}
+
 async function newSession({ connection, folder }: WireClient) {
   const { sessionId } = await connection.agent.request(
     methods.agent.session.new,
@@ -462,6 +533,10 @@ async function playTurn(
   await until(clock, idle)
 }
 
+function closeSession({ connection }: WireClient, sessionId: string) {
+  return connection.agent.request(methods.agent.session.close, { sessionId })
+}
+
 function prompt({ connection }: WireClient, sessionId: string, text: string) {
   return connection.agent.request(methods.agent.session.prompt, {
     sessionId,
@@ -486,8 +561,8 @@ async function reload({ clock, connectPlain }: WireHarness, sessionId: string) {
 }
 
 /**
- * An Edit of the user message `rewindSourceId` with `text`, or with none a
- * Retry, which sends that message's own text again; answers as the prompt did.
+ * An Edit of the user message `rewindSourceId` with `text`, or a Retry, which
+ * sends that message's own text again; answers as the prompt did.
  */
 function rewindPrompt(
   { connection }: WireClient,
@@ -497,7 +572,7 @@ function rewindPrompt(
 ) {
   return connection.agent.request(methods.agent.session.prompt, {
     sessionId,
-    prompt: text ? [{ type: "text", text }] : [],
+    prompt: [{ type: "text", text }],
     _meta: { [HGW_META_KEY]: { rewindSourceId } },
   })
 }
@@ -534,6 +609,16 @@ async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
     _meta: { [HGW_META_KEY]: { token } },
   })
   return client
+}
+
+/** The code of each error answer the gateway sent `client`, in order. */
+function errorCodes(client: WireClient) {
+  return client.bridge.sockets().flatMap(({ frames }) =>
+    frames.flatMap((raw) => {
+      const { error } = JSON.parse(raw) as { error?: { code?: unknown } }
+      return error ? [error.code] : []
+    })
+  )
 }
 
 /** Every frame the gateway sent `client` that names `id` anywhere in it. */
@@ -812,6 +897,7 @@ function wireCase(
         agentId: runtime.agentId,
         folder: runtime.folder,
         turn: runtime.turn ?? NO_TURN,
+        commands: runtime.commands ?? false,
         invite: (ref, said) =>
           runtime.invite
             ? runtime.invite(ref, said)
@@ -823,6 +909,10 @@ function wireCase(
         childReads: (childId) => {
           if (!runtime.childReads) throw lacks("count of child reads")
           return runtime.childReads(childId)
+        },
+        discards: () => {
+          if (!runtime.discards) throw lacks("count of discards")
+          return runtime.discards()
         },
         clock,
         connect,
@@ -1202,6 +1292,46 @@ export function runWireContract(
       )
 
       row(
+        "setupAnswerCarriesLists",
+        "answers a create and a resume with the Session's config options, commands and capabilities",
+        (harness) => createAndResume(harness, true),
+        {
+          gapCheck: {
+            title:
+              "answers a create and a resume with the Session's commands and capabilities, and no config options it cannot read",
+            body: (harness) => createAndResume(harness, false),
+          },
+        }
+      )
+
+      row(
+        "unpromptedSessionFreed",
+        "frees a Session its client created and closed with no prompt, in the runtime itself",
+        async (harness) => {
+          const { clock, discards } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+
+          await until(clock, closeSession(plain, sessionId))
+
+          expect(discards()).toBe(1)
+        }
+      )
+
+      row(
+        "promptedSessionKept",
+        "keeps a Session a prompt reached once its client closes it",
+        async (harness) => {
+          const { clock, turn, discards } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+
+          await until(clock, closeSession(plain, sessionId))
+
+          expect(discards()).toBe(0)
+        }
+      )
+
+      row(
         "childAnnouncedBeforeItsEvents",
         "announces a child Session before its own updates, live and on a reload",
         async (harness) => {
@@ -1288,15 +1418,23 @@ export function runWireContract(
               agent: agentSide(updates).messages.map(({ text }) => text),
             }
           }
-          /** Rewinds the user message, plays its turn, and reads again. */
+          /**
+           * Rewinds the user message with `text`, or with none its own text,
+           * plays its turn, and reads again.
+           */
           const rewound = async (
             { users }: Awaited<ReturnType<typeof stored>>,
-            text: string
+            text?: string
           ) => {
             const idle = plain.nextIdle()
             await until(
               clock,
-              rewindPrompt(plain, sessionId, users[0]!.id, text)
+              rewindPrompt(
+                plain,
+                sessionId,
+                users[0]!.id,
+                text ?? users[0]!.text
+              )
             )
             await until(clock, turn.firstResponse())
             await until(clock, turn.secondResponse())
@@ -1305,7 +1443,7 @@ export function runWireContract(
           }
           const played = await stored()
           const edited = await rewound(played, "list the folders")
-          const retried = await rewound(edited, "")
+          const retried = await rewound(edited)
 
           const texts = ({ users }: typeof played) =>
             users.map(({ text }) => text)
@@ -1330,7 +1468,7 @@ export function runWireContract(
 
       row(
         "guestRetryOfSlashRefused",
-        "refuses a guest's Retry of a slash command it was shown, its text empty or padding alone, and writes no rewind",
+        "refuses a guest's Retry of a slash command it was shown, its own text or padding alone, and writes no rewind",
         async (harness) => {
           const { clock, invite, rewinds } = harness
           const said = ["/compact", "  /compact", "\u200B/compact"]
@@ -1339,8 +1477,8 @@ export function runWireContract(
           await until(clock, resumeFromStart(guest, GUEST_REF))
           const shown = userSide(guest.updates)
           const answers: unknown[] = []
-          for (const { id } of shown)
-            for (const text of ["", " \u200B "])
+          for (const { id, text: own } of shown)
+            for (const text of [own, " \u200B "])
               answers.push(
                 await until(
                   clock,
@@ -1810,23 +1948,20 @@ export function runWireListenerContract(
     `${name} ACP listener wire contract`,
     withTransportsStubbed(() => {
       it(
-        "answers version 2 to an initialize asking for any version, alone or as a batch's only entry",
+        "answers version 2 to an initialize asking for any version",
         wireCase(createRuntime, async ({ gateway, clock }) => {
           const answers: unknown[] = []
-          for (const version of [1, 3])
-            for (const batched of [false, true]) {
-              const raw = await until(
-                clock,
-                rawSocket(gateway.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
-              )
-              const frame = rawInitialize(version)
-              raw.send(JSON.stringify(batched ? [frame] : frame))
-              const answer = await until(clock, raw.next())
-              answers.push(batched ? (answer as unknown[])[0] : answer)
-            }
+          for (const version of [1, 3]) {
+            const raw = await until(
+              clock,
+              rawSocket(gateway.acpService, OPERATOR_ORIGIN, HGW_ACP_PATH)
+            )
+            raw.send(JSON.stringify(rawInitialize(version)))
+            answers.push(await until(clock, raw.next()))
+          }
 
           expect(answers).toEqual(
-            Array.from({ length: 4 }, () =>
+            Array.from({ length: 2 }, () =>
               expect.objectContaining({
                 id: 1,
                 result: expect.objectContaining({ protocolVersion: 2 }),
@@ -1849,27 +1984,11 @@ export function runWireListenerContract(
             "{not json",
             JSON.stringify({ ...rawInitialize(2), params: null }),
             JSON.stringify({ ...rawInitialize(2), params: [] }),
-            JSON.stringify([{ ...rawInitialize(2), params: null }]),
           ]) {
             const raw = await open()
             raw.send(frame)
             answers.push(await until(clock, raw.next()))
           }
-          const raw = await open()
-          raw.send(JSON.stringify(rawInitialize(2)))
-          await until(clock, raw.next())
-          raw.send(
-            JSON.stringify([
-              7,
-              {
-                jsonrpc: "2.0",
-                id: 2,
-                method: methods.agent.session.list,
-                params: {},
-              },
-            ])
-          )
-          answers.push(await until(clock, raw.next()))
 
           const error = (id: number | null, code: number) =>
             expect.objectContaining({
@@ -1880,17 +1999,12 @@ export function runWireListenerContract(
             error(null, -32700),
             error(1, -32602),
             error(1, -32602),
-            [error(1, -32602)],
-            [
-              error(null, -32600),
-              expect.objectContaining({ id: 2, result: expect.anything() }),
-            ],
           ])
         })
       )
 
       it(
-        "refuses an initialize batched with other entries",
+        "refuses a batch with one invalid request answer and runs none of it",
         wireCase(createRuntime, async ({ gateway, clock }) => {
           const raw = await until(
             clock,
@@ -1907,9 +2021,26 @@ export function runWireListenerContract(
               },
             ])
           )
+          // Answered after anything the batch ran would be.
+          raw.send(JSON.stringify(rawInitialize(2, 3)))
+          const answers = [
+            await until(clock, raw.next()),
+            await until(clock, raw.next()),
+          ]
 
-          // The SDK refuses it by closing the socket, answering nothing.
-          expect(await until(clock, raw.next())).toEqual({ closed: 1002 })
+          expect(answers).toEqual([
+            {
+              jsonrpc: "2.0",
+              id: null,
+              error: expect.objectContaining({
+                code: RequestError.invalidRequest().code,
+              }),
+            },
+            expect.objectContaining({
+              id: 3,
+              result: expect.objectContaining({ protocolVersion: 2 }),
+            }),
+          ])
         })
       )
 
@@ -2121,8 +2252,14 @@ export function runWireListenerContract(
 
           expect(await closed).toBe("closed")
           expect(states(reader.updates).at(-1)).toBe("idle:cancelled")
-          expect(await close(plain)).toBe(RequestError.resourceNotFound().code)
+          // The SDK's client reads a close of a Session gone as done, so the
+          // answer that says so is read off the wire.
+          expect(await close(plain)).toBe("closed")
+          expect(errorCodes(plain)).toEqual([
+            RequestError.resourceNotFound().code,
+          ])
           expect(await close(reader)).toBe("closed")
+          expect(errorCodes(reader)).toEqual([])
         })
       )
 
@@ -2140,11 +2277,13 @@ export function runWireListenerContract(
               })
             )
           ).resolves.toEqual({})
+          // The SDK's client reads a not-found answer as done too.
+          expect(errorCodes(plain)).toEqual([])
         })
       )
 
       it(
-        "shows a guest each batched reply as its public code and name alone",
+        "shows a guest each error reply as its public code and name alone, a batch's refusal too",
         wireCase(createRuntime, async ({ gateway, agentId, clock }) => {
           const guest = gateway.guest!
           const ref = "wire-contract"
@@ -2174,42 +2313,43 @@ export function runWireListenerContract(
             JSON.stringify([
               {
                 jsonrpc: "2.0",
-                id: 3,
+                id: 4,
                 method: HGW_METHODS.session.focus,
                 params: {},
               },
-              {
-                jsonrpc: "2.0",
-                id: 4,
-                method: HGW_METHODS.session.part,
-                // The SDK's invalid-params reply echoes an unknown key.
-                params: { sessionId: ref, "internal detail 7f3a": true },
-              },
-              {
-                jsonrpc: "2.0",
-                method: methods.agent.session.cancel,
-                params: { sessionId: ref },
-              },
             ])
           )
-          const reply = await until(clock, raw.next())
+          raw.send(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 3,
+              method: HGW_METHODS.session.part,
+              // The SDK's invalid-params reply echoes an unknown key.
+              params: { sessionId: ref, "internal detail 7f3a": true },
+            })
+          )
+          const replies = [
+            await until(clock, raw.next()),
+            await until(clock, raw.next()),
+          ]
 
-          expect(JSON.stringify(reply)).not.toContain("internal detail 7f3a")
-          // A batch's replies come in the order they settle.
-          expect(reply).toHaveLength(2)
-          expect(reply).toEqual(
-            expect.arrayContaining([
-              { jsonrpc: "2.0", id: 3, result: {} },
-              {
-                jsonrpc: "2.0",
-                id: 4,
-                error: {
-                  code: RequestError.invalidParams().code,
-                  message: "invalid_request",
-                },
+          expect(JSON.stringify(replies)).not.toContain("internal detail 7f3a")
+          expect(replies).toEqual([
+            // As every guest error reply reads.
+            {
+              jsonrpc: "2.0",
+              id: null,
+              error: PUBLIC_ERRORS.reply(RequestError.invalidRequest().code),
+            },
+            {
+              jsonrpc: "2.0",
+              id: 3,
+              error: {
+                code: RequestError.invalidParams().code,
+                message: "invalid_request",
               },
-            ])
-          )
+            },
+          ])
         })
       )
 

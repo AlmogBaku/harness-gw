@@ -1,5 +1,6 @@
 import type {
   AgentCapabilities,
+  AvailableCommand,
   ContentBlock,
   CreateElicitationRequest,
   CreateElicitationResponse,
@@ -8,7 +9,7 @@ import type {
   SessionConfigOption,
   SessionInfo,
   SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { z } from "zod"
 
 import type { AgentCatalogResponseSchema } from "../protocol"
@@ -25,6 +26,7 @@ import type {
   HgwSteerRequestSchema,
   HgwSteerResponseSchema,
 } from "../protocol/acp"
+import type { HgwWorkspaceCapabilities } from "./hgw-client"
 
 /**
  * The browser-side seam over one ACP v2 WebSocket connection to the gateway.
@@ -90,6 +92,20 @@ export type AcpSessionReplayListener = () =>
   | void
 
 /**
+ * What a Session reports of its setup: its config options, its slash commands,
+ * and the capabilities that travel with the commands. A `session/new`,
+ * `session/resume`, or `session/fork` answer carries both lists, one it omits
+ * read as none, and the capabilities when it names them; a
+ * `config_option_update` or `available_commands_update` carries one list. Each
+ * list is the Session's whole list, and a field left out here is unchanged.
+ */
+export type AcpSessionSetup = {
+  readonly configOptions?: readonly SessionConfigOption[]
+  readonly availableCommands?: readonly AvailableCommand[]
+  readonly capabilities?: HgwWorkspaceCapabilities
+}
+
+/**
  * Where one opened Session stands: `joining` until the gateway has joined it,
  * `joined` while it follows the Session, `unavailable` while a failed join
  * waits out its backoff or one the transport refuses waits for the next, and
@@ -119,6 +135,14 @@ export type AcpSessionListener = {
    * may return a callback, called once that replay has settled either way.
    */
   replay?: AcpSessionReplayListener
+  /**
+   * The Session's setup: on subscribe, what it has reported so far by answer
+   * or update, then what each later setup answer reports, such as a rejoin's
+   * `session/resume`. Live updates of those lists reach `update` alone. An
+   * answer and an update alike replace the lists they name, in the order they
+   * arrive, as ACP has a client apply them.
+   */
+  setup?: (setup: AcpSessionSetup) => void
   state?: (state: AcpSessionState) => void
 }
 
@@ -162,8 +186,10 @@ export interface AcpConnection {
   login(token: string): Promise<void>
 
   /**
-   * The new Session's row, capabilities and config options follow as updates.
-   * The browser holds the shared address, so it names the Agent.
+   * Creates a Session, opened in its grace: it parts unless a listener
+   * subscribes within it, and one that does is handed the setup the answer
+   * reported. Its row follows as an update. The browser holds the shared
+   * address, so it names the Agent.
    */
   newSession(
     meta: z.infer<typeof HgwSessionNewMetaSchema> & { agentId: string }
@@ -171,7 +197,7 @@ export interface AcpConnection {
   /**
    * Forks a Session into a new one holding its conversation so far, where
    * `capabilities.session.fork` says the gateway forks; the gateway joins
-   * this connection to it, as `newSession` does.
+   * this connection to it, and it opens in its grace, as `newSession` does.
    */
   forkSession(sessionId: string): Promise<{ sessionId: string }>
   listSessions(
@@ -228,6 +254,14 @@ export interface AcpConnection {
     configId: string,
     value: string
   ): Promise<SessionConfigOption[]>
+  /**
+   * Ends the Session with ACP's `session/close`, which stops its work, and
+   * forgets it here at once, with no `_hgw/session/part`: its listeners hear
+   * nothing more of it, and nothing rejoins it. A Session the gateway no
+   * longer has (`-32002`) is closed already, so that answer resolves too.
+   */
+  closeSession(sessionId: string): Promise<void>
+  /** Resolves, as `closeSession` does, for a Session already gone (`-32002`). */
   deleteSession(sessionId: string): Promise<void>
 
   updateSession(

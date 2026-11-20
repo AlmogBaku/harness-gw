@@ -36,10 +36,16 @@ const NO_HISTORY = {
 }
 
 /** A coordinator that only reports each Session's execution. */
+/** What a membership asks of every coordinator: a hold, and no Session gone. */
+const HOLDING = {
+  hold: () => () => undefined,
+  refuseDiscarded: () => undefined,
+}
+
 function reporting(
   snapshot: (scope: ChannelScope) => { state: string; turnId?: string }
 ) {
-  return { snapshot } as unknown as SessionCoordinator
+  return { snapshot, ...HOLDING } as unknown as SessionCoordinator
 }
 
 const SCOPE: SessionScope = {
@@ -752,6 +758,7 @@ function joined(
         })
       return undefined
     },
+    ...HOLDING,
   } as unknown as SessionCoordinator
   const middleware: Middleware = {
     event(event, act) {
@@ -927,6 +934,7 @@ describe("a membership's resume", () => {
       recover: () => Promise.reject(gone),
       childReports: () => [],
       endIfGone: (_scope: SessionScope, cause: unknown) => cause === gone,
+      ...HOLDING,
     } as unknown as SessionCoordinator
     const { logger } = captureLogs()
     const membership = createChannels({

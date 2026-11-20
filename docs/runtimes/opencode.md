@@ -168,6 +168,7 @@ OpenCode ships it, enabling the gateway to store icons without frontmatter.
 
 ## Capability limits
 
+- OpenCode lists a Session from its create. One the gateway created and nobody prompted is left out of every list, and once nothing holds it (at once after `session/close`, else after 300 s) the gateway deletes it, after OpenCode's own reads show no message and no running turn; see `docs/protocol.md`, Session lifecycle methods. The adapter reads a Session's models only once its native row names a model, which a new Session's may not yet; its `session/new` answer then has no `configOptions`, and the update follows once the model can be read.
 - AOS reads the native Agent catalog, creates, renames, pins, archives, and deletes Sessions, and projects Session Todos, but Agent visibility, Agent icon writes, Activity, and context accounting are unavailable when OpenCode has no exact matching operation. Voice becomes available when the gateway `voice` block is configured; see [Use voice](https://github.com/AlmogBaku/aos-ui/blob/main/docs/chat-voice.md).
 - Runs support streaming, reconnect, Stop, attachments, questions, and permissions. Edit/regenerate and active-turn steering are unavailable.
 - OpenCode bounds no question or answer, so an answer is sent as written: any typed text where the question takes it, and every choice of a multi-select beside typed text, with an empty value dropped and a value given twice sent once. Question, header, and option text is read up to 512 KiB a field; the question card shows a header's first 256 characters.

@@ -21,11 +21,14 @@ export function coordinatedRuntime(
   id: string,
   { runtime, close }: ComposedRuntime,
   limits: RuntimeLimits,
-  logger: Logger
+  logger: Logger,
+  /** How long a Session created and never prompted may be held by nothing. */
+  unpromptedIdleMs?: number
 ): RuntimeInstance {
   const sessions = new SessionCoordinator({
     engine: runtime.turns,
     readings: runtime,
+    ...(unpromptedIdleMs === undefined ? {} : { unpromptedIdleMs }),
     maxActiveExecutions: limits.activeExecutions,
     maxSubscriberEvents: limits.subscriberEvents,
     maxSubscriberBytes: limits.subscriberBytes,

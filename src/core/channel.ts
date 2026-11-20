@@ -42,6 +42,7 @@ import {
   type CommandResults,
   type Member,
   type MemberScope,
+  type MemberSetup,
   type PromptPart,
   type SessionEvent,
   type SessionNotice,
@@ -67,6 +68,9 @@ import {
 } from "./session-coordinator"
 import type { SessionRow } from "./session-rows"
 import { FanoutOverflowError } from "./subscriber-fanout"
+
+/** The readings a setup answer tells, as the coordinator read them. */
+type SetupReadings = Awaited<ReturnType<SessionCoordinator["setupReadings"]>>
 
 /**
  * A channel is one provider Session; its members are the connections that
@@ -947,7 +951,8 @@ export function createChannels(options: CreateChannelsOptions) {
      * the newest page alone for a member that `paged` older history itself.
      * The view reads the history, then the
      * live events the journal buffered, then the Session's state, before the
-     * answer. The join lands once the answer is written, and the Session's
+     * answer; the setup it tells is read beside all that, and built from
+     * after it. The join lands once the answer is written, and the Session's
      * readings and row reach the member as events after it. A Session waiting
      * on input asks its runtime whether the wait still stands, which the
      * answer does not wait for. A resume the journal serves asks the provider
@@ -960,7 +965,12 @@ export function createChannels(options: CreateChannelsOptions) {
       position: ResumePosition,
       view?: ResumeView
     ): Promise<CommandResults["resume"]> {
-      const resumed = await membership.resume(position, view)
+      // The setup is read beside the replay, and told after it.
+      const [resumed, readings] = await Promise.all([
+        membership.resume(position, view),
+        membership.readSetup(),
+      ])
+      const setup = await membership.setup(readings)
       membership.joined()
       if (
         !membership.pending &&
@@ -971,7 +981,7 @@ export function createChannels(options: CreateChannelsOptions) {
           .catch((err: unknown) =>
             logger.error({ err }, "channel.adopt.failed")
           )
-      return resumed
+      return { ...resumed, setup }
     },
 
     /**
@@ -991,7 +1001,8 @@ export function createChannels(options: CreateChannelsOptions) {
         // only by reading an empty page there.
         if (older.offset > page.total) throw new CommandRefusedError("invalid")
         await membership.showOlderPage(page, older)
-        return { page }
+        // Every resume answer restates the setup, a page read's as well.
+        return { page, setup: await membership.setup() }
       } catch (cause) {
         membership.endIfGone(cause)
         throw cause
@@ -1006,6 +1017,14 @@ export function createChannels(options: CreateChannelsOptions) {
      */
     createSession(agentId: string, input: CreateInput, principalId: string) {
       return coordinator.createSession(agentId, input, principalId)
+    },
+
+    /**
+     * Discards a Session a member closed, where a create here made it, no
+     * prompt reached it, and nothing else holds it.
+     */
+    closed(scope: SessionScope) {
+      return coordinator.closed(scope)
     },
 
     /** Whether the runtime forks Sessions. */
@@ -1137,6 +1156,8 @@ class Membership {
       this.#subscription?.close()
       this.#subscription = undefined
     })
+    // A Session a member is on, joining or joined, is never discarded.
+    if (hasSession(scope)) owner.stack.defer(options.coordinator.hold(scope))
     this.#delivery = {
       sendTurn: ({ messageId, content }) =>
         this.#rebuilding
@@ -1213,20 +1234,7 @@ class Membership {
     const declines = new Set<string>()
     let shown: ReturnType<typeof runEvents>
     try {
-      shown = runEvents(
-        this.#member.middleware,
-        {
-          // A child's event is the child's, under its own id.
-          sessionId:
-            event.kind === "child"
-              ? event.event.childSessionId
-              : event.kind === "child-history"
-                ? event.childSessionId
-                : this.#addressed.sessionId,
-          ...event,
-        },
-        { decline: (requestId) => declines.add(requestId) }
-      )
+      shown = this.#shown(event, (requestId) => declines.add(requestId))
     } catch (cause) {
       // A stack that throws costs this event alone, through the caller's own
       // handling of a failed send, never the members or events after it.
@@ -1249,6 +1257,66 @@ class Membership {
           )
         )
     return sent
+  }
+
+  /** One event as this member's stack shows it, or `undefined` when hidden. */
+  #shown(event: SessionEvent, decline: (requestId: string) => void) {
+    return runEvents(
+      this.#member.middleware,
+      {
+        // A child's event is the child's, under its own id.
+        sessionId:
+          event.kind === "child"
+            ? event.event.childSessionId
+            : event.kind === "child-history"
+              ? event.childSessionId
+              : this.#addressed.sessionId,
+        ...event,
+      },
+      { decline }
+    )
+  }
+
+  /**
+   * Reads what a setup answer tells this member, each reading at most once
+   * and seeded for this member's own readings; one that cannot be read in
+   * time answers the reading held, and its value follows as an update. A
+   * Session being discarded is refused, as its resume is, and read no more.
+   */
+  async readSetup(): Promise<SetupReadings> {
+    if (!this.pending) this.#options.coordinator.refuseDiscarded(this.#scope)
+    return this.#options.coordinator.setupReadings(
+      this.#addressed,
+      this.#options.membershipId
+    )
+  }
+
+  /**
+   * What a setup answer tells this member of its Session: the model options
+   * and capabilities `readings` holds, read now when none is given, as the
+   * `model` and `commands` events its stack would show it, so it is told only
+   * what its stream shows. Take it before `joined`, which lets those updates
+   * go.
+   */
+  async setup(readings?: SetupReadings): Promise<MemberSetup> {
+    const [models, capabilities] = readings ?? (await this.readSetup())
+    const shown = (event: SessionEvent) => {
+      try {
+        return this.#shown(event, () => undefined)
+      } catch (err) {
+        // As a stack that throws on an event costs it that event alone.
+        this.#options.logger.warn({ err }, "membership.setup.hidden")
+        return undefined
+      }
+    }
+    const model = models && shown({ kind: "model", models })
+    const commands = capabilities && shown({ kind: "commands", capabilities })
+    return {
+      ...(model?.kind === "model" ? { models: model.models } : {}),
+      ...(commands?.kind === "commands"
+        ? { capabilities: commands.capabilities }
+        : {}),
+    }
   }
 
   /**
@@ -1301,6 +1369,7 @@ class Membership {
   ): Promise<{ history?: SessionHistoryResponse }> {
     // A fresh invitation has no history to replay and no turn to follow.
     if (this.pending) return {}
+    this.#options.coordinator.refuseDiscarded(this.#scope)
     this.#stated = undefined
     this.#restating = true
     try {

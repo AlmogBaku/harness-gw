@@ -141,4 +141,65 @@ describe("SessionReporter", () => {
     await clock.advance(0)
     expect(returning.mock.calls).toEqual([["before"], ["after"]])
   })
+
+  describe("a setup answer's take of a cell nobody follows", () => {
+    const WITHIN_MS = 1_000
+
+    /** Reads that each wait until the test lands them, in order. */
+    function heldReads() {
+      const landings: ((value: string) => void)[] = []
+      const read = vi.fn(
+        () => new Promise<string>((land) => landings.push(land))
+      )
+      return { read, land: (value: string) => landings.shift()!(value) }
+    }
+
+    it("leaves the member's subscription a change reported while its read was in flight", async () => {
+      const clock = useFakeClock()
+      const { read, land } = heldReads()
+      const reporter = cells(read)
+      const answer = reporter.take("session-1", scope, "member", WITHIN_MS)
+
+      reporter.report("session-1")
+      land("before")
+      expect(await answer).toBe("before")
+      const member = listener()
+      reporter.subscribe("session-1", scope, "member", member)
+      land("after")
+      await clock.advance(0)
+
+      expect(member.mock.calls).toEqual([["before"], ["after"]])
+    })
+
+    it("joins a read in flight rather than starting another", async () => {
+      useFakeClock()
+      const { read, land } = heldReads()
+      const reporter = cells(read)
+
+      const answers = [
+        reporter.take("session-1", scope, "one", WITHIN_MS),
+        reporter.take("session-1", scope, "two", WITHIN_MS),
+      ]
+      expect(read).toHaveBeenCalledTimes(1)
+      land("reading")
+
+      expect(await Promise.all(answers)).toEqual(["reading", "reading"])
+    })
+
+    it("answers the value it holds when its read fails", async () => {
+      const clock = useFakeClock()
+      const read = vi
+        .fn<() => Promise<string>>()
+        .mockResolvedValueOnce("held")
+        .mockRejectedValue(new Error("unreadable"))
+      const reporter = cells(read)
+      reporter.subscribe("session-1", scope, "browser", listener())()
+      await clock.advance(0)
+
+      await expect(
+        reporter.take("session-1", scope, "member", WITHIN_MS)
+      ).resolves.toBe("held")
+      expect(read).toHaveBeenCalledTimes(2)
+    })
+  })
 })

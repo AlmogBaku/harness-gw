@@ -17,6 +17,16 @@ export const READING_RETRIES = 5
  */
 export const RETRY_BUDGET = { burst: 32, perSecond: 16 }
 
+/**
+ * How long a setup answer (`session/new`, `session/resume`, `session/fork`)
+ * waits on a model or capability read it starts. A healthy native read
+ * answers well inside it, while one slow enough to miss it would hold the
+ * answer, and a first message waiting on its create, up to the adapter's own
+ * deadline; past it the answer carries what the gateway holds, and the read
+ * still lands as an update.
+ */
+export const SETUP_READ_MS = 2_000
+
 /** The backoff a native link redials on, with full jitter. */
 export const LINK_BACKOFF = { baseMs: 250, capMs: 5_000 }
 
@@ -56,6 +66,27 @@ export const RECONCILE_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
  * as the admission deadline.
  */
 export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
+
+/**
+ * How long nothing may hold a Session created and never prompted before the
+ * gateway discards it, where the runtime sets no idle window of its own.
+ */
+export const UNPROMPTED_IDLE_MS = 5 * 60_000
+
+/**
+ * How many times the gateway tries to free an unprompted Session its runtime
+ * failed to free, an idle window apart, before it leaves the Session be.
+ */
+export const DISCARD_ATTEMPTS = 3
+
+/**
+ * How many of the Sessions it discarded the gateway still answers as not
+ * found itself, the most recent kept: Hermes makes a server-minted draft anew
+ * for any resume of its key, so a client that held one would bring it back,
+ * however long after. A browser holds a few drafts at most, so the bound only
+ * keeps the record finite.
+ */
+export const DISCARDED_REFUSALS = 4_096
 
 /** How long a member that fell behind keeps its place for its view to rejoin. */
 export const PAUSED_DEADLINE_MS = 30_000

@@ -16,6 +16,7 @@ export type {
   AcpPendingRequest,
   AcpSessionListener,
   AcpSessionReplayListener,
+  AcpSessionSetup,
   AcpSessionState,
   AcpSessionUpdateListener,
 } from "./types"

@@ -29,6 +29,8 @@ function stubClient(
       create: async () => session(),
       update: async () => {},
       delete: async () => {},
+      messages: async () => ({ data: [], cursor: {} }),
+      active: async () => ({ data: {} }),
       ...sessions,
     },
   }
@@ -428,4 +430,32 @@ describe("OpenCode workspace operations", () => {
     expect(update).not.toHaveBeenCalled()
     expect(remove).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ["holds no message and runs no turn", [], {}, true],
+    [
+      "holds a message",
+      [{ id: "message-1", type: "user", text: "Hi", time: { created: 1 } }],
+      {},
+      false,
+    ],
+    ["runs a turn", [], { "session-1": { type: "running" } }, false],
+  ] as const)(
+    "deletes a Session it discards only while OpenCode shows it empty and idle: one that %s",
+    async (_, messages, active, discarded) => {
+      const remove = vi.fn(async () => {})
+      const operations = createOpenCodeWorkspaceOperations({
+        client: stubClient({
+          messages: async () => ({ data: messages, cursor: {} }),
+          active: async () => ({ data: active }),
+          delete: remove,
+        }),
+      })
+
+      await expect(
+        operations.discardSession("research", "session-1")
+      ).resolves.toBe(discarded)
+      expect(remove).toHaveBeenCalledTimes(discarded ? 1 : 0)
+    }
+  )
 })
