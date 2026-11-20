@@ -354,7 +354,8 @@ type Row = {
 }
 
 const ROWS: Row[] = [
-  // --- fails once: readings the membership owes retry on their backoff.
+  // --- fails once: a reading a setup answer failed to read is read again
+  // by the member's own readings as its join lands, with no backoff.
   {
     operation: "models",
     fault: "fails once",
@@ -364,7 +365,7 @@ const ROWS: Row[] = [
       await join(t, t.operator)
       await join(t, t.guest)
     },
-    bound: READING_BACKOFF.baseMs,
+    bound: 0,
     recovered(t) {
       expect(updatesOf(t.operator, "config_option_update")).toHaveLength(1)
       // Models are an operator feed a guest is not granted.
@@ -373,6 +374,25 @@ const ROWS: Row[] = [
     // The answer's one read fails; the operator's readings take it again.
     calls: { models: 2 },
   },
+  {
+    operation: "workspaceCapabilities",
+    fault: "fails once",
+    stage: "connected",
+    async meet(t) {
+      t.test.faults.failOnce("workspaceCapabilities", unavailable())
+      await join(t, t.operator)
+      await join(t, t.guest)
+    },
+    bound: 0,
+    recovered(t) {
+      for (const member of members(t))
+        expect(updatesOf(member, "available_commands_update")).toHaveLength(1)
+    },
+    // Each member reads its own: the operator's answer fails and its
+    // readings take it again, and the guest's answer reads it once.
+    calls: { workspaceCapabilities: 3 },
+  },
+  // --- fails once: a reading the membership owes retries on its backoff.
   {
     operation: "context",
     fault: "fails once",
@@ -395,24 +415,6 @@ const ROWS: Row[] = [
         ["backing-off", "reading"],
       ],
     },
-  },
-  {
-    operation: "workspaceCapabilities",
-    fault: "fails once",
-    stage: "connected",
-    async meet(t) {
-      t.test.faults.failOnce("workspaceCapabilities", unavailable())
-      await join(t, t.operator)
-      await join(t, t.guest)
-    },
-    bound: READING_BACKOFF.baseMs,
-    recovered(t) {
-      for (const member of members(t))
-        expect(updatesOf(member, "available_commands_update")).toHaveLength(1)
-    },
-    // Each member reads its own: the operator's answer fails and its
-    // readings take it again, and the guest's answer reads it once.
-    calls: { workspaceCapabilities: 3 },
   },
   // --- fails once: a join is refused at once, and its repeat lands.
   {
