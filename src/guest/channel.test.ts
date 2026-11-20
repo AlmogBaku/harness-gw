@@ -3,18 +3,10 @@
 import { methods } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
+import { HGW_ATTACHMENT_URI_SCHEME, HGW_METHODS } from "../../protocol/acp"
 import {
-  ACP_PROTOCOL_VERSION,
-  HGW_ATTACHMENT_URI_SCHEME,
-  HGW_AUTH_METHOD_INVITE,
-  HGW_METHODS,
-  HGW_META_KEY,
-} from "../../protocol/acp"
-import {
-  AGENT,
   SESSION,
   chunk,
-  connectClient,
   EventSource,
   endedTurn,
   flow,
@@ -33,22 +25,18 @@ import {
   withoutStates,
   type ClientAnswers,
 } from "../acp/test-harness"
-import { createGuestInvitationService } from "../auth/guest-invitation"
-import { AttachmentStageRegistry } from "../core/attachment-stages"
+import { connectGuest, GUEST_REF, invite } from "./test-utils/guest-browser"
 import {
   PendingRequestKind,
   RepliesTurnInputSchema,
   TurnEventKind,
   type PendingRequest,
 } from "../core/events"
-import { createGuestConnection } from "./acp"
 
 /**
  * The guest listener in a channel with operator browsers: a redeemed invitation
  * to the operator harness's seeded Session, on the same runtime and channels.
  */
-
-const GUEST_REF = "guest-ref"
 
 const APPROVAL: PendingRequest = {
   requestId: "approval-1",
@@ -62,65 +50,6 @@ const question = (requestId: string): PendingRequest => ({
   kind: PendingRequestKind.Elicitation,
   message: `Which folder for ${requestId}?`,
 })
-
-type Operator = Awaited<ReturnType<typeof harness>>
-
-/** One invitation to the seeded Session, which every tab it opens acts as. */
-async function invite(test: Operator) {
-  const invitations = createGuestInvitationService({
-    issuer: "aos-invite",
-    audience: "aos-guest",
-    deploymentId: "deployment-a",
-    runtimeId: test.runtimeInstance.id,
-    keys: [{ id: "current", secret: new Uint8Array(32).fill(7) }],
-  })
-  const { token } = await invitations.issue({ agentId: AGENT, ref: GUEST_REF })
-  return { invitations, token }
-}
-
-type Invitation = Awaited<ReturnType<typeof invite>>
-
-/** A guest browser that redeemed an invitation to the seeded Session. */
-async function connectGuest(
-  test: Operator,
-  answers: ClientAnswers = {},
-  invitation?: Invitation
-) {
-  const { invitations, token } = invitation ?? (await invite(test))
-  const context = createGuestConnection(
-    {
-      runtimeInstance: test.runtimeInstance,
-      invitations,
-      attachmentStages: new AttachmentStageRegistry(),
-      channels: test.channels,
-      catalog: test.catalog,
-      guestActiveExecutions: 2,
-      logger: test.logs.logger,
-    },
-    "guest-connection"
-  )
-  const { connection, recorder } = connectClient(context, {
-    name: "aos-guest-browser",
-    ...answers,
-  })
-  await connection.agent.request(methods.agent.initialize, {
-    protocolVersion: ACP_PROTOCOL_VERSION,
-    info: { name: "aos-guest-browser", version: "1" },
-    capabilities: {
-      elicitation: { form: {} },
-      _meta: { [HGW_META_KEY]: { historyPages: true } },
-    },
-  })
-  await connection.agent.request(methods.agent.auth.login, {
-    methodId: HGW_AUTH_METHOD_INVITE,
-    _meta: { [HGW_META_KEY]: { token } },
-  })
-  return {
-    agent: connection.agent,
-    recorder,
-    close: () => connection.close(),
-  }
-}
 
 describe("guest in a Session channel", () => {
   it("keeps a guest's exposure out of presence and read state", async () => {
@@ -337,7 +266,7 @@ describe("guest in a Session channel", () => {
 
   it("declines a guest's own permission reissued when it reconnects", async () => {
     // The runtime still waits on the request whenever a resume asks.
-    const test: Operator = await harness({
+    const test = await harness({
       providerIds: true,
       discover: async () => ({
         handle: new EventSource(),

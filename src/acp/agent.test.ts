@@ -83,6 +83,7 @@ import {
   waitFor,
   withoutStates,
 } from "./test-harness"
+import { connectGuest, GUEST_REF } from "../guest/test-utils/guest-browser"
 
 /**
  * The setup an operator's answer carries for the harness's Session: its
@@ -452,8 +453,9 @@ describe("AOS ACP agent", () => {
     }
   })
 
-  it("lists a created Session to nobody until a prompt reaches it, and frees one closed unprompted", async () => {
-    const test = await harness()
+  it("lists a created Session to nobody until a prompt reaches it, and frees one closed unprompted once a guest on it leaves too", async () => {
+    // The guest's invitation reaches the Session the operator creates.
+    const test = await harness({ invited: CREATED })
     const ids = async () =>
       [
         ...(await test.agent.request(methods.agent.session.list, {})).sessions,
@@ -465,19 +467,16 @@ describe("AOS ACP agent", () => {
       ].map(({ sessionId }) => sessionId)
     await test.create()
     expect(await ids()).not.toContain(CREATED)
-    // Another connection on the Session holds it through the creator's close.
-    const other = await test.connect("connection-2")
-    const close = (browser: Browser) =>
-      browser.agent.request(methods.agent.session.close, { sessionId: CREATED })
-    await other.agent.request(methods.agent.session.resume, {
-      sessionId: CREATED,
-      cwd: "/",
-      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
-    })
+    // A guest on the Session, under its invitation's name, holds it by its
+    // native key through the creator's close.
+    const guest = await connectGuest(test)
+    await open(guest, { sessionId: GUEST_REF })
+    const close = (browser: Pick<Browser, "agent">, sessionId: string) =>
+      browser.agent.request(methods.agent.session.close, { sessionId })
 
-    await close(test)
+    await close(test, CREATED)
     expect(test.discardSession).not.toHaveBeenCalled()
-    await close(other)
+    await close(guest, GUEST_REF)
 
     expect(test.discardSession).toHaveBeenCalledTimes(1)
     await expect(
@@ -499,7 +498,7 @@ describe("AOS ACP agent", () => {
     })
     expect(prompted.discardSession).not.toHaveBeenCalled()
     test.close()
-    other.close()
+    guest.close()
     prompted.close()
   })
 
