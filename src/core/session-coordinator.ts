@@ -60,6 +60,8 @@ import {
 import {
   ADMISSION_DEADLINE_MS,
   CLIENT_ADMISSIONS,
+  DISCARD_ATTEMPTS,
+  DISCARDED_REFUSAL_MS,
   RECONCILE_BACKOFF,
   RETRY_BUDGET,
   UNCERTAINTY_DEADLINE_MS,
@@ -1030,12 +1032,25 @@ export class SessionCoordinator {
   /**
    * The Sessions a create here made and no prompt has reached, by session
    * key: left out of every list, and discarded once nothing holds them. One
-   * `discarding` stays so, and a resume or prompt finds it gone.
+   * `discarding` is found gone by a resume or prompt until its discard
+   * settles, which ends its entry.
    */
   readonly #unprompted = new Map<
     string,
-    { scope: SessionScope; discarding: boolean; idle?: unknown }
+    {
+      scope: SessionScope
+      discarding: boolean
+      idle?: unknown
+      /** The discards that failed so far. */
+      failures: number
+    }
   >()
+  /**
+   * The Sessions discarded here, by session key, each with the timer that
+   * forgets it: until then the gateway finds it gone itself, as Hermes would
+   * make it anew (`DISCARDED_REFUSAL_MS`).
+   */
+  readonly #discarded = new Map<string, unknown>()
   /** How many memberships, of either listener, are on each Session. */
   readonly #holders = new Map<string, number>()
 
@@ -1561,17 +1576,18 @@ export class SessionCoordinator {
     const providerSessionId = readings.resolveProviderSessionId?.(agentId, id)
     if (!providerSessionId) return
     const scope = { agentId, providerSessionId, sessionId: ids.sessionId(id) }
-    const marked = { scope, discarding: false }
+    const marked = { scope, discarding: false, failures: 0 }
     this.#unprompted.set(scopeKey(scope), marked)
     this.#idleUnprompted(scopeKey(scope))
   }
 
   /**
    * Whether a create here made the Session and no prompt reached it, or it is
-   * being discarded: a list shows it to nobody.
+   * being or was just discarded: a list shows it to nobody.
    */
   unprompted(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
-    return this.#unprompted.has(scopeKey(scope))
+    const key = scopeKey(scope)
+    return this.#unprompted.has(key) || this.#discarded.has(key)
   }
 
   /**
@@ -1628,9 +1644,11 @@ export class SessionCoordinator {
    * Discards an unprompted Session nothing holds, in one checked step: the
    * mark and the holders are read and the Session taken as discarding in the
    * same turn, so no join or prompt lands between, and any after finds it
-   * gone. Then the runtime frees it. One it keeps, holding a message, is no
-   * longer unprompted; one it fails to free is marked again for its next
-   * idle window.
+   * gone. Then the runtime frees it, and its mark ends: one the runtime kept,
+   * holding a message, is listed again, and one it freed, or already found
+   * gone, is found gone here for `DISCARDED_REFUSAL_MS`. One it fails to free
+   * is tried again after its next idle window, `DISCARD_ATTEMPTS` times in
+   * all, and then left be, listed.
    */
   async #discard(key: string) {
     const marked = this.#unprompted.get(key)
@@ -1640,23 +1658,43 @@ export class SessionCoordinator {
     marked.discarding = true
     this.#clearIdle(marked)
     const { agentId, providerSessionId, sessionId } = marked.scope
+    let discarded: boolean
     try {
-      const discarded = await readings.discardSession(
-        agentId,
-        providerSessionId
-      )
-      this.#logger.info({ agentId, sessionId, discarded }, "session.discarded")
-      if (!discarded) this.#unprompted.delete(key)
+      discarded = await readings.discardSession(agentId, providerSessionId)
     } catch (err) {
-      this.#logger.warn({ err, agentId, sessionId }, "session.discard.failed")
-      marked.discarding = false
-      this.#idleUnprompted(key)
+      discarded = this.#failure(err)?.kind === "gone"
+      if (!discarded) {
+        marked.failures += 1
+        const retries = marked.failures < DISCARD_ATTEMPTS
+        this.#logger.warn(
+          { err, agentId, sessionId, retries },
+          "session.discard.failed"
+        )
+        marked.discarding = false
+        if (retries) this.#idleUnprompted(key)
+        else this.#unprompted.delete(key)
+        return
+      }
     }
+    this.#logger.info({ agentId, sessionId, discarded }, "session.discarded")
+    this.#unprompted.delete(key)
+    if (discarded && !this.#closed)
+      this.#discarded.set(
+        key,
+        this.#clock.setTimeout(
+          () => this.#discarded.delete(key),
+          DISCARDED_REFUSAL_MS
+        )
+      )
   }
 
-  /** Refuses a Session being discarded, as the runtime will once it is. */
+  /**
+   * Refuses a Session being or just discarded, as OpenCode and OpenClaw would
+   * once it is: Hermes would make it anew.
+   */
   refuseDiscarded(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
-    if (this.#unprompted.get(scopeKey(scope))?.discarding)
+    const key = scopeKey(scope)
+    if (this.#unprompted.get(key)?.discarding || this.#discarded.has(key))
       throw new ServerSessionNotFoundError()
   }
 
@@ -2306,6 +2344,9 @@ export class SessionCoordinator {
     if (this.#closed) return
     this.#closed = true
     for (const marked of this.#unprompted.values()) this.#clearIdle(marked)
+    for (const timer of this.#discarded.values())
+      this.#clock.clearTimeout(timer)
+    this.#discarded.clear()
     this.#closing.abort(new Error("Session coordinator is closed"))
     for (const execution of this.#executions.values())
       execution.segment.fanout.close()

@@ -63,6 +63,20 @@ export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
  */
 export const UNPROMPTED_IDLE_MS = 5 * 60_000
 
+/**
+ * How many times the gateway tries to free an unprompted Session its runtime
+ * failed to free, an idle window apart, before it leaves the Session be.
+ */
+export const DISCARD_ATTEMPTS = 3
+
+/**
+ * How long the gateway still answers a Session it discarded as not found,
+ * itself: Hermes makes a server-minted draft anew for any resume of its key,
+ * so a client that held one would bring it back. It is the window a repeat of
+ * its create may still answer that Session (`CLIENT_ADMISSIONS.ttlMs`).
+ */
+export const DISCARDED_REFUSAL_MS = CLIENT_ADMISSIONS.ttlMs
+
 /** How long a member that fell behind keeps its place for its view to rejoin. */
 export const PAUSED_DEADLINE_MS = 30_000
 

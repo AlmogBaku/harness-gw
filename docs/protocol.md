@@ -274,9 +274,17 @@ of it answers `-32002`, and a client that still wants it creates a new one. The
 runtime then frees it (`discardSession`): Hermes, which lists no Session before
 its first turn, closes its live Session; OpenCode and OpenClaw delete it only
 after their own read shows no message and no running turn, and keep any other,
-which is listed again. A discard that fails leaves the Session marked for its
-next idle window. A gateway restart forgets every mark, so it can leave a
-Session behind, never delete one.
+which is listed again. A Session the runtime already reports gone counts as
+discarded. Once the discard settles the mark ends. A discarded Session stays
+`-32002` here for 10 minutes (`DISCARDED_REFUSAL_MS`, the window in which a
+repeat of its `clientId` still answers it): OpenCode and OpenClaw answer not
+found for it themselves, but Hermes makes a server-minted draft anew for any
+resume of its key, so past the window a resume or prompt of a Hermes draft
+opens it again, empty. A discard that fails for any other reason leaves the
+Session marked for its next idle window, three attempts in all
+(`DISCARD_ATTEMPTS`), after which the gateway leaves it be and lists it. A
+gateway restart forgets every mark, so it can leave a Session behind, never
+delete one.
 
 ### Request `_meta.hgw` shapes
 

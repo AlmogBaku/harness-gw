@@ -26,6 +26,8 @@ import {
 import {
   ADMISSION_DEADLINE_MS,
   CLIENT_ADMISSIONS,
+  DISCARD_ATTEMPTS,
+  DISCARDED_REFUSAL_MS,
   RECONCILE_BACKOFF,
   UNCERTAINTY_DEADLINE_MS,
 } from "./limits"
@@ -1246,23 +1248,32 @@ describe("SessionCoordinator", () => {
       expect(discard).toHaveBeenCalledTimes(1)
     })
 
-    it("finds a Session being discarded gone, for a resume and a prompt alike", async () => {
+    it("finds a Session gone while it is discarded and for the refusal window after, for a resume and a prompt alike, and then forgets it", async () => {
+      const clock = useFakeClock()
       let discarded!: (kept: boolean) => void
       const { sessions, create } = retaining({
         discard: () => new Promise<boolean>((done) => (discarded = done)),
       })
       await create()
+      const refused = async (turnId: string) => {
+        expect(() => sessions.refuseDiscarded(scope)).toThrow(
+          ServerSessionNotFoundError
+        )
+        await expect(
+          sessions.start(scope, input(turnId), access("one"))
+        ).rejects.toThrow(ServerSessionNotFoundError)
+        expect(sessions.unprompted(scope)).toBe(true)
+      }
       const closing = sessions.closed(scope)
 
-      expect(() => sessions.refuseDiscarded(scope)).toThrow(
-        ServerSessionNotFoundError
-      )
-      await expect(
-        sessions.start(scope, input("run-1"), access("one"))
-      ).rejects.toThrow(ServerSessionNotFoundError)
+      await refused("run-1")
       discarded(true)
       await closing
-      expect(sessions.unprompted(scope)).toBe(true)
+      await clock.advance(DISCARDED_REFUSAL_MS - 1)
+      await refused("run-2")
+      await clock.advance(1)
+      expect(() => sessions.refuseDiscarded(scope)).not.toThrow()
+      expect(sessions.unprompted(scope)).toBe(false)
     })
 
     it.each([
@@ -1308,27 +1319,37 @@ describe("SessionCoordinator", () => {
     it.each([
       // The runtime found a message or a running turn: it is a conversation.
       [
-        "kept by the runtime is listed again",
+        "kept by the runtime listed again",
         async (): Promise<boolean> => false,
-        false,
+        { listed: true, discards: 1 },
+      ],
+      // One the runtime no longer has is as discarded as one it freed.
+      [
+        "the runtime finds gone found gone",
+        async (): Promise<boolean> => {
+          throw new ServerSessionNotFoundError()
+        },
+        { listed: false, discards: 1 },
       ],
       [
-        "it failed to free waits out another idle window",
+        "it fails to free tried again each idle window, and listed after the last",
         async (): Promise<boolean> => {
           throw new Error("Runtime unavailable")
         },
-        true,
+        { listed: true, discards: DISCARD_ATTEMPTS },
       ],
-    ] as const)("leaves one %s", async (_, answer, retried) => {
+    ] as const)("leaves one %s", async (_, answer, left) => {
       const clock = useFakeClock()
       const discard = vi.fn(answer)
       const { sessions, create } = retaining({ discard })
       await create()
       await sessions.closed(scope)
 
-      expect(sessions.unprompted(scope)).toBe(retried)
-      await clock.advance(IDLE_MS)
-      expect(discard).toHaveBeenCalledTimes(retried ? 2 : 1)
+      // One idle window more than the attempts need, which tries no more.
+      for (let window = 0; window < DISCARD_ATTEMPTS; window++)
+        await clock.advance(IDLE_MS)
+      expect(discard).toHaveBeenCalledTimes(left.discards)
+      expect(sessions.unprompted(scope)).toBe(!left.listed)
     })
   })
 
