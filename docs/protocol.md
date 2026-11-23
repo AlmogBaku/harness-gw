@@ -261,6 +261,11 @@ keeps only a public code. Any other failure reads `-31013`
 `data: { sessionId }`, the `sessionId` the guest's own request named, when
 that was a string, and nothing the gateway wrote (`src/acp/socket.ts`), so a
 guest is shown its invitation's reference and never the native id behind it.
+Only a request the ACP SDK answers under its own id is remembered for this:
+one with the `jsonrpc: "2.0"` envelope, an integer id or a string one, and a
+`sessionId`, each string at most 1024 characters, and at most 64 of them
+unanswered on one socket; a request past that bound is answered without
+`data`.
 
 ## Session lifecycle methods
 

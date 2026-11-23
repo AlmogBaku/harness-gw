@@ -230,6 +230,101 @@ describe("ACP WebSocket shim", () => {
     ])
   })
 
+  // The SDK answers these with `id: null`, or closes on them, so no reply
+  // would ever settle a record of them.
+  it.each([
+    [
+      "without the JSON-RPC envelope",
+      { id: 1, method: "session/prompt", params: { sessionId: "ref" } },
+    ],
+    [
+      "with an id ACP v2 forbids",
+      {
+        jsonrpc: "2.0",
+        id: 0.5,
+        method: "session/prompt",
+        params: { sessionId: "ref" },
+      },
+    ],
+    [
+      "whose id is past the SDK's id length",
+      {
+        jsonrpc: "2.0",
+        id: "i".repeat(1_025),
+        method: "session/prompt",
+        params: { sessionId: "ref" },
+      },
+    ],
+    [
+      "naming a Session id past the SDK's id length",
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "session/prompt",
+        params: { sessionId: "r".repeat(1_025) },
+      },
+    ],
+  ])("records nothing of a request %s", (_label, frame) => {
+    const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
+    socket.receive(JSON.stringify(frame))
+
+    socket.socket.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: frame.id,
+        error: { code: NOT_FOUND, message: "not found" },
+      })
+    )
+
+    expect(JSON.parse(sent[0]!)).toEqual({
+      jsonrpc: "2.0",
+      id: frame.id,
+      error: { code: NOT_FOUND, message: "not_found" },
+    })
+  })
+
+  it("records at most its bound of unanswered requests, dropping none to make room", () => {
+    const { socket, sent } = harness({
+      publicErrors: PUBLIC_ERRORS,
+      maxNamedRequests: 2,
+    })
+    for (const id of [1, 2, 3])
+      socket.receive(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "session/prompt",
+          params: { sessionId: `ref-${id}` },
+        })
+      )
+
+    for (const id of [3, 1])
+      socket.socket.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          error: { code: NOT_FOUND, message: "not found" },
+        })
+      )
+
+    expect(sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: { code: NOT_FOUND, message: "not_found" },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: NOT_FOUND,
+          message: "not_found",
+          data: { sessionId: "ref-1" },
+        },
+      },
+    ])
+  })
+
   it("writes a listener's error notice as its Session and a public code alone", () => {
     const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
     const notice = (params: Record<string, unknown>) =>

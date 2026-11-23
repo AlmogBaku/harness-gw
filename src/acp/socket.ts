@@ -1,4 +1,7 @@
-import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
+import {
+  DEFAULT_MAX_ID_LENGTH,
+  type PreparedWebSocketUpgrade,
+} from "@agentclientprotocol/sdk/experimental/server"
 import { methods } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
@@ -21,6 +24,15 @@ const DEFAULT_INPUT_FRAMES_PER_WINDOW = 64
  * Session, on a single large prompt.
  */
 const DEFAULT_INPUT_BYTES_PER_WINDOW = 2 * MAX_FRAME_BYTES
+/**
+ * The unanswered requests naming a Session one socket records, while failures
+ * are made public. The ACP SDK bounds no number of pending requests, so this
+ * is the gateway's: a guest reaches one invited Session, and a real tab holds
+ * a few requests naming it at once (its resume, prompt, steer or page), so
+ * the bound is a backstop that keeps a flood to about 256 KiB a socket, each
+ * entry two ids of at most `DEFAULT_MAX_ID_LENGTH`.
+ */
+const DEFAULT_MAX_NAMED_REQUESTS = 64
 
 const decoder = new TextDecoder()
 
@@ -63,6 +75,8 @@ export type AcpSocketOptions = {
   inputWindowMs?: number
   maxInputFramesPerWindow?: number
   maxInputBytesPerWindow?: number
+  /** At most this many unanswered requests' Sessions are recorded at once. */
+  maxNamedRequests?: number
 }
 
 export type AcpSocket = {
@@ -95,12 +109,18 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     options.maxInputBytesPerWindow,
     DEFAULT_INPUT_BYTES_PER_WINDOW
   )
+  const maxNamed = positiveLimit(
+    options.maxNamedRequests,
+    DEFAULT_MAX_NAMED_REQUESTS
+  )
 
   const listeners = new Map<string, Set<(event: unknown) => void>>()
   /**
    * The Session each request still unanswered named, by its id, while
    * failures are made public: the reply to it may name that id back, and
-   * nothing the gateway wrote in its place.
+   * nothing the gateway wrote in its place. Once full it records no more, so
+   * a request past the bound is answered without its Session, and none is
+   * dropped to make room.
    */
   const named = new Map<string | number, string>()
   let closed = false
@@ -199,7 +219,8 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
       const frame = parsed(data)
       if (options.publicErrors) {
         const request = namedSessionOf(frame)
-        if (request) named.set(request.id, request.sessionId)
+        if (request && (named.has(request.id) || named.size < maxNamed))
+          named.set(request.id, request.sessionId)
       }
       dispatch("message", {
         type: "message",
@@ -249,16 +270,43 @@ function requestIdOf(frame: unknown): string | number | undefined {
     : undefined
 }
 
-/** The one request a frame carries and the Session it names as a string. */
+/**
+ * The one request a frame carries and the Session it names as a string, where
+ * the SDK answers that request under its own id, so the reply settles it. The
+ * SDK answers `id: null` to a frame without the `jsonrpc: "2.0"` envelope
+ * (`isRequestMessage`, `core/jsonrpc.js`) and to an id ACP v2 forbids, `null`
+ * or a non-integer number (`isV2RequestId`), and closes the connection on a
+ * string id or a Session id longer than `maxIdLength` (`validateRequestId`,
+ * `validateSessionId`, `transports/connection.js`), which the gateway leaves
+ * at `DEFAULT_MAX_ID_LENGTH`. None of those is recorded.
+ */
 function namedSessionOf(frame: unknown) {
-  const id = requestIdOf(frame)
-  if (id === undefined) return undefined
-  const { params } = frame as { params?: unknown }
+  if (typeof frame !== "object" || frame === null || Array.isArray(frame))
+    return undefined
+  const { jsonrpc, id, method, params } = frame as {
+    jsonrpc?: unknown
+    id?: unknown
+    method?: unknown
+    params?: unknown
+  }
+  if (jsonrpc !== "2.0" || typeof method !== "string" || !answeredUnder(id))
+    return undefined
   const sessionId =
-    typeof params === "object" && params !== null && !Array.isArray(params)
+    typeof params === "object" && params !== null
       ? (params as { sessionId?: unknown }).sessionId
       : undefined
-  return typeof sessionId === "string" ? { id, sessionId } : undefined
+  return typeof sessionId === "string" && withinIdLength(sessionId)
+    ? { id, sessionId }
+    : undefined
+}
+
+/** Whether the SDK answers a request under `id` itself. */
+function answeredUnder(id: unknown): id is string | number {
+  return typeof id === "string" ? withinIdLength(id) : Number.isInteger(id)
+}
+
+function withinIdLength(id: string) {
+  return id.length <= DEFAULT_MAX_ID_LENGTH
 }
 
 /**
