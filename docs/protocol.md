@@ -273,7 +273,12 @@ Both options are selects: a `session/set_config_option` names one of them,
 holds it while a member follows the Session and nothing has changed since, or
 else as one read of the runtime. Any other `configId`, `type` or `value`
 answers `-32602` and changes nothing. The thought level offered is the
-selected model's.
+selected model's. Each option's `currentValue` is always one of its values,
+each listed once: a current model the catalog does not list, as a switch a
+turn reports mid-turn may name, leads in a group of its own (`groupId:
+"current"`, `name: "Current"`) under its id, and a current thought level off
+the model's ladder leads it, under its id; the provider's own default, which
+reports no effort, is `""` (`name: "Default"`), offered only while it holds.
 
 A Session is **active** on a connection from a `session/new`, `session/fork`
 or `session/resume` there that succeeded until `session/close`,

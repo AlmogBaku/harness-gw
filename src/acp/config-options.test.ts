@@ -122,6 +122,69 @@ describe("configOptionsOf", () => {
     expect(configOptionsOf({ ...models, selectedId })).toHaveLength(1)
   })
 
+  // ACP requires the current value to be one of an option's values.
+  it("lists a current model the catalog does not, leading in a group of its own under its id", () => {
+    expect(configOptionsOf({ ...models, selectedId: "opus" })[0]).toMatchObject(
+      {
+        currentValue: "opus",
+        options: [
+          {
+            groupId: "current",
+            name: "Current",
+            options: [{ value: "opus", name: "opus" }],
+          },
+          { groupId: "Anthropic" },
+        ],
+      }
+    )
+  })
+
+  it("lists a current effort off the selected model's ladder, leading under its id", () => {
+    expect(configOptionsOf({ ...models, effortId: "max" })[1]).toMatchObject({
+      currentValue: "max",
+      options: [
+        { value: "max", name: "max" },
+        { value: "low", name: "low" },
+        { value: "medium", name: "medium" },
+        { value: "high", name: "high" },
+      ],
+    })
+  })
+
+  // ACP requires each value once within its option, across groups too.
+  it("lists each model and each effort once, however often the catalog names it", () => {
+    const [sonnet, haiku] = models.options
+    const repeated = configOptionsOf({
+      ...models,
+      options: [
+        { ...sonnet!, efforts: [...sonnet!.efforts!, { id: "low" }] },
+        haiku!,
+        { ...haiku!, group: "Elsewhere" },
+      ],
+    })
+
+    expect(repeated).toMatchObject([
+      {
+        options: [
+          {
+            groupId: "Anthropic",
+            options: [
+              { value: "sonnet", name: "Sonnet" },
+              { value: "haiku", name: "Haiku" },
+            ],
+          },
+        ],
+      },
+      {
+        options: [
+          { value: "low", name: "low" },
+          { value: "medium", name: "medium" },
+          { value: "high", name: "high" },
+        ],
+      },
+    ])
+  })
+
   // ACP refuses a select with no choices.
   it("offers no selector for an empty catalog", () => {
     expect(configOptionsOf({ selectedId: "sonnet", options: [] })).toEqual([])
