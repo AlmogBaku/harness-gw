@@ -611,14 +611,45 @@ async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
   return client
 }
 
+/** One frame the gateway sent a client, as JSON-RPC shapes it. */
+type WireFrame = {
+  method?: string
+  params?: { update?: SessionUpdate }
+  result?: unknown
+  error?: { code?: unknown }
+}
+
+/** Every frame the gateway sent `client`, in order. */
+function framesOf(client: WireClient) {
+  return client.bridge
+    .sockets()
+    .flatMap(({ frames }) => frames.map((raw) => JSON.parse(raw) as WireFrame))
+}
+
 /** The code of each error answer the gateway sent `client`, in order. */
 function errorCodes(client: WireClient) {
-  return client.bridge.sockets().flatMap(({ frames }) =>
-    frames.flatMap((raw) => {
-      const { error } = JSON.parse(raw) as { error?: { code?: unknown } }
-      return error ? [error.code] : []
-    })
+  return framesOf(client).flatMap(({ error }) => (error ? [error.code] : []))
+}
+
+/**
+ * Each update `client` read off the wire before the first answer `answers`
+ * picks out, or every one when none does.
+ */
+function updatesBefore(
+  client: WireClient,
+  answers: (result: unknown) => boolean
+) {
+  const frames = framesOf(client)
+  const answer = frames.findIndex(
+    (frame) => "result" in frame && answers(frame.result)
   )
+  return frames
+    .slice(0, answer < 0 ? undefined : answer)
+    .flatMap(({ method, params }) =>
+      method === methods.client.session.update && params?.update
+        ? [params.update]
+        : []
+    )
 }
 
 /** Every frame the gateway sent `client` that names `id` anywhere in it. */
@@ -2222,7 +2253,7 @@ export function runWireListenerContract(
       )
 
       it(
-        "closes a joined Session by stopping its work for every member, and parts only the closer",
+        "closes a joined Session by stopping its work for every member, showing the closer how it ended before the answer, and parts only the closer",
         wireCase(createRuntime, async ({ clock, turn, connectPlain }) => {
           const questions = questionsOf(turn)
           const plain = connectPlain()
@@ -2252,6 +2283,13 @@ export function runWireListenerContract(
 
           expect(await closed).toBe("closed")
           expect(states(reader.updates).at(-1)).toBe("idle:cancelled")
+          // The closer read the turn's end before the close's answer, the
+          // first `{}` it was sent.
+          expect(
+            states(
+              updatesBefore(plain, (result) => JSON.stringify(result) === "{}")
+            ).at(-1)
+          ).toBe("idle:cancelled")
           // A close is idempotent, so a second one answers as the first did.
           // The SDK's client reads a `-32002` answer as done too, so each
           // answer is read off the wire.

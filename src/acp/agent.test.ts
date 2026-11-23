@@ -34,6 +34,7 @@ import {
 } from "../core/events"
 import {
   ADMISSION_DEADLINE_MS,
+  CLOSE_DEADLINE_MS,
   READING_BACKOFF,
   SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
@@ -41,6 +42,7 @@ import {
 import {
   ServerAgentUpdateUnsupportedError,
   ServerSessionNotFoundError,
+  ServerTurnStopNotDispatchedError,
   type ServerTurnListener,
   type ServerRuntime,
 } from "../core/runtime"
@@ -490,7 +492,13 @@ describe("AOS ACP agent", () => {
     // renamed (an OpenCode invitation finds its Session by its title) is kept
     // on purpose: each is listed, and kept once closed.
     for (const keep of [
-      (browser: Browser) => prompt(browser, "Hello", CREATED),
+      // Its turn ends, so the close stops no turn of it.
+      async (browser: Awaited<ReturnType<typeof harness>>) => {
+        await prompt(browser, "Hello", CREATED)
+        await waitFor(() => expect(browser.start).toHaveBeenCalledTimes(1))
+        reply(browser.sources[0], "Hello back")
+        await browser.recorder.wait(endedTurn, "the turn to end")
+      },
       (browser: Browser) =>
         browser.agent.request(HGW_METHODS.session.update, {
           sessionId: CREATED,
@@ -3543,6 +3551,47 @@ describe("Session rooms", () => {
     test.close()
     other.close()
   })
+
+  it.each([
+    {
+      stop: "fails before it reaches the runtime",
+      code: RequestError.internalError().code,
+      async close(test: Awaited<ReturnType<typeof harness>>) {
+        test.sources[0]?.stop.mockRejectedValueOnce(
+          new ServerTurnStopNotDispatchedError(new Error("refused"))
+        )
+        return await test.agent
+          .request(methods.agent.session.close, { sessionId: SESSION })
+          .catch((cause: unknown) => cause)
+      },
+    },
+    {
+      stop: "is never confirmed",
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+      async close(test: Awaited<ReturnType<typeof harness>>) {
+        const clock = useFakeClock()
+        const closing = test.agent
+          .request(methods.agent.session.close, { sessionId: SESSION })
+          .catch((cause: unknown) => cause)
+        await clock.advance(CLOSE_DEADLINE_MS)
+        return await closing
+      },
+    },
+  ])(
+    "answers a close whose Stop $stop with its error, and keeps the closer on the Session",
+    async ({ close, code }) => {
+      const test = await harness({ providerIds: true })
+      await test.list()
+      await liveTurn(test, [test])
+
+      expect(await close(test)).toMatchObject({ code })
+      // The closer is still a member: the turn's next words reach it.
+      chunk(test.sources[0], "Still here")
+      test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+      await test.recorder.wait(said("Still here"), "the turn's next words")
+      test.close()
+    }
+  )
 
   it("sends nothing to a browser that closed the Session", async () => {
     const test = await harness({ providerIds: true })

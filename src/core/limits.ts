@@ -68,6 +68,14 @@ export const RECONCILE_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
 export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
 
 /**
+ * How long a close or a delete waits for the turn its Stop asked to end, as
+ * ACP has its closer shown that end before the answer; the same as the
+ * admission deadline, so a confirmed Stop's end lands inside it and the
+ * answer inside the browser's own deadline. Past it the Stop is unconfirmed.
+ */
+export const CLOSE_DEADLINE_MS = ADMISSION_DEADLINE_MS
+
+/**
  * How long nothing may hold a Session created and never prompted before the
  * gateway discards it, where the runtime sets no idle window of its own.
  */

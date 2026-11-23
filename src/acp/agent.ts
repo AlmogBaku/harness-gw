@@ -898,8 +898,10 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     await perform(
       "close",
       { sessionId: params.sessionId },
-      // As ACP closes a Session: its work stops, for every member, and then
-      // this connection leaves it.
+      // As ACP closes a Session: its work stops, for every member, this
+      // member is shown how its turn ended, and then this connection leaves
+      // it. A close that could not stop the work answers why, and leaves the
+      // Session active here, as a close that failed changes nothing else.
       async (command) => {
         const membership = sessions.membership(command.sessionId)
         // ACP's close is idempotent: a Session not active on this connection,
@@ -907,11 +909,8 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         // with `{}`. A fresh invitation's, which has no Session yet, leaves.
         if (!membership) return sessions.part(command.sessionId)
         const { scope } = membership
-        try {
-          await membership.cancel()
-        } finally {
-          sessions.part(command.sessionId)
-        }
+        await membership.closeTurn()
+        sessions.part(command.sessionId)
         // A Session no prompt reached, which nothing else holds, is freed now.
         await context.channels.closed(scope)
       },

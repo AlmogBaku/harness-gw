@@ -8,7 +8,7 @@ import {
   ServerTurnEndedError,
 } from "../core/runtime"
 import { coreFailure, failureOf, type PublicFailure } from "../core/failures"
-import { MembershipDetachedError } from "../core/channel"
+import { MembershipDetachedError, StopUnconfirmedError } from "../core/channel"
 import { ServerClientIdReusedError } from "../core/session-coordinator"
 import type { CommandRefusal } from "../core/member"
 import type { PublicErrors } from "./socket"
@@ -174,6 +174,9 @@ export const PUBLIC_ERRORS: PublicErrors = {
 function channelFailure(cause: unknown) {
   if (cause instanceof MembershipDetachedError)
     return failureOf("unavailable", cause)
+  // The Stop went out and may still land: the turn is seen settling.
+  if (cause instanceof StopUnconfirmedError)
+    return failureOf("uncertain", cause)
   if (cause instanceof ServerClientIdReusedError)
     return failureOf("invalid_request", cause)
   return coreFailure(cause)

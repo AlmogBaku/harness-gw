@@ -1061,6 +1061,8 @@ export class SessionCoordinator {
   readonly #discarded = new Set<string>()
   /** How many memberships, of either listener, are on each Session. */
   readonly #holders = new Map<string, number>()
+  /** What waits for each Session's turn to rest idle (`idle`). */
+  readonly #idleWaiters = new Map<string, Set<() => void>>()
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
@@ -1246,6 +1248,45 @@ export class SessionCoordinator {
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     return this.#turnExecution(scopeKey(scope)).state
+  }
+
+  /**
+   * Settles once the Session's turn rests idle: at once when it does, at its
+   * move to idle, and once the Session is dropped. `signal` rejects it with
+   * its reason.
+   */
+  idle(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    signal: AbortSignal
+  ) {
+    const key = scopeKey(scope)
+    return new Promise<void>((resolve, reject) => {
+      if (this.#turnExecution(key).state === "idle") return resolve()
+      const waiters = this.#idleWaiters.get(key) ?? new Set()
+      this.#idleWaiters.set(key, waiters)
+      const leave = () => {
+        waiters.delete(settle)
+        if (waiters.size === 0 && this.#idleWaiters.get(key) === waiters)
+          this.#idleWaiters.delete(key)
+        signal.removeEventListener("abort", abort)
+      }
+      const settle = () => {
+        leave()
+        resolve()
+      }
+      const abort = () => {
+        leave()
+        reject(signal.reason)
+      }
+      waiters.add(settle)
+      signal.addEventListener("abort", abort, { once: true })
+      if (signal.aborted) abort()
+    })
+  }
+
+  /** Settles every `idle` waiting on the Session. */
+  #wakeIdle(key: string) {
+    for (const settle of [...(this.#idleWaiters.get(key) ?? [])]) settle()
   }
 
   /**
@@ -2442,6 +2483,8 @@ export class SessionCoordinator {
     this.#executions.delete(key)
     for (const reporter of [this.#usage, this.#models, this.#execution])
       reporter.release(key)
+    // A Session dropped has no turn left to rest.
+    this.#wakeIdle(key)
   }
 
   /** One owner per Session, logging under its ids and the turn it moves. */
@@ -2493,6 +2536,7 @@ export class SessionCoordinator {
         return
       reported = moved
       this.#execution.report(key)
+      if (moved.state === "idle") this.#wakeIdle(key)
     })
     this.#turns.set(key, turn)
     return turn

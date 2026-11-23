@@ -1,6 +1,7 @@
 import {
   backoffDelay,
   createOwner,
+  Deadline,
   defaultClock,
   ownerSetup,
   type Clock,
@@ -15,6 +16,7 @@ import type {
 } from "../../protocol"
 import {
   CHILD_FOLLOW_GRACE_MS,
+  CLOSE_DEADLINE_MS,
   JOIN_DEADLINE_MS,
   PAUSED_DEADLINE_MS,
   READING_BACKOFF,
@@ -850,6 +852,47 @@ export class MembershipDetachedError extends Error {
   constructor() {
     super("The membership detached before its join landed")
     this.name = "MembershipDetachedError"
+  }
+}
+
+/**
+ * A Stop a close or a delete asked that its runtime did not confirm within
+ * `CLOSE_DEADLINE_MS`: the turn may still be stopping.
+ */
+export class StopUnconfirmedError extends Error {
+  constructor() {
+    super("The runtime did not confirm the Stop in time")
+    this.name = "StopUnconfirmedError"
+  }
+}
+
+/**
+ * Stops a Session's turn with `stop`, as `session/close` asks, and settles
+ * once the turn rests idle and `shown` settled: what the members it names were
+ * owed of how the turn ended. A turn already idle is stopped no further and
+ * owes nothing more. A Stop its runtime does not confirm within
+ * `CLOSE_DEADLINE_MS` throws `StopUnconfirmedError`.
+ */
+async function stopAndSettle(
+  coordinator: SessionCoordinator,
+  clock: Clock,
+  scope: SessionScope,
+  stop: () => Promise<unknown>,
+  shown: () => Promise<unknown>
+) {
+  if (coordinator.state(scope) === "idle") return
+  await stop()
+  const deadline = new Deadline(CLOSE_DEADLINE_MS, clock)
+  try {
+    await deadline.run(async (signal) => {
+      await coordinator.idle(scope, signal)
+      await shown()
+    })
+  } catch (cause) {
+    const { signal } = deadline
+    if (signal.aborted && cause === signal.reason)
+      throw new StopUnconfirmedError()
+    throw cause
   }
 }
 
@@ -1915,6 +1958,29 @@ class Membership {
     if (status !== "stopping") return
     this.#stopRequested = true
     await this.reportExecution()
+  }
+
+  /**
+   * Stops the Session's turn as `session/close` asks, as `cancel` does, and
+   * settles once this member was shown how it ended: ACP has a closer shown
+   * the turn's final updates and its idle state before the close's answer.
+   * Throws as `stopAndSettle` does.
+   */
+  closeTurn() {
+    return stopAndSettle(
+      this.#coordinator,
+      this.#options.clock,
+      this.#scope,
+      () => this.cancel(),
+      () => this.#shownStream()
+    )
+  }
+
+  /** Settles once this member was shown the last stream it follows, whole. */
+  async #shownStream() {
+    // A follow in flight subscribes before its stream can be waited on.
+    await this.#exclusive(async () => undefined)
+    await this.#streamed?.done
   }
 
   /**

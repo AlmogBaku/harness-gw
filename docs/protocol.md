@@ -252,7 +252,14 @@ keeps only a public code. Any other failure reads `-31013`
 (model → `category: "model"`, effort → `category: "thought_level"`).
 
 `session/close` stops the Session's active work for every member and then
-detaches this connection. Closing is idempotent: a close of a Session not
+detaches this connection. The closer is shown how a turn it stopped ended,
+its final updates and its idle `state_update` with `stopReason: "cancelled"`,
+before the answer; closing an idle Session sends no idle of its own. A close
+whose Stop fails answers that failure, and one whose Stop the runtime does not
+confirm within 30 s (`CLOSE_DEADLINE_MS`) answers `-31014`
+`uncertain_mutation`: either way the Session stays active on the connection,
+which is shown the turn's end once it comes, and the close may be sent again.
+Closing is idempotent: a close of a Session not
 active on this connection, already closed, gone, or never known answers `{}`,
 as a close of a fresh invitation does, which only detaches it.
 `_hgw/session/part` (`HgwSessionPartRequestSchema`,
