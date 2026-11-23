@@ -71,6 +71,7 @@ describe("guest in a Session channel", () => {
     const history: ReturnType<typeof storedLiveTurn> = []
     const test = await harness({ providerIds: true, history })
     await test.list()
+    await open(test)
     const guest = await connectGuest(test)
     const messageId = await liveTurn(test, [test])
     history.push(...storedLiveTurn({ promptId: messageId }))
@@ -90,6 +91,7 @@ describe("guest in a Session channel", () => {
   it("shows a guest an operator's prompt as its text alone, and lets it steer and Stop the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
     const other = await test.connect("connection-2")
@@ -139,6 +141,7 @@ describe("guest in a Session channel", () => {
   it("streams a guest an operator's long prompt whole", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const guest = await connectGuest(test)
     await open(guest, { sessionId: GUEST_REF })
 

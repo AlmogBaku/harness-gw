@@ -465,30 +465,52 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       sessions.adopt(command.sessionId, command.agentId)
     const scope = command.scope ?? sessions.scope(command.sessionId)
     if (!command.scope) await requireFolder(scope.agentId, params)
+    const held = sessions.active(scope.sessionId)
     const membership = sessions.join(client, scope)
-    return context.channels.resume(membership, command, {
-      fromStart: command.fromStart,
-      positioned: command.positioned,
-      paged: clientPagesHistory,
-    })
+    try {
+      return await context.channels.resume(membership, command, {
+        fromStart: command.fromStart,
+        positioned: command.positioned,
+        paged: clientPagesHistory,
+      })
+    } catch (cause) {
+      // ACP has a Session active from a resume that succeeded: what a
+      // failed one joined leaves, and a Session already active stays so.
+      if (membership !== held) sessions.leave(scope.sessionId, membership)
+      throw cause
+    }
   }
 
   /**
-   * Admits one user turn in a Session this connection reaches, answering once
-   * the coordinator admitted or refused it; `signal` aborts the admission.
-   * Only a first admission takes its stage, and the coordinator releases it
-   * if the turn never starts: the client keeps its attachments and stages them
-   * anew.
+   * The Session's membership while it is active on this connection, as ACP
+   * has a Session-scoped request need: `-32002` naming it otherwise.
+   */
+  function requireActive(sessionId: string) {
+    const membership = sessions.active(sessionId)
+    if (!membership) throw sessionNotFound(sessionId)
+    return membership
+  }
+
+  /**
+   * Admits one user turn in a Session active on this connection, answering
+   * once the coordinator admitted or refused it; `signal` aborts the
+   * admission. Only a first admission takes its stage, and the coordinator
+   * releases it if the turn never starts: the client keeps its attachments
+   * and stages them anew.
    */
   async function send(
     command: MemberCommands["send"],
     client: AgentContext,
     signal: AbortSignal
   ): Promise<CommandResults["send"]> {
+    // Asked again past the stack, which a close may have overtaken.
+    const held = requireActive(command.sessionId)
     const scope = command.scope ?? sessions.scope(command.sessionId)
     const { text, attachmentStageId, rewindSourceId } = command
     let stage: ReturnType<typeof context.attachmentStages.take>
-    const membership = sessions.join(client, scope)
+    // A fresh invitation's first prompt created its Session, which it joins
+    // anew; every other prompt goes to the membership it is active by.
+    const membership = held.pending ? sessions.join(client, scope) : held
     try {
       const sent = await membership.startTurn(
         {
@@ -806,6 +828,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     methods.agent.session.prompt,
     async ({ params, client, signal, requestId }) => {
       admit(methods.agent.session.prompt, "send", params)
+      // Refused before the stack, so a prompt of a Session not active here
+      // creates nothing, a fresh invitation's conversation included.
+      requireActive(params.sessionId)
       const meta = parseMeta(HgwPromptMetaSchema, params._meta)
       if (params.prompt.some(isUnadvertisedBlock)) throw invalidParams()
       const blocks =
@@ -882,12 +907,15 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         "set-config",
         { sessionId: params.sessionId, ...(write ? { write } : {}) },
         async (command) => {
+          // A fresh invitation has no Session to configure.
+          const membership = sessions.membership(command.sessionId)
+          if (!membership) throw sessionNotFound(command.sessionId)
           if (!command.write) throw invalidParams()
           return {
             models: await context.channels.switchModel(
-              sessions.scope(command.sessionId),
+              membership.scope,
               command.write,
-              sessions.membership(command.sessionId)
+              membership
             ),
           }
         },

@@ -242,7 +242,13 @@ export interface AcpConnection {
    * reported; a join that replays nothing leaves it as it was.
    */
   history(sessionId: string): HgwHistoryCursor | undefined
-  /** Prompts an opened Session once it is joined, as `setConfigOption` and `steer` write. */
+  /**
+   * Prompts an opened Session once it is joined, as `setConfigOption` and
+   * `steer` write. Open it first (`subscribe`, or `newSession` and
+   * `forkSession`, which open the Session they make): the gateway takes
+   * neither a prompt nor a config write of a Session no resume or create made
+   * active on the connection, and answers `-32002` naming it.
+   */
   prompt(
     sessionId: string,
     blocks: ContentBlock[],

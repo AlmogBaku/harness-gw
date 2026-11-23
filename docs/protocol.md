@@ -80,7 +80,10 @@ any socket or route is reached:
 The response carries an `Acp-Connection-Id` header. A client sends
 `initialize` and receives capabilities in `_meta.hgw`. On reconnect, send
 `initialize` again and then `session/resume` with the `_hgw/position` cursor
-naming the first sequence not yet observed. When the cursor is beyond bounded
+naming the first sequence not yet observed: a Session is active only on the
+connection that created or resumed it (see
+[Session lifecycle methods](#session-lifecycle-methods)), so nothing is
+prompted or configured on the new one before its resume. When the cursor is beyond bounded
 replay, the same resume rebuilds the Session from history, as described under
 [Response `_meta.hgw` shapes](#response-_metahgw-shapes).
 
@@ -206,7 +209,7 @@ invited conversation by its reference alone; any other Session id is
 | Method                                                                                                                                       | Guest behavior                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session/resume`                                                                                                                             | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
-| `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
+| `session/prompt`                                                                                                                             | Sends, once the guest resumed the invited conversation; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
 | `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
 | `session/close`                                                                                                                              | Stops the invited conversation's turn for every member, then detaches. Unlike an operator's close, it stops no background child: a guest is told of none, and can neither see nor stop the operator's background work. |
@@ -254,6 +257,22 @@ guest is shown its invitation's reference and never the native id behind it.
 `session/new`, `session/list`, `session/resume`, `session/prompt`,
 `session/cancel`, `session/close`, `session/delete`, `session/set_config_option`
 (model → `category: "model"`, effort → `category: "thought_level"`).
+
+A Session is **active** on a connection from a `session/new`, `session/fork`
+or `session/resume` there that succeeded until `session/close`,
+`_hgw/session/part`, or the connection's end; a resume that fails leaves a
+Session it found inactive as it was. `session/prompt` and
+`session/set_config_option` need the Session active, and answer `-32002` with
+`data.sessionId` otherwise, before anything else is checked: a client resumes a
+Session, on every new connection too, before it prompts it or changes its
+model or thought level. A guest's resume of a fresh invitation makes it
+active, and its first prompt then creates the conversation; one that never
+resumed it creates nothing. A busy Session still refuses a prompt with
+`-31010` once it is active. `session/cancel` of a Session not active here is
+ignored, and `_hgw/session/steer` and an older page answer `-32002`;
+`session/fork`, `session/delete`, `_hgw/session/update` and
+`_hgw/session/focus` act on any Session the connection was told of by a list,
+search, create, or resume, active or not.
 
 `session/close` stops the Session's active work for every member and then
 detaches this connection: its turn, as `session/cancel` does, and then its
@@ -996,7 +1015,7 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 | Code     | SDK constructor                           | Meaning                                              |
 | -------- | ----------------------------------------- | ---------------------------------------------------- |
 | `-32000` | `authRequired()`                          | Authentication required (guest: no valid invitation) |
-| `-32002` | `sessionNotFound()`, `resourceNotFound()` | Session or Agent does not exist                      |
+| `-32002` | `sessionNotFound()`, `resourceNotFound()` | Session or Agent does not exist, or Session inactive |
 | `-32601` | `methodNotFound()`                        | Method does not exist, or is not available here      |
 | `-32602` | `invalidParams()`                         | Request parameters failed validation                 |
 | `-32800` | `requestCancelled()`                      | Request timed out or the transport closed            |

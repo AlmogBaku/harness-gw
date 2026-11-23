@@ -409,8 +409,8 @@ type HarnessOptions = {
     agentId: string,
     sessionId: string
   ) => ProviderSessionId | undefined
-  /** What the invited lookup or a run's start throws instead. */
-  fails?: { lookup?: unknown; start?: unknown }
+  /** What a run's start throws instead. */
+  fails?: { start?: unknown }
   /** How many turns every guest together may hold; four by default. */
   guestActiveExecutions?: number
 }
@@ -437,7 +437,6 @@ function harness(options: HarnessOptions = {}) {
   }
   const resolveInvitedSession = vi.fn<ServerRuntime["resolveInvitedSession"]>(
     async (_agentId, _ref, create) => {
-      if (options.fails?.lookup) throw options.fails.lookup
       return options.existing || (create && options.creates !== false)
         ? {
             providerSessionId: providerSessionId(STORED),
@@ -1755,6 +1754,22 @@ describe("guest scope and commands", () => {
     test.close()
   })
 
+  // ACP has a prompt need its Session active on the connection, as a resume
+  // of the invitation, a fresh one too, makes it.
+  it("refuses a prompt of the invitation it has not resumed, and creates nothing for it", async () => {
+    const test = harness()
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    await expect(test.prompt("Hello")).rejects.toMatchObject({
+      code: NOT_FOUND,
+      data: { sessionId: REF },
+    })
+    expect(test.resolveInvitedSession).not.toHaveBeenCalled()
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+  })
+
   it("answers a first send not found when the runtime cannot create the conversation", async () => {
     const test = harness({ creates: false })
     await test.initialize()
@@ -1773,6 +1788,7 @@ describe("guest scope and commands", () => {
       const test = harness()
       await test.initialize()
       await test.login(await invite(test.invitations))
+      await test.resume(REF)
 
       await expect(
         test.agent.request(methods.agent.session.prompt, {
@@ -1781,7 +1797,12 @@ describe("guest scope and commands", () => {
         })
       ).rejects.toMatchObject({ code: INVALID_PARAMS })
 
-      expect(test.resolveInvitedSession).not.toHaveBeenCalled()
+      // The resume looked the invitation up; nothing asked to create it.
+      expect(test.resolveInvitedSession).not.toHaveBeenCalledWith(
+        AGENT,
+        REF,
+        expect.anything()
+      )
       expect(test.start).not.toHaveBeenCalled()
       test.close()
     }
@@ -2059,18 +2080,22 @@ describe("guest scope and commands", () => {
   it.each(FAILURES)(
     "answers %s from the invited lookup with a public code alone",
     async (_name, failure) => {
-      const test = harness({ fails: { lookup: failure() } })
+      const test = harness()
       const socket = await loggedInWire(
         test.listener,
         await invite(test.invitations)
       )
-
-      expectPublicError(
-        await socket.request(methods.agent.session.resume, {
+      const resume = () =>
+        socket.request(methods.agent.session.resume, {
           sessionId: REF,
           cwd: "/",
         })
-      )
+
+      test.resolveInvitedSession.mockRejectedValueOnce(failure())
+      expectPublicError(await resume())
+      // The first send of the fresh invitation looks it up again.
+      expect(await resume()).toMatchObject({ result: {} })
+      test.resolveInvitedSession.mockRejectedValueOnce(failure())
       expectPublicError(
         await socket.request(methods.agent.session.prompt, {
           sessionId: REF,
