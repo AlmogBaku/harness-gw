@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
+import type { SessionHistoryResponse } from "../../protocol"
 import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import {
@@ -2635,6 +2636,73 @@ describe("SessionCoordinator", () => {
     })
     expect(sessions.state(scope)).toBe("running")
     expect(unreceipted.stop).not.toHaveBeenCalled()
+  })
+
+  // ACP: "If the message is retained and replayed, the Agent MUST use the
+  // same ID" its answer returned.
+  it("replays a prompt whose receipt outran its answer under the id that answer named, and rewinds it by the provider's own", async () => {
+    const { advance } = useFakeClock()
+    let store!: (messageId: string) => void
+    const late = Object.assign(new EventSource(), {
+      stored: new Promise<string>((resolve) => (store = resolve)),
+    })
+    const start = vi
+      .fn<ServerTurnEngine["start"]>()
+      .mockResolvedValueOnce(late)
+      .mockResolvedValue(new EventSource())
+    const sessions = coordinator({
+      start,
+      recover: vi.fn(async () => new EventSource()),
+    })
+    const page = (...messages: SessionHistoryResponse["messages"]) => ({
+      sessionId: scope.sessionId,
+      messages,
+      total: messages.length,
+      limit: 50,
+      offset: 0,
+      nextOffset: messages.length,
+    })
+    const stored = page(
+      {
+        id: "stored-2",
+        role: "user",
+        content: [{ type: "text", text: "Hello" }],
+        createdAt: "2026-11-23T10:00:00.000Z",
+      },
+      {
+        id: "stored-2:reply",
+        role: "assistant",
+        content: [{ type: "text", text: "Hi" }],
+        createdAt: "2026-11-23T10:00:01.000Z",
+      }
+    )
+
+    const answered = sessions.start(scope, input("run-2"), access("one"))
+    await advance(ADMISSION_DEADLINE_MS)
+    await expect(answered).resolves.toMatchObject({
+      messageId: "message-run-2",
+    })
+    // Before the provider proves it stored the prompt, a replay shows its own.
+    expect(sessions.answeredHistory(scope, stored)).toEqual(stored)
+    store("stored-2")
+    await vi.waitFor(() =>
+      expect(
+        sessions.answeredHistory(scope, stored).messages.map(({ id }) => id)
+      ).toEqual(["message-run-2", "stored-2:reply"])
+    )
+    late.emit(turnEnded)
+    late.finish()
+    await vi.waitFor(() => expect(sessions.state(scope)).toBe("idle"))
+
+    await sessions.start(
+      scope,
+      { ...input("run-3"), rewindSourceId: "message-run-2" },
+      access("one")
+    )
+
+    expect(start.mock.calls[1]?.[1]).toMatchObject({
+      rewindSourceId: "stored-2",
+    })
   })
 
   // ACP reads an error answer as a prompt never inserted, so only a turn its

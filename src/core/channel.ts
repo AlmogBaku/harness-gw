@@ -936,14 +936,18 @@ export function createChannels(options: CreateChannelsOptions) {
   /** The memberships reading an older page: one page at a time each. */
   const paging = new WeakSet<Membership>()
 
-  /** One history page, `offset` rows back from the newest. */
-  function readHistory(scope: SessionScope, offset = 0) {
-    return runtime.history(
+  /**
+   * One history page, `offset` rows back from the newest, each prompt under
+   * the id its answer named.
+   */
+  async function readHistory(scope: SessionScope, offset = 0) {
+    const page = await runtime.history(
       scope.agentId,
       scope.providerSessionId,
       historyReach.pageSize,
       offset
     )
+    return coordinator.answeredHistory(scope, page)
   }
 
   /**

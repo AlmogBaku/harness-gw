@@ -507,7 +507,13 @@ as a prompt never inserted, the answer waits for the runtime's storage receipt
 and names the id it stored the prompt under. A prompt the runtime may have
 stored without proving it, because its receipt outlasted the admission
 deadline, its turn ended first, or its start went unanswered, is answered
-under the id the gateway minted. An unanswered start then reports the
+under the id the gateway minted. As ACP has a replayed prompt keep the id its
+answer returned, a receipt that lands after that answer makes every later
+replay and older page name the prompt by the minted id, and a rewind naming
+it reach the runtime by the runtime's own; the gateway keeps that in memory,
+so a restart forgets it, and a prompt whose turn ended, or whose start went
+unanswered, before any receipt replays under whatever id the runtime stored.
+An unanswered start then reports the
 `unknown` state until a recover confirms the turn or its deadline ends it.
 Only a turn its adapter knows stored nothing is answered with an error.
 A `$/cancel_request` for the prompt answers `-32800` only while the start has
