@@ -936,7 +936,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     admit(methods.agent.session.close, "close", params)
     await perform(
       "close",
-      { sessionId: params.sessionId },
+      { sessionId: params.sessionId, stopsBackground: true },
       // As ACP closes a Session: its work stops, for every member, this
       // member is shown how its turn ended, and then this connection leaves
       // it. A close that could not stop the work answers why, and leaves the
@@ -950,15 +950,15 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         const { scope } = membership
         await membership.closeTurn()
         // ACP's close also stops the background work, unlike its cancel: here
-        // each child this connection was told still works after its turn. A
-        // guest is told of none, so its close stops the turn alone and leaves
-        // the operator's background work, which it can neither see nor stop.
-        await context.channels.stopBackground(
-          scope,
-          (childSessionId) =>
-            sessions.child(childSessionId) !== undefined &&
-            sessions.rootOf(childSessionId) === command.sessionId
-        )
+        // each child this connection was told still works after its turn,
+        // where the member's stack lets its close stop any.
+        if (command.stopsBackground)
+          await context.channels.stopBackground(
+            scope,
+            (childSessionId) =>
+              sessions.child(childSessionId) !== undefined &&
+              sessions.rootOf(childSessionId) === command.sessionId
+          )
         sessions.part(command.sessionId)
         // A Session no prompt reached, which nothing else holds, is freed now.
         await context.channels.closed(scope)

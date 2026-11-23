@@ -972,7 +972,9 @@ Later reports patch it.
   and `session/close` of the parent stops each one still at work that the
   closing connection was told of, through the runtime's own stop of a child,
   as a `cancel` of the child would; a child the runtime cannot stop alone
-  runs on. A guest is told of no child, so its close stops none. A Session nobody watches any longer still follows its children
+  runs on. A guest's close stops none, whatever its connection was told: a
+  guest is told of no child, and its stack's close asks no background work
+  stopped. A Session nobody watches any longer still follows its children
   for a minute, so a reload or a reconnect comes back to them followed: a
   connection that joins is told each one's latest report, and each open
   request, including those of a child that ended in that minute. No turn's

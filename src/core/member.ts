@@ -302,7 +302,12 @@ export type MemberCommands = {
     text: string
   }
   stop: { sessionId: string }
-  close: { sessionId: string }
+  /**
+   * `stopsBackground` stops the Session's background work beside its turn, as
+   * ACP's close does; a guest's close stops none, since a guest can neither
+   * see the operator's background work nor stop it.
+   */
+  close: { sessionId: string; stopsBackground: boolean }
   /** One reply to a request the member was asked, with the answers it saw. */
   answer: {
     sessionId: string
