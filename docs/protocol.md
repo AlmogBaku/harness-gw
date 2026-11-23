@@ -288,9 +288,11 @@ model's thought level:
 - Each `currentValue` is one of its option's values, each value listed once. A
   current model the catalog does not list, as a switch a turn reports mid-turn
   may name, leads in a group of its own (`groupId: "current"`,
-  `name: "Current"`) under its id; a current thought level off the model's
-  ladder leads it under its id; the provider's own default, which reports no
-  effort, is `""` (`name: "Default"`), offered only while it holds.
+  `name: "Current"`) under its id. Thought levels go from lowest to highest,
+  as ACP asks: a current one off the model's ladder, whose rank is unknown,
+  follows the ladder under its id; the provider's own default, which reports
+  no effort, is `""` (`name: "Default"`), leads it, and is offered only while
+  it holds.
 
 A Session is **active** on a connection from a `session/new`, `session/fork`
 or `session/resume` there that succeeded until `session/close`,

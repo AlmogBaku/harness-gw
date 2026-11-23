@@ -55,11 +55,13 @@ function modelGroupsOf({
 }
 
 /**
- * The selected model's thought levels, each once, led by the current one where
- * the ladder lacks it: the provider's own default, which reports no effort and
- * is a choice of its own rather than a claim to one of the ladder's ids, or an
- * effort it reports off the ladder, under its id. The default is offered only
- * while it holds, so choosing it asks the provider for no change.
+ * The selected model's thought levels, each once, from lowest to highest as
+ * ACP asks, with the current one where the ladder lacks it: the provider's
+ * own default, which reports no effort and is a choice of its own rather than
+ * a claim to one of the ladder's ids, leads it; an effort it reports off the
+ * ladder, whose rank nothing tells, follows it under its id. The default is
+ * offered only while it holds, so choosing it asks the provider for no
+ * change.
  */
 function effortChoicesOf(
   current: string,
@@ -69,17 +71,10 @@ function effortChoicesOf(
   // ACP requires a name; an effort the provider left unnamed goes by its id.
   for (const { id, name } of efforts)
     if (!ladder.has(id)) ladder.set(id, { value: id, name: name ?? id })
-  return [
-    ...(ladder.has(current)
-      ? []
-      : [
-          {
-            value: current,
-            name: current === DEFAULT_EFFORT ? "Default" : current,
-          },
-        ]),
-    ...ladder.values(),
-  ]
+  if (ladder.has(current)) return [...ladder.values()]
+  if (current === DEFAULT_EFFORT)
+    return [{ value: current, name: "Default" }, ...ladder.values()]
+  return [...ladder.values(), { value: current, name: current }]
 }
 
 export const configOptionsOf = ((models) => {

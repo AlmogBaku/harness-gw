@@ -139,14 +139,16 @@ describe("configOptionsOf", () => {
     )
   })
 
-  it("lists a current effort off the selected model's ladder, leading under its id", () => {
+  // ACP lists thought levels from lowest to highest, and nothing ranks an
+  // effort off the ladder.
+  it("lists a current effort off the selected model's ladder after it, under its id", () => {
     expect(configOptionsOf({ ...models, effortId: "max" })[1]).toMatchObject({
       currentValue: "max",
       options: [
-        { value: "max", name: "max" },
         { value: "low", name: "low" },
         { value: "medium", name: "medium" },
         { value: "high", name: "high" },
+        { value: "max", name: "max" },
       ],
     })
   })
