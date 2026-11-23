@@ -725,8 +725,16 @@ describe("AOS ACP agent", () => {
       replayFrom: { type: "start" },
     })
 
-    // The answer carries the setup and where the replay ended; the row
-    // follows it as an update.
+    // The answer carries the setup and where the replay ended; the row came
+    // before it, as ACP has current session info precede a resume's answer.
+    const rows = rowsSince(test.recorder, 0)
+    expect(rows).toMatchObject([
+      {
+        update: {
+          _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "running" } },
+        },
+      },
+    ])
     expect(resumed).toEqual({
       ...ANSWERED_SETUP,
       _meta: {
@@ -752,19 +760,13 @@ describe("AOS ACP agent", () => {
         _meta: { [HGW_META_KEY]: { turnId: "run-live" } },
       },
     })
-    const row = await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("session_info_update"),
-      "the Session's row"
-    )
-    expect(row.params).toMatchObject({
-      update: {
-        _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "running" } },
-      },
-    })
     await test.recorder.wait(
       (entry) => JSON.stringify(entry.params).includes('"configId":"model"'),
       "the Session's model options"
     )
+    // The readings the join starts with do not show the same row again.
+    await settled()
+    expect(rowsSince(test.recorder, 0)).toEqual(rows)
     test.sources[0]?.emit({
       kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
@@ -4197,14 +4199,12 @@ function pageUpdates(recorder: Recorder, from: number) {
 }
 
 /**
- * The messages a resume replayed since `from`, before the end of its replay
- * and the state it closes with.
+ * The messages a resume replayed since `from`, without the end of its replay
+ * and the Session's row and state it closes with.
  */
 const replayedIds = (recorder: Recorder, from: number) =>
-  pageUpdates(recorder, from).flatMap(({ sessionUpdate, messageId }) =>
-    sessionUpdate === "state_update" || sessionUpdate === "replay_complete"
-      ? []
-      : [messageId]
+  pageUpdates(recorder, from).flatMap(({ messageId }) =>
+    messageId === undefined ? [] : [messageId]
   )
 
 const pageTag = (update: SentUpdate) =>

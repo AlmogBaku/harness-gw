@@ -578,8 +578,12 @@ events after the answer, never before it; `session/fork` answers the same way.
 the setup above, and `{ position?, history? }` beside the capabilities in
 `_meta.hgw`. `position` is
 the turn and sequence the joined Session stands at; a later resume continues
-from it. Session info (`session_info_update`), execution state (`state_update`),
-and usage arrive as events after the answer. When the journal cannot answer `from`
+from it. As ACP has a resume synchronize current state before its answer, the
+Session's current `state_update` and then the row the gateway holds of it
+(`session_info_update`) arrive before the answer, after any replay. The row is
+the one the gateway already holds, so a rejoin still asks the provider nothing
+first: a row it does not hold yet, and a change the read after the join
+finds, arrive after the answer, and so does usage. When the journal cannot answer `from`
 (`ReplayCursorLostError`, `core/channel.ts`), the gateway rebuilds the Session
 from history as a `start` resume does: the retained messages arrive as standard
 `session/update`s before the answer, the live turn follows them, and the answer

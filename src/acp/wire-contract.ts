@@ -1495,7 +1495,7 @@ export function runWireContract(
 
       row(
         "replayCompleteAfterHistory",
-        "ends a replay from the start or a position with replay_complete after its history alone, then states the Session, all before the answer, and ends none without a cursor",
+        "ends a replay from the start or a position with replay_complete after its history alone, then states the Session and its row, all before the answer, and ends none without a cursor",
         async (harness) => {
           const { clock, turn, connectPlain } = harness
           const { plain, sessionId } = await operatorSession(harness)
@@ -1526,11 +1526,14 @@ export function runWireContract(
           await until(clock, turn.secondResponse())
           await until(clock, idle)
 
-          const replayed = ["history", "replay_complete", "state_update"]
+          // ACP has the current state, and session info, follow any replay
+          // before the answer.
+          const current = ["state_update", "session_info_update"]
+          const replayed = ["history", "replay_complete", ...current]
           expect(read).toEqual({
             start: replayed,
             position: replayed,
-            none: ["state_update"],
+            none: current,
           })
         }
       )

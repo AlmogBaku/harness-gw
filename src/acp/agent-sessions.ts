@@ -266,6 +266,7 @@ export function createSessions(
         membershipId: `${context.connectionId}:${scope.sessionId}`,
         logger,
         describe: (cause) => errorNotificationOf(context.publicError, cause),
+        knownRow: () => catalog.row(scope),
         subscribeRow: (listener) =>
           catalog.subscribe(scope, listener, (cause) => {
             const { code } = errorNotificationOf(context.publicError, cause)

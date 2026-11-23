@@ -804,6 +804,8 @@ export type MembershipOptions = {
   describe: (cause: unknown) => { code: string; message: string }
   /** The Session's row as a replaying cell: the known row, then each change. */
   subscribeRow: (listener: (row: SessionRow) => void) => () => void
+  /** The row the gateway holds of the Session now, read from no provider. */
+  knownRow?: () => SessionRow | undefined
 }
 
 /** A membership's options, with the coordinator and clock its channels share. */
@@ -1061,8 +1063,9 @@ export function createChannels(options: CreateChannelsOptions) {
      * the newest page alone for a member that `paged` older history itself.
      * The view reads the history, then the live events the journal buffered,
      * then, for a resume with a cursor, `replay_complete` and what it held,
-     * then the Session's state, before the answer; the setup it tells is read
-     * beside all that, and built from after it. The join lands once the answer is written, and the Session's
+     * then the Session's state and the row the gateway holds, before the
+     * answer; the setup it tells is read beside all that, and built from after
+     * it. The join lands once the answer is written, and the Session's
      * readings and row reach the member as events after it. A Session waiting
      * on input asks its runtime whether the wait still stands, which the
      * answer does not wait for. A resume the journal serves asks the provider
@@ -1081,6 +1084,7 @@ export function createChannels(options: CreateChannelsOptions) {
           membership.resume(position, view),
           membership.readSetup(),
         ])
+        await membership.showRow()
         const setup = await membership.setup(readings)
         membership.joined()
         if (
@@ -1337,6 +1341,11 @@ class Membership {
    * that follows the switch shows it no more.
    */
   #switched: SessionModelsResponse | undefined
+  /**
+   * The row a resume showed this member before its answer, which the row
+   * its join's readings start with shows it no more.
+   */
+  #rowShown: SessionRow | undefined
   /** Whether this member's view pages older history itself. */
   #paged = false
   /** Settles once the member was shown what the journal buffered. */
@@ -2446,6 +2455,9 @@ class Membership {
     })
     const capabilities = subscribeCapabilities()
     const row = this.#options.subscribeRow((row) => {
+      const shown = this.#rowShown
+      this.#rowShown = undefined
+      if (shown && isDeepStrictEqual(shown, row)) return
       this.#deliver({ kind: "session-info", row }).catch((err: unknown) =>
         this.#options.logger.error({ err }, "membership.row.failed")
       )
@@ -2455,6 +2467,20 @@ class Membership {
       capabilities()
       row()
     }
+  }
+
+  /**
+   * Shows this member the row the gateway holds of its Session, ahead of a
+   * resume's answer, as ACP has current session info precede it. It reads
+   * no provider, so a rejoin the journal serves still asks none first: a row
+   * the gateway does not hold yet, or one the read after the join changes,
+   * follows the answer as an update.
+   */
+  async showRow() {
+    const row = this.pending ? undefined : this.#options.knownRow?.()
+    if (!row) return
+    this.#rowShown = row
+    await this.#deliver({ kind: "session-info", row })
   }
 
   /**
