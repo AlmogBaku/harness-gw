@@ -252,7 +252,10 @@ keeps only a public code. Any other failure reads `-31013`
 (model → `category: "model"`, effort → `category: "thought_level"`).
 
 `session/close` stops the Session's active work for every member and then
-detaches this connection. `_hgw/session/part` (`HgwSessionPartRequestSchema`,
+detaches this connection. Closing is idempotent: a close of a Session not
+active on this connection, already closed, gone, or never known answers `{}`,
+as a close of a fresh invitation does, which only detaches it.
+`_hgw/session/part` (`HgwSessionPartRequestSchema`,
 `protocol/acp.ts`) only detaches this connection; the Session's work and all other
 members continue. `session/delete` of a Session not known to this connection
 succeeds rather than returning not-found. The SDK client parts a Session its

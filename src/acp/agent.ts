@@ -902,7 +902,10 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       // this connection leaves it.
       async (command) => {
         const membership = sessions.membership(command.sessionId)
-        if (!membership) throw notFound()
+        // ACP's close is idempotent: a Session not active on this connection,
+        // one already closed or gone or never known, closes as a close does,
+        // with `{}`. A fresh invitation's, which has no Session yet, leaves.
+        if (!membership) return sessions.part(command.sessionId)
         const { scope } = membership
         try {
           await membership.cancel()

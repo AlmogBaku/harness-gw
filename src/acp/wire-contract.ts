@@ -2252,12 +2252,12 @@ export function runWireListenerContract(
 
           expect(await closed).toBe("closed")
           expect(states(reader.updates).at(-1)).toBe("idle:cancelled")
-          // The SDK's client reads a close of a Session gone as done, so the
-          // answer that says so is read off the wire.
+          // A close is idempotent, so a second one answers as the first did.
+          // The SDK's client reads a `-32002` answer as done too, so each
+          // answer is read off the wire.
           expect(await close(plain)).toBe("closed")
-          expect(errorCodes(plain)).toEqual([
-            RequestError.resourceNotFound().code,
-          ])
+          expect(await close(plain)).toBe("closed")
+          expect(errorCodes(plain)).toEqual([])
           expect(await close(reader)).toBe("closed")
           expect(errorCodes(reader)).toEqual([])
         })

@@ -1993,16 +1993,22 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("lets a guest close the invited Session", async () => {
-    const test = harness({ existing: true })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
+  it.each([
+    ["the invited Session", true],
+    ["a fresh invitation, which has no Session yet", false],
+  ])("lets a guest close %s", async (_case, existing) => {
+    const test = harness({ existing })
+    // The SDK's client reads a `-32002` answer to a close as done, so the
+    // answer is read off the wire.
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
 
-    await expect(
-      test.agent.request(methods.agent.session.close, { sessionId: REF })
-    ).resolves.toEqual({})
-    test.close()
+    expect(
+      await socket.request(methods.agent.session.close, { sessionId: REF })
+    ).toMatchObject({ result: {} })
+    socket.close()
   })
 
   it.each(FAILURES)(
