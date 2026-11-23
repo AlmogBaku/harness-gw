@@ -316,11 +316,14 @@ background work, each child still at work after its turn that this connection
 was told of (see [Child Sessions](#child-sessions)). The closer is shown how a
 turn it stopped ended, its final updates and its idle `state_update` with
 `stopReason: "cancelled"`, before the answer; closing an idle Session sends no
-idle of its own. A close whose Stop fails answers that failure, and one whose
-Stop the runtime does not confirm within 30 s (`CLOSE_DEADLINE_MS`) answers
+idle of its own. The whole close, its Stop, the wait for the turn's end, and
+its background stops, shares one 30 s deadline (`CLOSE_DEADLINE_MS`), well
+under the SDK client's 45 s request deadline. A close whose Stop fails answers
+that failure, and one the runtime does not confirm within the deadline answers
 `-31014` `uncertain_mutation`: either way the Session stays active on the
 connection, which is shown the turn's end once it comes, and the close may be
-sent again. Closing is idempotent: a close of a Session not active on this
+sent again. Freeing an unprompted Session (below) holds the answer only until
+the deadline, as the closer has left. Closing is idempotent: a close of a Session not active on this
 connection, already closed, gone, or never known answers `{}`, as a close of a
 fresh invitation does, which only detaches it. `_hgw/session/part`
 (`HgwSessionPartRequestSchema`, `protocol/acp.ts`) only detaches this
@@ -332,10 +335,17 @@ shown how it ended, and stops every background child still at work; then the
 runtime deletes the Session, and once it holds it no longer, deleted or
 already gone, this connection is detached, as its close would detach it, and
 every other member is told it is gone with an `_hgw/error` `not_found` and
-detached. A delete whose Stop fails, or goes unconfirmed, answers as a close
-would and deletes nothing; one the runtime refuses answers that failure, and
-in either case the Session stays active on the connection, as after a failed
-close, so the delete may be sent again. A deleted Session that was
+detached. The whole delete, its close and the runtime's delete, shares one
+30 s deadline (`CLOSE_DEADLINE_MS`). It waits for each member to be shown the
+turn's end for at most 5 s (`DELETE_SHOWN_MS`) and then goes on without it,
+so one member's slow socket never fails another's delete: such a member is
+told the Session is gone without the turn's updates it was not yet written.
+A delete whose Stop fails, or goes unconfirmed, answers as a close would and
+deletes nothing; one the runtime refuses answers that failure, and one whose
+runtime delete is not confirmed within the deadline answers `-31014`; in each
+case the Session stays active on the connection, as after a failed close, so
+the delete may be sent again, and a delete that lands after its `-31014`
+tells this connection the Session is gone as it tells every other member. A deleted Session that was
 unprompted is not discarded afterwards: nothing is left to free. A delete of
 a Session not known to this connection succeeds rather than returning
 not-found. The SDK client parts a Session its last listener left, after a

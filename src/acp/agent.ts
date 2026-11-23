@@ -41,6 +41,7 @@ import {
   type HgwExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
+import { unlessAborted } from "../core/channel"
 import type { SessionRow } from "../core/session-rows"
 import type { PresenceReport } from "../push/presence"
 import { GATEWAY_VERSION } from "../version"
@@ -948,20 +949,25 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         // with `{}`. A fresh invitation's, which has no Session yet, leaves.
         if (!membership) return sessions.part(command.sessionId)
         const { scope } = membership
-        await membership.closeTurn()
-        // ACP's close also stops the background work, unlike its cancel: here
-        // each child this connection was told still works after its turn,
-        // where the member's stack lets its close stop any.
-        if (command.stopsBackground)
-          await context.channels.stopBackground(
-            scope,
-            (childSessionId) =>
-              sessions.child(childSessionId) !== undefined &&
-              sessions.rootOf(childSessionId) === command.sessionId
-          )
-        sessions.part(command.sessionId)
-        // A Session no prompt reached, which nothing else holds, is freed now.
-        await context.channels.closed(scope)
+        // The whole close, each step in turn, shares one deadline.
+        await context.channels.closing(async (signal) => {
+          await membership.closeTurn(signal)
+          // ACP's close also stops the background work, unlike its cancel:
+          // here each child this connection was told still works after its
+          // turn, where the member's stack lets its close stop any.
+          if (command.stopsBackground)
+            await context.channels.stopBackground(
+              scope,
+              signal,
+              (childSessionId) =>
+                sessions.child(childSessionId) !== undefined &&
+                sessions.rootOf(childSessionId) === command.sessionId
+            )
+          sessions.part(command.sessionId)
+          // A Session no prompt reached, which nothing else holds, is freed
+          // now.
+          await context.channels.closed(scope, signal)
+        })
       },
       requestId
     )
@@ -988,17 +994,26 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           // delete a running Session is never asked to. Once the runtime
           // holds it no longer, this connection leaves it, as its close
           // would, and every other member is told it is gone; a delete that
-          // fails leaves this connection on it, as a failed close does.
-          await context.channels.stopWork(scope)
-          try {
-            await catalog.delete(scope, () => sessions.part(command.sessionId))
-          } catch (cause) {
-            if (
-              publicCodeOf(publicRequestError(context.publicError, cause)) !==
-              "not_found"
-            )
-              throw cause
-          }
+          // fails leaves this connection on it, as a failed close does. The
+          // whole delete shares one deadline: one that lands after it was
+          // answered as unconfirmed tells this connection it is gone too.
+          await context.channels.closing(async (signal) => {
+            await context.channels.stopWork(scope, signal)
+            try {
+              await unlessAborted(
+                catalog.delete(scope, () => {
+                  if (!signal.aborted) sessions.part(command.sessionId)
+                }),
+                signal
+              )
+            } catch (cause) {
+              if (
+                publicCodeOf(publicRequestError(context.publicError, cause)) !==
+                "not_found"
+              )
+                throw cause
+            }
+          })
         }
         sessions.forget(command.sessionId)
       },

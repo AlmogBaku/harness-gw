@@ -68,12 +68,24 @@ export const RECONCILE_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
 export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
 
 /**
- * How long a close or a delete waits for the turn its Stop asked to end, as
- * ACP has its closer shown that end before the answer; the same as the
- * admission deadline, so a confirmed Stop's end lands inside it and the
- * answer inside the browser's own deadline. Past it the Stop is unconfirmed.
+ * How long a whole close or delete may take: its Stop, the wait for the turn
+ * it stopped to end and be shown, as ACP has its closer shown that end before
+ * the answer, its background stops, and a delete's runtime call share it. The
+ * same as the admission deadline, so a confirmed Stop's end lands inside it,
+ * and well under the browser's 45 s request deadline, so the answer reaches
+ * the browser before it gives the request up. Past it the close or delete is
+ * unconfirmed.
  */
 export const CLOSE_DEADLINE_MS = ADMISSION_DEADLINE_MS
+
+/**
+ * How long a delete waits, inside its CLOSE_DEADLINE_MS, for every member to
+ * be shown how the turn it stopped ended. A member slower than this is behind
+ * its socket, and the delete goes on without it, so one slow reader never
+ * fails the delete for another: that member is then told the Session is gone,
+ * and shown none of the turn's last updates it was not yet written.
+ */
+export const DELETE_SHOWN_MS = 5_000
 
 /**
  * How long nothing may hold a Session created and never prompted before the

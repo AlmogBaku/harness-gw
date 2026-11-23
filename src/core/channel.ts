@@ -19,6 +19,7 @@ import type {
 import {
   CHILD_FOLLOW_GRACE_MS,
   CLOSE_DEADLINE_MS,
+  DELETE_SHOWN_MS,
   JOIN_DEADLINE_MS,
   READING_BACKOFF,
   READING_RETRIES,
@@ -874,13 +875,13 @@ export class MembershipDetachedError extends Error {
 }
 
 /**
- * A Stop a close or a delete asked that its runtime did not confirm within
- * `CLOSE_DEADLINE_MS`: the turn may still be stopping.
+ * A close or a delete its runtime did not confirm within `CLOSE_DEADLINE_MS`:
+ * its Stop, a background stop or a delete's own call may still land.
  */
-export class StopUnconfirmedError extends Error {
+export class CloseUnconfirmedError extends Error {
   constructor() {
-    super("The runtime did not confirm the Stop in time")
-    this.name = "StopUnconfirmedError"
+    super("The runtime did not confirm the close in time")
+    this.name = "CloseUnconfirmedError"
   }
 }
 
@@ -888,30 +889,20 @@ export class StopUnconfirmedError extends Error {
  * Stops a Session's turn with `stop`, as `session/close` asks, and settles
  * once the turn rests idle and `shown` settled: what the members it names were
  * owed of how the turn ended. A turn already idle is stopped no further and
- * owes nothing more. A Stop its runtime does not confirm within
- * `CLOSE_DEADLINE_MS` throws `StopUnconfirmedError`.
+ * owes nothing more. Each step takes what is left of the close's deadline
+ * through `signal`, and rejects with its reason once it aborts.
  */
 async function stopAndSettle(
   coordinator: SessionCoordinator,
-  clock: Clock,
   scope: SessionScope,
   stop: () => Promise<unknown>,
-  shown: () => Promise<unknown>
+  shown: (signal: AbortSignal) => Promise<unknown>,
+  signal: AbortSignal
 ) {
   if (coordinator.state(scope) === "idle") return
-  await stop()
-  const deadline = new Deadline(CLOSE_DEADLINE_MS, clock)
-  try {
-    await deadline.run(async (signal) => {
-      await coordinator.idle(scope, signal)
-      await shown()
-    })
-  } catch (cause) {
-    const { signal } = deadline
-    if (signal.aborted && cause === signal.reason)
-      throw new StopUnconfirmedError()
-    throw cause
-  }
+  await unlessAborted(stop(), signal)
+  await coordinator.idle(scope, signal)
+  await shown(signal)
 }
 
 /** Settles as `work` does, unless `signal` aborts first: then with its reason. */
@@ -987,21 +978,43 @@ export function createChannels(options: CreateChannelsOptions) {
   /**
    * Stops each of the Session's background children `includes` takes, as
    * closing a Session stops its background work beside its turn: every one
-   * is asked, and the first failure is thrown once all were. A runtime that
-   * cannot stop a child alone leaves each running.
+   * is asked, and the first failure is thrown once all were, or the reason
+   * `signal` aborts with first. A runtime that cannot stop a child alone
+   * leaves each running.
    */
   async function stopBackground(
     scope: SessionScope,
+    signal: AbortSignal,
     includes: (childSessionId: string) => boolean = () => true
   ) {
-    const stopped = await Promise.allSettled(
-      channels
-        .backgroundChildren(scope)
-        .filter(includes)
-        .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+    const stopped = await unlessAborted(
+      Promise.allSettled(
+        channels
+          .backgroundChildren(scope)
+          .filter(includes)
+          .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+      ),
+      signal
     )
     const failed = stopped.find((settled) => settled.status === "rejected")
     if (failed) throw failed.reason
+  }
+
+  /**
+   * Settles once every member was shown how the Session's turn ended, or once
+   * `DELETE_SHOWN_MS` passed: a member slower than that is behind its socket,
+   * and a delete goes on without it, so one member's slow reader never fails
+   * another's delete. Rejects with `signal`'s reason once it aborts.
+   */
+  async function everyMemberShown(scope: SessionScope, signal: AbortSignal) {
+    const wait = new Deadline(DELETE_SHOWN_MS, clock, signal)
+    try {
+      await wait.run(() => channels.shown(scope))
+    } catch (cause) {
+      if (signal.aborted || cause !== wait.signal.reason) throw cause
+      const { agentId, sessionId } = scope
+      logger.warn({ agentId, sessionId }, "channel.delete.shown_late")
+    }
   }
 
   return {
@@ -1101,11 +1114,37 @@ export function createChannels(options: CreateChannelsOptions) {
     },
 
     /**
-     * Discards a Session a member closed, where a create here made it, no
-     * prompt reached it, and nothing else holds it.
+     * Runs one close or one delete, `work`, under one `CLOSE_DEADLINE_MS`,
+     * which each of its steps takes what is left of through `signal`. One
+     * still waiting when it passes throws `CloseUnconfirmedError`: what it
+     * asked of the runtime may still land.
      */
-    closed(scope: SessionScope) {
-      return coordinator.closed(scope)
+    async closing<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+      const deadline = new Deadline(CLOSE_DEADLINE_MS, clock)
+      try {
+        return await work(deadline.signal)
+      } catch (cause) {
+        const { signal } = deadline
+        if (signal.aborted && cause === signal.reason)
+          throw new CloseUnconfirmedError()
+        throw cause
+      } finally {
+        deadline.clear()
+      }
+    },
+
+    /**
+     * Discards a Session a member closed, where a create here made it, no
+     * prompt reached it, and nothing else holds it. The member has left, so
+     * the close waits on the discard only until `signal` aborts, and the
+     * discard goes on.
+     */
+    async closed(scope: SessionScope, signal: AbortSignal) {
+      await unlessAborted(coordinator.closed(scope), signal).catch(
+        (cause: unknown) => {
+          if (cause !== signal.reason) throw cause
+        }
+      )
     },
 
     stopBackground,
@@ -1113,18 +1152,18 @@ export function createChannels(options: CreateChannelsOptions) {
     /**
      * Stops all of a Session's work as `session/delete` asks, as a close on
      * every connection would: its turn, settling once each member was shown
-     * how it ended, then every background child. Throws as `stopAndSettle`
-     * and `stopBackground` do.
+     * how it ended or `DELETE_SHOWN_MS` passed, then every background child.
+     * Throws as `stopAndSettle` and `stopBackground` do.
      */
-    async stopWork(scope: SessionScope) {
+    async stopWork(scope: SessionScope, signal: AbortSignal) {
       await stopAndSettle(
         coordinator,
-        clock,
         scope,
         () => coordinator.stop(scope),
-        () => channels.shown(scope)
+        (shownSignal) => everyMemberShown(scope, shownSignal),
+        signal
       )
-      await stopBackground(scope)
+      await stopBackground(scope, signal)
     },
 
     /** Whether the runtime forks Sessions. */
@@ -2051,15 +2090,15 @@ class Membership {
    * Stops the Session's turn as `session/close` asks, as `cancel` does, and
    * settles once this member was shown how it ended: ACP has a closer shown
    * the turn's final updates and its idle state before the close's answer.
-   * Throws as `stopAndSettle` does.
+   * Throws as `stopAndSettle` does, under the close's `signal`.
    */
-  closeTurn() {
+  closeTurn(signal: AbortSignal) {
     return stopAndSettle(
       this.#coordinator,
-      this.#options.clock,
       this.#scope,
       () => this.cancel(),
-      () => this.#shownStream()
+      (shownSignal) => unlessAborted(this.#shownStream(), shownSignal),
+      signal
     )
   }
 

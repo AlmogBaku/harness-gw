@@ -1557,6 +1557,37 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  // One deadline bounds the whole delete, its runtime call too, so the
+  // browser is answered before it gives the request up.
+  it("answers a delete its runtime does not confirm in time as unconfirmed, and tells the deleter once it lands", async () => {
+    const test = await harness()
+    await test.list()
+    await open(test)
+    const landing = Promise.withResolvers<void>()
+    test.deleteSession.mockImplementationOnce(() => landing.promise)
+    const clock = useFakeClock()
+
+    const deleting = test.agent
+      .request(methods.agent.session.delete, { sessionId: SESSION })
+      .catch((cause: unknown) => cause)
+    await clock.advance(CLOSE_DEADLINE_MS)
+    expect(await deleting).toMatchObject({
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+    })
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
+
+    // Answered that it may not have, the deleter hears it gone once it lands.
+    landing.resolve()
+    await clock.advance(0)
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([
+      {
+        method: HGW_METHODS.notify.error,
+        params: { sessionId: SESSION, code: "not_found", message: "not_found" },
+      },
+    ])
+    test.close()
+  })
+
   it("discards nothing of a created Session once its delete removed it", async () => {
     const test = await harness()
     await test.create()
@@ -3790,6 +3821,22 @@ describe("Session rooms", () => {
       code: HGW_JSONRPC_ERRORS.uncertainMutation,
       async close(test: Awaited<ReturnType<typeof harness>>) {
         const clock = useFakeClock()
+        const closing = test.agent
+          .request(methods.agent.session.close, { sessionId: SESSION })
+          .catch((cause: unknown) => cause)
+        await clock.advance(CLOSE_DEADLINE_MS)
+        return await closing
+      },
+    },
+    // The deadline bounds the whole close, its Stop's own call too.
+    {
+      stop: "is never answered",
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+      async close(test: Awaited<ReturnType<typeof harness>>) {
+        const clock = useFakeClock()
+        test.sources[0]?.stop.mockImplementationOnce(
+          () => new Promise<never>(() => {})
+        )
         const closing = test.agent
           .request(methods.agent.session.close, { sessionId: SESSION })
           .catch((cause: unknown) => cause)

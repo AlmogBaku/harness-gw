@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import { defaultClock } from "../../lifecycle"
 import {
@@ -28,6 +29,7 @@ import {
   type ChannelTurn,
 } from "./channel"
 import { providerSessionId, sessionId } from "./ids"
+import { DELETE_SHOWN_MS } from "./limits"
 import type { SessionCoordinator } from "./session-coordinator"
 
 /** No test here reads history; a channel that did would fail loudly. */
@@ -540,6 +542,41 @@ const GUEST_SCOPE: SessionScope = {
   ...SCOPE,
   sessionId: sessionId("thread-guest"),
 }
+
+describe("a delete's wait for its members", () => {
+  // One member's slow reader never fails the delete for another.
+  it("goes on without a member not shown its turn's end in time", async () => {
+    const clock = useFakeClock()
+    const channels = createChannels({
+      coordinator: {
+        ...HOLDING,
+        snapshot: () => ({ state: "running" }),
+        state: () => "running",
+        stop: async () => "stopping",
+        idle: async () => undefined,
+      } as unknown as SessionCoordinator,
+      runtime: NO_HISTORY,
+      logger: captureLogs().logger,
+    })
+    const slow: MembershipDelivery = {
+      ...member().fake,
+      shown: () => new Promise<void>(() => {}),
+    }
+    channels.add(SCOPE, slow, { hasPrompt: false })
+    let outcome: unknown
+    void channels
+      .closing((signal) => channels.stopWork(SCOPE, signal))
+      .then(
+        () => (outcome = "stopped"),
+        (cause: unknown) => (outcome = cause)
+      )
+
+    await clock.advance(DELETE_SHOWN_MS - 1)
+    expect(outcome).toBeUndefined()
+    await clock.advance(1)
+    expect(outcome).toBe("stopped")
+  })
+})
 
 describe("createChannel adopting runtime-started turns", () => {
   it("subscribes while the channel has members and stops when the last parts", () => {
