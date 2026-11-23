@@ -1409,12 +1409,13 @@ describe("AOS ACP agent", () => {
     ])
     // The deleter left the Session as its close would: told nothing more.
     expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
-    // The shared address cannot tell whose Session it never listed.
+    // The shared address cannot tell whose Session it never listed, so it
+    // holds none by that id: ACP has such a delete succeed silently.
     await expect(
       test.agent.request(methods.agent.session.delete, {
         sessionId: "session-unlisted",
       })
-    ).rejects.toMatchObject(INVALID_PARAMS)
+    ).resolves.toEqual({})
     expect(test.deleteSession).toHaveBeenCalledTimes(1)
     test.close()
     other.close()

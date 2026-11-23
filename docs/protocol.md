@@ -329,8 +329,9 @@ Agents skips, and logs, any Agent with no folder (`session.list.no_folder`) or a
 unreadable one (`session.list.folder_read_failed`), and still lists every other
 Agent's rows; a list on one Agent's address answers either as an error.
 `session/delete` on the shared address for a Session this connection never
-listed or resumed returns invalid params naming the per-Agent address; on an
-Agent's address a Session that is already gone deletes successfully.
+listed or resumed cannot tell which Agent owns it, so it deletes nothing and
+succeeds silently, as ACP has a delete of a Session that never existed do; on
+an Agent's address a Session that is already gone deletes successfully.
 
 **`session/fork`** (operator listener only): answers the `sessionId` and setup
 (see [Response `_meta.hgw` shapes](#response-_metahgw-shapes)) of a new

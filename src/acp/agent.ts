@@ -936,8 +936,10 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       { sessionId: params.sessionId },
       async (command) => {
         const agentId = sessions.owner(command.sessionId) ?? context.agentId
-        if (agentId === undefined)
-          throw invalidParams(`connect to ${HGW_ACP_AGENTS_PATH}/<agentId>`)
+        // The shared address cannot tell whose Session an id it never listed
+        // is, so it holds none by that id to delete; ACP has a delete of a
+        // Session that never existed "succeed silently".
+        if (agentId === undefined) return
         const scope = catalog.scope(agentId, command.sessionId)
         // A Session its Agent cannot find is already gone.
         if (scope) {
