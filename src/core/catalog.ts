@@ -332,11 +332,18 @@ export function createCatalog({
     markRead,
 
     async delete(target, leave = () => undefined) {
-      /** Ends the Session for every member but the deleter, which leaves. */
-      const end = (cause: unknown) => {
+      /**
+       * Ends the Session for every member but the deleter, which leaves, and
+       * then runs `after`: a leave that throws skips neither.
+       */
+      const end = (cause: unknown, after: () => void = () => undefined) => {
         coordinator.deleted?.(target)
-        leave()
-        coordinator.endIfGone(target, cause)
+        try {
+          leave()
+        } finally {
+          coordinator.endIfGone(target, cause)
+          after()
+        }
       }
       try {
         await runtime.deleteSession(target.agentId, target.providerSessionId)
@@ -348,8 +355,7 @@ export function createCatalog({
         throw cause
       }
       rows.forget(target.agentId, target.sessionId)
-      end(new ServerSessionNotFoundError())
-      invalidate()
+      end(new ServerSessionNotFoundError(), invalidate)
     },
 
     invalidation: {
