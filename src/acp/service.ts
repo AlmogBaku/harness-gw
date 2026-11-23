@@ -16,7 +16,11 @@ import {
   READER_FELL_BEHIND,
   type PublicErrors,
 } from "./socket"
-import type { AcpConnectionContext, HgwAcpAgentFactory } from "./types"
+import type {
+  AcpConnectionContext,
+  AcpListenerContext,
+  HgwAcpAgentFactory,
+} from "./types"
 import { errorNotificationOf } from "./validation"
 import type { Role } from "../core/member"
 
@@ -84,7 +88,7 @@ export type AcpServiceOptions = {
     connectionId: string,
     principalId: string,
     agentId?: string
-  ): AcpConnectionContext
+  ): AcpListenerContext
   /**
    * Serves each Agent at `path/agents/<agentId>` beside `path` itself, for an
    * Agent the catalog holds; absent, the listener serves its one path.
@@ -193,10 +197,18 @@ export function createAcpService(options: AcpServiceOptions) {
   }
 
   function open(upgrade: AcpUpgrade, peer: AcpPeer) {
-    const context = options.connection(
-      upgrade.connectionId,
-      upgrade.principalId,
-      upgrade.agentId
+    const context: AcpConnectionContext = Object.assign(
+      options.connection(
+        upgrade.connectionId,
+        upgrade.principalId,
+        upgrade.agentId
+      ),
+      {
+        // A member its Session left behind closes the socket as a reader that
+        // fell behind, which its client reconnects on.
+        fellBehind: () =>
+          socket.socket.close(READER_FELL_BEHIND, "ACP member fell behind"),
+      }
     )
     // Thread the clock into the context so the connection machine and the
     // handshake deadline share the same injected clock.
@@ -246,8 +258,6 @@ export function createAcpService(options: AcpServiceOptions) {
       handshakeDeadline.clear()
     }
     context.handshakeComplete = handshakeEnded
-    context.fellBehind = () =>
-      socket.socket.close(READER_FELL_BEHIND, "ACP member fell behind")
     // A logout that ended a login hands the socket back to its handshake, as
     // the newest one in the budget, under a fresh deadline.
     context.handshakeRestart = () => {

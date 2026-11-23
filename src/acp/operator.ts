@@ -10,7 +10,7 @@ import { createReadState } from "./read-state"
 import { createAcpService } from "./service"
 import type { Channels } from "../core/channel"
 import * as translators from "./translate"
-import type { AcpConnectionContext } from "./types"
+import type { AcpListenerContext } from "./types"
 
 export type OperatorAcpServiceOptions = {
   runtimeInstance: RuntimeInstance
@@ -60,7 +60,7 @@ export function createOperatorAcpService({
       publicError: (cause) => runtimeInstance.runtime.publicError(cause),
     },
     logger,
-    connection: (connectionId, principalId, agentId): AcpConnectionContext => ({
+    connection: (connectionId, principalId, agentId): AcpListenerContext => ({
       connectionId,
       principalId,
       ...(agentId === undefined ? {} : { agentId }),

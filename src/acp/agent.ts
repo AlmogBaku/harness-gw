@@ -211,7 +211,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         sessions.membership(sessionId)?.report(cause),
       // The upgrade's principal holds for the connection's whole life.
       live: () => context.authentication?.live() ?? true,
-      fellBehind: () => context.fellBehind?.(),
+      fellBehind: () => context.fellBehind(),
       children: {
         announce: (childSessionId, parentSessionId, cancellable) =>
           sessions.announceChild(childSessionId, parentSessionId, cancellable),

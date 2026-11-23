@@ -5,10 +5,7 @@ import type { Catalog } from "../core/catalog"
 import type { Channels } from "../core/channel"
 import type { Member } from "../core/member"
 import * as translators from "../acp/translate"
-import type {
-  AcpConnectionContext,
-  ConnectionAuthentication,
-} from "../acp/types"
+import type { AcpListenerContext, ConnectionAuthentication } from "../acp/types"
 import { PUBLIC_ERRORS } from "../acp/validation"
 import {
   guestCapabilities,
@@ -220,7 +217,7 @@ function createGuestAuthentication(
 export function createGuestConnection(
   options: GuestAcpServiceOptions,
   connectionId: string
-): AcpConnectionContext {
+): AcpListenerContext {
   const role = "guest" as const
   const { runtime } = options.runtimeInstance
   return {
