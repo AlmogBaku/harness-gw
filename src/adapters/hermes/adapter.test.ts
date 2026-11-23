@@ -3504,6 +3504,64 @@ describe("Hermes server adapter", () => {
     }
   })
 
+  it.each([
+    ["an unsent draft, closing its live Session", {}, true],
+    ["no draft Hermes stored since", { message_count: 4 }, false],
+    ["no draft Hermes runs", { running: true }, false],
+  ] as const)("discards %s", async (_, resumed, discarded) => {
+    const router = rpcRouter({
+      "session.resume": async () => ({
+        session_id: "live-draft",
+        stored_session_id: "draft",
+        message_count: 0,
+        messages: [],
+        info: { lazy: true, profile_name: "researcher" },
+        ...resumed,
+      }),
+      "session.close": async () => ({ closed: true }),
+    })
+    const adapter = new HermesServerAdapter(router)
+
+    await expect(adapter.discardSession("researcher", "draft")).resolves.toBe(
+      discarded
+    )
+    expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+      discarded ? [{ session_id: "live-draft" }] : []
+    )
+  })
+
+  it("finds a draft Hermes restarted out of gone, writing its key no row", async () => {
+    // Restarted, Hermes holds no live draft for the key: a lazy resume finds
+    // it gone, and any other writes the key an empty row and opens it
+    // (`_resume_locate`, tui_gateway/methods_session.py).
+    const rows: unknown[] = []
+    const router = rpcRouter({
+      "session.resume": async (params) => {
+        if (params.lazy === true)
+          throw new HermesRpcRejectedError(4007, "session not found")
+        rows.push(params.session_id)
+        return {
+          session_id: "live-draft",
+          session_key: "draft",
+          message_count: 0,
+          messages: [],
+          info: { model: "contract-model" },
+          running: false,
+        }
+      },
+    })
+    const adapter = new HermesServerAdapter(router)
+
+    const answered = await adapter.discardSession("researcher", "draft").then(
+      (discarded) => discarded,
+      (cause: unknown) => adapter.publicError(cause)?.kind
+    )
+
+    expect(answered).toBe("gone")
+    expect(rows).toEqual([])
+    expect(router.calls("session.close")).toEqual([])
+  })
+
   describe("retained failed turn", () => {
     const inflight = {
       user: "Summarize the filing",

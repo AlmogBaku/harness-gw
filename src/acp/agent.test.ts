@@ -4,7 +4,7 @@ import {
   RequestError,
   type RequestPermissionResponse,
   type ResumeSessionRequest,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
@@ -21,6 +21,7 @@ import {
   HGW_REPLAY_BEFORE,
   HGW_REPLAY_POSITION,
   HgwHistoryCursorSchema,
+  HgwSessionSearchResponseSchema,
   formatArtifactUri,
   type HgwActivityNotification,
 } from "../../protocol/acp"
@@ -34,6 +35,7 @@ import {
 import {
   ADMISSION_DEADLINE_MS,
   READING_BACKOFF,
+  SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
 } from "../core/limits"
 import {
@@ -47,6 +49,7 @@ import { translateHistory } from "./translate/history"
 import { invalidParams, notFound } from "./validation"
 import {
   AGENT,
+  CAPABILITIES,
   CONNECTION,
   CREATED,
   FORKED,
@@ -80,6 +83,21 @@ import {
   waitFor,
   withoutStates,
 } from "./test-harness"
+import { connectGuest, GUEST_REF } from "../guest/test-utils/guest-browser"
+
+/**
+ * The setup an operator's answer carries for the harness's Session: its
+ * model options and commands, and its capabilities in `_meta.hgw`.
+ */
+const ANSWERED_SETUP = {
+  configOptions: [
+    expect.objectContaining({ configId: "model", currentValue: "sonnet" }),
+  ],
+  availableCommands: [
+    { type: "command", name: "plan", description: "Draft a plan" },
+  ],
+  _meta: { [HGW_META_KEY]: { capabilities: CAPABILITIES } },
+}
 
 /** Every `_meta.hgw.sequence` the recorded run-stream updates carry, in order. */
 function sequencesOf(recorder: Recorder) {
@@ -247,7 +265,7 @@ describe("AOS ACP agent", () => {
       cwd: "/",
     })
 
-    expect(forked).toEqual({ sessionId: FORKED })
+    expect(forked).toEqual({ sessionId: FORKED, ...ANSWERED_SETUP })
     expect(test.forkSession).toHaveBeenCalledWith(AGENT, SESSION)
     await test.recorder.wait(
       (entry) =>
@@ -302,12 +320,15 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("answers a created Session's id alone and joins its creator to the Session's row, commands, model options and usage", async () => {
+  it("answers a created Session's id and setup, and joins its creator to the Session's row, commands, model options and usage, after the answer", async () => {
     const test = await harness()
 
     const created = await test.create()
+    const answeredAfter = updates(test.recorder).length
 
-    expect(created).toEqual({ sessionId: CREATED })
+    expect(created).toEqual({ sessionId: CREATED, ...ANSWERED_SETUP })
+    // ACP has initial state in the answer rather than in updates before it.
+    expect(answeredAfter).toBe(0)
     await test.recorder.wait(
       () => updates(test.recorder).length === 4,
       "the created Session's readings"
@@ -321,7 +342,9 @@ describe("AOS ACP agent", () => {
         sessionId: CREATED,
         update: {
           sessionUpdate: "available_commands_update",
-          availableCommands: [{ name: "plan", description: "Draft a plan" }],
+          availableCommands: [
+            { type: "command", name: "plan", description: "Draft a plan" },
+          ],
         },
       },
       {
@@ -359,7 +382,135 @@ describe("AOS ACP agent", () => {
         },
       },
     ])
+    // The answer's one read of each seeds the readings its creator joins.
+    expect(test.faults.calls("models")).toHaveLength(1)
+    expect(test.faults.calls("workspaceCapabilities")).toHaveLength(1)
     test.close()
+  })
+
+  it("answers a create whose model read fails with no config options, and sends them once its readings read them", async () => {
+    const test = await harness()
+    test.faults.failOnce("models")
+
+    const created = await test.create()
+
+    // The gateway holds no model reading for a new Session, so the answer
+    // has none to tell; the commands it read still travel.
+    expect(created).toEqual({
+      sessionId: CREATED,
+      availableCommands: ANSWERED_SETUP.availableCommands,
+      _meta: ANSWERED_SETUP._meta,
+    })
+    const followed = await test.recorder.wait(
+      (entry) => JSON.stringify(entry.params).includes("config_option_update"),
+      "the created Session's model options"
+    )
+    expect(followed.params).toMatchObject({
+      update: { configOptions: ANSWERED_SETUP.configOptions },
+    })
+    expect(test.faults.calls("models")).toHaveLength(2)
+    test.close()
+  })
+
+  it("answers a create without waiting out a slow model read, whose options follow once it lands, read once", async () => {
+    const asked = Promise.withResolvers<void>()
+    const read = gate()
+    const test = await harness({
+      beforeModels: () => {
+        asked.resolve()
+        return read.held
+      },
+    })
+    useUsageTimers()
+    try {
+      let answer: unknown
+      void test.create().then((created) => (answer = created))
+      await asked.promise
+
+      await vi.advanceTimersByTimeAsync(SETUP_READ_MS - 1)
+      expect(answer).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(answer).toEqual({
+        sessionId: CREATED,
+        availableCommands: ANSWERED_SETUP.availableCommands,
+        _meta: ANSWERED_SETUP._meta,
+      })
+      // It lands before its creator's readings join, the tick after the
+      // answer, and they take it as read.
+      read.release()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(
+        updates(test.recorder).filter(
+          ({ update }) => update.sessionUpdate === "config_option_update"
+        )
+      ).toMatchObject([
+        { update: { configOptions: ANSWERED_SETUP.configOptions } },
+      ])
+      expect(test.faults.calls("models")).toHaveLength(1)
+      test.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("lists a created Session to nobody until a prompt or the operator's update reaches it, and frees one closed unprompted once a guest on it leaves too", async () => {
+    // The guest's invitation reaches the Session the operator creates.
+    const test = await harness({ invited: CREATED })
+    const ids = async () =>
+      [
+        ...(await test.agent.request(methods.agent.session.list, {})).sessions,
+        ...HgwSessionSearchResponseSchema.parse(
+          await test.agent.request(HGW_METHODS.sessions.search, {
+            _meta: { [HGW_META_KEY]: { query: "Untitled" } },
+          })
+        ).sessions,
+      ].map(({ sessionId }) => sessionId)
+    await test.create()
+    expect(await ids()).not.toContain(CREATED)
+    // A guest on the Session, under its invitation's name, holds it by its
+    // native key through the creator's close.
+    const guest = await connectGuest(test)
+    await open(guest, { sessionId: GUEST_REF })
+    const close = (browser: Pick<Browser, "agent">, sessionId: string) =>
+      browser.agent.request(methods.agent.session.close, { sessionId })
+
+    await close(test, CREATED)
+    expect(test.discardSession).not.toHaveBeenCalled()
+    await close(guest, GUEST_REF)
+
+    expect(test.discardSession).toHaveBeenCalledTimes(1)
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+      })
+    ).rejects.toMatchObject({ code: notFound().code })
+
+    // A Session a prompt reached is a conversation, and one the operator
+    // renamed (an OpenCode invitation finds its Session by its title) is kept
+    // on purpose: each is listed, and kept once closed.
+    for (const keep of [
+      (browser: Browser) => prompt(browser, "Hello", CREATED),
+      (browser: Browser) =>
+        browser.agent.request(HGW_METHODS.session.update, {
+          sessionId: CREATED,
+          title: "aos-invite:ref-1",
+        }),
+    ]) {
+      const kept = await harness()
+      await kept.create()
+      await keep(kept)
+      expect(
+        (await kept.agent.request(methods.agent.session.list, {})).sessions
+      ).toContainEqual(expect.objectContaining({ sessionId: CREATED }))
+      await kept.agent.request(methods.agent.session.close, {
+        sessionId: CREATED,
+      })
+      expect(kept.discardSession).not.toHaveBeenCalled()
+      kept.close()
+    }
+    test.close()
+    guest.close()
   })
 
   it("creates one Session for a repeated client id and refuses the id for another create", async () => {
@@ -564,10 +715,16 @@ describe("AOS ACP agent", () => {
       replayFrom: { type: "start" },
     })
 
-    // The answer says only where the replay ended; the row and the model
-    // options follow it as updates.
+    // The answer carries the setup and where the replay ended; the row
+    // follows it as an update.
     expect(resumed).toEqual({
-      _meta: { [HGW_META_KEY]: { history: expect.any(Object) } },
+      ...ANSWERED_SETUP,
+      _meta: {
+        [HGW_META_KEY]: {
+          ...ANSWERED_SETUP._meta[HGW_META_KEY],
+          history: expect.any(Object),
+        },
+      },
     })
     expect(updates(test.recorder)[0]).toMatchObject({
       sessionId: SESSION,
@@ -933,6 +1090,24 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
+  it("reads a resume's setup beside its replay, and answers with it after the replay", async () => {
+    const page = gate()
+    const test = await harness({ beforeHistory: () => page.held })
+    await test.list()
+
+    const resumed = test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+    })
+    await waitFor(() => expect(test.faults.calls("models")).toHaveLength(1))
+    expect(test.faults.calls("workspaceCapabilities")).toHaveLength(1)
+    page.release()
+
+    expect(await resumed).toMatchObject(ANSWERED_SETUP)
+    test.close()
+  })
+
   it("defers the reading a resumed Session cannot take yet", async () => {
     const test = await harness({ context: coldWindow(3) })
     await test.list()
@@ -1182,6 +1357,7 @@ describe("AOS ACP agent", () => {
       sessionId: SESSION,
       archived: true,
     })
+    await settled()
 
     expect(test.updateSession).toHaveBeenCalledWith(AGENT, SESSION, {
       archived: true,
@@ -1192,6 +1368,7 @@ describe("AOS ACP agent", () => {
       sessionId: SESSION,
       title: "Renamed",
     })
+    await settled()
 
     // A title leaves the catalog's membership and order alone.
     expect(relists(test.recorder)).toHaveLength(1)
@@ -2752,25 +2929,56 @@ describe("Session rooms", () => {
     test.close()
   })
 
-  it("sends a rewind with no text as the turn it replaces", async () => {
-    const test = await harness({ providerIds: true })
-    await test.list()
+  // A rewind resends the blocks of the message it replaces, whose files the
+  // turn re-attaches from the row it replaces.
+  const resentLink = {
+    type: "resource_link" as const,
+    uri: formatArtifactUri("notes"),
+    name: "notes.txt",
+  }
+  it.each([
+    [
+      "a Retry of attachments alone",
+      [resentLink],
+      { rewindSourceId: "user-1" },
+      "",
+    ],
+    [
+      "a rewind with text",
+      [{ type: "text" as const, text: "Summarize" }, resentLink],
+      { rewindSourceId: "user-1" },
+      "Summarize",
+    ],
+    [
+      "a prompt that is no rewind",
+      [{ type: "text" as const, text: "Summarize" }, resentLink],
+      {},
+      `Summarize\n[notes.txt](${resentLink.uri})`,
+    ],
+  ])(
+    "sends %s as its text, a rewind without the links it resent",
+    async (_label, blocks, meta, text) => {
+      const test = await harness({ providerIds: true })
+      await test.list()
 
-    await prompt(test, [], SESSION, { rewindSourceId: "user-1" })
+      await prompt(test, blocks, SESSION, meta)
 
-    await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
-    expect(test.start.mock.calls[0]?.[1]).toMatchObject({
-      prompt: "",
-      rewindSourceId: "user-1",
-    })
-    test.close()
-  })
+      await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
+      expect(test.start.mock.calls[0]?.[1]).toMatchObject({
+        prompt: text,
+        ...meta,
+      })
+      test.close()
+    }
+  )
 
   it("refuses a prompt with neither text nor attachments", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
 
-    await expect(prompt(test, [])).rejects.toMatchObject(INVALID_PARAMS)
+    await expect(
+      prompt(test, [{ type: "text", text: "" }])
+    ).rejects.toMatchObject(INVALID_PARAMS)
     expect(test.start).not.toHaveBeenCalled()
     test.close()
   })
@@ -3568,6 +3776,11 @@ const HistoryReplySchema = z.object({
   _meta: z.object({ hgw: z.object({ history: HgwHistoryCursorSchema }) }),
 })
 
+/** The history cursor a resume or page answer reports. */
+function historyOf(answer: unknown) {
+  return HistoryReplySchema.parse(answer)._meta.hgw.history
+}
+
 /** Reads the page older than `cursor`, as a browser scrolling back does. */
 function older(
   browser: Browser,
@@ -3705,9 +3918,9 @@ describe("History pages", () => {
     const page = await older(test, cursorOf(5))
 
     const sent = pageUpdates(test.recorder, from)
-    expect(page).toEqual({
-      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
-    })
+    expect(historyOf(page)).toEqual({ nextCursor: cursorOf(10) })
+    // A page read is a resume, whose answer restates the setup.
+    expect(page).toMatchObject(ANSWERED_SETUP)
     expect(test.history).toHaveBeenLastCalledWith(AGENT, SESSION, 5, 5)
     expect(sent.map((update) => update.messageId)).toEqual(
       conversation(12)
@@ -3730,7 +3943,7 @@ describe("History pages", () => {
     const last = test.recorder.entries.length
     const oldest = await older(test, cursorOf(10))
 
-    expect(oldest).toEqual({ _meta: { [HGW_META_KEY]: { history: {} } } })
+    expect(historyOf(oldest)).toEqual({})
     expect(pageUpdates(test.recorder, last)).toHaveLength(2)
     test.close()
   })
@@ -3903,8 +4116,8 @@ describe("History pages", () => {
       code: notFound().code,
     })
     await test.create()
-    await expect(older(test, cursorOf(5), CREATED)).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { nextCursor: cursorOf(10) } } },
+    expect(historyOf(await older(test, cursorOf(5), CREATED))).toEqual({
+      nextCursor: cursorOf(10),
     })
     await open(test)
     await test.agent.request(methods.agent.session.close, {
@@ -3947,8 +4160,8 @@ describe("History pages", () => {
     await test.list()
     await open(test)
 
-    await expect(older(test, cursorOf(18))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
+    expect(historyOf(await older(test, cursorOf(18)))).toEqual({
+      truncated: true,
     })
     await expect(older(test, cursorOf(20))).rejects.toMatchObject(
       INVALID_PARAMS
@@ -3962,8 +4175,8 @@ describe("History pages", () => {
     })
     await cut.list()
     await open(cut)
-    await expect(older(cut, cursorOf(10))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
+    expect(historyOf(await older(cut, cursorOf(10)))).toEqual({
+      truncated: true,
     })
     // A runtime at its reach may still count rows past it; no cursor leads there.
     cut.history.mockResolvedValueOnce({
@@ -3975,8 +4188,8 @@ describe("History pages", () => {
       nextOffset: 6,
       truncated: true,
     })
-    await expect(older(cut, cursorOf(5))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: { truncated: true } } },
+    expect(historyOf(await older(cut, cursorOf(5)))).toEqual({
+      truncated: true,
     })
     cut.close()
   })
@@ -3998,9 +4211,7 @@ describe("History pages", () => {
       nextOffset: 5,
     })
 
-    await expect(older(test, cursorOf(5))).resolves.toEqual({
-      _meta: { [HGW_META_KEY]: { history: {} } },
-    })
+    expect(historyOf(await older(test, cursorOf(5)))).toEqual({})
     test.close()
   })
 

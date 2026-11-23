@@ -110,6 +110,8 @@ export async function createHermesRuntime(
       mcpServerOverrides: dependencies.mcpServerOverrides,
     }),
     limits,
-    logger
+    logger,
+    // The draft a create left is held as long as Hermes holds an idle one.
+    config.sessionIdleMs
   )
 }

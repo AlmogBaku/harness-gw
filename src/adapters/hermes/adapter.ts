@@ -315,6 +315,16 @@ function isUnpersistedDraft(
   )
 }
 
+/** Whether a `session.resume` answer says a turn of the Session is live. */
+function resumedRunning(resumed: NativeRecord | undefined) {
+  return (
+    resumed?.running === true ||
+    resumed?.status === "working" ||
+    resumed?.status === "waiting" ||
+    resumed?.status === "starting"
+  )
+}
+
 /** The `ui_meta` namespaces AOS writes: visibility, and the avatar and mute. */
 const UI_META_KEYS = ["hermes-bots", "aos"] as const
 type UiMetaKey = (typeof UI_META_KEYS)[number]
@@ -1116,14 +1126,8 @@ export class HermesServerAdapter implements ServerRuntime {
    * `session.resume` payload the registry recorded.
    */
   #resumedRunning(agentId: string, sessionId: string) {
-    const resumed = this.#attachmentInfo.get(
-      attachmentInfoKey(agentId, sessionId)
-    )
-    return (
-      resumed?.running === true ||
-      resumed?.status === "working" ||
-      resumed?.status === "waiting" ||
-      resumed?.status === "starting"
+    return resumedRunning(
+      this.#attachmentInfo.get(attachmentInfoKey(agentId, sessionId))
     )
   }
 
@@ -2373,6 +2377,45 @@ export class HermesServerAdapter implements ServerRuntime {
       session_id: storedId,
       profile,
     })
+  }
+
+  /**
+   * Frees a Session this gateway created and never prompted. Hermes lists no
+   * Session before its first turn and keeps such a draft only in its live
+   * Session, so closing that frees it. A lazy resume says whether it is still
+   * that draft, and writes nothing: Hermes answers it from the live draft,
+   * and finds a key it holds neither a row nor a live draft for gone, where
+   * any other resume writes that key an empty row (`_resume_locate`). One
+   * Hermes since stored, or runs, is kept.
+   */
+  async discardSession(profile: string, storedId: string) {
+    let resumed: unknown
+    try {
+      resumed = await retryTransient(
+        () =>
+          this.transport.request("session.resume", {
+            session_id: storedId,
+            profile,
+            lazy: true,
+            omit_messages: true,
+          }),
+        this.#retry
+      )
+    } catch (error) {
+      if (isSessionGone(error))
+        throw new HermesSessionGoneError({ cause: error })
+      throwUnavailable(error)
+    }
+    if (
+      !isRecord(resumed) ||
+      !validLiveSessionId(resumed.session_id) ||
+      !isUnpersistedDraft(resumed, profile, storedId) ||
+      resumedRunning(resumed)
+    )
+      return false
+    await this.#closeNativeSession(resumed.session_id)
+    this.#attachments.invalidate(resumed.session_id)
+    return true
   }
 
   /** Renames the Session through its live binding, rebound once if stale. */

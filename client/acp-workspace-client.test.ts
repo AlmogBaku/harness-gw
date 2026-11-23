@@ -2,26 +2,16 @@ import type {
   SessionConfigOption,
   SessionInfo,
   SessionUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
-import type { z } from "zod"
 
-import {
-  INTERACTION_PROTOCOL,
-  type AgentCatalogEntry,
-  type RuntimeInfo,
-} from "../protocol"
-import {
-  HGW_METHODS,
-  HGW_META_KEY,
-  HGW_PLAN_ID,
-  type HgwAvailableCommandsMetaSchema,
-} from "../protocol/acp"
+import { type AgentCatalogEntry, type RuntimeInfo } from "../protocol"
+import { HGW_METHODS, HGW_META_KEY, HGW_PLAN_ID } from "../protocol/acp"
 
 import { useFakeClock } from "../test/support/fake-clock"
 
 import type { SessionMetadata } from "./workspace"
-import { sessionCapabilities } from "./test-capabilities"
+import { composerCapabilities } from "./test-capabilities"
 import { createAcpWorkspaceClient } from "./acp-workspace-client"
 import type {
   AcpConnection,
@@ -36,59 +26,8 @@ const UPDATED_AT = "2026-09-19T10:00:00.000Z"
 /** A Session no catalog page this fake answers with has described. */
 const UNLISTED_SESSION_ID = "session-2"
 
-type AcpCapabilities = z.infer<
-  typeof HgwAvailableCommandsMetaSchema
->["capabilities"]
-
 const unavailable = { status: "unavailable", reason: "not-supported" } as const
 const available = { status: "available" } as const
-
-function capabilities(): AcpCapabilities {
-  return sessionCapabilities({
-    workspace: {
-      models: {
-        status: "available",
-        scope: "session",
-        selection: "native-session",
-        choices: "provider-reported",
-      },
-      context: {
-        status: "available",
-        scope: "session",
-        source: "provider-usage-or-estimate",
-        breakdown: "provider-categories",
-      },
-    },
-    interactions: {
-      steering: {
-        status: "available",
-        scope: "active-turn",
-        semantics: "visible-user-message",
-        input: "text",
-        fallback: "provider-queue",
-      },
-      rewind: { status: "available", scope: "user-turn" },
-      approvals: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        choices: [{ value: "once", scope: "request" }],
-        maxPending: 8,
-      },
-      questions: {
-        status: "available",
-        protocol: INTERACTION_PROTOCOL,
-        scope: "turn",
-        answerModes: ["single", "multiple", "free-text"],
-        cancellation: "native-empty-answer",
-        maxQuestions: 8,
-        maxChoicesPerQuestion: 8,
-        maxAnswerValuesPerQuestion: 8,
-        maxStringBytes: 4_096,
-      },
-    },
-  })
-}
 
 function runtimeInfo(
   capabilities: Partial<RuntimeInfo["capabilities"]> = {}
@@ -238,7 +177,7 @@ function createFakeConnection() {
       emit(
         sessionId,
         { sessionUpdate: "available_commands_update", availableCommands: [] },
-        { capabilities: capabilities() }
+        { capabilities: composerCapabilities() }
       )
       emit(
         sessionId,
@@ -315,6 +254,9 @@ function createFakeConnection() {
       if (configId === "session-model") model = value
       else effort = value
       return configOptions(model, effort)
+    },
+    async closeSession(sessionId) {
+      record("closeSession", sessionId)
     },
     async deleteSession(sessionId) {
       record("deleteSession", sessionId)
@@ -1188,9 +1130,11 @@ describe("ACP workspace client", () => {
     emitUpdate(
       {
         sessionUpdate: "available_commands_update",
-        availableCommands: [{ name: "plan", description: "Plan the work" }],
+        availableCommands: [
+          { type: "command", name: "plan", description: "Plan the work" },
+        ],
       },
-      { capabilities: capabilities() }
+      { capabilities: composerCapabilities() }
     )
     emitUpdate({ sessionUpdate: "usage_update", used: 120, size: 1_000 })
 
@@ -1407,7 +1351,7 @@ describe("ACP workspace client", () => {
       setListed({
         ...listEntry(),
         updatedAt: newerAt,
-      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
+      } as import("@agentclientprotocol/sdk/experimental/v2/unstable").SessionInfo)
       const [first] = await client.getSessionMetadata([SESSION_ID])
       expect(first?.updatedAt).toBe(newerAt)
 
@@ -1415,7 +1359,7 @@ describe("ACP workspace client", () => {
       setListed({
         ...listEntry(),
         updatedAt: "2026-09-19T10:00:00Z",
-      } as import("@agentclientprotocol/sdk/experimental/v2").SessionInfo)
+      } as import("@agentclientprotocol/sdk/experimental/v2/unstable").SessionInfo)
       await client.listSessions()
 
       const [after] = await client.getSessionMetadata([SESSION_ID])

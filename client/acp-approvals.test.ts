@@ -2,7 +2,7 @@ import type {
   CreateElicitationRequest,
   RequestPermissionRequest,
   RequestPermissionResponse,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { HGW_PERMISSION_KIND_SESSION } from "../protocol/acp"

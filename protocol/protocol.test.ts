@@ -1,4 +1,4 @@
-import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
+import { RequestError } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -958,13 +958,16 @@ describe("AOS v1 normalized protocol", () => {
 
   it("keeps every AOS error code clear of the codes ACP defines", () => {
     // Each static builder the SDK ships is one ACP error, so an SDK that adds a
-    // code inside the hgw block fails here.
+    // code inside the hgw block fails here. A builder that takes a requested
+    // version and the supported ones is given those.
     const builders = RequestError as unknown as Record<string, unknown>
     const acpCodes = Object.getOwnPropertyNames(RequestError).flatMap(
       (name) => {
         const builder = builders[name]
         const built: unknown =
-          typeof builder === "function" ? builder.call(RequestError) : undefined
+          typeof builder === "function"
+            ? builder.call(RequestError, 1, [2])
+            : undefined
         return built instanceof RequestError ? [built.code] : []
       }
     )

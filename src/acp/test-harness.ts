@@ -11,7 +11,7 @@ import {
   type RequestPermissionResponse,
   type ResumeSessionRequest,
   type UpdateSessionNotification,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { expect, vi } from "vitest"
 import { z } from "zod"
 
@@ -644,6 +644,8 @@ export type HarnessOptions = {
   translateHistory?: Translators["translateHistory"]
   /** Gives provider Sessions ids of their own, as a real runtime does. */
   providerIds?: boolean
+  /** The public id of the Session every invitation addresses; the seeded one by default. */
+  invited?: string
   /** The runtime's translation hints; absent stands for the neutral reading. */
   translation?: ServerRuntimeTranslation
   /** Whether the client pages older history, as the AOS browser does. */
@@ -732,6 +734,11 @@ export async function harness(options: HarnessOptions = {}) {
   const deleteSession = vi.fn(async (_agentId: string, sessionId: string) => {
     rows.delete(sessionId)
   })
+  // A Session no prompt reached holds nothing, so the runtime frees it.
+  const discardSession = vi.fn(async (_agentId: string, sessionId: string) => {
+    rows.delete(sessionId)
+    return true
+  })
   const createSession = vi.fn(async (agentId: string, title?: string) => {
     rows.set(
       CREATED,
@@ -795,9 +802,9 @@ export async function harness(options: HarnessOptions = {}) {
   const runtime: ServerRuntime = {
     turns: engine,
     ...(options.translation ? { translation: options.translation } : {}),
-    // Every invitation in this harness addresses the seeded Session.
+    // Every invitation in this harness addresses one Session.
     resolveInvitedSession: async () => ({
-      providerSessionId: providerId(SESSION),
+      providerSessionId: providerId(options.invited ?? SESSION),
       created: false,
     }),
     resolveProviderSessionId: (_agentId, publicSessionId) =>
@@ -818,6 +825,7 @@ export async function harness(options: HarnessOptions = {}) {
     ...(options.childHistory ? { childHistory: options.childHistory } : {}),
     updateSession,
     deleteSession,
+    discardSession,
     workspaceCapabilities: async () => options.capabilities ?? CAPABILITIES,
     models: async () => {
       await options.beforeModels?.()
@@ -1050,6 +1058,7 @@ export async function harness(options: HarnessOptions = {}) {
     forkSession,
     updateSession,
     deleteSession,
+    discardSession,
     updateModel,
     updateAgent,
     listAllSessions,

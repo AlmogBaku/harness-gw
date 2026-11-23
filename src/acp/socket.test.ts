@@ -109,6 +109,8 @@ describe("ACP WebSocket shim", () => {
     expect(closed).toEqual([{ code: 1008, reason: "ACP rate exceeded" }])
   })
 
+  // The SDK writes no batch, but an array written all the same is made
+  // public entry by entry: redaction fails closed.
   it("writes each error reply, batched or not, as its public code alone", () => {
     const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
     const unavailable = {

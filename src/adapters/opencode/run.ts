@@ -320,7 +320,8 @@ function validateSessionOwner(value: unknown, scope: SessionScope) {
     throw new Error("Session does not belong to this Agent")
 }
 
-function isSessionActive(value: unknown, sessionId: string) {
+/** Whether OpenCode's running set, as `session.active` answers it, names it. */
+export function isSessionActive(value: unknown, sessionId: string) {
   const envelope = record(value)
   const active = record(envelope?.data)
   if (!active) throw new OpenCodeClientError("invalid_response")

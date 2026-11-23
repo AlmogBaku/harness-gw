@@ -1,4 +1,4 @@
-import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2"
+import type { SessionInfo } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   backoffDelay,
@@ -424,6 +424,12 @@ export function createAcpWorkspaceClient({
       adopt(created.sessionId, agentId)
       return { sessionId: created.sessionId }
     },
+    /**
+     * Ends a Session nothing will use, as an abandoned draft's, stopping its
+     * work; one the gateway no longer has resolves as closed. A hold on it
+     * stays the holder's to release.
+     */
+    closeSession: (sessionId: string) => connection.closeSession(sessionId),
     subscribeSession,
     async markSessionRead(sessionId: string) {
       store.setUnread(sessionId, false)

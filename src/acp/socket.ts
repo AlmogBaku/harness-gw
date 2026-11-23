@@ -1,5 +1,5 @@
 import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
-import { methods } from "@agentclientprotocol/sdk/experimental/v2"
+import { methods } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   ACP_PROTOCOL_VERSION,
@@ -227,9 +227,9 @@ function requestIdOf(data: string): string | number | undefined {
 }
 
 /**
- * A frame whose `initialize`, alone or in a batch, asks for a version, with
- * that version set to 2, so the SDK answers the one version it serves rather
- * than refusing the handshake. Every other frame is passed on untouched.
+ * A frame whose `initialize` asks for a version, with that version set to 2,
+ * so the SDK answers the one version it serves rather than refusing the
+ * handshake. Every other frame is passed on untouched.
  */
 function askingVersion2(data: string) {
   let frame: unknown
@@ -238,29 +238,24 @@ function askingVersion2(data: string) {
   } catch {
     return data
   }
-  const entries: unknown[] = Array.isArray(frame) ? frame : [frame]
-  let asked = false
-  for (const entry of entries) {
-    if (typeof entry !== "object" || entry === null) continue
-    const { method, params } = entry as { method?: unknown; params?: unknown }
-    if (
-      method !== methods.agent.initialize ||
-      typeof params !== "object" ||
-      params === null ||
-      Array.isArray(params)
-    )
-      continue
-    const { protocolVersion } = params as { protocolVersion?: unknown }
-    if (
-      !Number.isInteger(protocolVersion) ||
-      protocolVersion === ACP_PROTOCOL_VERSION
-    )
-      continue
-    ;(params as { protocolVersion: number }).protocolVersion =
-      ACP_PROTOCOL_VERSION
-    asked = true
-  }
-  return asked ? JSON.stringify(frame) : data
+  if (typeof frame !== "object" || frame === null) return data
+  const { method, params } = frame as { method?: unknown; params?: unknown }
+  if (
+    method !== methods.agent.initialize ||
+    typeof params !== "object" ||
+    params === null ||
+    Array.isArray(params)
+  )
+    return data
+  const { protocolVersion } = params as { protocolVersion?: unknown }
+  if (
+    !Number.isInteger(protocolVersion) ||
+    protocolVersion === ACP_PROTOCOL_VERSION
+  )
+    return data
+  ;(params as { protocolVersion: number }).protocolVersion =
+    ACP_PROTOCOL_VERSION
+  return JSON.stringify(frame)
 }
 
 function frameSize(raw: string | Uint8Array) {
@@ -270,8 +265,9 @@ function frameSize(raw: string | Uint8Array) {
 }
 
 /**
- * One serialized frame, or each message of a batch, as `shown` makes it
- * public. Any other frame is written as it is.
+ * One serialized frame as `shown` makes it public. The SDK writes no batch,
+ * but its v2 entrypoints are experimental, so an array is made public entry
+ * by entry rather than passed on as it is.
  */
 function publicFrame(raw: string, shown: PublicErrors) {
   const frame = JSON.parse(raw) as unknown

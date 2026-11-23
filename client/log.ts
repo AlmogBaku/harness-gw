@@ -1,8 +1,8 @@
 import {
   methods,
-  type AnyWireMessage,
-  type WireStream,
-} from "@agentclientprotocol/sdk/experimental/v2"
+  type AnyMessage,
+  type Stream,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import pino from "pino/browser.js"
 
 import type { LogFields, Logger } from "../lifecycle"
@@ -100,22 +100,20 @@ export function frameFields(direction: "in" | "out", message: unknown) {
 }
 
 /** `stream` with one `acp.frame` debug line per message, each way. */
-export function loggedStream(stream: WireStream, logger: Logger): WireStream {
-  const log = (direction: "in" | "out", frame: AnyWireMessage) => {
-    for (const message of [frame].flat())
-      logger.debug(frameFields(direction, message), "acp.frame")
-  }
+export function loggedStream(stream: Stream, logger: Logger): Stream {
+  const log = (direction: "in" | "out", frame: AnyMessage) =>
+    logger.debug(frameFields(direction, frame), "acp.frame")
   const writer = stream.writable.getWriter()
   return {
     readable: stream.readable.pipeThrough(
-      new TransformStream<AnyWireMessage, AnyWireMessage>({
+      new TransformStream<AnyMessage, AnyMessage>({
         transform(frame, controller) {
           log("in", frame)
           controller.enqueue(frame)
         },
       })
     ),
-    writable: new WritableStream<AnyWireMessage>({
+    writable: new WritableStream<AnyMessage>({
       write(frame) {
         log("out", frame)
         return writer.write(frame)

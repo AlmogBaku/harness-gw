@@ -31,7 +31,7 @@ state. The client works only with the normalized surface.
 
 | Term            | Meaning                                                                                |
 | --------------- | -------------------------------------------------------------------------------------- |
-| ACP             | Agent Client Protocol v2 (`@agentclientprotocol/sdk/experimental/v2`)                  |
+| ACP             | Agent Client Protocol v2 (`@agentclientprotocol/sdk/experimental/v2/unstable`)         |
 | Client / agent  | The client end / the gateway end of the ACP socket                                     |
 | Session         | One conversation, identified by a public `sessionId` the client supplies               |
 | Resumed Session | A Session the client has resumed and not closed                                        |

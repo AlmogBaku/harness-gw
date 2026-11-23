@@ -7,7 +7,7 @@ import {
   type JsonRpcId,
   type NewSessionRequest,
   type ResumeSessionRequest,
-} from "@agentclientprotocol/sdk/experimental/v2"
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   createOwner,
@@ -58,6 +58,7 @@ import {
   isUnadvertisedBlock,
   promptParts,
   promptText,
+  withoutResentLinks,
 } from "./prompt-content"
 import {
   admits,
@@ -68,9 +69,14 @@ import {
   type CommandResults,
   type Middleware,
   type MemberCommands,
+  type MemberSetup,
   type WorkspaceEvent,
 } from "../core/member"
-import { createMemberEncoder, type ClientReply } from "./member-encoder"
+import {
+  createMemberEncoder,
+  setupAnswer,
+  type ClientReply,
+} from "./member-encoder"
 import { shownAnswers } from "./translate/requests"
 import type { AcpConnectionContext, HgwAcpAgentFactory } from "./types"
 import {
@@ -394,6 +400,32 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     return rows.filter((row) => folders.get(row.agentId) !== undefined)
   }
 
+  /**
+   * A setup answer's own fields, `_meta.hgw` beside the capabilities holding
+   * `meta` too: the setup is the member's, as its stack showed it.
+   */
+  function answered(setup: MemberSetup, meta: Record<string, unknown> = {}) {
+    const { meta: capabilities, ...lists } = setupAnswer(translators, setup)
+    return { ...lists, _meta: { [HGW_META_KEY]: { ...meta, ...capabilities } } }
+  }
+
+  /**
+   * Joins a Session the connection just created or forked, as its creator,
+   * and reads what the answer tells it. The join lands with `landCreated`.
+   */
+  function joinCreated(client: AgentContext, sessionId: string) {
+    return sessions.join(client, sessions.scope(sessionId)).setup()
+  }
+
+  /**
+   * Lands the creator's join as its answer goes out, past every layer of its
+   * stack: the row, and each reading again, follow the answer as updates, as
+   * ACP has initial state in the answer rather than in updates before it.
+   */
+  function landCreated(sessionId: string) {
+    sessions.membership(sessionId)?.joined()
+  }
+
   /** Whether this client reads older pages itself (`initialize`). */
   let clientPagesHistory = false
   /** The elicitation modes this client declared it answers (`initialize`). */
@@ -587,7 +619,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         throw invalidParams(
           `name the Agent, or connect to ${HGW_ACP_AGENTS_PATH}/<agentId>`
         )
-      const { sessionId } = await perform(
+      const { sessionId, setup } = await perform(
         "new",
         {
           agentId,
@@ -606,14 +638,12 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           )
           const sessionId = created.session.id
           sessions.remember([{ id: sessionId, agentId }])
-          // The row, capabilities and model options follow the answer as
-          // updates.
-          sessions.join(client, sessions.scope(sessionId)).joined()
-          return { sessionId }
+          return { sessionId, setup: await joinCreated(client, sessionId) }
         },
         requestId
       )
-      return { sessionId }
+      landCreated(sessionId)
+      return { sessionId, ...answered(setup) }
     }
   )
 
@@ -626,7 +656,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       // Only a runtime that forks is offered it.
       if (!context.channels.forks)
         throw RequestError.methodNotFound(methods.agent.session.fork)
-      const { sessionId } = await perform(
+      const { sessionId, setup } = await perform(
         "fork",
         { sessionId: params.sessionId },
         async (command) => {
@@ -637,14 +667,12 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           )
           const sessionId = forked.session.id
           sessions.remember([{ id: sessionId, agentId: scope.agentId }])
-          // The row, capabilities and model options follow the answer as
-          // updates.
-          sessions.join(client, sessions.scope(sessionId)).joined()
-          return { sessionId }
+          return { sessionId, setup: await joinCreated(client, sessionId) }
         },
         requestId
       )
-      return { sessionId }
+      landCreated(sessionId)
+      return { sessionId, ...answered(setup) }
     }
   )
 
@@ -732,7 +760,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       if (replay.from === "before") {
         const { cursor } = replay
         admit(method, "older-page", params)
-        const { page } = await perform(
+        const { page, setup } = await perform(
           "older-page",
           { sessionId: params.sessionId, cursor },
           async (command) => {
@@ -743,11 +771,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           },
           requestId
         )
-        return {
-          _meta: {
-            [HGW_META_KEY]: { history: historyCursor(page, maxOffset) },
-          },
-        }
+        return answered(setup, { history: historyCursor(page, maxOffset) })
       }
       admit(method, "resume", params)
       const meta = parseMeta(HgwSessionResumeMetaSchema, params._meta)
@@ -764,16 +788,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         (command) => resume(command, client, params),
         requestId
       )
-      const { history } = resumed
-      return {
-        _meta: {
-          [HGW_META_KEY]: {
-            ...(history === undefined
-              ? {}
-              : { history: historyCursor(history, maxOffset) }),
-          },
-        },
-      }
+      const { history, setup } = resumed
+      return answered(
+        setup,
+        history === undefined
+          ? {}
+          : { history: historyCursor(history, maxOffset) }
+      )
     }
   )
 
@@ -783,7 +804,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       admit(methods.agent.session.prompt, "send", params)
       const meta = parseMeta(HgwPromptMetaSchema, params._meta)
       if (params.prompt.some(isUnadvertisedBlock)) throw invalidParams()
-      const text = promptText(params.prompt)
+      const blocks =
+        meta.rewindSourceId === undefined
+          ? params.prompt
+          : withoutResentLinks(
+              params.prompt,
+              meta.attachmentStageId !== undefined
+            )
+      const text = promptText(blocks)
       // A turn of attachments alone carries no text: its stage supplies the turn,
       // or, for a rewind, the turn it replaces.
       if (
@@ -800,7 +828,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         "send",
         {
           sessionId: params.sessionId,
-          content: promptParts(params.prompt),
+          content: promptParts(blocks),
           text,
           ...meta,
         },
@@ -875,11 +903,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       async (command) => {
         const membership = sessions.membership(command.sessionId)
         if (!membership) throw notFound()
+        const { scope } = membership
         try {
           await membership.cancel()
         } finally {
           sessions.part(command.sessionId)
         }
+        // A Session no prompt reached, which nothing else holds, is freed now.
+        await context.channels.closed(scope)
       },
       requestId
     )

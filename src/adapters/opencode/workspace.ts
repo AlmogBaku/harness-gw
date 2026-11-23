@@ -20,10 +20,12 @@ import {
   openCodeAgentAvatar,
   parseOpenCodeAgent,
   parseOpenCodeAgentCatalog,
+  parseOpenCodeMessageCatalog,
   parseOpenCodeSession,
   parseOpenCodeSessionCatalog,
   type OpenCodeAgent,
 } from "./native-schemas"
+import { isSessionActive } from "./run"
 
 const MAX_PAGE_SIZE = 100
 const MAX_CATALOG_WINDOW = 1_000
@@ -62,6 +64,11 @@ type OpenCodeWorkspaceClient = {
       signal?: AbortSignal
     ): Promise<void>
     delete(sessionId: string, signal?: AbortSignal): Promise<void>
+    messages(
+      sessionId: string,
+      options?: { limit?: number; signal?: AbortSignal }
+    ): Promise<unknown>
+    active(signal?: AbortSignal): Promise<unknown>
   }
 }
 
@@ -427,6 +434,25 @@ export function createOpenCodeWorkspaceOperations(input: {
     async deleteSession(agentId: string, sessionId: string) {
       await readSession(agentId, sessionId)
       await input.client.sessions.delete(sessionId)
+    },
+
+    /**
+     * Deletes a Session this gateway created and never prompted, which
+     * OpenCode lists from its create, once its own reads show the Session
+     * holds no message and runs no turn; one that does is kept.
+     */
+    async discardSession(agentId: string, sessionId: string) {
+      await readSession(agentId, sessionId)
+      const [messages, active] = await Promise.all([
+        input.client.sessions.messages(sessionId, { limit: 1 }),
+        input.client.sessions.active(),
+      ])
+      const page = parseOpenCodeMessageCatalog(messages)
+      if (!page.success) throw new OpenCodeWorkspaceUnavailableError()
+      if (page.data.data.length > 0 || isSessionActive(active, sessionId))
+        return false
+      await input.client.sessions.delete(sessionId)
+      return true
     },
 
     async createSession(agentId: string) {

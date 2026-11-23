@@ -434,6 +434,17 @@ export interface ServerRuntime {
     agentId: string,
     providerSessionId: ProviderSessionId
   ): Promise<void>
+  /**
+   * Frees a Session this gateway created and never prompted, which nothing
+   * holds any more, so no list shows it again: the runtime closes or deletes
+   * it, as it keeps such a Session. Answers whether it did; a Session the
+   * runtime finds holding a message or running a turn is kept as it is.
+   * Absent where the runtime keeps every Session it creates.
+   */
+  discardSession?(
+    agentId: string,
+    providerSessionId: ProviderSessionId
+  ): Promise<boolean>
   workspaceCapabilities(
     agentId: string,
     publicSessionId: string

@@ -73,8 +73,11 @@ type Entry = {
   running: boolean
   /**
    * Hermes holds a row for this Session. An unsaved draft lives only in the
-   * live Session, so closing it natively would delete the draft; it is only
-   * ever dropped locally. Hermes commits a turn's history before it sends
+   * live Session, so closing it natively deletes the draft: its idle window
+   * here drops it only locally, since the registry cannot tell a draft its
+   * owner abandoned from one it will prompt. The gateway's core decides that
+   * for a draft it created, and frees it through the adapter's
+   * `discardSession`. Hermes commits a turn's history before it sends
    * `message.complete`, so a completed turn marks the draft saved.
    */
   saved: boolean
@@ -579,7 +582,8 @@ export class HermesAttachmentRegistry {
         // (typically a socket that never healed): Hermes reaps that orphan, so
         // The gateway neither re-arms forever nor closes it. An unsaved draft exists
         // only in its live Session, which Hermes keeps while the socket lives;
-        // closing it natively would delete the draft.
+        // closing it natively would delete the draft, which only the core's
+        // discard of a draft nobody prompted does.
         this.invalidate(liveSessionId)
         return
       }

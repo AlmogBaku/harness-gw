@@ -39,6 +39,8 @@ function hermesRuntime(): WireRuntime {
     // What `config.get` answers for `project`, never the profile row's `path`.
     folder: PROJECT_FOLDER,
     turn: hermes,
+    // `commands.catalog` lists `/branch` and its alias `/fork`.
+    commands: true,
     // Hermes finds an invited Session by its title.
     async invite(ref, said) {
       hermes.storeSession(inviteSessionKey(ref), said)
@@ -47,6 +49,8 @@ function hermesRuntime(): WireRuntime {
     rewinds: () => hermes.truncations().length,
     childReads: (childId) =>
       hermes.httpRequests(`/api/sessions/${childId}/messages`).length,
+    // Hermes frees a draft by closing its live Session.
+    discards: () => hermes.closedSessions().length,
   }
 }
 

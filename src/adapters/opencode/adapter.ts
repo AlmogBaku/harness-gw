@@ -412,6 +412,10 @@ export class OpenCodeServerAdapter implements ServerRuntime {
     await this.#workspace.deleteSession(agentId, sessionId)
   }
 
+  discardSession(agentId: string, sessionId: string) {
+    return this.#workspace.discardSession(agentId, sessionId)
+  }
+
   async workspaceCapabilities(agentId: string, publicSessionId: string) {
     await this.getSession(agentId, publicSessionId)
     const { agentVisibility, ...workspace } = this.#workspace.capabilities()

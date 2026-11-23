@@ -1,4 +1,4 @@
-import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2"
+import type { SessionUpdate } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import type { SessionHistoryResponse } from "../../../protocol"

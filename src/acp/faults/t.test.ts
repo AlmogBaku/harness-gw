@@ -1,4 +1,7 @@
-import { client, methods } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  client,
+  methods,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it } from "vitest"
 
 import {
@@ -22,6 +25,7 @@ import {
   READING_BACKOFF,
   RECONCILE_BACKOFF,
   UNCERTAINTY_DEADLINE_MS,
+  UNPROMPTED_IDLE_MS,
 } from "../../core/limits"
 import type { ServerTurnListener } from "../../core/runtime"
 import { createGuestConnection } from "../../guest/acp"
@@ -349,7 +353,8 @@ type Row = {
 }
 
 const ROWS: Row[] = [
-  // --- fails once: readings the membership owes retry on their backoff.
+  // --- fails once: a reading a setup answer failed to read is read again
+  // by the member's own readings as its join lands, with no backoff.
   {
     operation: "models",
     fault: "fails once",
@@ -359,20 +364,34 @@ const ROWS: Row[] = [
       await join(t, t.operator)
       await join(t, t.guest)
     },
-    bound: READING_BACKOFF.baseMs,
+    bound: 0,
     recovered(t) {
       expect(updatesOf(t.operator, "config_option_update")).toHaveLength(1)
       // Models are an operator feed a guest is not granted.
       expect(updatesOf(t.guest, "config_option_update")).toEqual([])
     },
+    // The answer's one read fails; the operator's readings take it again.
     calls: { models: 2 },
-    transitions: {
-      reading: [
-        ["reading", "backing-off"],
-        ["backing-off", "reading"],
-      ],
-    },
   },
+  {
+    operation: "workspaceCapabilities",
+    fault: "fails once",
+    stage: "connected",
+    async meet(t) {
+      t.test.faults.failOnce("workspaceCapabilities", unavailable())
+      await join(t, t.operator)
+      await join(t, t.guest)
+    },
+    bound: 0,
+    recovered(t) {
+      for (const member of members(t))
+        expect(updatesOf(member, "available_commands_update")).toHaveLength(1)
+    },
+    // Each member reads its own: the operator's answer fails and its
+    // readings take it again, and the guest's answer reads it once.
+    calls: { workspaceCapabilities: 3 },
+  },
+  // --- fails once: a reading the membership owes retries on its backoff.
   {
     operation: "context",
     fault: "fails once",
@@ -389,29 +408,6 @@ const ROWS: Row[] = [
       expect(updatesOf(t.guest, "usage_update")).toEqual([])
     },
     calls: { context: 2 },
-    transitions: {
-      reading: [
-        ["reading", "backing-off"],
-        ["backing-off", "reading"],
-      ],
-    },
-  },
-  {
-    operation: "workspaceCapabilities",
-    fault: "fails once",
-    stage: "connected",
-    async meet(t) {
-      t.test.faults.failOnce("workspaceCapabilities", unavailable())
-      await join(t, t.operator)
-      await join(t, t.guest)
-    },
-    bound: READING_BACKOFF.baseMs,
-    recovered(t) {
-      for (const member of members(t))
-        expect(updatesOf(member, "available_commands_update")).toHaveLength(1)
-    },
-    // Each member reads its own: the operator's twice, the guest's once.
-    calls: { workspaceCapabilities: 3 },
     transitions: {
       reading: [
         ["reading", "backing-off"],
@@ -1152,7 +1148,9 @@ describe("gateway fault table", () => {
       )
 
     for (const browser of t.browsers) browser.close()
-    await clock.advance(0)
+    // A Session a row created and never prompted is discarded once nothing
+    // has held it for its idle window.
+    await clock.advance(UNPROMPTED_IDLE_MS)
     assertLeakFree(t.gateway)
   })
 })

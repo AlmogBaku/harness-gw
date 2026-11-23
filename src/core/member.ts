@@ -327,13 +327,23 @@ export type MemberCommands = {
 
 export type CommandKind = keyof MemberCommands
 
+/**
+ * The readings a setup answer carries, as the member's stack shows them: one
+ * its stack hides, or none the gateway holds, is absent.
+ */
+export type MemberSetup = {
+  models?: SessionModelsResponse
+  capabilities?: WorkspaceCapabilities
+}
+
 /** What each command answers, before a transport encodes it. */
 export type CommandResults = {
   resume: {
     /** The page the resume replayed, from its start or to rebuild the view. */
     history?: SessionHistoryResponse
+    setup: MemberSetup
   }
-  "older-page": { page: SessionHistoryResponse }
+  "older-page": { page: SessionHistoryResponse; setup: MemberSetup }
   send: { messageId: string }
   steer: TurnSteerResponse
   stop: void
@@ -342,8 +352,8 @@ export type CommandResults = {
   focus: void
   list: { rows: readonly SessionRow[]; nextOffset?: number }
   search: { rows: readonly SessionRow[] }
-  new: { sessionId: string }
-  fork: { sessionId: string }
+  new: { sessionId: string; setup: MemberSetup }
+  fork: { sessionId: string; setup: MemberSetup }
   delete: void
   update: void
   "set-config": { models: SessionModelsResponse }

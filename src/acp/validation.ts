@@ -1,4 +1,4 @@
-import { RequestError } from "@agentclientprotocol/sdk/experimental/v2"
+import { RequestError } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import type { z } from "zod"
 
 import { HGW_JSONRPC_ERRORS, HGW_META_KEY } from "../../protocol/acp"

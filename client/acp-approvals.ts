@@ -1,4 +1,4 @@
-import type { RequestPermissionRequest } from "@agentclientprotocol/sdk/experimental/v2"
+import type { RequestPermissionRequest } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   HGW_META_KEY,

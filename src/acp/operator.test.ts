@@ -1,4 +1,7 @@
-import { methods, RequestError } from "@agentclientprotocol/sdk/experimental/v2"
+import {
+  methods,
+  RequestError,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { describe, expect, it, vi } from "vitest"
 import { z } from "zod"
 
@@ -669,6 +672,11 @@ describe("operator ACP listener", () => {
         type: "id",
         value: "opus",
       },
+      [methods.agent.session.archive]: child,
+      [methods.agent.session.unarchive]: child,
+      [methods.agent.session.status]: child,
+      [methods.agent.session.options]: { ...child, cwd: "/" },
+      [methods.agent.session.setTitle]: { ...child, title: "Renamed" },
       [HGW_METHODS.session.update]: { ...child, title: "Renamed" },
       [HGW_METHODS.session.focus]: child,
       [HGW_METHODS.session.part]: child,
