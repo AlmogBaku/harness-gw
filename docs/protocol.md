@@ -268,6 +268,13 @@ guest is shown its invitation's reference and never the native id behind it.
 `session/cancel`, `session/close`, `session/delete`, `session/set_config_option`
 (model → `category: "model"`, effort → `category: "thought_level"`).
 
+Both options are selects: a `session/set_config_option` names one of them,
+`type: "id"`, and a `value` it offers now, as the Session's model reading
+holds it while a member follows the Session and nothing has changed since, or
+else as one read of the runtime. Any other `configId`, `type` or `value`
+answers `-32602` and changes nothing. The thought level offered is the
+selected model's.
+
 A Session is **active** on a connection from a `session/new`, `session/fork`
 or `session/resume` there that succeeded until `session/close`,
 `_hgw/session/part`, or the connection's end; a resume that fails leaves a

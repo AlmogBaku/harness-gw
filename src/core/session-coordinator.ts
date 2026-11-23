@@ -1220,6 +1220,24 @@ export class SessionCoordinator {
   }
 
   /**
+   * The model options the Session offers now: what its reading holds while a
+   * member follows it and nothing changed since, or else one read.
+   */
+  async models(scope: SessionScope): Promise<SessionModelsResponse> {
+    return this.#command(
+      scope,
+      async () =>
+        this.#models.current(scopeKey(scope)) ??
+        SessionModelsResponseSchema.parse(
+          await this.options.readings.models(
+            scope.agentId,
+            scope.providerSessionId
+          )
+        )
+    )
+  }
+
+  /**
    * Writes one model choice and answers the model options a read after it
    * shows. Every subscriber is then owed the readings the switch moves, each
    * read afresh: the model options, and the usage, whose window belongs to

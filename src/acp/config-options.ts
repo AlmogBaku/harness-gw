@@ -1,6 +1,9 @@
-import type {
+import {
   SessionConfigOption,
-  SessionConfigSelectGroup,
+  type SessionConfigSelect,
+  type SessionConfigSelectGroup,
+  type SessionConfigSelectOption,
+  type SetSessionConfigOptionRequest,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import type { SessionModelsResponse } from "../../protocol"
@@ -73,3 +76,39 @@ export const configWriteOf = ((configId, value) => {
   if (configId === THOUGHT_CONFIG_ID) return { effortId: value }
   return undefined
 }) satisfies ConfigWriteOf
+
+/** Every value a select offers, whether flat or in groups. */
+function selectValues({ options }: SessionConfigSelect) {
+  const entries: ReadonlyArray<
+    SessionConfigSelectOption | SessionConfigSelectGroup
+  > = options
+  return entries.flatMap((entry) =>
+    "groupId" in entry ? entry.options.map(({ value }) => value) : [entry.value]
+  )
+}
+
+/**
+ * Whether `options` offers what a `session/set_config_option` request asks:
+ * an option its `configId` names, the value `type` that option takes, and one
+ * of its values. ACP refuses anything else with `-32602`, changing nothing.
+ */
+export function offers(
+  options: readonly SessionConfigOption[],
+  {
+    configId,
+    type,
+    value,
+  }: Pick<SetSessionConfigOptionRequest, "configId" | "type" | "value">
+) {
+  const option = options.find((offered) => offered.configId === configId)
+  if (!option) return false
+  if (SessionConfigOption.isSelect(option))
+    return (
+      type === "id" &&
+      typeof value === "string" &&
+      selectValues(option).includes(value)
+    )
+  if (SessionConfigOption.isBoolean(option))
+    return type === "boolean" && typeof value === "boolean"
+  return false
+}

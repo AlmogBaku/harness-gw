@@ -44,6 +44,7 @@ import type { Catalog } from "../core/catalog"
 import type { SessionRow } from "../core/session-rows"
 import type { PresenceReport } from "../push/presence"
 import { GATEWAY_VERSION } from "../version"
+import { offers } from "./config-options"
 import {
   createSessions,
   sessionInfoOf,
@@ -912,6 +913,12 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           const membership = sessions.membership(command.sessionId)
           if (!membership) throw sessionNotFound(command.sessionId)
           if (!command.write) throw invalidParams()
+          // ACP refuses a value the option does not offer, or a `type` it
+          // does not take, with invalid params, and changes nothing.
+          const offered = translators.configOptionsOf(
+            await context.channels.models(membership.scope)
+          )
+          if (!offers(offered, params)) throw invalidParams()
           return {
             models: await context.channels.switchModel(
               membership.scope,

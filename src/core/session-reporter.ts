@@ -393,6 +393,17 @@ export class SessionReporter<
     return read ? read.value : cell.last?.value
   }
 
+  /**
+   * What a cell someone follows holds while no change came since it was
+   * read: its own reads keep it current. `undefined` for any other.
+   */
+  current(key: string): T | undefined {
+    const cell = this.#cells.get(key)
+    return cell && cell.listeners.size > 0 && !cell.stale
+      ? cell.last?.value
+      : undefined
+  }
+
   close() {
     this.#unlink()
     for (const cell of this.#cells.values()) this.#dispose(cell)

@@ -1135,6 +1135,11 @@ export function createChannels(options: CreateChannelsOptions) {
       return coordinator.forkSession(scope)
     },
 
+    /** The model options the Session offers now, which a switch picks from. */
+    models(scope: SessionScope) {
+      return coordinator.models(scope)
+    },
+
     /**
      * Switches the Session's model. Every member hears the switch, and the
      * `membership` that asked for it once its answer is written.
