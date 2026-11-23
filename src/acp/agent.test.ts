@@ -1538,6 +1538,24 @@ describe("AOS ACP agent", () => {
     other.close()
   })
 
+  // A delete that fails changes nothing, as a failed close changes nothing.
+  it("keeps the deleter on the Session when its runtime refuses the delete", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await open(test)
+    test.deleteSession.mockRejectedValueOnce(new Error("Dashboard down"))
+
+    await expect(
+      test.agent.request(methods.agent.session.delete, { sessionId: SESSION })
+    ).rejects.toMatchObject({ code: RequestError.internalError().code })
+    // The deleter is still a member: it prompts, and its turn reaches it.
+    await prompt(test, "Summarize")
+    await waitFor(() => expect(test.start).toHaveBeenCalledOnce())
+    reply(test.sources[0], "Still here")
+    await test.recorder.wait(said("Still here"), "the turn's words")
+    test.close()
+  })
+
   it.each([
     {
       marks: "read at once, ending what this connection kept unread",

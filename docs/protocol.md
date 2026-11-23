@@ -328,15 +328,19 @@ connection; the Session's work and all other members continue.
 
 `session/delete` closes the Session first, as a close on every connection
 would: it stops the turn and waits, as a close does, until each member was
-shown how it ended, stops every background child still at work, and detaches
-this connection; then the runtime deletes the Session, and every other member
-is told it is gone with an `_hgw/error` `not_found` and detached. A delete
-whose Stop fails, or goes unconfirmed, answers as a close would and deletes
-nothing. A delete of a Session not known to this connection succeeds rather
-than returning not-found. The SDK client parts a Session its last listener
-left, after a 2 s grace, and closes one only when asked (`closeSession`),
-forgetting it at once with no part; as ACP asks, it takes a `-32002` answer to
-`session/close` or `session/delete` as success.
+shown how it ended, and stops every background child still at work; then the
+runtime deletes the Session, and once it holds it no longer, deleted or
+already gone, this connection is detached, as its close would detach it, and
+every other member is told it is gone with an `_hgw/error` `not_found` and
+detached. A delete whose Stop fails, or goes unconfirmed, answers as a close
+would and deletes nothing; one the runtime refuses answers that failure, and
+in either case the Session stays active on the connection, as after a failed
+close, so the delete may be sent again. A delete of a Session not known to
+this connection succeeds rather than returning not-found. The SDK client
+parts a Session its last listener left, after a 2 s grace, and closes one
+only when asked (`closeSession`), forgetting it at once with no part; as ACP
+asks, it takes a `-32002` answer to `session/close` or `session/delete` as
+success.
 
 A Session a `session/new` created is **unprompted** until the first prompt is
 sent to its runtime, whether or not the runtime confirms the start, or until

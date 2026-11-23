@@ -985,13 +985,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           // As ACP deletes a Session active anywhere: closed first, on every
           // connection, its turn stopped and each member shown how it ended,
           // and its background work stopped, so a runtime that refuses to
-          // delete a running Session is never asked to; this connection
-          // leaves it, as its close would, and then the delete tells every
-          // other member it is gone.
+          // delete a running Session is never asked to. Once the runtime
+          // holds it no longer, this connection leaves it, as its close
+          // would, and every other member is told it is gone; a delete that
+          // fails leaves this connection on it, as a failed close does.
           await context.channels.stopWork(scope)
-          sessions.part(command.sessionId)
           try {
-            await catalog.delete(scope)
+            await catalog.delete(scope, () => sessions.part(command.sessionId))
           } catch (cause) {
             if (
               publicCodeOf(publicRequestError(context.publicError, cause)) !==
