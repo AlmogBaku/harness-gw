@@ -1098,7 +1098,9 @@ describe("AOS ACP agent", () => {
     }
   )
 
-  it("restates the model options and context usage after a config option changes the model, once it is answered", async () => {
+  // ACP has the writer sent the switch's own update before its answer, and
+  // the changes that follow after it.
+  it("restates the model options to the browser that changed them before the answer, and context usage after it", async () => {
     const test = await harness()
     await test.list()
     await test.agent.request(methods.agent.session.resume, {
@@ -1117,17 +1119,21 @@ describe("AOS ACP agent", () => {
 
     // The window's size belongs to the model, so a switch owes a fresh reading.
     await usageOf(test, 2)
-    await test.recorder.wait(selects("opus"), "the switched model options")
+    await settled()
     const order = test.recorder.entries.map((entry) =>
       entry.method === "switch-answered"
         ? entry.method
         : selects("opus")(entry)
           ? "config_option_update"
-          : undefined
+          : JSON.stringify(entry.params).includes("usage_update")
+            ? "usage_update"
+            : undefined
     )
     expect(order.filter(Boolean)).toEqual([
-      "switch-answered",
+      "usage_update",
       "config_option_update",
+      "switch-answered",
+      "usage_update",
     ])
     test.close()
   })

@@ -268,17 +268,24 @@ guest is shown its invitation's reference and never the native id behind it.
 `session/cancel`, `session/close`, `session/delete`, `session/set_config_option`
 (model → `category: "model"`, effort → `category: "thought_level"`).
 
-Both options are selects: a `session/set_config_option` names one of them,
-`type: "id"`, and a `value` it offers now, as the Session's model reading
-holds it while a member follows the Session and nothing has changed since, or
-else as one read of the runtime. Any other `configId`, `type` or `value`
-answers `-32602` and changes nothing. The thought level offered is the
-selected model's. Each option's `currentValue` is always one of its values,
-each listed once: a current model the catalog does not list, as a switch a
-turn reports mid-turn may name, leads in a group of its own (`groupId:
-"current"`, `name: "Current"`) under its id, and a current thought level off
-the model's ladder leads it, under its id; the provider's own default, which
-reports no effort, is `""` (`name: "Default"`), offered only while it holds.
+A Session's config options are two selects, the model and the selected
+model's thought level:
+
+- A `session/set_config_option` names one of them, `type: "id"`, and a `value` it offers now: as
+  the Session's model reading holds it while a member follows the Session and
+  nothing changed since, or else as one read of the runtime. Any other
+  `configId`, `type` or `value` answers `-32602` and changes nothing.
+- The writing connection is sent the write's `config_option_update`, the
+  complete list the answer carries, before the answer. Every other member is
+  sent the options read afresh once the answer is written, and every member
+  then the `usage_update` whose window the model moved. The writer is not sent
+  the same options again.
+- Each `currentValue` is one of its option's values, each value listed once. A
+  current model the catalog does not list, as a switch a turn reports mid-turn
+  may name, leads in a group of its own (`groupId: "current"`,
+  `name: "Current"`) under its id; a current thought level off the model's
+  ladder leads it under its id; the provider's own default, which reports no
+  effort, is `""` (`name: "Default"`), offered only while it holds.
 
 A Session is **active** on a connection from a `session/new`, `session/fork`
 or `session/resume` there that succeeded until `session/close`,

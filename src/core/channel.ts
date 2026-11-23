@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util"
+
 import {
   backoffDelay,
   createOwner,
@@ -1141,19 +1143,22 @@ export function createChannels(options: CreateChannelsOptions) {
     },
 
     /**
-     * Switches the Session's model. Every member hears the switch, and the
-     * `membership` that asked for it once its answer is written.
+     * Switches the model of the Session `membership` asked it of. As ACP
+     * has a writer told, its member is shown the switch before its answer,
+     * and every member hears the readings the switch moved once that answer
+     * is written; the writer is not shown its own switch again.
      */
     switchModel(
-      scope: SessionScope,
-      write: SessionModelUpdateRequest,
-      membership?: Membership
+      membership: Membership,
+      write: SessionModelUpdateRequest
     ): Promise<SessionModelsResponse> {
       return coordinator.switchModel(
-        scope,
+        membership.scope,
         write,
-        membership &&
-          ((report) => membership.afterResponse(async () => report()))
+        async (models, report) => {
+          await membership.showSwitch(models)
+          membership.afterResponse(async () => report())
+        }
       )
     },
   }
@@ -1189,6 +1194,11 @@ class Membership {
   #followedTurn: string | undefined
   /** The turn whose stream this member last fell behind and rebuilt for. */
   #rebuiltTurn: string | undefined
+  /**
+   * The model options this member's own switch was shown, which the reading
+   * that follows the switch shows it no more.
+   */
+  #switched: SessionModelsResponse | undefined
   /** Whether this member's view pages older history itself. */
   #paged = false
   /** Settles once the member was shown what the journal buffered. */
@@ -2100,7 +2110,7 @@ class Membership {
     const readings = coordinator.subscribeReadings(this.#scope, membershipId, {
       execution: () => this.#followInterrupted(),
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
-      model: (models) => this.#deliver({ kind: "model", models }),
+      model: (models) => this.#showModels(models),
       gone: (cause) => this.#end(cause),
     })
     const capabilities = subscribeCapabilities()
@@ -2114,6 +2124,27 @@ class Membership {
       capabilities()
       row()
     }
+  }
+
+  /**
+   * Shows this member the model options its own switch left, ahead of the
+   * switch's answer, which a failure to show them does not fail.
+   */
+  showSwitch(models: SessionModelsResponse) {
+    this.#switched = models
+    return this.#deliver({ kind: "model", models })
+  }
+
+  /**
+   * Shows one model reading, unless it is the first since this member's own
+   * switch and repeats the options that switch showed it.
+   */
+  #showModels(models: SessionModelsResponse) {
+    const switched = this.#switched
+    this.#switched = undefined
+    return switched && isDeepStrictEqual(switched, models)
+      ? Promise.resolve()
+      : this.#deliver({ kind: "model", models })
   }
 
   /**

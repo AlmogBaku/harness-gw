@@ -1241,13 +1241,17 @@ export class SessionCoordinator {
    * Writes one model choice and answers the model options a read after it
    * shows. Every subscriber is then owed the readings the switch moves, each
    * read afresh: the model options, and the usage, whose window belongs to
-   * the model. `deliver` runs that report, so a caller's answer can land
-   * before its own subscription hears it.
+   * the model. `deliver` is handed those options and runs that report, and
+   * the answer waits for it, so a caller can show its own member the switch
+   * first and the report after its answer.
    */
   switchModel(
     scope: SessionScope,
     write: SessionModelUpdateRequest,
-    deliver: (report: () => void) => void = (report) => report()
+    deliver: (
+      models: SessionModelsResponse,
+      report: () => void
+    ) => Promise<void> | void = (_models, report) => report()
   ): Promise<SessionModelsResponse> {
     return this.#command(scope, async () => {
       const { readings } = this.options
@@ -1256,7 +1260,7 @@ export class SessionCoordinator {
         await readings.models(scope.agentId, scope.providerSessionId)
       )
       const key = scopeKey(scope)
-      deliver(() => {
+      await deliver(models, () => {
         this.#models.report(key)
         this.#usage.report(key)
       })

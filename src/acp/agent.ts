@@ -921,9 +921,8 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
           if (!offers(offered, params)) throw invalidParams()
           return {
             models: await context.channels.switchModel(
-              membership.scope,
-              command.write,
-              membership
+              membership,
+              command.write
             ),
           }
         },
