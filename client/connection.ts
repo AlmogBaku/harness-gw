@@ -67,6 +67,7 @@ import {
 import { AcpConnectionClosedError, AgentUpdateError } from "./workspace"
 import {
   CAPACITY_BACKOFF,
+  FELL_BEHIND_WINDOW_MS,
   HANDSHAKE_DEADLINE_MS,
   LIVENESS_SILENCE_MS,
   PART_GRACE_MS,
@@ -85,6 +86,7 @@ import type {
   AcpSessionListener,
   AcpSessionSetup,
   AcpSessionState,
+  AcpSubscribeOptions,
 } from "./types"
 
 /**
@@ -96,6 +98,7 @@ import type {
 /** The close codes the gateway ends a connection with on purpose. */
 const TRY_AGAIN_LATER = 1013
 const POLICY_VIOLATION = 1008
+const READER_FELL_BEHIND = 4409
 
 /** Where the client logs when its caller passes no logger. */
 export const SILENT_LOGGER: Logger = {
@@ -455,7 +458,12 @@ export function connectionMachine({
     recover: fromAbortable(() => recover()),
   }
   const connectionSetup = ownerSetup<
-    { generation: number; attempt: number },
+    {
+      generation: number
+      attempt: number
+      /** When the transport last recovered, and the attempt it started over. */
+      recovered?: { at: number; attempt: number }
+    },
     ConnectionEvent,
     typeof actors
   >("connection", logger, clock, actors)
@@ -464,6 +472,11 @@ export function connectionMachine({
     { guard: "inProcess", target: "closed" },
     { guard: "policyViolation", target: "closed" },
     { guard: "tryAgainLater", target: "capacity" },
+    {
+      guard: "fellBehindAgain",
+      target: "reconnecting",
+      actions: "keepBackoff",
+    },
     { target: "reconnecting" },
   ] as const
   return connectionSetup
@@ -485,6 +498,11 @@ export function connectionMachine({
           event.type === "closed" && event.code === POLICY_VIOLATION,
         tryAgainLater: ({ event }) =>
           event.type === "closed" && event.code === TRY_AGAIN_LATER,
+        fellBehindAgain: ({ context, event }) =>
+          event.type === "closed" &&
+          event.code === READER_FELL_BEHIND &&
+          context.recovered !== undefined &&
+          clock.now() - context.recovered.at < FELL_BEHIND_WINDOW_MS,
       },
       actions: {
         // A handshake or replay that cannot complete leaves an unusable
@@ -496,7 +514,23 @@ export function connectionMachine({
         countAttempt: connectionSetup.assign({
           attempt: ({ context }) => context.attempt + 1,
         }),
-        resetAttempts: connectionSetup.assign({ attempt: 0 }),
+        resetAttempts: connectionSetup.assign({
+          attempt: 0,
+          recovered: undefined,
+        }),
+        startOver: connectionSetup.assign({
+          attempt: 0,
+          recovered: ({ context }) => ({
+            at: clock.now(),
+            attempt: context.attempt,
+          }),
+        }),
+        // A reader that fell behind again soon after its recovery backs off
+        // from where that recovery found it, as a repeated failure does.
+        keepBackoff: connectionSetup.assign({
+          attempt: ({ context }) =>
+            Math.max(context.attempt, context.recovered?.attempt ?? 0),
+        }),
       },
     })
     .createMachine({
@@ -522,10 +556,10 @@ export function connectionMachine({
         ready: {
           entry: "markReady",
           // Every Session rejoined, or a transport up long enough, starts the
-          // backoff over.
+          // backoff over; a fall-behind soon after the rejoin takes it back.
           invoke: {
             src: "recover",
-            onDone: { actions: "resetAttempts" },
+            onDone: { actions: "startOver" },
             onError: { actions: "closeTransport" },
           },
           on: { closed: onTransportClosed },
@@ -726,9 +760,13 @@ export function createAcpConnection(
   >()
   /**
    * One `subscribe` call: a listener subscribed twice holds the Session until
-   * each of its subscriptions leaves.
+   * each of its subscriptions leaves. `replays` says whether it asks the
+   * Session replayed from the start.
    */
-  type Subscription = { readonly listener: AcpSessionListener }
+  type Subscription = {
+    readonly listener: AcpSessionListener
+    readonly replays: boolean
+  }
   /**
    * One opened Session: whoever listens, the owner that joins it, and what a
    * rejoin and a page read need, all dropped once it parts.
@@ -756,6 +794,8 @@ export function createAcpConnection(
     /** Why the transport refused the join, while the Session stays refused. */
     refusal?: unknown
     grace?: unknown
+    /** Set while a close is out: no grace parts what the close may end. */
+    closing?: boolean
     /**
      * The newest setup the Session reported, by answer or update, which a
      * listener that subscribes later is handed.
@@ -1225,7 +1265,7 @@ export function createAcpConnection(
     const open = sessions.get(sessionId)
     if (!open) throw notOpen()
     if (signal.aborted) return
-    const fromStart = !open.replayed || open.replayOwed
+    const fromStart = replayWanted(open)
     open.replayOwed = false
     const named = [...open.listeners].find(({ listener }) => listener.agentId)
     const agentId = named?.listener.agentId ?? owners.get(sessionId)
@@ -1247,9 +1287,13 @@ export function createAcpConnection(
             {
               sessionId,
               cwd: AGENT_CWD,
-              replayFrom: fromStart
-                ? { type: "start" }
-                : rejoinCursor(open.position),
+              // A Session never replayed, which nothing asks to be, names
+              // no cursor: ACP then replays nothing at all.
+              ...(fromStart
+                ? { replayFrom: { type: "start" } }
+                : open.replayed
+                  ? { replayFrom: rejoinCursor(open.position) }
+                  : {}),
               _meta: {
                 [HGW_META_KEY]: agentId === undefined ? {} : { agentId },
               },
@@ -1302,6 +1346,17 @@ export function createAcpConnection(
           )
       ),
     }
+  }
+
+  /**
+   * Whether the Session's next join replays it from the start: one is owed,
+   * or none has yet and a subscription asks for one.
+   */
+  function replayWanted(open: OpenSession) {
+    return (
+      open.replayOwed ||
+      (!open.replayed && [...open.listeners].some(({ replays }) => replays))
+    )
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */
@@ -1369,7 +1424,7 @@ export function createAcpConnection(
     if (!open) return Promise.reject(notOpen())
     const served = open.replaying
       ? !open.replaying.delivered
-      : !open.replayed || open.replayOwed
+      : replayWanted(open)
     if (!served) open.owner?.actor.send({ type: "replay" })
     return joined(sessionId)
   }
@@ -1394,11 +1449,15 @@ export function createAcpConnection(
       )
   }
 
-  function subscribe(sessionId: string, listener: AcpSessionListener) {
+  function subscribe(
+    sessionId: string,
+    listener: AcpSessionListener,
+    options: AcpSubscribeOptions = {}
+  ) {
     if (ended) return () => {}
     // A Session opened before the transport joins once it is ready.
     start()
-    const subscription = { listener }
+    const subscription = { listener, replays: options.replay ?? true }
     const known = sessions.get(sessionId)
     if (known) {
       clock.clearTimeout(known.grace)
@@ -1408,6 +1467,11 @@ export function createAcpConnection(
       // Session whole to this listener too.
       if (known.replaying && !known.replaying.delivered)
         known.replaying.settles.push(...settleOf(subscription))
+      // A Session opened without a replay, and replayed by none since, is
+      // replayed for the first subscription that asks, after any join in
+      // flight.
+      else if (subscription.replays && !known.replayed && !known.replaying)
+        known.owner?.actor.send({ type: "replay" })
       // No answer or update restates the setup for this listener alone.
       hand(known, known.setup, [subscription])
       return () => leave(sessionId, known, subscription)
@@ -1453,6 +1517,12 @@ export function createAcpConnection(
   ) {
     if (!open.listeners.delete(subscription) || open.listeners.size > 0) return
     if (sessions.get(sessionId) !== open) return
+    startGrace(sessionId, open)
+  }
+
+  /** Parts an opened Session nothing holds once its grace passes. */
+  function startGrace(sessionId: string, open: OpenSession) {
+    if (open.closing) return
     open.grace = clock.setTimeout(() => part(sessionId, open), PART_GRACE_MS)
   }
 
@@ -1467,13 +1537,9 @@ export function createAcpConnection(
   ) {
     let open = sessions.get(sessionId)
     if (!open) {
-      const created = openSession(sessionId, [], true)
+      open = openSession(sessionId, [], true)
       // It parts in its grace unless a listener comes to it.
-      created.grace = clock.setTimeout(
-        () => part(sessionId, created),
-        PART_GRACE_MS
-      )
-      open = created
+      startGrace(sessionId, open)
     }
     hand(open, report(open, setupOfAnswer(answer)))
   }
@@ -1489,6 +1555,40 @@ export function createAcpConnection(
     open.owner?.dispose()
     open.waiters?.reject(notOpen())
     open.waiters = undefined
+  }
+
+  /**
+   * Ends a Session on this connection with `send`, its `session/close` or
+   * `session/delete`. While it is out no grace parts the Session: the part
+   * would only race it. One that failed changed nothing: the gateway keeps
+   * this connection on the Session, so it stays opened here, and joined, and
+   * may be sent again. Once it succeeded `ended` runs, and the Session is
+   * forgotten, with no part, so nothing rejoins it.
+   */
+  async function endSession(
+    sessionId: string,
+    send: Send<unknown>,
+    ended?: (open: OpenSession) => void
+  ) {
+    const open = sessions.get(sessionId)
+    if (open) {
+      clock.clearTimeout(open.grace)
+      open.grace = undefined
+      open.closing = true
+    }
+    try {
+      await request("short", send)
+    } catch (error) {
+      if (open) {
+        open.closing = false
+        if (open.listeners.size === 0 && sessions.get(sessionId) === open)
+          startGrace(sessionId, open)
+      }
+      throw error
+    }
+    if (!open || sessions.get(sessionId) !== open) return
+    ended?.(open)
+    forget(sessionId, open)
   }
 
   /**
@@ -1864,21 +1964,20 @@ export function createAcpConnection(
       return response.configOptions
     },
 
-    async closeSession(sessionId) {
-      // Forgotten first, so neither its grace nor a reconnect parts or
-      // rejoins the Session this closes.
-      const open = sessions.get(sessionId)
-      if (open) forget(sessionId, open)
-      await request("short", (agent, options) =>
+    closeSession: (sessionId) =>
+      endSession(sessionId, (agent, options) =>
         agent.request(methods.agent.session.close, { sessionId }, options)
-      )
-    },
+      ),
 
-    async deleteSession(sessionId) {
-      await request("short", (agent, options) =>
-        agent.request(methods.agent.session.delete, { sessionId }, options)
-      )
-    },
+    deleteSession: (sessionId) =>
+      endSession(
+        sessionId,
+        (agent, options) =>
+          agent.request(methods.agent.session.delete, { sessionId }, options),
+        // The gateway tells its deleter nothing: the Session is gone for
+        // good here, as one the gateway reports gone is.
+        (open) => open.owner?.actor.send({ type: "gone" })
+      ),
 
     async updateSession(update) {
       await request("short", (agent, options) =>

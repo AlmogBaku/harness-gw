@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { SessionModelsResponse } from "../../protocol"
-import { configOptionsOf, configWriteOf } from "./config-options"
+import { configOptionsOf, configWriteOf, offers } from "./config-options"
 
 const models: SessionModelsResponse = {
   selectedId: "sonnet",
@@ -122,6 +122,71 @@ describe("configOptionsOf", () => {
     expect(configOptionsOf({ ...models, selectedId })).toHaveLength(1)
   })
 
+  // ACP requires the current value to be one of an option's values.
+  it("lists a current model the catalog does not, leading in a group of its own under its id", () => {
+    expect(configOptionsOf({ ...models, selectedId: "opus" })[0]).toMatchObject(
+      {
+        currentValue: "opus",
+        options: [
+          {
+            groupId: "current",
+            name: "Current",
+            options: [{ value: "opus", name: "opus" }],
+          },
+          { groupId: "Anthropic" },
+        ],
+      }
+    )
+  })
+
+  // ACP lists thought levels from lowest to highest, and nothing ranks an
+  // effort off the ladder.
+  it("lists a current effort off the selected model's ladder after it, under its id", () => {
+    expect(configOptionsOf({ ...models, effortId: "max" })[1]).toMatchObject({
+      currentValue: "max",
+      options: [
+        { value: "low", name: "low" },
+        { value: "medium", name: "medium" },
+        { value: "high", name: "high" },
+        { value: "max", name: "max" },
+      ],
+    })
+  })
+
+  // ACP requires each value once within its option, across groups too.
+  it("lists each model and each effort once, however often the catalog names it", () => {
+    const [sonnet, haiku] = models.options
+    const repeated = configOptionsOf({
+      ...models,
+      options: [
+        { ...sonnet!, efforts: [...sonnet!.efforts!, { id: "low" }] },
+        haiku!,
+        { ...haiku!, group: "Elsewhere" },
+      ],
+    })
+
+    expect(repeated).toMatchObject([
+      {
+        options: [
+          {
+            groupId: "Anthropic",
+            options: [
+              { value: "sonnet", name: "Sonnet" },
+              { value: "haiku", name: "Haiku" },
+            ],
+          },
+        ],
+      },
+      {
+        options: [
+          { value: "low", name: "low" },
+          { value: "medium", name: "medium" },
+          { value: "high", name: "high" },
+        ],
+      },
+    ])
+  })
+
   // ACP refuses a select with no choices.
   it("offers no selector for an empty catalog", () => {
     expect(configOptionsOf({ selectedId: "sonnet", options: [] })).toEqual([])
@@ -142,5 +207,45 @@ describe("configWriteOf", () => {
     ["a missing thought level", "thought_level", undefined],
   ])("refuses %s", (_label, configId, value) => {
     expect(configWriteOf(configId, value)).toBeUndefined()
+  })
+})
+
+describe("offers", () => {
+  const offered = configOptionsOf(models)
+  const { effortId, ...withoutEffort } = models
+  void effortId
+
+  it.each([
+    ["a model in its provider's group", offered, "model", "haiku"],
+    ["an effort of the selected model", offered, "thought_level", "high"],
+    [
+      "the default while no effort is set",
+      configOptionsOf(withoutEffort),
+      "thought_level",
+      "",
+    ],
+  ])("takes %s", (_label, options, configId, value) => {
+    expect(offers(options, { configId, type: "id", value })).toBe(true)
+  })
+
+  // ACP refuses an unknown option, a type it does not take, and a value it
+  // does not offer, all alike.
+  it.each([
+    ["an unknown option", offered, "mode", "id", "plan"],
+    ["a custom value type", offered, "model", "_vendor", "haiku"],
+    ["a boolean for a select", offered, "model", "boolean", true],
+    ["a value of another type", offered, "model", "id", 3],
+    ["a model the catalog does not offer", offered, "model", "id", "opus"],
+    ["an effort off the ladder", offered, "thought_level", "id", "max"],
+    [
+      "an effort for a model that reports none",
+      configOptionsOf({ ...models, selectedId: "haiku" }),
+      "thought_level",
+      "id",
+      "low",
+    ],
+    ["the default once an effort is set", offered, "thought_level", "id", ""],
+  ] as const)("refuses %s", (_label, options, configId, type, value) => {
+    expect(offers(options, { configId, type, value })).toBe(false)
   })
 })

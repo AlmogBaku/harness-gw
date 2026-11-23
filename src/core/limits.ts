@@ -68,6 +68,28 @@ export const RECONCILE_BACKOFF = { baseMs: 1_000, capMs: 30_000 }
 export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
 
 /**
+ * How long a whole close or delete may take: its Stop, the wait for the turn
+ * it stopped to end and be shown, as ACP has its closer shown that end before
+ * the answer, its background stops, and a delete's runtime call share it. The
+ * same as the admission deadline, so a confirmed Stop's end lands inside it,
+ * and well under the browser's 45 s request deadline, so the answer reaches
+ * the browser before it gives the request up. Past it the close or delete is
+ * unconfirmed.
+ */
+export const CLOSE_DEADLINE_MS = ADMISSION_DEADLINE_MS
+
+/**
+ * How long a delete waits, inside its CLOSE_DEADLINE_MS, for each member but
+ * the deleter to be shown how the turn it stopped ended; the deleter it waits
+ * for under the whole deadline, as its close would. Any other member slower
+ * than this is behind its socket, and the delete goes on without it, so one
+ * slow reader never fails the delete for another: that member is then told
+ * the Session is gone, and shown none of the turn's last updates it was not
+ * yet written.
+ */
+export const DELETE_SHOWN_MS = 5_000
+
+/**
  * How long nothing may hold a Session created and never prompted before the
  * gateway discards it, where the runtime sets no idle window of its own.
  */
@@ -80,16 +102,13 @@ export const UNPROMPTED_IDLE_MS = 5 * 60_000
 export const DISCARD_ATTEMPTS = 3
 
 /**
- * How many of the Sessions it discarded the gateway still answers as not
- * found itself, the most recent kept: Hermes makes a server-minted draft anew
- * for any resume of its key, so a client that held one would bring it back,
- * however long after. A browser holds a few drafts at most, so the bound only
- * keeps the record finite.
+ * How many of the Sessions it discarded, or deleted unprompted, the gateway
+ * still answers as not found itself, the most recent kept: Hermes makes a
+ * server-minted draft anew for any resume of its key, so a client that held
+ * one would bring it back, however long after. A browser holds a few drafts
+ * at most, so the bound only keeps the record finite.
  */
 export const DISCARDED_REFUSALS = 4_096
-
-/** How long a member that fell behind keeps its place for its view to rejoin. */
-export const PAUSED_DEADLINE_MS = 30_000
 
 /**
  * How long a peer may take to send its first `initialize` before the gateway

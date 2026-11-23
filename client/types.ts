@@ -146,6 +146,20 @@ export type AcpSessionListener = {
   state?: (state: AcpSessionState) => void
 }
 
+/** How one `subscribe` opens its Session. */
+export type AcpSubscribeOptions = {
+  /**
+   * `false` opens the Session without asking for its history, as a send from
+   * outside its view does: the Session is made active on the connection, as a
+   * prompt needs, and while no subscription asks for a replay, its join names
+   * no `replayFrom`, which ACP answers with no replay at all, and a rejoin
+   * after a reconnect follows only what streams next. A later subscription
+   * that asks for one, to a Session not replayed yet, has it replayed from the
+   * start then, after any join in flight. Defaults to `true`.
+   */
+  replay?: boolean
+}
+
 /**
  * A read (`listAgents`, `listSessions`, `searchSessions`, `resumePage`) waits
  * out a reconnect and goes out again on the transport that recovers, and a
@@ -218,9 +232,14 @@ export interface AcpConnection {
    * parts, with `_hgw/session/part`, 2 s after the last listener leaves, so a
    * listener back within that grace costs neither a part nor a resume. A
    * listener that subscribes before anything of a from-start replay under way
-   * has arrived takes part in that replay.
+   * has arrived takes part in that replay. A subscription with
+   * `{ replay: false }` asks for none (see `AcpSubscribeOptions`).
    */
-  subscribe(sessionId: string, listener: AcpSessionListener): () => void
+  subscribe(
+    sessionId: string,
+    listener: AcpSessionListener,
+    options?: AcpSubscribeOptions
+  ): () => void
   /** Resolves once the opened Session is joined; rejects once it is gone or parts. */
   joined(sessionId: string): Promise<void>
   /**
@@ -242,7 +261,13 @@ export interface AcpConnection {
    * reported; a join that replays nothing leaves it as it was.
    */
   history(sessionId: string): HgwHistoryCursor | undefined
-  /** Prompts an opened Session once it is joined, as `setConfigOption` and `steer` write. */
+  /**
+   * Prompts an opened Session once it is joined, as `setConfigOption` and
+   * `steer` write. Open it first (`subscribe`, or `newSession` and
+   * `forkSession`, which open the Session they make): the gateway takes
+   * neither a prompt nor a config write of a Session no resume or create made
+   * active on the connection, and answers `-32002` naming it.
+   */
   prompt(
     sessionId: string,
     blocks: ContentBlock[],
@@ -256,12 +281,22 @@ export interface AcpConnection {
   ): Promise<SessionConfigOption[]>
   /**
    * Ends the Session with ACP's `session/close`, which stops its work, and
-   * forgets it here at once, with no `_hgw/session/part`: its listeners hear
-   * nothing more of it, and nothing rejoins it. A Session the gateway no
-   * longer has (`-32002`) is closed already, so that answer resolves too.
+   * forgets it here once the close succeeded, with no `_hgw/session/part`:
+   * its listeners hear nothing more of it, and nothing rejoins it. While the
+   * close is out its listeners still hear what the gateway shows the closer,
+   * and no grace parts it. A Session the gateway no longer has (`-32002`) is
+   * closed already, so that answer resolves too. A close that fails rejects
+   * with its error and changes nothing: the Session stays opened and joined,
+   * and may be closed again.
    */
   closeSession(sessionId: string): Promise<void>
-  /** Resolves, as `closeSession` does, for a Session already gone (`-32002`). */
+  /**
+   * Deletes the Session with ACP's `session/delete`, and once the delete
+   * succeeded, or found it already gone (`-32002`), forgets it here as
+   * `closeSession` does: its listeners' `state` hears `gone`, as for a
+   * Session the gateway reports gone, and then nothing more of it. A delete
+   * that fails changes nothing, as a failed close does.
+   */
   deleteSession(sessionId: string): Promise<void>
 
   updateSession(

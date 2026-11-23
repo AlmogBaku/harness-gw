@@ -14,7 +14,12 @@ import * as ids from "./ids"
 import type { ProviderSessionId } from "./ids"
 import { createLink, type Link } from "./link"
 import { hasSession, type CommandResults, type MemberScope } from "./member"
-import type { ServerRuntime, SessionPatch, SessionScope } from "./runtime"
+import {
+  ServerSessionNotFoundError,
+  type ServerRuntime,
+  type SessionPatch,
+  type SessionScope,
+} from "./runtime"
 import {
   EXECUTION_STATUS,
   type SessionCoordinator,
@@ -85,7 +90,13 @@ export type Catalog = {
   update(scope: SessionScope, patch: SessionPatch): Promise<void>
   /** Settles one Session read at once, and tells the runtime. */
   markRead(agentId: string, sessionId: string): Promise<void>
-  delete(scope: SessionScope): Promise<void>
+  /**
+   * Deletes one Session, which ends it for every member still on it. `leave`
+   * runs once the runtime holds it no longer, deleted or found gone, before
+   * the members are told: the deleter leaves it as its close would, and is
+   * told nothing. A delete that fails otherwise leaves every member on it.
+   */
+  delete(scope: SessionScope, leave?: () => void): Promise<void>
   /**
    * The Session list or an Agent changed and must be read again. `signaled`
    * says whether the runtime reports its own changes; a change made here, an
@@ -104,7 +115,7 @@ export type Catalog = {
 export type CatalogOptions = {
   runtime: ServerRuntime
   coordinator: Pick<SessionCoordinator, "state" | "endIfGone"> &
-    Partial<Pick<SessionCoordinator, "unprompted" | "keep">>
+    Partial<Pick<SessionCoordinator, "unprompted" | "keep" | "deleted">>
   rows: SessionRows
   /** Where the runtime's change feed writes why it failed. */
   logger: Logger
@@ -320,12 +331,31 @@ export function createCatalog({
 
     markRead,
 
-    async delete(target) {
-      await onSession(target, () =>
-        runtime.deleteSession(target.agentId, target.providerSessionId)
-      )
+    async delete(target, leave = () => undefined) {
+      /**
+       * Ends the Session for every member but the deleter, which leaves, and
+       * then runs `after`: a leave that throws skips neither.
+       */
+      const end = (cause: unknown, after: () => void = () => undefined) => {
+        coordinator.deleted?.(target)
+        try {
+          leave()
+        } finally {
+          coordinator.endIfGone(target, cause)
+          after()
+        }
+      }
+      try {
+        await runtime.deleteSession(target.agentId, target.providerSessionId)
+      } catch (cause) {
+        // One the runtime finds gone is gone for every member, as a read
+        // finding it so would end it.
+        if ((coreFailure(cause) ?? runtime.publicError(cause))?.kind === "gone")
+          end(cause)
+        throw cause
+      }
       rows.forget(target.agentId, target.sessionId)
-      invalidate()
+      end(new ServerSessionNotFoundError(), invalidate)
     },
 
     invalidation: {

@@ -43,6 +43,7 @@ import {
   type ProviderSessionId,
 } from "../core/ids"
 import {
+  ChildSessionStatus,
   PendingRequestKind,
   TurnEventKind,
   type PendingRequest,
@@ -408,8 +409,8 @@ type HarnessOptions = {
     agentId: string,
     sessionId: string
   ) => ProviderSessionId | undefined
-  /** What the invited lookup or a run's start throws instead. */
-  fails?: { lookup?: unknown; start?: unknown }
+  /** What a run's start throws instead. */
+  fails?: { start?: unknown }
   /** How many turns every guest together may hold; four by default. */
   guestActiveExecutions?: number
 }
@@ -424,14 +425,18 @@ function harness(options: HarnessOptions = {}) {
     handles.push(handle)
     return handle
   })
+  // The runtime stops a child alone, between turns too.
+  const stopChild = vi.fn<NonNullable<ServerTurnEngine["stopChild"]>>(
+    async () => undefined
+  )
   const engine: ServerTurnEngine = {
     start,
     recover: vi.fn(unsupported),
     discover: vi.fn(async () => undefined),
+    stopChild,
   }
   const resolveInvitedSession = vi.fn<ServerRuntime["resolveInvitedSession"]>(
     async (_agentId, _ref, create) => {
-      if (options.fails?.lookup) throw options.fails.lookup
       return options.existing || (create && options.creates !== false)
         ? {
             providerSessionId: providerSessionId(STORED),
@@ -575,6 +580,7 @@ function harness(options: HarnessOptions = {}) {
     listener,
     coordinator,
     start,
+    stopChild,
     handles,
     history,
     updateSession,
@@ -594,6 +600,19 @@ function harness(options: HarnessOptions = {}) {
     notice() {
       if (!watcher) throw new Error("Nothing watches the Session")
       watcher.onNotice?.({ severity: "info", title: "Heartbeat" })
+    },
+    /**
+     * The runtime reports a child an earlier turn spawned still at work, as
+     * background work an operator was shown and may stop.
+     */
+    backgroundChild(childSessionId: string) {
+      if (!watcher) throw new Error("Nothing watches the Session")
+      watcher.onChild?.("operator-turn", {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId,
+        status: ChildSessionStatus.Running,
+        cancellable: true,
+      })
     },
     /**
      * Advertises paging older history, as the aos-ui browser does, by default,
@@ -644,7 +663,7 @@ type Frame = {
   id?: number | string
   method?: string
   result?: unknown
-  error?: { code: number }
+  error?: { code: number; data?: unknown }
   params?: unknown
 }
 
@@ -1627,12 +1646,21 @@ const PUBLIC_CODES: readonly number[] = [
   RequestError.requestCancelled().code,
 ]
 
-/** A reply's error carries a public code and nothing that describes the host. */
-function expectPublicError(reply: Frame) {
+/**
+ * A reply's error carries a public code and nothing that describes the host:
+ * a not-found names `requested`, the Session the guest's request named, and
+ * no other error carries `data` at all.
+ */
+function expectPublicError(reply: Frame, requested?: string) {
   expect(reply.error).toBeDefined()
-  expect(Object.keys(reply.error ?? {}).sort()).toEqual(["code", "message"])
+  const { data, ...error } = reply.error ?? {}
+  expect(Object.keys(error).sort()).toEqual(["code", "message"])
   expect(PUBLIC_CODES).toContain(reply.error?.code)
+  if (reply.error?.code === NOT_FOUND)
+    expect(data).toEqual({ sessionId: requested })
+  else expect(reply.error).not.toHaveProperty("data")
   expect(JSON.stringify(reply)).not.toContain(OPERATOR_SECRET)
+  expect(JSON.stringify(reply)).not.toContain(STORED)
 }
 
 /** A run the guest started that stays open and accepts a steer. */
@@ -1650,7 +1678,8 @@ describe("guest scope and commands", () => {
     const test = harness({ existing: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
-    const notFound = { code: NOT_FOUND }
+    // A not-found names the Session the guest named, and nothing else.
+    const notFound = { code: NOT_FOUND, data: { sessionId: "another-session" } }
 
     await expect(test.resume("another-session")).rejects.toMatchObject(notFound)
     await expect(test.prompt("Hello", "another-session")).rejects.toMatchObject(
@@ -1725,6 +1754,22 @@ describe("guest scope and commands", () => {
     test.close()
   })
 
+  // ACP has a prompt need its Session active on the connection, as a resume
+  // of the invitation, a fresh one too, makes it.
+  it("refuses a prompt of the invitation it has not resumed, and creates nothing for it", async () => {
+    const test = harness()
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    await expect(test.prompt("Hello")).rejects.toMatchObject({
+      code: NOT_FOUND,
+      data: { sessionId: REF },
+    })
+    expect(test.resolveInvitedSession).not.toHaveBeenCalled()
+    expect(test.start).not.toHaveBeenCalled()
+    test.close()
+  })
+
   it("answers a first send not found when the runtime cannot create the conversation", async () => {
     const test = harness({ creates: false })
     await test.initialize()
@@ -1743,6 +1788,7 @@ describe("guest scope and commands", () => {
       const test = harness()
       await test.initialize()
       await test.login(await invite(test.invitations))
+      await test.resume(REF)
 
       await expect(
         test.agent.request(methods.agent.session.prompt, {
@@ -1751,7 +1797,12 @@ describe("guest scope and commands", () => {
         })
       ).rejects.toMatchObject({ code: INVALID_PARAMS })
 
-      expect(test.resolveInvitedSession).not.toHaveBeenCalled()
+      // The resume looked the invitation up; nothing asked to create it.
+      expect(test.resolveInvitedSession).not.toHaveBeenCalledWith(
+        AGENT,
+        REF,
+        expect.anything()
+      )
       expect(test.start).not.toHaveBeenCalled()
       test.close()
     }
@@ -1807,13 +1858,13 @@ describe("guest scope and commands", () => {
 
     // Another connection on the same invitation steers only once it joins.
     const other = await loggedInWire(test.listener, token)
-    expect(
-      await other.request(HGW_METHODS.session.steer, {
-        sessionId: REF,
-        requestId: "steer-2",
-        text: "Longer",
-      })
-    ).toMatchObject({ error: { code: NOT_FOUND } })
+    const refused = await other.request(HGW_METHODS.session.steer, {
+      sessionId: REF,
+      requestId: "steer-2",
+      text: "Longer",
+    })
+    expect(refused).toMatchObject({ error: { code: NOT_FOUND } })
+    expectPublicError(refused, REF)
     expect(test.handles.at(0)?.steer).toHaveBeenCalledOnce()
     other.close()
     test.close()
@@ -1993,33 +2044,58 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it("lets a guest close the invited Session", async () => {
+  // ACP's close stops the Session's background work, but a guest can neither
+  // see the operator's nor stop it: its close stops the turn alone.
+  it("lets a guest close the invited Session, leaving a background child at work running", async () => {
     const test = harness({ existing: true })
-    await test.initialize()
-    await test.login(await invite(test.invitations))
-    await test.resume(REF)
+    // The SDK's client reads a `-32002` answer to a close as done, so the
+    // answer is read off the wire.
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+    test.backgroundChild("child-1")
+    await settled()
 
-    await expect(
-      test.agent.request(methods.agent.session.close, { sessionId: REF })
-    ).resolves.toEqual({})
-    test.close()
+    expect(
+      await socket.request(methods.agent.session.close, { sessionId: REF })
+    ).toMatchObject({ result: {} })
+    expect(test.stopChild).not.toHaveBeenCalled()
+    socket.close()
+  })
+
+  it("lets a guest close a fresh invitation, which has no Session yet", async () => {
+    const test = harness()
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+
+    expect(
+      await socket.request(methods.agent.session.close, { sessionId: REF })
+    ).toMatchObject({ result: {} })
+    socket.close()
   })
 
   it.each(FAILURES)(
     "answers %s from the invited lookup with a public code alone",
     async (_name, failure) => {
-      const test = harness({ fails: { lookup: failure() } })
+      const test = harness()
       const socket = await loggedInWire(
         test.listener,
         await invite(test.invitations)
       )
-
-      expectPublicError(
-        await socket.request(methods.agent.session.resume, {
+      const resume = () =>
+        socket.request(methods.agent.session.resume, {
           sessionId: REF,
           cwd: "/",
         })
-      )
+
+      test.resolveInvitedSession.mockRejectedValueOnce(failure())
+      expectPublicError(await resume())
+      // The first send of the fresh invitation looks it up again.
+      expect(await resume()).toMatchObject({ result: {} })
+      test.resolveInvitedSession.mockRejectedValueOnce(failure())
       expectPublicError(
         await socket.request(methods.agent.session.prompt, {
           sessionId: REF,

@@ -235,8 +235,9 @@ export type SessionCoordinatorOptions = {
    */
   unpromptedIdleMs?: number
   /**
-   * How many of the Sessions it discarded the coordinator still finds gone
-   * itself, the most recent kept (`DISCARDED_REFUSALS`).
+   * How many of the Sessions it discarded, or deleted unprompted, the
+   * coordinator still finds gone itself, the most recent kept
+   * (`DISCARDED_REFUSALS`).
    */
   discardedRefusals?: number
   /** How long a setup answer waits on a reading it reads (`SETUP_READ_MS`). */
@@ -1054,13 +1055,15 @@ export class SessionCoordinator {
     }
   >()
   /**
-   * The Sessions discarded here, by session key, oldest first: the gateway
-   * finds each gone itself, as Hermes would make it anew, until the bound
-   * (`DISCARDED_REFUSALS`) drops it.
+   * The unprompted Sessions discarded or deleted here, by session key, oldest
+   * first: the gateway finds each gone itself, as Hermes would make it anew,
+   * until the bound (`DISCARDED_REFUSALS`) drops it.
    */
   readonly #discarded = new Set<string>()
   /** How many memberships, of either listener, are on each Session. */
   readonly #holders = new Map<string, number>()
+  /** What waits for each Session's turn to rest idle (`idle`). */
+  readonly #idleWaiters = new Map<string, Set<() => void>>()
 
   constructor(private readonly options: SessionCoordinatorOptions) {
     const { readings } = options
@@ -1218,16 +1221,38 @@ export class SessionCoordinator {
   }
 
   /**
+   * The model options the Session offers now: what its reading holds while a
+   * member follows it and nothing changed since, or else one read.
+   */
+  async models(scope: SessionScope): Promise<SessionModelsResponse> {
+    return this.#command(
+      scope,
+      async () =>
+        this.#models.current(scopeKey(scope)) ??
+        SessionModelsResponseSchema.parse(
+          await this.options.readings.models(
+            scope.agentId,
+            scope.providerSessionId
+          )
+        )
+    )
+  }
+
+  /**
    * Writes one model choice and answers the model options a read after it
    * shows. Every subscriber is then owed the readings the switch moves, each
    * read afresh: the model options, and the usage, whose window belongs to
-   * the model. `deliver` runs that report, so a caller's answer can land
-   * before its own subscription hears it.
+   * the model. `deliver` is handed those options and runs that report, and
+   * the answer waits for it, so a caller can show its own member the switch
+   * first and the report after its answer.
    */
   switchModel(
     scope: SessionScope,
     write: SessionModelUpdateRequest,
-    deliver: (report: () => void) => void = (report) => report()
+    deliver: (
+      models: SessionModelsResponse,
+      report: () => void
+    ) => Promise<void> | void = (_models, report) => report()
   ): Promise<SessionModelsResponse> {
     return this.#command(scope, async () => {
       const { readings } = this.options
@@ -1236,7 +1261,7 @@ export class SessionCoordinator {
         await readings.models(scope.agentId, scope.providerSessionId)
       )
       const key = scopeKey(scope)
-      deliver(() => {
+      await deliver(models, () => {
         this.#models.report(key)
         this.#usage.report(key)
       })
@@ -1246,6 +1271,45 @@ export class SessionCoordinator {
 
   state(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     return this.#turnExecution(scopeKey(scope)).state
+  }
+
+  /**
+   * Settles once the Session's turn rests idle: at once when it does, at its
+   * move to idle, and once the Session is dropped. `signal` rejects it with
+   * its reason.
+   */
+  idle(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    signal: AbortSignal
+  ) {
+    const key = scopeKey(scope)
+    return new Promise<void>((resolve, reject) => {
+      if (this.#turnExecution(key).state === "idle") return resolve()
+      const waiters = this.#idleWaiters.get(key) ?? new Set()
+      this.#idleWaiters.set(key, waiters)
+      const leave = () => {
+        waiters.delete(settle)
+        if (waiters.size === 0 && this.#idleWaiters.get(key) === waiters)
+          this.#idleWaiters.delete(key)
+        signal.removeEventListener("abort", abort)
+      }
+      const settle = () => {
+        leave()
+        resolve()
+      }
+      const abort = () => {
+        leave()
+        reject(signal.reason)
+      }
+      waiters.add(settle)
+      signal.addEventListener("abort", abort, { once: true })
+      if (signal.aborted) abort()
+    })
+  }
+
+  /** Settles every `idle` waiting on the Session. */
+  #wakeIdle(key: string) {
+    for (const settle of [...(this.#idleWaiters.get(key) ?? [])]) settle()
   }
 
   /**
@@ -1639,6 +1703,23 @@ export class SessionCoordinator {
   }
 
   /**
+   * Ends the mark of an unprompted Session its delete removed, or found
+   * gone: nothing is left to discard, so no idle window or discard follows,
+   * and it is found gone here from then on, as a discarded one is, since
+   * Hermes would make it anew for a resume of its key. A Session a prompt
+   * reached is left to the runtime's own answer: a runtime may make a
+   * conversation anew under its key itself, as an OpenClaw channel does.
+   */
+  deleted(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    const key = scopeKey(scope)
+    const marked = this.#unprompted.get(key)
+    if (!marked) return
+    this.#clearIdle(marked)
+    this.#unprompted.delete(key)
+    this.#refuse(key)
+  }
+
+  /**
    * Runs an operator's write to a Session, which keeps it: one a create here
    * made and no prompt reached is listed again and never discarded once the
    * write lands, as after its first prompt. One being or already discarded is
@@ -1716,7 +1797,15 @@ export class SessionCoordinator {
     }
     this.#logger.info({ agentId, sessionId, discarded }, "session.discarded")
     this.#unprompted.delete(key)
-    if (!discarded || this.#closed) return
+    if (discarded) this.#refuse(key)
+  }
+
+  /**
+   * Finds a Session gone here from now on, among the last `discardedRefusals`
+   * so found.
+   */
+  #refuse(key: string) {
+    if (this.#closed) return
     this.#discarded.add(key)
     const bound = this.options.discardedRefusals ?? DISCARDED_REFUSALS
     if (this.#discarded.size > bound) {
@@ -1726,8 +1815,8 @@ export class SessionCoordinator {
   }
 
   /**
-   * Refuses a Session being or already discarded, as OpenCode and OpenClaw
-   * would once it is: Hermes would make it anew.
+   * Refuses a Session being or already discarded, or deleted unprompted, as
+   * OpenCode and OpenClaw would once it is: Hermes would make it anew.
    */
   refuseDiscarded(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const key = scopeKey(scope)
@@ -2442,6 +2531,8 @@ export class SessionCoordinator {
     this.#executions.delete(key)
     for (const reporter of [this.#usage, this.#models, this.#execution])
       reporter.release(key)
+    // A Session dropped has no turn left to rest.
+    this.#wakeIdle(key)
   }
 
   /** One owner per Session, logging under its ids and the turn it moves. */
@@ -2493,6 +2584,7 @@ export class SessionCoordinator {
         return
       reported = moved
       this.#execution.report(key)
+      if (moved.state === "idle") this.#wakeIdle(key)
     })
     this.#turns.set(key, turn)
     return turn

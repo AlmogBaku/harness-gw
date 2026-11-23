@@ -41,9 +41,11 @@ import {
   type HgwExtensions,
 } from "../../protocol/acp"
 import type { Catalog } from "../core/catalog"
+import { unlessAborted } from "../core/channel"
 import type { SessionRow } from "../core/session-rows"
 import type { PresenceReport } from "../push/presence"
 import { GATEWAY_VERSION } from "../version"
+import { offers } from "./config-options"
 import {
   createSessions,
   sessionInfoOf,
@@ -83,11 +85,12 @@ import {
   authenticationRequired,
   errorNotificationOf,
   invalidParams,
-  notFound,
+  namingSession,
   parseMeta,
   publicCodeOf,
   publicRequestError,
   refusalError,
+  sessionNotFound,
   unsupported,
 } from "./validation"
 
@@ -209,6 +212,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         sessions.membership(sessionId)?.report(cause),
       // The upgrade's principal holds for the connection's whole life.
       live: () => context.authentication?.live() ?? true,
+      fellBehind: () => context.fellBehind(),
       children: {
         announce: (childSessionId, parentSessionId, cancellable) =>
           sessions.announceChild(childSessionId, parentSessionId, cancellable),
@@ -276,11 +280,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     try {
       return await runCommand(stack(), kind, command, current)
     } catch (cause) {
-      const error =
+      const { sessionId } = command as { sessionId?: string | null }
+      // A not-found of a command naming a Session names the one it named.
+      const error = namingSession(
         cause instanceof CommandRefusedError
           ? refusalError(cause.refusal, cause.hint)
-          : publicRequestError(context.publicError, cause)
-      const { sessionId } = command as { sessionId?: string | null }
+          : publicRequestError(context.publicError, cause),
+        sessionId ?? undefined
+      )
       context.logger.warn(
         {
           command: kind,
@@ -440,7 +447,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     cursor,
   }: MemberCommands["older-page"]): Promise<CommandResults["older-page"]> {
     const membership = sessions.membership(sessionId)
-    if (!membership) throw notFound()
+    if (!membership) throw sessionNotFound(sessionId)
     return context.channels.olderPage(membership, {
       cursor,
       offset: decodeHistoryCursor(cursor, maxOffset),
@@ -461,30 +468,52 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       sessions.adopt(command.sessionId, command.agentId)
     const scope = command.scope ?? sessions.scope(command.sessionId)
     if (!command.scope) await requireFolder(scope.agentId, params)
+    const held = sessions.active(scope.sessionId)
     const membership = sessions.join(client, scope)
-    return context.channels.resume(membership, command, {
-      fromStart: command.fromStart,
-      positioned: command.positioned,
-      paged: clientPagesHistory,
-    })
+    try {
+      return await context.channels.resume(membership, command, {
+        fromStart: command.fromStart,
+        positioned: command.positioned,
+        paged: clientPagesHistory,
+      })
+    } catch (cause) {
+      // ACP has a Session active from a resume that succeeded: what a
+      // failed one joined leaves, and a Session already active stays so.
+      if (membership !== held) sessions.leave(scope.sessionId, membership)
+      throw cause
+    }
   }
 
   /**
-   * Admits one user turn in a Session this connection reaches, answering once
-   * the coordinator admitted or refused it; `signal` aborts the admission.
-   * Only a first admission takes its stage, and the coordinator releases it
-   * if the turn never starts: the client keeps its attachments and stages them
-   * anew.
+   * The Session's membership while it is active on this connection, as ACP
+   * has a Session-scoped request need: `-32002` naming it otherwise.
+   */
+  function requireActive(sessionId: string) {
+    const membership = sessions.active(sessionId)
+    if (!membership) throw sessionNotFound(sessionId)
+    return membership
+  }
+
+  /**
+   * Admits one user turn in a Session active on this connection, answering
+   * once the coordinator admitted or refused it; `signal` aborts the
+   * admission. Only a first admission takes its stage, and the coordinator
+   * releases it if the turn never starts: the client keeps its attachments
+   * and stages them anew.
    */
   async function send(
     command: MemberCommands["send"],
     client: AgentContext,
     signal: AbortSignal
   ): Promise<CommandResults["send"]> {
+    // Asked again past the stack, which a close may have overtaken.
+    const held = requireActive(command.sessionId)
     const scope = command.scope ?? sessions.scope(command.sessionId)
     const { text, attachmentStageId, rewindSourceId } = command
     let stage: ReturnType<typeof context.attachmentStages.take>
-    const membership = sessions.join(client, scope)
+    // A fresh invitation's first prompt created its Session, which it joins
+    // anew; every other prompt goes to the membership it is active by.
+    const membership = held.pending ? sessions.join(client, scope) : held
     try {
       const sent = await membership.startTurn(
         {
@@ -802,6 +831,9 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     methods.agent.session.prompt,
     async ({ params, client, signal, requestId }) => {
       admit(methods.agent.session.prompt, "send", params)
+      // Refused before the stack, so a prompt of a Session not active here
+      // creates nothing, a fresh invitation's conversation included.
+      requireActive(params.sessionId)
       const meta = parseMeta(HgwPromptMetaSchema, params._meta)
       if (params.prompt.some(isUnadvertisedBlock)) throw invalidParams()
       const blocks =
@@ -878,12 +910,20 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         "set-config",
         { sessionId: params.sessionId, ...(write ? { write } : {}) },
         async (command) => {
+          // A fresh invitation has no Session to configure.
+          const membership = sessions.membership(command.sessionId)
+          if (!membership) throw sessionNotFound(command.sessionId)
           if (!command.write) throw invalidParams()
+          // ACP refuses a value the option does not offer, or a `type` it
+          // does not take, with invalid params, and changes nothing.
+          const offered = translators.configOptionsOf(
+            await context.channels.models(membership.scope)
+          )
+          if (!offers(offered, params)) throw invalidParams()
           return {
             models: await context.channels.switchModel(
-              sessions.scope(command.sessionId),
-              command.write,
-              sessions.membership(command.sessionId)
+              membership,
+              command.write
             ),
           }
         },
@@ -897,20 +937,37 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     admit(methods.agent.session.close, "close", params)
     await perform(
       "close",
-      { sessionId: params.sessionId },
-      // As ACP closes a Session: its work stops, for every member, and then
-      // this connection leaves it.
+      { sessionId: params.sessionId, stopsBackground: true },
+      // As ACP closes a Session: its work stops, for every member, this
+      // member is shown how its turn ended, and then this connection leaves
+      // it. A close that could not stop the work answers why, and leaves the
+      // Session active here, as a close that failed changes nothing else.
       async (command) => {
         const membership = sessions.membership(command.sessionId)
-        if (!membership) throw notFound()
+        // ACP's close is idempotent: a Session not active on this connection,
+        // one already closed or gone or never known, closes as a close does,
+        // with `{}`. A fresh invitation's, which has no Session yet, leaves.
+        if (!membership) return sessions.part(command.sessionId)
         const { scope } = membership
-        try {
-          await membership.cancel()
-        } finally {
+        // The whole close, each step in turn, shares one deadline.
+        await context.channels.closing(async (signal) => {
+          await membership.closeTurn(signal)
+          // ACP's close also stops the background work, unlike its cancel:
+          // here each child this connection was told still works after its
+          // turn, where the member's stack lets its close stop any.
+          if (command.stopsBackground)
+            await context.channels.stopBackground(
+              scope,
+              signal,
+              (childSessionId) =>
+                sessions.child(childSessionId) !== undefined &&
+                sessions.rootOf(childSessionId) === command.sessionId
+            )
           sessions.part(command.sessionId)
-        }
-        // A Session no prompt reached, which nothing else holds, is freed now.
-        await context.channels.closed(scope)
+          // A Session no prompt reached, which nothing else holds, is freed
+          // now.
+          await context.channels.closed(scope, signal)
+        })
       },
       requestId
     )
@@ -924,20 +981,44 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       { sessionId: params.sessionId },
       async (command) => {
         const agentId = sessions.owner(command.sessionId) ?? context.agentId
-        if (agentId === undefined)
-          throw invalidParams(`connect to ${HGW_ACP_AGENTS_PATH}/<agentId>`)
+        // The shared address cannot tell whose Session an id it never listed
+        // is, so it holds none by that id to delete; ACP has a delete of a
+        // Session that never existed "succeed silently".
+        if (agentId === undefined) return
         const scope = catalog.scope(agentId, command.sessionId)
         // A Session its Agent cannot find is already gone.
         if (scope) {
-          try {
-            await catalog.delete(scope)
-          } catch (cause) {
-            if (
-              publicCodeOf(publicRequestError(context.publicError, cause)) !==
-              "not_found"
+          // As ACP deletes a Session active anywhere: closed first, on every
+          // connection, its turn stopped and each member shown how it ended,
+          // this one before its answer as its close would show it, and its
+          // background work stopped, so a runtime that refuses to delete a
+          // running Session is never asked to. Once the runtime holds it no
+          // longer, this connection leaves it, as its close would, and every
+          // other member is told it is gone; a delete that fails leaves this
+          // connection on it, as a failed close does. The whole delete shares
+          // one deadline: one that lands after it was answered as unconfirmed
+          // tells this connection it is gone too.
+          await context.channels.closing(async (signal) => {
+            await context.channels.stopWork(
+              scope,
+              signal,
+              sessions.membership(command.sessionId)
             )
-              throw cause
-          }
+            try {
+              await unlessAborted(
+                catalog.delete(scope, () => {
+                  if (!signal.aborted) sessions.part(command.sessionId)
+                }),
+                signal
+              )
+            } catch (cause) {
+              if (
+                publicCodeOf(publicRequestError(context.publicError, cause)) !==
+                "not_found"
+              )
+                throw cause
+            }
+          })
         }
         sessions.forget(command.sessionId)
       },
@@ -1023,7 +1104,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         async (command) => {
           // A connection steers only a Session it joined, as it stops one.
           const membership = sessions.membership(command.sessionId)
-          if (!membership) throw notFound()
+          if (!membership) throw sessionNotFound(command.sessionId)
           const steered = await membership.steer(
             command.requestId,
             command.text

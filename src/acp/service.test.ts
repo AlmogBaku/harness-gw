@@ -9,7 +9,7 @@ import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import type { SocketRefusal } from "../server"
 import { createAcpService, type AcpUpgrade } from "./service"
-import type { AcpConnectionContext } from "./types"
+import type { AcpConnectionContext, AcpListenerContext } from "./types"
 
 const ORIGIN = "https://aos.example.test"
 const PATH = "/api/v1/acp"
@@ -50,7 +50,7 @@ function accepted(upgrade: AcpUpgrade | SocketRefusal | undefined): AcpUpgrade {
 function connectionContext(
   connectionId: string,
   principalId: string
-): AcpConnectionContext {
+): AcpListenerContext {
   return {
     connectionId,
     principalId,
@@ -246,6 +246,23 @@ describe("ACP WebSocket service", () => {
     await clock.advance(61_000)
     expect(transport.closed).toEqual([
       { code: 4409, reason: expect.stringContaining("maxOutputStallMs") },
+    ])
+  })
+
+  it("closes a connection one of its members fell behind on with the code a reader that fell behind gets", async () => {
+    const { acp, contexts } = service()
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
+    )
+    const transport = peer()
+    acp.open(upgrade, transport.peer)
+
+    contexts[0]?.fellBehind()
+
+    expect(transport.closed).toEqual([
+      { code: 4409, reason: expect.any(String) },
     ])
   })
 

@@ -8,7 +8,12 @@ import { connect } from "node:net"
 
 import { HGW_ACP_PATH } from "../protocol/acp"
 import { createAcpService } from "./acp/service"
-import type { AcpConnectionContext, ActivityFeed, ReadState } from "./acp/types"
+import type {
+  AcpConnectionContext,
+  AcpListenerContext,
+  ActivityFeed,
+  ReadState,
+} from "./acp/types"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
 import { heldBody } from "./routes/file-reads"
 import { startGatewayServer } from "./server"
@@ -27,7 +32,7 @@ function portOf(lifecycle: ReturnType<typeof startGatewayServer>) {
 function connectionContext(
   connectionId: string,
   principalId: string
-): AcpConnectionContext {
+): AcpListenerContext {
   return {
     connectionId,
     principalId,

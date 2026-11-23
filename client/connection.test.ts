@@ -30,7 +30,12 @@ import { createAcpConnection } from "./connection"
 import { PART_GRACE_MS, REQUEST_DEADLINE_MS } from "./limits"
 import { composerCapabilities } from "./test-capabilities"
 import { pipedSockets } from "./test-socket"
-import type { AcpConnection, AcpPendingRequest, AcpSessionSetup } from "./types"
+import type {
+  AcpConnection,
+  AcpPendingRequest,
+  AcpSessionSetup,
+  AcpSessionState,
+} from "./types"
 
 const SESSION_ID = "session-1"
 /** The Session a fork of `SESSION_ID` makes. */
@@ -142,9 +147,12 @@ function createGatewayAgent(
     reportedDuringResume?: SessionUpdate
     /** Answers `session/close` and `session/delete` with `-32002`. */
     gone?: boolean
+    /** The first `session/close` answers once this settles, failing as it fails. */
+    firstClose?: Promise<unknown>
   } = {}
 ) {
   const calls: AgentCall[] = []
+  let closes = 0
   let peer: AgentContext | undefined
   let logins = 0
   const record = (method: string, params: unknown) => {
@@ -286,8 +294,10 @@ function createGatewayAgent(
       record(methods.agent.session.setConfigOption, params)
       return { configOptions: [modelOption("opus")] }
     })
-    .onRequest(methods.agent.session.close, ({ params }) => {
+    .onRequest(methods.agent.session.close, async ({ params }) => {
       record(methods.agent.session.close, params)
+      closes += 1
+      if (closes === 1 && options.firstClose) await options.firstClose
       return goneOr({})
     })
     .onRequest(methods.agent.session.delete, ({ params }) => {
@@ -867,6 +877,37 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  // A send from outside the Session's view needs it active, not its history.
+  it("opens a Session with no replay for a subscription that asks none, and replays it once one asks", async () => {
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
+    const release = connection.subscribe(
+      SESSION_ID,
+      { agentId: AGENT_ID },
+      { replay: false }
+    )
+    await connection.joined(SESSION_ID)
+    // ACP replays nothing for a resume that names no cursor.
+    expect(gateway.callsOf(methods.agent.session.resume)).toEqual([
+      {
+        sessionId: SESSION_ID,
+        cwd: "",
+        _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
+      },
+    ])
+
+    const dropTranscript = vi.fn()
+    connection.subscribe(SESSION_ID, { replay: dropTranscript })
+    await connection.joined(SESSION_ID)
+
+    expect(gateway.callsOf(methods.agent.session.resume)[1]).toMatchObject({
+      replayFrom: { type: "start" },
+    })
+    expect(dropTranscript).toHaveBeenCalledOnce()
+    release()
+    connection.close()
+  })
+
   it.each([
     // The answer replaces what came before it, as ACP has a client apply it.
     ["before the resume answered", true, "sonnet"],
@@ -990,23 +1031,66 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("closes a created Session, forgetting it at once and never parting it", async () => {
+  it("forgets a Session once its close succeeds, parting it at no point, and keeps it joined through a close that fails", async () => {
     const clock = useFakeClock()
-    const gateway = createGatewayAgent()
+    const refused = Promise.withResolvers<never>()
+    const gateway = createGatewayAgent({ firstClose: refused.promise })
     const connection = connectInProcess(gateway)
     const { sessionId } = await connection.newSession({ agentId: AGENT_ID })
+    const unsubscribe = connection.subscribe(sessionId, {})
+
+    const closing = connection.closeSession(sessionId)
+    unsubscribe()
+    // While the close is out, no grace parts what it may end.
+    await clock.advance(PART_GRACE_MS)
+    expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
+    refused.reject(
+      new RequestError(HGW_JSONRPC_ERRORS.uncertainMutation, "unconfirmed")
+    )
+    await expect(closing).rejects.toMatchObject({
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+    })
+    // A close that failed changed nothing, so it may be sent again.
+    expect(connection.sessionState(sessionId)).toBe("joined")
 
     await connection.closeSession(sessionId)
     expect(gateway.callsOf(methods.agent.session.close)).toEqual([
       { sessionId },
+      { sessionId },
     ])
     expect(connection.sessionState(sessionId)).toBeUndefined()
-
     // Its grace ends with nothing left to part.
     await clock.advance(PART_GRACE_MS)
     expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
     connection.close()
   })
+
+  // The gateway tells its deleter nothing once it parted it.
+  it.each([
+    ["removed it", {}],
+    ["found it gone already", { gone: true }],
+  ])(
+    "forgets a Session once its delete %s, telling its listeners it is gone and parting it at no point",
+    async (_label, options) => {
+      const clock = useFakeClock()
+      const gateway = createGatewayAgent(options)
+      const connection = connectInProcess(gateway)
+      const { sessionId } = await connection.newSession({ agentId: AGENT_ID })
+      const states: AcpSessionState[] = []
+      const unsubscribe = connection.subscribe(sessionId, {
+        state: (state) => states.push(state),
+      })
+
+      await connection.deleteSession(sessionId)
+
+      expect(states).toEqual(["gone"])
+      expect(connection.sessionState(sessionId)).toBeUndefined()
+      unsubscribe()
+      await clock.advance(PART_GRACE_MS)
+      expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
+      connection.close()
+    }
+  )
 
   it.each(["closeSession", "deleteSession"] as const)(
     "takes a -32002 answer to %s as done: the Session is gone already",
@@ -1587,6 +1671,36 @@ describe("ACP connection", () => {
     )
     expect(connection.status).toBe("ready")
     expect(pipe.sockets).toHaveLength(2)
+    connection.close()
+  })
+
+  // Each cycle costs the gateway a history rebuild and a resume of every
+  // Session on the tab, so a reader that keeps falling behind backs off.
+  it("backs off a reader that falls behind again soon after its recovery, and only such a reader", async () => {
+    const clock = useFakeClock()
+    // Full jitter at its ceiling: each backoff is its whole window, less 1 ms.
+    vi.spyOn(Math, "random").mockReturnValue(0.999)
+    const gateway = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(gateway)
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
+    await connection.joined(SESSION_ID)
+    /** Advances past `ms` and reports how many sockets opened by then. */
+    const opened = async (ms: number) => {
+      await clock.advance(ms)
+      return pipe.sockets.length
+    }
+
+    pipe.sockets[0]?.closeFromGateway(4409, "ACP member fell behind")
+    expect(await opened(249)).toBe(2)
+    await connection.joined(SESSION_ID)
+    pipe.sockets[1]?.closeFromGateway(4409, "ACP member fell behind")
+    expect(await opened(498)).toBe(2)
+    expect(await opened(1)).toBe(3)
+    await connection.joined(SESSION_ID)
+    // Any other close after a recovery reconnects from the start of the
+    // backoff, as before.
+    pipe.sockets[2]?.drop()
+    expect(await opened(249)).toBe(4)
     connection.close()
   })
 

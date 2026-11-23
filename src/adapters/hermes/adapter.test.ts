@@ -38,6 +38,7 @@ import {
   HermesContentUnreadableError,
 } from "./content"
 import {
+  HermesModelChoiceRefusedError,
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
 } from "./workspace"
@@ -1514,10 +1515,13 @@ describe("Hermes server adapter", () => {
         status: "idle",
       }
     )
+    // Lazy, so a key Hermes holds no draft for is found gone, never written
+    // an empty row.
     expect(router.calls("session.resume")[0]?.params).toEqual({
       session_id: "stored/1",
       profile: "researcher",
       source: "aos-ui",
+      lazy: true,
       omit_messages: true,
     })
   })
@@ -1566,6 +1570,46 @@ describe("Hermes server adapter", () => {
       )
     }
   )
+
+  // A draft has no row to delete: it lives in its live Session alone, or, once
+  // discarded or lost to a Hermes restart, nowhere, where a non-lazy resume of
+  // its key would write it an empty row (`_resume_materialize_minted`).
+  it.each([
+    ["frees a draft Hermes holds live by closing its live Session", true],
+    [
+      "finds a draft Hermes no longer holds gone, writing its key no row",
+      false,
+    ],
+  ])("deletes an unsaved draft: %s", async (_case, live) => {
+    const rows: unknown[] = []
+    const router = rpcRouter({
+      "session.resume": async (params) => {
+        if (live) return lazySnapshot
+        if (params.lazy === true)
+          throw new HermesRpcRejectedError(4007, "session not found")
+        rows.push(params.session_id)
+        return { session_id: "live-private", session_key: "stored/1" }
+      },
+      "session.close": async () => ({ closed: true }),
+    })
+    const adapter = new HermesServerAdapter({
+      ...router,
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+
+    const answered = await adapter.deleteSession("researcher", "stored/1").then(
+      () => "deleted",
+      (cause: unknown) => adapter.publicError(cause)?.kind
+    )
+
+    expect(answered).toBe(live ? "deleted" : "gone")
+    expect(rows).toEqual([])
+    expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+      live ? [{ session_id: "live-private" }] : []
+    )
+  })
 
   it("returns empty Todos for an unpersisted lazy Session", async () => {
     const { adapter } = unstoredAdapter(lazySnapshot)
@@ -3340,9 +3384,11 @@ describe("Hermes server adapter", () => {
       new HermesInteractionPublicError("HGW_PROVIDER_UNAVAILABLE"),
     ])
       expect(kindOf(cause)).toBe("unavailable")
-    expect(
-      kindOf(new HermesInteractionPublicError("HGW_INVALID_INTERACTION"))
-    ).toBe("invalid_request")
+    for (const cause of [
+      new HermesInteractionPublicError("HGW_INVALID_INTERACTION"),
+      new HermesModelChoiceRefusedError(),
+    ])
+      expect(kindOf(cause)).toBe("invalid_request")
     expect(adapter.publicError(new Error("unclassified"))).toBeUndefined()
   })
 
@@ -3504,11 +3550,21 @@ describe("Hermes server adapter", () => {
     }
   })
 
+  /** Hermes' lazy resume of a key it stores a row for: no stored id. */
+  const storedRow = { stored_session_id: undefined, session_key: "draft" }
+
   it.each([
-    ["an unsent draft, closing its live Session", {}, true],
-    ["no draft Hermes stored since", { message_count: 4 }, false],
-    ["no draft Hermes runs", { running: true }, false],
-  ] as const)("discards %s", async (_, resumed, discarded) => {
+    ["an unsent draft, closing its live Session", {}, "closed"],
+    // A non-lazy resume of a draft Hermes restarted out of wrote its key one.
+    [
+      "an empty row, closing its live Session and deleting the row",
+      storedRow,
+      "deleted",
+    ],
+    ["no draft Hermes stored since", { message_count: 4 }, "kept"],
+    ["no row holding a message", { ...storedRow, message_count: 2 }, "kept"],
+    ["no draft Hermes runs", { running: true }, "kept"],
+  ] as const)("discards %s", async (_, resumed, outcome) => {
     const router = rpcRouter({
       "session.resume": async () => ({
         session_id: "live-draft",
@@ -3520,14 +3576,26 @@ describe("Hermes server adapter", () => {
       }),
       "session.close": async () => ({ closed: true }),
     })
-    const adapter = new HermesServerAdapter(router)
+    const http = vi.fn<
+      (path: string, init?: { method?: string }) => Promise<unknown>
+    >(async (path) =>
+      path.includes("/mutation-snapshot?")
+        ? { exists: true, runtime_revision: 0, runtime_generation: 0 }
+        : {}
+    )
+    const adapter = new HermesServerAdapter({ ...router, http })
 
     await expect(adapter.discardSession("researcher", "draft")).resolves.toBe(
-      discarded
+      outcome !== "kept"
     )
     expect(router.calls("session.close").map(({ params }) => params)).toEqual(
-      discarded ? [{ session_id: "live-draft" }] : []
+      outcome === "kept" ? [] : [{ session_id: "live-draft" }]
     )
+    expect(
+      http.mock.calls.flatMap(([path, init]) =>
+        init?.method === "DELETE" ? [path.split("?")[0]] : []
+      )
+    ).toEqual(outcome === "deleted" ? ["/api/sessions/draft"] : [])
   })
 
   it("finds a draft Hermes restarted out of gone, writing its key no row", async () => {

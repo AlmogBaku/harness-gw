@@ -8,7 +8,7 @@ import {
   ServerTurnEndedError,
 } from "../core/runtime"
 import { coreFailure, failureOf, type PublicFailure } from "../core/failures"
-import { MembershipDetachedError } from "../core/channel"
+import { CloseUnconfirmedError, MembershipDetachedError } from "../core/channel"
 import { ServerClientIdReusedError } from "../core/session-coordinator"
 import type { CommandRefusal } from "../core/member"
 import type { PublicErrors } from "./socket"
@@ -50,8 +50,31 @@ export function authenticationRequired() {
   return RequestError.authRequired()
 }
 
+/** A request naming something that does not exist: ACP's `-32002`. */
 export function notFound() {
   return RequestError.resourceNotFound()
+}
+
+/**
+ * A request naming a Session that does not exist or is not active on this
+ * connection: ACP's `-32002`, with `data.sessionId` the id it named.
+ */
+export function sessionNotFound(sessionId: string) {
+  return RequestError.sessionNotFound(sessionId)
+}
+
+const NOT_FOUND = notFound().code
+
+/**
+ * `error` as an answer to a request naming the Session `sessionId`: ACP has
+ * its `-32002` carry the id the request named, whatever was not found.
+ */
+export function namingSession(error: unknown, sessionId: string | undefined) {
+  return sessionId !== undefined &&
+    error instanceof RequestError &&
+    error.code === NOT_FOUND
+    ? sessionNotFound(sessionId)
+    : error
 }
 
 /**
@@ -128,6 +151,10 @@ const KIND_ERRORS: Readonly<Record<PublicFailure["kind"], () => RequestError>> =
 const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
   (
     [
+      // ACP's invalid params took `invalid_request` first, so JSON-RPC's own
+      // Invalid Request, a refused batch among them, is a malformed one.
+      [RequestError.parseError(), "parse_error"],
+      [RequestError.invalidRequest(), "malformed_request"],
       [invalidParams(), "invalid_request"],
       [authenticationRequired(), "authentication_required"],
       [notFound(), "not_found"],
@@ -150,18 +177,22 @@ const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
 
 /**
  * A failure as a public client may read it: a public code, and never the
- * detail a failure carries. Any other reply is reported temporarily
- * unavailable, and any other notice code as an internal error.
+ * detail a failure carries. A not-found names back the Session the client's
+ * own request named, as ACP has it, and nothing the gateway wrote. Any other
+ * reply is reported temporarily unavailable, and any other notice code as an
+ * internal error.
  */
 export const PUBLIC_ERRORS: PublicErrors = {
-  reply(code) {
+  reply(code, sessionId) {
     const name =
       typeof code === "number" ? PUBLIC_ERROR_NAMES.get(code) : undefined
-    return name === undefined
-      ? {
-          code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
-          message: "temporarily_unavailable",
-        }
+    if (name === undefined)
+      return {
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
+        message: "temporarily_unavailable",
+      }
+    return code === NOT_FOUND && sessionId !== undefined
+      ? { code, message: name, data: { sessionId } }
       : { code: code as number, message: name }
   },
   notice: (code) =>
@@ -174,6 +205,9 @@ export const PUBLIC_ERRORS: PublicErrors = {
 function channelFailure(cause: unknown) {
   if (cause instanceof MembershipDetachedError)
     return failureOf("unavailable", cause)
+  // What the close asked went out and may still land.
+  if (cause instanceof CloseUnconfirmedError)
+    return failureOf("uncertain", cause)
   if (cause instanceof ServerClientIdReusedError)
     return failureOf("invalid_request", cause)
   return coreFailure(cause)

@@ -34,13 +34,16 @@ import {
 } from "../core/events"
 import {
   ADMISSION_DEADLINE_MS,
+  CLOSE_DEADLINE_MS,
   READING_BACKOFF,
   SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
+  UNPROMPTED_IDLE_MS,
 } from "../core/limits"
 import {
   ServerAgentUpdateUnsupportedError,
   ServerSessionNotFoundError,
+  ServerTurnStopNotDispatchedError,
   type ServerTurnListener,
   type ServerRuntime,
 } from "../core/runtime"
@@ -315,6 +318,7 @@ describe("AOS ACP agent", () => {
       )
     await expect(fork({ sessionId: "unknown" })).rejects.toMatchObject({
       code: notFound().code,
+      data: { sessionId: "unknown" },
     })
     expect(test.forkSession).not.toHaveBeenCalled()
     test.close()
@@ -490,7 +494,13 @@ describe("AOS ACP agent", () => {
     // renamed (an OpenCode invitation finds its Session by its title) is kept
     // on purpose: each is listed, and kept once closed.
     for (const keep of [
-      (browser: Browser) => prompt(browser, "Hello", CREATED),
+      // Its turn ends, so the close stops no turn of it.
+      async (browser: Awaited<ReturnType<typeof harness>>) => {
+        await prompt(browser, "Hello", CREATED)
+        await waitFor(() => expect(browser.start).toHaveBeenCalledTimes(1))
+        reply(browser.sources[0], "Hello back")
+        await browser.recorder.wait(endedTurn, "the turn to end")
+      },
       (browser: Browser) =>
         browser.agent.request(HGW_METHODS.session.update, {
           sessionId: CREATED,
@@ -987,6 +997,7 @@ describe("AOS ACP agent", () => {
   it("writes the Session model a config option selects and tells every browser on the Session", async () => {
     const test = await harness()
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
 
     const written = await test.agent.request(
@@ -1000,15 +1011,91 @@ describe("AOS ACP agent", () => {
     expect(written).toMatchObject({
       configOptions: [{ configId: "model", currentValue: "opus" }],
     })
-    // The browser that switched never opened the Session, so the switch
-    // reaches the one that did without making the other a member.
     await other.recorder.wait(selects("opus"), "the switched model options")
-    expect(updates(test.recorder)).toEqual([])
     test.close()
     other.close()
   })
 
-  it("restates the model options and context usage after a config option changes the model, once it is answered", async () => {
+  // `offers` decides which writes an option takes; this proves its refusal
+  // reaches the wire and changes nothing.
+  it("refuses a config write of a model the Session does not offer, changing nothing", async () => {
+    const test = await harness()
+    await test.list()
+    await open(test)
+
+    await expect(
+      test.agent.request(methods.agent.session.setConfigOption, {
+        sessionId: SESSION,
+        configId: "model",
+        type: "id",
+        value: "gpt",
+      })
+    ).rejects.toMatchObject(INVALID_PARAMS)
+    expect(test.updateModel).not.toHaveBeenCalled()
+    test.close()
+  })
+
+  // ACP has a Session active on a connection from a create or resume there
+  // that succeeded until its close; a prompt or config write of any other is
+  // `-32002`, naming it.
+  it.each([
+    ["it only listed", async () => undefined],
+    [
+      "it closed",
+      async (test: Awaited<ReturnType<typeof harness>>) => {
+        await open(test)
+        await test.agent.request(methods.agent.session.close, {
+          sessionId: SESSION,
+        })
+      },
+    ],
+    [
+      "it parted",
+      async (test: Awaited<ReturnType<typeof harness>>) => {
+        await open(test)
+        await test.agent.request(HGW_METHODS.session.part, {
+          sessionId: SESSION,
+        })
+      },
+    ],
+    [
+      "its resume failed",
+      async (test: Awaited<ReturnType<typeof harness>>) => {
+        test.faults.failOnce("history")
+        await expect(
+          open(test, { replayFrom: { type: "start" } })
+        ).rejects.toThrow()
+      },
+    ],
+  ])(
+    "refuses a prompt and a config write of a Session %s, naming it",
+    async (_label, leave) => {
+      const test = await harness()
+      await test.list()
+      await leave(test)
+
+      for (const request of [
+        prompt(test, "Summarize"),
+        test.agent.request(methods.agent.session.setConfigOption, {
+          sessionId: SESSION,
+          configId: "model",
+          type: "id",
+          value: "opus",
+        }),
+      ])
+        await expect(request).rejects.toMatchObject({
+          code: notFound().code,
+          data: { sessionId: SESSION },
+        })
+      expect(test.start).not.toHaveBeenCalled()
+      expect(test.updateModel).not.toHaveBeenCalled()
+      test.close()
+    }
+  )
+
+  // ACP has the writer sent the switch's own update before its answer, and
+  // the changes that follow after it.
+  it("restates the model options to the browser that changed them before the answer, and context usage after it", async () => {
     const test = await harness()
     await test.list()
     await test.agent.request(methods.agent.session.resume, {
@@ -1027,17 +1114,21 @@ describe("AOS ACP agent", () => {
 
     // The window's size belongs to the model, so a switch owes a fresh reading.
     await usageOf(test, 2)
-    await test.recorder.wait(selects("opus"), "the switched model options")
+    await settled()
     const order = test.recorder.entries.map((entry) =>
       entry.method === "switch-answered"
         ? entry.method
         : selects("opus")(entry)
           ? "config_option_update"
-          : undefined
+          : JSON.stringify(entry.params).includes("usage_update")
+            ? "usage_update"
+            : undefined
     )
     expect(order.filter(Boolean)).toEqual([
-      "switch-answered",
+      "usage_update",
       "config_option_update",
+      "switch-answered",
+      "usage_update",
     ])
     test.close()
   })
@@ -1375,28 +1466,154 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("deletes a Session and asks every operator connection to relist", async () => {
+  it("deletes a Session, asking every operator connection to relist and telling every other member it is gone", async () => {
     const test = await harness()
-    const other = await test.connect("connection-2")
     await test.list()
+    await open(test)
+    const other = await openInSecondTab(test)
 
     await test.agent.request(methods.agent.session.delete, {
       sessionId: SESSION,
     })
+    await other.recorder.wait(
+      (entry) => entry.method === HGW_METHODS.notify.error,
+      "the Session gone"
+    )
     await settled()
 
     expect(test.deleteSession).toHaveBeenCalledWith(AGENT, SESSION)
     expect(relists(test.recorder)).toHaveLength(1)
     expect(relists(other.recorder)).toHaveLength(1)
-    // The shared address cannot tell whose Session it never listed.
+    expect(other.recorder.of(HGW_METHODS.notify.error)).toEqual([
+      {
+        method: HGW_METHODS.notify.error,
+        params: { sessionId: SESSION, code: "not_found", message: "not_found" },
+      },
+    ])
+    // The deleter left the Session as its close would: told nothing more.
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
+    // The shared address cannot tell whose Session it never listed, so it
+    // holds none by that id: ACP has such a delete succeed silently.
     await expect(
       test.agent.request(methods.agent.session.delete, {
         sessionId: "session-unlisted",
       })
-    ).rejects.toMatchObject(INVALID_PARAMS)
+    ).resolves.toEqual({})
     expect(test.deleteSession).toHaveBeenCalledTimes(1)
     test.close()
     other.close()
+  })
+
+  // As ACP deletes a Session active anywhere: closed first, then deleted, so
+  // no runtime is asked to delete one still running.
+  it("deletes a Session while its turn runs once the turn stopped and every member was shown its end", async () => {
+    const test = await harness()
+    await test.list()
+    await open(test)
+    const other = await openInSecondTab(test)
+    await liveTurn(test, [test, other])
+
+    const deleting = test.agent.request(methods.agent.session.delete, {
+      sessionId: SESSION,
+    })
+    await waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
+    await settled()
+    expect(test.deleteSession).not.toHaveBeenCalled()
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+
+    await expect(deleting).resolves.toEqual({})
+    expect(test.deleteSession).toHaveBeenCalledWith(AGENT, SESSION)
+    await other.recorder.wait(
+      (entry) => entry.method === HGW_METHODS.notify.error,
+      "the Session gone"
+    )
+    for (const { recorder } of [test, other])
+      expect(flow(recorder).at(-1)).toBe("state idle")
+    const ended = other.recorder.entries.findIndex(endedTurn)
+    const gone = other.recorder.entries.findIndex(
+      (entry) => entry.method === HGW_METHODS.notify.error
+    )
+    expect(ended).toBeGreaterThanOrEqual(0)
+    expect(ended).toBeLessThan(gone)
+    test.close()
+    other.close()
+  })
+
+  // A delete that fails changes nothing, as a failed close changes nothing.
+  it("keeps the deleter on the Session when its runtime refuses the delete", async () => {
+    const test = await harness({ providerIds: true })
+    await test.list()
+    await open(test)
+    test.deleteSession.mockRejectedValueOnce(new Error("Dashboard down"))
+
+    await expect(
+      test.agent.request(methods.agent.session.delete, { sessionId: SESSION })
+    ).rejects.toMatchObject({ code: RequestError.internalError().code })
+    // The deleter is still a member: it prompts, and its turn reaches it.
+    await prompt(test, "Summarize")
+    await waitFor(() => expect(test.start).toHaveBeenCalledOnce())
+    reply(test.sources[0], "Still here")
+    await test.recorder.wait(said("Still here"), "the turn's words")
+    test.close()
+  })
+
+  // One deadline bounds the whole delete, its runtime call too, so the
+  // browser is answered before it gives the request up.
+  it("answers a delete its runtime does not confirm in time as unconfirmed, and tells the deleter once it lands", async () => {
+    const test = await harness()
+    await test.list()
+    await open(test)
+    const landing = Promise.withResolvers<void>()
+    test.deleteSession.mockImplementationOnce(() => landing.promise)
+    const clock = useFakeClock()
+
+    const deleting = test.agent
+      .request(methods.agent.session.delete, { sessionId: SESSION })
+      .catch((cause: unknown) => cause)
+    await clock.advance(CLOSE_DEADLINE_MS)
+    expect(await deleting).toMatchObject({
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+    })
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
+
+    // Answered that it may not have, the deleter hears it gone once it lands.
+    landing.resolve()
+    await clock.advance(0)
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([
+      {
+        method: HGW_METHODS.notify.error,
+        params: { sessionId: SESSION, code: "not_found", message: "not_found" },
+      },
+    ])
+    test.close()
+  })
+
+  // ACP fails a later request for a deleted Session, a resume included, with
+  // -32002; Hermes would make the draft anew for a resume of its key.
+  it("discards nothing of a created Session once its delete removed it, and finds it gone after", async () => {
+    const test = await harness()
+    await test.create()
+    const clock = useFakeClock()
+
+    await test.agent.request(methods.agent.session.delete, {
+      sessionId: CREATED,
+    })
+    await clock.advance(UNPROMPTED_IDLE_MS)
+
+    expect(test.deleteSession).toHaveBeenCalledWith(AGENT, CREATED)
+    expect(test.discardSession).not.toHaveBeenCalled()
+    // A client that still holds it names its Agent, as one that never
+    // listed it does.
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: "start" },
+        _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+      })
+    ).rejects.toMatchObject({ code: notFound().code })
+    expect(test.history).not.toHaveBeenCalled()
+    test.close()
   })
 
   it.each([
@@ -1635,6 +1852,7 @@ describe("AOS ACP agent", () => {
   it("starts a prompt once the coordinator settled the uncertain turn before it", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     await prompt(test, "Long job")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     const lost = test.sources[0]
@@ -1660,6 +1878,7 @@ describe("AOS ACP agent", () => {
   it("makes one turn of a prompt its client repeats after reconnecting", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
       public: [],
       appendTo: (text) => text,
@@ -1671,6 +1890,7 @@ describe("AOS ACP agent", () => {
     // the stage the first send took.
     const other = await test.connect("connection-2")
     await other.list()
+    await open(other)
 
     expect(await prompt(other, "Summarize", SESSION, meta)).toBe(messageId)
     await replyWhileWatched(test.sources[0], "Done", [test, other])
@@ -1928,6 +2148,8 @@ describe("Session rooms", () => {
   it("shows an open Session another browser's prompt, then its stream", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
+    const sent = test.recorder.entries.length
     const other = await openInSecondTab(test)
     const from = other.recorder.entries.length
 
@@ -1942,7 +2164,7 @@ describe("Session rooms", () => {
       "state idle",
     ]
     expect(flow(other.recorder, SESSION, from)).toEqual(turn)
-    expect(flow(test.recorder)).toEqual(turn)
+    expect(flow(test.recorder, SESSION, sent)).toEqual(turn)
     expect(prompts(other.recorder)).toEqual([
       [{ type: "text", text: "Summarize" }],
     ])
@@ -1963,15 +2185,17 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
 
     await expect(
       test.agent.request(methods.agent.session.resume, {
         sessionId: "missing",
         cwd: "/",
       })
-    ).rejects.toMatchObject({ code: -32002 })
+    ).rejects.toMatchObject({ code: -32002, data: { sessionId: "missing" } })
     await expect(prompt(test, "Summarize")).rejects.toMatchObject({
       code: -32002,
+      data: { sessionId: SESSION },
     })
     // A start that found its Session gone tells its sender, who holds no
     // readings yet, and asks the runtime after it no more.
@@ -2047,6 +2271,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
     const cleanup = vi.fn(async () => undefined)
     const attachmentStageId = test.attachmentStages.create(AGENT, SESSION, {
@@ -2076,6 +2301,7 @@ describe("Session rooms", () => {
   it("lets another operator browser stop the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
     await prompt(test, "Long job")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
@@ -2099,6 +2325,7 @@ describe("Session rooms", () => {
     const withdrawal = Promise.withResolvers<AbortSignal>()
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const other = await test.connect("connection-2", {
       permission: async (_params, signal) => {
         withdrawal.resolve(signal)
@@ -2141,6 +2368,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     const other = await test.connect("connection-2", {
       question: (_params, signal) => {
         withdrawal.resolve(signal)
@@ -2268,6 +2496,7 @@ describe("Session rooms", () => {
     }
     const test = await harness({ providerIds: true, permission: holding })
     await test.list()
+    await open(test)
     const other = await test.connect("connection-2", { permission: holding })
     await other.list()
     await open(other)
@@ -2300,6 +2529,7 @@ describe("Session rooms", () => {
   it("takes the first of two answers given at once and continues the turn once", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
     await promptAsking(test, "Delete it", [APPROVAL])
 
@@ -2320,6 +2550,7 @@ describe("Session rooms", () => {
   it("joins a live turn with its history, then its prompt, then its stream, then its state", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const messageId = await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
@@ -2358,6 +2589,7 @@ describe("Session rooms", () => {
     const history: StoredMessages = []
     const test = await harness({ providerIds: true, history })
     await test.list()
+    await open(test)
     const other = await test.connect("connection-2")
     await other.list()
     const messageId = await liveTurn(test, [test])
@@ -2386,6 +2618,7 @@ describe("Session rooms", () => {
       history: storedLiveTurn({ replyId: "assistant-0", createdAt: NOW }),
     })
     await test.list()
+    await open(test)
     const other = await test.connect("connection-2")
     await other.list()
     await liveTurn(test, [test])
@@ -2444,6 +2677,7 @@ describe("Session rooms", () => {
     const history: StoredMessages = []
     const test = await harness({ providerIds: true, history })
     await test.list()
+    await open(test)
     const messageId = await liveTurn(test, [test])
     history.push(...storedLiveTurn({ promptId: messageId }))
     test.sources[0]?.emit({
@@ -2476,6 +2710,7 @@ describe("Session rooms", () => {
     const history: StoredMessages = []
     const test = await harness({ providerIds: true, history })
     await test.list()
+    await open(test)
     const messageId = await liveTurn(test, [test])
     history.push(...storedLiveTurn({ promptId: messageId }))
     test.sources[0]?.emit({
@@ -2522,6 +2757,7 @@ describe("Session rooms", () => {
         },
       })
       await test.list()
+      await open(test)
       const messageId = await liveTurn(test, [test])
 
       unreadable = true
@@ -2557,6 +2793,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
 
     held = true
@@ -2587,6 +2824,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
 
     failing = true
@@ -2617,6 +2855,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
 
     held = true
@@ -2653,6 +2892,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     messageId = await liveTurn(test, [test])
     const from = test.recorder.entries.length
 
@@ -2673,6 +2913,7 @@ describe("Session rooms", () => {
   it("adds no prompt to a resume whose cursor is inside the turn", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
@@ -2699,6 +2940,7 @@ describe("Session rooms", () => {
   it("replays a positioned resume from the event its cursor names", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     await liveTurn(test, [test])
     const live = sequencesOf(test.recorder).at(-1)!
     const { turnId } = test.coordinator.snapshot(test.scope)
@@ -2725,6 +2967,7 @@ describe("Session rooms", () => {
   it("follows a resume naming no cursor from the turn's next event", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     await liveTurn(test, [test])
 
     const other = await test.connect("connection-2")
@@ -2744,6 +2987,7 @@ describe("Session rooms", () => {
   it("rebuilds nothing for a resume naming no cursor past its journal's start", async () => {
     const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
     await test.list()
+    await open(test)
     await liveTurn(test, [test])
     // A third event outgrows the journal, so the turn's start is gone.
     chunk(test.sources[0], "Aside", "assistant-2")
@@ -2791,6 +3035,7 @@ describe("Session rooms", () => {
   it("gives a reconnect without a cursor the prompt once, then the stream", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const messageId = await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
@@ -2836,6 +3081,7 @@ describe("Session rooms", () => {
       onStart: () => admission.held,
     })
     await test.list()
+    await open(test)
     const sent = prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
@@ -2858,6 +3104,7 @@ describe("Session rooms", () => {
   it("sends a turn of attachments alone as the stage's own prompt", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const stageId = test.attachmentStages.create(AGENT, SESSION, {
       public: [],
       appendTo: (text) => [text, "[image one]", "[image two]"].join(""),
@@ -2884,6 +3131,7 @@ describe("Session rooms", () => {
   it("echoes each staged image as the artifact its history replays as", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const stageId = test.attachmentStages.create(AGENT, SESSION, {
       public: [],
       appendTo: (text) => text,
@@ -2960,6 +3208,7 @@ describe("Session rooms", () => {
     async (_label, blocks, meta, text) => {
       const test = await harness({ providerIds: true })
       await test.list()
+      await open(test)
 
       await prompt(test, blocks, SESSION, meta)
 
@@ -2975,6 +3224,7 @@ describe("Session rooms", () => {
   it("refuses a prompt with neither text nor attachments", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
 
     await expect(
       prompt(test, [{ type: "text", text: "" }])
@@ -2986,6 +3236,7 @@ describe("Session rooms", () => {
   it("refuses a Session command sent as a prompt, saying the client runs it", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
 
     await expect(
       prompt(test, [{ type: "text", text: "/reset" }])
@@ -3004,6 +3255,7 @@ describe("Session rooms", () => {
   it("sends a prompt without the items ACP has not defined", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
 
     await prompt(test, [
       { type: "text", text: "Summarize" },
@@ -3022,6 +3274,7 @@ describe("Session rooms", () => {
   it("refuses an inline image, audio clip or embedded file", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const text = { type: "text" as const, text: "Summarize" }
 
     for (const block of [
@@ -3046,8 +3299,10 @@ describe("Session rooms", () => {
       onStart: () => admission.held,
     })
     await test.list()
+    await open(test)
     const other = await test.connect("connection-2")
     await other.list()
+    await open(other)
     const sent = prompt(test, "First")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
 
@@ -3075,8 +3330,10 @@ describe("Session rooms", () => {
   it("lets a losing prompt follow the winner that was admitted first", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const other = await test.connect("connection-2")
     await other.list()
+    await open(other)
     // The loser waits on its staged attachment while the winner is admitted
     // and announced.
     const staged = gate()
@@ -3124,6 +3381,7 @@ describe("Session rooms", () => {
     async (_, who) => {
       const test = await harness({ providerIds: true })
       await test.list()
+      await open(test)
       const other = await test.connect("connection-2")
       await other.list()
       await open(other)
@@ -3168,6 +3426,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     await liveTurn(test, [test])
 
     const from = test.recorder.entries.length
@@ -3193,6 +3452,7 @@ describe("Session rooms", () => {
   it("still ends a turn cancelled when it is reopened after an acknowledged Stop", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     await liveTurn(test, [test])
     await test.agent.notify(methods.agent.session.cancel, {
       sessionId: SESSION,
@@ -3221,6 +3481,7 @@ describe("Session rooms", () => {
   it("streams each chunk once to a browser that reopens twice in a row", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
     await liveTurn(test, [other])
 
@@ -3249,6 +3510,7 @@ describe("Session rooms", () => {
   it("keeps streaming a reopen whose turn outgrew its journal", async () => {
     const test = await harness({ providerIds: true, maxSubscriberEvents: 2 })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
     await liveTurn(test, [other])
     // A third event outgrows the journal, so the turn's start is gone.
@@ -3275,6 +3537,7 @@ describe("Session rooms", () => {
   it("replays only history to a browser that joins after the turn ended", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     reply(test.sources[0], "Done")
@@ -3299,15 +3562,21 @@ describe("Session rooms", () => {
     await test.list()
     const other = await test.connect("connection-2")
     await other.list()
-    const resumed = other.agent.request(methods.agent.session.resume, {
-      sessionId: SESSION,
-      cwd: "/",
-    })
-    await waitFor(() =>
-      expect(test.logged()).toContainEqual(
-        expect.objectContaining({ connectionId: "connection-2" })
-      )
-    )
+    const resume = (browser: Pick<Browser, "agent">) =>
+      browser.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+      })
+    // A slow provider's model read: the prompting tab's resume answers once
+    // its wait for it is over, and the other's, begun a second later, still
+    // waits on the same read as the turn starts.
+    const clock = useFakeClock()
+    const opened = resume(test)
+    await clock.advance(1_000)
+    const resumed = resume(other)
+    await clock.advance(SETUP_READ_MS - 1_000)
+    await opened
+    vi.useRealTimers()
 
     const messageId = await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
@@ -3331,6 +3600,7 @@ describe("Session rooms", () => {
   it("streams each event once to a browser that follows twice at once", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     await prompt(test, "Summarize")
     await waitFor(() => expect(test.start).toHaveBeenCalledTimes(1))
     test.sources[0]?.emit(turnStarted())
@@ -3410,6 +3680,7 @@ describe("Session rooms", () => {
       rows: [sessionRow(), sessionRow({ id: "session-2" })],
     })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
     await open(other, { sessionId: "session-2" })
     const from = other.recorder.entries.length
@@ -3528,6 +3799,7 @@ describe("Session rooms", () => {
       },
     })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
 
     const from = other.recorder.entries.length
@@ -3544,9 +3816,68 @@ describe("Session rooms", () => {
     other.close()
   })
 
+  it.each([
+    {
+      stop: "fails before it reaches the runtime",
+      code: RequestError.internalError().code,
+      async close(test: Awaited<ReturnType<typeof harness>>) {
+        test.sources[0]?.stop.mockRejectedValueOnce(
+          new ServerTurnStopNotDispatchedError(new Error("refused"))
+        )
+        return await test.agent
+          .request(methods.agent.session.close, { sessionId: SESSION })
+          .catch((cause: unknown) => cause)
+      },
+    },
+    {
+      stop: "is never confirmed",
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+      async close(test: Awaited<ReturnType<typeof harness>>) {
+        const clock = useFakeClock()
+        const closing = test.agent
+          .request(methods.agent.session.close, { sessionId: SESSION })
+          .catch((cause: unknown) => cause)
+        await clock.advance(CLOSE_DEADLINE_MS)
+        return await closing
+      },
+    },
+    // The deadline bounds the whole close, its Stop's own call too.
+    {
+      stop: "is never answered",
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+      async close(test: Awaited<ReturnType<typeof harness>>) {
+        const clock = useFakeClock()
+        test.sources[0]?.stop.mockImplementationOnce(
+          () => new Promise<never>(() => {})
+        )
+        const closing = test.agent
+          .request(methods.agent.session.close, { sessionId: SESSION })
+          .catch((cause: unknown) => cause)
+        await clock.advance(CLOSE_DEADLINE_MS)
+        return await closing
+      },
+    },
+  ])(
+    "answers a close whose Stop $stop with its error, and keeps the closer on the Session",
+    async ({ close, code }) => {
+      const test = await harness({ providerIds: true })
+      await test.list()
+      await open(test)
+      await liveTurn(test, [test])
+
+      expect(await close(test)).toMatchObject({ code })
+      // The closer is still a member: the turn's next words reach it.
+      chunk(test.sources[0], "Still here")
+      test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+      await test.recorder.wait(said("Still here"), "the turn's next words")
+      test.close()
+    }
+  )
+
   it("sends nothing to a browser that closed the Session", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
+    await open(test)
     const other = await openInSecondTab(test)
     await other.agent.request(methods.agent.session.close, {
       sessionId: SESSION,
@@ -3598,6 +3929,7 @@ describe("Reloading a running turn", () => {
     const history: StoredMessages = []
     const test = await harness({ providerIds: true, history })
     await test.list()
+    await open(test)
     const messageId = await liveTurn(test, [test])
     history.push(...storedLiveTurn({ promptId: messageId }))
 
@@ -3655,6 +3987,7 @@ describe("Reloading a running turn", () => {
   it("dates the replayed turn where it began, not when it is replayed", async () => {
     const test = await harness({ providerIds: true, history: storedLiveTurn() })
     await test.list()
+    await open(test)
     const admittedAt = Date.now() - 30_000
     const clock = vi.spyOn(Date, "now").mockReturnValue(admittedAt)
     try {
@@ -4114,6 +4447,7 @@ describe("History pages", () => {
 
     await expect(older(test, cursorOf(5))).rejects.toMatchObject({
       code: notFound().code,
+      data: { sessionId: SESSION },
     })
     await test.create()
     expect(historyOf(await older(test, cursorOf(5), CREATED))).toEqual({

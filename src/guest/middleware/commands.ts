@@ -120,6 +120,11 @@ export function createCommandsMiddleware(): Middleware {
         if (refusedText(text)) throw new CommandRefusedError("invalid")
         return next({ sessionId, requestId, text })
       },
+      // ACP's close stops the Session's background work too, but a guest can
+      // neither see the operator's nor stop it: its close stops the turn
+      // alone, whatever its connection was told.
+      close: async ({ sessionId }, next) =>
+        next({ sessionId, stopsBackground: false }),
       // Read state belongs to the operator; a guest's exposure moves nothing.
       focus: async () => undefined,
     },

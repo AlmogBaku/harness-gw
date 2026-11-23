@@ -9,7 +9,7 @@ import {
   type Middleware,
 } from "./member"
 
-const close = { sessionId: "session-1" }
+const close = { sessionId: "session-1", stopsBackground: true }
 const prompt = (text: string): MemberEvent => ({
   sessionId: "session-1",
   kind: "prompt",
@@ -29,7 +29,7 @@ describe("member stack", () => {
       commands: {
         close: async (command, next) => {
           order.push(`${name}:${command.sessionId}`)
-          await next({ sessionId: `${command.sessionId}>${name}` })
+          await next({ ...command, sessionId: `${command.sessionId}>${name}` })
           order.push(`${name}:done`)
         },
       },

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import { HermesAgentNotFoundError, HermesSessionNotFoundError } from "./adapter"
 import {
+  HermesModelChoiceRefusedError,
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
   createHermesWorkspaceOperations,
@@ -278,7 +279,7 @@ describe("Hermes workspace operations", () => {
           // Neither half is written when the other is rejected.
           effortId: "high",
         })
-      ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+      ).rejects.toBeInstanceOf(HermesModelChoiceRefusedError)
       expect(request).not.toHaveBeenCalled()
     }
   )
@@ -571,7 +572,7 @@ describe("Hermes workspace operations", () => {
       operations.updateModel("research", "hermes:research:stored-1", {
         effortId: "turbo",
       })
-    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+    ).rejects.toBeInstanceOf(HermesModelChoiceRefusedError)
     expect(request).not.toHaveBeenCalled()
   })
 
@@ -596,7 +597,7 @@ describe("Hermes workspace operations", () => {
       set.operations.updateModel("research", "hermes:research:stored-1", {
         effortId: "",
       })
-    ).rejects.toBeInstanceOf(HermesWorkspaceUnavailableError)
+    ).rejects.toBeInstanceOf(HermesModelChoiceRefusedError)
     expect(unset.request).not.toHaveBeenCalled()
     expect(set.request).not.toHaveBeenCalled()
   })

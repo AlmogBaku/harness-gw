@@ -80,13 +80,18 @@ any socket or route is reached:
 The response carries an `Acp-Connection-Id` header. A client sends
 `initialize` and receives capabilities in `_meta.hgw`. On reconnect, send
 `initialize` again and then `session/resume` with the `_hgw/position` cursor
-naming the first sequence not yet observed. When the cursor is beyond bounded
+naming the first sequence not yet observed: a Session is active only on the
+connection that created or resumed it (see
+[Session lifecycle methods](#session-lifecycle-methods)), so nothing is
+prompted or configured on the new one before its resume. When the cursor is beyond bounded
 replay, the same resume rebuilds the Session from history, as described under
 [Response `_meta.hgw` shapes](#response-_metahgw-shapes).
 
 The SDK client reconnects with jittered backoff starting at 250 ms, capped at
 5 000 ms, and resetting once every resumed Session has rejoined or the link has
-been stable for a while. A guest connection re-sends `auth/login` after every
+been stable for a while. A `4409` within 60 s of that rejoin
+(`FELL_BEHIND_WINDOW_MS`) takes the reset back, so a reader that keeps falling
+behind a running turn backs off as any repeated failure does. A guest connection re-sends `auth/login` after every
 transport recovery before resuming sessions. A read (`_hgw/agents/list`,
 `session/list`, `_hgw/sessions/search`) that its transport closes under, or
 that is made while the client reconnects, goes out again once a transport has
@@ -103,9 +108,19 @@ Close codes the gateway sends:
 | `1008` | Policy violation (expired credential, rate or frame size exceeded, or another protocol limit the ACP SDK enforces)                                 | No reconnect; ends connection |
 | `1013` | Gateway at capacity                                                                                                                                | Backs off 30–60 s with jitter |
 | `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
-| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, or its waiting requests passed that buffer                       | Normal reconnect              |
+| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, its waiting requests passed that buffer, or a Session left it behind | Normal reconnect; within 60 s of a rejoin, the backoff grows |
 
 Any other code triggers a normal reconnect.
+
+What bounds a slow reader is the socket and each Session's stream, never a
+deadline on a Session it holds. The ACP SDK holds output once 8 MiB is unsent
+and closes a reader that drains none of it for 60 s. A Session streams each
+member through a queue of `limits.subscriberEvents` events and
+`limits.subscriberBytes` bytes: a member whose queue overflows is rebuilt from
+history in standard updates, once per turn. One that overflows the same turn
+again, or whose view cannot be rebuilt, is not kept on the Session: the
+gateway closes its connection with `4409`, which ends every Session's activity
+on it, and the client reconnects and resumes each one.
 
 A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
 itself before the gateway reads it, so the client never sends one: it refuses
@@ -113,10 +128,16 @@ an oversized prompt or steer locally with `requestTooLarge`.
 
 ACP uses no JSON-RPC batches. A frame holding a JSON array is answered with one
 `-32600` Invalid Request error whose `id` is `null`, and none of its messages
-runs. A guest reads that answer as it reads every error reply (see
-[Guest listener](#guest-listener)). The gateway writes no batch either; one
-written all the same reaches a guest with each entry made public as a lone
-reply is.
+runs; a frame that is not JSON gets `-32700` Parse error, `id` `null` too. ACP
+v2 request ids are strings or integers: a request whose id is `null` or a
+number that is no integer gets the same `-32600` under `id` `null`, and does
+not run. The gateway answers the non-integer one itself once `initialize` was
+sent, before the ACP SDK sees it (`src/acp/socket.ts`), as the SDK would
+otherwise hold a record of each such request until the socket closed. A
+guest reads each of these answers as it reads every error reply (see
+[Guest listener](#guest-listener)): `malformed_request` and `parse_error`. The
+gateway writes no batch either; one written all the same reaches a guest with
+each entry made public as a lone reply is.
 
 ## Handshake: `initialize` and `auth/login`
 
@@ -205,10 +226,10 @@ invited conversation by its reference alone; any other Session id is
 | Method                                                                                                                                       | Guest behavior                                                                                                                               |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `session/resume`                                                                                                                             | The invited conversation only. A fresh invitation with no Session yet answers idle with nothing to replay.                                   |
-| `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
+| `session/prompt`                                                                                                                             | Sends, once the guest resumed the invited conversation; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
 | `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
-| `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
+| `session/close`                                                                                                                              | Stops the invited conversation's turn for every member, then detaches. Unlike an operator's close, it stops no background child: a guest is told of none, and can neither see nor stop the operator's background work. |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
 | `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
 | `session/new`, `session/list`, `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded: ACP's code for a method that "does not exist or is not available", which these are to a guest, though the session capability promises `session/new` and `session/list`. |
@@ -243,7 +264,15 @@ Guest errors carry only a public code (`PUBLIC_ERRORS`,
 `src/acp/validation.ts`): an error reply keeps its JSON-RPC code
 with the code's public name as its message, and an `_hgw/error` notification
 keeps only a public code. Any other failure reads `-31013`
-`temporarily_unavailable`.
+`temporarily_unavailable`. No reply keeps `data`, but a `-32002`: it carries
+`data: { sessionId }`, the `sessionId` the guest's own request named, when
+that was a string, and nothing the gateway wrote (`src/acp/socket.ts`), so a
+guest is shown its invitation's reference and never the native id behind it.
+Only a request the ACP SDK answers under its own id is remembered for this:
+one with the `jsonrpc: "2.0"` envelope, an integer id or a string one, and a
+`sessionId`, each string at most 1024 characters, and at most 64 of them
+unanswered on one socket; a request past that bound is answered without
+`data`.
 
 ## Session lifecycle methods
 
@@ -251,14 +280,97 @@ keeps only a public code. Any other failure reads `-31013`
 `session/cancel`, `session/close`, `session/delete`, `session/set_config_option`
 (model → `category: "model"`, effort → `category: "thought_level"`).
 
+A Session's config options are two selects, the model and the selected
+model's thought level:
+
+- A `session/set_config_option` names one of them, `type: "id"`, and a `value` it offers now: as
+  the Session's model reading holds it while a member follows the Session and
+  nothing changed since, or else as one read of the runtime. Any other
+  `configId`, `type` or `value` answers `-32602` and changes nothing.
+- The writing connection is sent the write's `config_option_update`, the
+  complete list the answer carries, before the answer. Every other member is
+  sent the options read afresh once the answer is written, and every member
+  then the `usage_update` whose window the model moved. The writer is not sent
+  the same options again.
+- Each `currentValue` is one of its option's values, each value listed once. A
+  current model the catalog does not list, as a switch a turn reports mid-turn
+  may name, leads in a group of its own (`groupId: "current"`,
+  `name: "Current"`) under its id. Thought levels go from lowest to highest,
+  as ACP asks: a current one off the model's ladder, whose rank is unknown,
+  follows the ladder under its id; the provider's own default, which reports
+  no effort, is `""` (`name: "Default"`), leads it, and is offered only while
+  it holds.
+
+A Session is **active** on a connection from a `session/new`, `session/fork`
+or `session/resume` there that succeeded until `session/close`,
+`_hgw/session/part`, or the connection's end; a resume that fails leaves a
+Session it found inactive as it was. `session/prompt` and
+`session/set_config_option` need the Session active, and answer `-32002` with
+`data.sessionId` otherwise, before anything else is checked: a client resumes a
+Session, on every new connection too, before it prompts it or changes its
+model or thought level. A guest's resume of a fresh invitation makes it
+active, and its first prompt then creates the conversation; one that never
+resumed it creates nothing. A busy Session still refuses a prompt with
+`-31010` once it is active. `session/cancel` of a Session not active here is
+ignored, and `_hgw/session/steer` and an older page answer `-32002`;
+`session/fork`, `session/delete`, `_hgw/session/update` and
+`_hgw/session/focus` act on any Session the connection was told of by a list,
+search, create, or resume, active or not.
+
 `session/close` stops the Session's active work for every member and then
-detaches this connection. `_hgw/session/part` (`HgwSessionPartRequestSchema`,
-`protocol/acp.ts`) only detaches this connection; the Session's work and all other
-members continue. `session/delete` of a Session not known to this connection
-succeeds rather than returning not-found. The SDK client parts a Session its
-last listener left, after a 2 s grace, and closes one only when asked
-(`closeSession`), forgetting it at once with no part; as ACP asks, it takes a
-`-32002` answer to `session/close` or `session/delete` as success.
+detaches this connection: its turn, as `session/cancel` does, and then its
+background work, each child still at work after its turn that this connection
+was told of (see [Child Sessions](#child-sessions)). The closer is shown how a
+turn it stopped ended, its final updates and its idle `state_update` with
+`stopReason: "cancelled"`, before the answer; closing an idle Session sends no
+idle of its own. The whole close, its Stop, the wait for the turn's end, and
+its background stops, shares one 30 s deadline (`CLOSE_DEADLINE_MS`), well
+under the SDK client's 45 s request deadline. A close whose Stop fails answers
+that failure, and one the runtime does not confirm within the deadline answers
+`-31014` `uncertain_mutation`: either way the Session stays active on the
+connection, which is shown the turn's end once it comes, and the close may be
+sent again. Freeing an unprompted Session (below) holds the answer only until
+the deadline, as the closer has left. Closing is idempotent: a close of a Session not active on this
+connection, already closed, gone, or never known answers `{}`, as a close of a
+fresh invitation does, which only detaches it. `_hgw/session/part`
+(`HgwSessionPartRequestSchema`, `protocol/acp.ts`) only detaches this
+connection; the Session's work and all other members continue.
+
+`session/delete` closes the Session first, as a close on every connection
+would: it stops the turn and waits, as a close does, until each member was
+shown how it ended, and stops every background child still at work; then the
+runtime deletes the Session, and once it holds it no longer, deleted or
+already gone, this connection is detached, as its close would detach it, and
+every other member is told it is gone with an `_hgw/error` `not_found` and
+detached. The whole delete, its close and the runtime's delete, shares one
+30 s deadline (`CLOSE_DEADLINE_MS`). The deleter, if a member, is shown how a
+turn the delete stopped ended, its final updates and its idle `state_update`
+with `stopReason: "cancelled"`, before the answer, within that deadline, as
+its close would show it. It waits for each other member to be shown the
+turn's end for at most 5 s (`DELETE_SHOWN_MS`) and then goes on without it,
+so one member's slow socket never fails another's delete: such a member is
+told the Session is gone without the turn's updates it was not yet written.
+A delete whose Stop fails, or goes unconfirmed, answers as a close would and
+deletes nothing; one the runtime refuses answers that failure, and one whose
+runtime delete is not confirmed within the deadline answers `-31014`; in each
+case the Session stays active on the connection, as after a failed close, so
+the delete may be sent again, and a delete that lands after its `-31014`
+tells this connection the Session is gone as it tells every other member. A deleted Session that was
+unprompted is not discarded afterwards: nothing is left to free, and a resume
+or a prompt of it answers `-32002` from then on, as one discarded does
+(below). A Session a prompt reached is left to the runtime's own answer once
+deleted, since a runtime may make a conversation anew under its key itself, as
+an OpenClaw channel does. A delete of
+a Session not known to this connection succeeds rather than returning
+not-found. The SDK client parts a Session its last listener left, after a
+2 s grace, and closes one only when asked (`closeSession`): no grace parts it
+while the close is out, and it forgets the Session, with no part, once the
+close succeeded, while a close that fails leaves it opened and joined, so it
+may be closed again. A delete (`deleteSession`) does the same, and once it
+succeeded, the gateway having told the deleter nothing, the Session's
+listeners hear it `gone`, as for a Session the gateway reports gone, before it
+is forgotten. As ACP asks, it takes a `-32002` answer to `session/close` or
+`session/delete` as success.
 
 A Session a `session/new` created is **unprompted** until the first prompt is
 sent to its runtime, whether or not the runtime confirms the start, or until
@@ -276,12 +388,14 @@ and that no member, joining or joined, of either listener, is on the Session,
 and takes it as discarding in the same turn. From then on a resume or a prompt
 of it answers `-32002`, and a client that still wants it creates a new one. The
 runtime then frees it (`discardSession`): Hermes, which lists no Session before
-its first turn, closes its live Session; OpenCode and OpenClaw delete it only
+its first turn, closes its live Session, and deletes the empty row a resume of
+its key may have written; OpenCode and OpenClaw delete it only
 after their own read shows no message and no running turn, and keep any other,
 which is listed again. A Session the runtime already reports gone counts as
-discarded. Once the discard settles the mark ends. A discarded Session stays
-`-32002` here however long after, among the last 4096 the gateway discarded
-(`DISCARDED_REFUSALS`), and out of every list: OpenCode and OpenClaw answer
+discarded. Once the discard settles the mark ends. A discarded Session, and
+an unprompted one deleted, stays `-32002` here however long after, among the
+last 4096 the gateway discarded or deleted so (`DISCARDED_REFUSALS`), and out
+of every list: OpenCode and OpenClaw answer
 not found for it themselves, but Hermes makes a server-minted draft anew for
 any resume of its key, so the gateway's own answer is what keeps a client
 that held one from bringing it back. A discard that fails for any other
@@ -311,8 +425,9 @@ Agents skips, and logs, any Agent with no folder (`session.list.no_folder`) or a
 unreadable one (`session.list.folder_read_failed`), and still lists every other
 Agent's rows; a list on one Agent's address answers either as an error.
 `session/delete` on the shared address for a Session this connection never
-listed or resumed returns invalid params naming the per-Agent address; on an
-Agent's address a Session that is already gone deletes successfully.
+listed or resumed cannot tell which Agent owns it, so it deletes nothing and
+succeeds silently, as ACP has a delete of a Session that never existed do; on
+an Agent's address a Session that is already gone deletes successfully.
 
 **`session/fork`** (operator listener only): answers the `sessionId` and setup
 (see [Response `_meta.hgw` shapes](#response-_metahgw-shapes)) of a new
@@ -338,7 +453,10 @@ Agent before listing. A position in `_meta.hgw` (version 1's `after` and
 `replayFrom` is one of:
 
 - absent: nothing is replayed, as ACP asks. The view follows the live turn from
-  its next event, and is never rebuilt from history.
+  its next event, and is never rebuilt from history. The SDK client resumes so
+  a Session it opened with `subscribe(sessionId, listener, { replay: false })`,
+  as a send from outside the Session's view does, while no subscription asks
+  for a replay; one that then asks has it replayed from `start`.
 - `{ type: "start" }`: the whole Session is replayed.
 - `{ type: "_hgw/position", turnId?, from? }` (`HGW_REPLAY_POSITION`,
   `HgwReplayPositionSchema`): the reconnect cursor. `from` is the first
@@ -882,7 +1000,14 @@ Later reports patch it.
   `background: true`, so no reader takes it as a position in that turn's
   stream; its requests are answered, and its `cancel` honored, without any
   turn. The parent first reports each child that outlives its turn as
-  `running`. A Session nobody watches any longer still follows its children
+  `running`. As ACP has it, `session/cancel` of the parent asks nothing of
+  such a child (a runtime may still end it with the turn, as Hermes does),
+  and `session/close` of the parent stops each one still at work that the
+  closing connection was told of, through the runtime's own stop of a child,
+  as a `cancel` of the child would; a child the runtime cannot stop alone
+  runs on. A guest's close stops none, whatever its connection was told: a
+  guest is told of no child, and its stack's close asks no background work
+  stopped. A Session nobody watches any longer still follows its children
   for a minute, so a reload or a reconnect comes back to them followed: a
   connection that joins is told each one's latest report, and each open
   request, including those of a child that ended in that minute. No turn's
@@ -963,13 +1088,17 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 
 **ACP standard codes:**
 
-| Code     | SDK constructor      | Meaning                                              |
-| -------- | -------------------- | ---------------------------------------------------- |
-| `-32000` | `authRequired()`     | Authentication required (guest: no valid invitation) |
-| `-32002` | `resourceNotFound()` | Agent or Session does not exist                      |
-| `-32601` | `methodNotFound()`   | Method does not exist, or is not available here      |
-| `-32602` | `invalidParams()`    | Request parameters failed validation                 |
-| `-32800` | `requestCancelled()` | Request timed out or the transport closed            |
+| Code     | SDK constructor                           | Meaning                                              |
+| -------- | ----------------------------------------- | ---------------------------------------------------- |
+| `-32000` | `authRequired()`                          | Authentication required (guest: no valid invitation) |
+| `-32002` | `sessionNotFound()`, `resourceNotFound()` | Session or Agent does not exist, or Session inactive |
+| `-32601` | `methodNotFound()`                        | Method does not exist, or is not available here      |
+| `-32602` | `invalidParams()`                         | Request parameters failed validation                 |
+| `-32800` | `requestCancelled()`                      | Request timed out or the transport closed            |
+
+A `-32002` answering a request that names a Session carries
+`data: { sessionId }`, the id the request named, whatever it was that could
+not be found; one answering any other request carries no `data`.
 
 **Gateway codes (`HGW_JSONRPC_ERRORS`, block from -31010):**
 
@@ -994,6 +1123,8 @@ The machine name an error travels as — the `message` of a public reply, and th
 
 | Code     | Machine name              |
 | -------- | ------------------------- |
+| `-32700` | `parse_error`             |
+| `-32600` | `malformed_request`       |
 | `-32000` | `authentication_required` |
 | `-32002` | `not_found`               |
 | `-32601` | `method_not_found`        |

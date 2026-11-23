@@ -46,6 +46,28 @@ describe("SessionReporter", () => {
     expect(read).toHaveBeenCalledTimes(1)
   })
 
+  it("holds a current value only while someone follows it and nothing changed since its read", async () => {
+    const clock = useFakeClock()
+    const read = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("before")
+      .mockResolvedValue("after")
+    const reporter = cells(read)
+    const leave = reporter.subscribe("session-1", scope, "browser", listener())
+    await clock.advance(0)
+    expect(reporter.current("session-1")).toBe("before")
+
+    // A change reported is not current until its read lands.
+    reporter.report("session-1")
+    expect(reporter.current("session-1")).toBeUndefined()
+    await clock.advance(0)
+    expect(reporter.current("session-1")).toBe("after")
+
+    // Nobody keeps a cell nobody follows current.
+    leave()
+    expect(reporter.current("session-1")).toBeUndefined()
+  })
+
   it("keeps delivering a released cell's readings to a listener it still has", async () => {
     const clock = useFakeClock()
     const read = vi

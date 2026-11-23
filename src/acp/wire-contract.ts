@@ -54,7 +54,6 @@ import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredGateway } from "../composition"
 import { stubUnreachableTransports, until } from "../core/runtime-contract"
 import { CredentialValues } from "../redaction"
-import { PUBLIC_ERRORS } from "./validation"
 
 /** The contract's rows, each named for the rule it protects. */
 export type WireContractRow =
@@ -611,14 +610,45 @@ async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
   return client
 }
 
+/** One frame the gateway sent a client, as JSON-RPC shapes it. */
+type WireFrame = {
+  method?: string
+  params?: { update?: SessionUpdate }
+  result?: unknown
+  error?: { code?: unknown }
+}
+
+/** Every frame the gateway sent `client`, in order. */
+function framesOf(client: WireClient) {
+  return client.bridge
+    .sockets()
+    .flatMap(({ frames }) => frames.map((raw) => JSON.parse(raw) as WireFrame))
+}
+
 /** The code of each error answer the gateway sent `client`, in order. */
 function errorCodes(client: WireClient) {
-  return client.bridge.sockets().flatMap(({ frames }) =>
-    frames.flatMap((raw) => {
-      const { error } = JSON.parse(raw) as { error?: { code?: unknown } }
-      return error ? [error.code] : []
-    })
+  return framesOf(client).flatMap(({ error }) => (error ? [error.code] : []))
+}
+
+/**
+ * Each update `client` read off the wire before the first answer `answers`
+ * picks out, or every one when none does.
+ */
+function updatesBefore(
+  client: WireClient,
+  answers: (result: unknown) => boolean
+) {
+  const frames = framesOf(client)
+  const answer = frames.findIndex(
+    (frame) => "result" in frame && answers(frame.result)
   )
+  return frames
+    .slice(0, answer < 0 ? undefined : answer)
+    .flatMap(({ method, params }) =>
+      method === methods.client.session.update && params?.update
+        ? [params.update]
+        : []
+    )
 }
 
 /** Every frame the gateway sent `client` that names `id` anywhere in it. */
@@ -2222,7 +2252,7 @@ export function runWireListenerContract(
       )
 
       it(
-        "closes a joined Session by stopping its work for every member, and parts only the closer",
+        "closes a joined Session by stopping its work for every member, showing the closer how it ended before the answer, and parts only the closer",
         wireCase(createRuntime, async ({ clock, turn, connectPlain }) => {
           const questions = questionsOf(turn)
           const plain = connectPlain()
@@ -2252,12 +2282,19 @@ export function runWireListenerContract(
 
           expect(await closed).toBe("closed")
           expect(states(reader.updates).at(-1)).toBe("idle:cancelled")
-          // The SDK's client reads a close of a Session gone as done, so the
-          // answer that says so is read off the wire.
+          // The closer read the turn's end before the close's answer, the
+          // first `{}` it was sent.
+          expect(
+            states(
+              updatesBefore(plain, (result) => JSON.stringify(result) === "{}")
+            ).at(-1)
+          ).toBe("idle:cancelled")
+          // A close is idempotent, so a second one answers as the first did.
+          // The SDK's client reads a `-32002` answer as done too, so each
+          // answer is read off the wire.
           expect(await close(plain)).toBe("closed")
-          expect(errorCodes(plain)).toEqual([
-            RequestError.resourceNotFound().code,
-          ])
+          expect(await close(plain)).toBe("closed")
+          expect(errorCodes(plain)).toEqual([])
           expect(await close(reader)).toBe("closed")
           expect(errorCodes(reader)).toEqual([])
         })
@@ -2283,7 +2320,7 @@ export function runWireListenerContract(
       )
 
       it(
-        "shows a guest each error reply as its public code and name alone, a batch's refusal too",
+        "shows a guest each error reply as its public code and name alone, a refused batch and an unreadable frame too",
         wireCase(createRuntime, async ({ gateway, agentId, clock }) => {
           const guest = gateway.guest!
           const ref = "wire-contract"
@@ -2319,6 +2356,7 @@ export function runWireListenerContract(
               },
             ])
           )
+          raw.send("{not json")
           raw.send(
             JSON.stringify({
               jsonrpc: "2.0",
@@ -2331,15 +2369,27 @@ export function runWireListenerContract(
           const replies = [
             await until(clock, raw.next()),
             await until(clock, raw.next()),
+            await until(clock, raw.next()),
           ]
 
           expect(JSON.stringify(replies)).not.toContain("internal detail 7f3a")
+          // Each keeps its JSON-RPC code, as every guest error reply does.
           expect(replies).toEqual([
-            // As every guest error reply reads.
             {
               jsonrpc: "2.0",
               id: null,
-              error: PUBLIC_ERRORS.reply(RequestError.invalidRequest().code),
+              error: {
+                code: RequestError.invalidRequest().code,
+                message: "malformed_request",
+              },
+            },
+            {
+              jsonrpc: "2.0",
+              id: null,
+              error: {
+                code: RequestError.parseError().code,
+                message: "parse_error",
+              },
             },
             {
               jsonrpc: "2.0",

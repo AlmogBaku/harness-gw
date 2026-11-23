@@ -424,8 +424,56 @@ describe("operator ACP listener", () => {
     expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(JSON.stringify(turnUpdates(test.recorder))).not.toContain("end_turn")
     expect(usageUpdates(test.recorder)).toHaveLength(1)
+    expect(test.fellBehind).not.toHaveBeenCalled()
     test.close()
   })
+
+  // A member the Session leaves behind is never left holding it: its socket
+  // closes as a reader that fell behind, and its client resumes.
+  it.each([
+    [
+      "falls behind the same turn again",
+      async (test: Harness, burst: () => void) => {
+        burst()
+        await test.recorder.wait(
+          (entry) => JSON.stringify(entry.params).includes("Here they are"),
+          "the rebuilt view"
+        )
+        await settled()
+        expect(test.fellBehind).not.toHaveBeenCalled()
+        burst()
+      },
+    ],
+    [
+      "cannot be rebuilt",
+      async (test: Harness, burst: () => void) => {
+        test.faults.failOnce("history")
+        burst()
+      },
+    ],
+  ])(
+    "closes the socket of a browser whose view %s",
+    async (_label, fallBehind) => {
+      // One event of queue, so each burst outruns the send the pump awaits.
+      const test = await harness({ maxSubscriberEvents: 1 })
+      const { source } = await runningTurn(test, "Summarize")
+      source.emit(turnStarted())
+      const burst = () => {
+        for (const delta of ["one", "two", "three", "four"])
+          source.emit({
+            kind: TurnEventKind.MessageChunk,
+            messageId: "assistant-1",
+            text: delta,
+          })
+      }
+
+      await fallBehind(test, burst)
+
+      await vi.waitFor(() => expect(test.fellBehind).toHaveBeenCalledOnce())
+      source.finish()
+      test.close()
+    }
+  )
 
   // ACP scopes a question to its Session and, optionally, to the tool call
   // that asked it, so a client can show it on that call.
@@ -1113,6 +1161,45 @@ describe("operator ACP listener", () => {
       )
       test.close()
     })
+
+    // ACP's cancel stops the foreground alone; its close, and a delete, which
+    // closes first, stop the background work too: each child still at work,
+    // and nothing already over.
+    it.each([
+      ["closes", methods.agent.session.close],
+      ["is deleted", methods.agent.session.delete],
+    ] as const)(
+      "stops each child still at work as its parent %s, and none as it is cancelled",
+      async (_ending, method) => {
+        const { test, listener, turnId, stopChild } = await outlived()
+        for (const [childSessionId, status] of [
+          ["child-2", ChildSessionStatus.Running],
+          ["child-3", ChildSessionStatus.Idle],
+        ] as const)
+          listener.onChild!(turnId, {
+            kind: TurnEventKind.ChildSessionUpdated,
+            childSessionId,
+            status,
+          })
+        await test.recorder.wait(
+          (entry) => JSON.stringify(entry.params).includes("child-3"),
+          "the child that is over"
+        )
+
+        await test.agent.notify(methods.agent.session.cancel, {
+          sessionId: CREATED,
+        })
+        await test.agent.request(method, { sessionId: CREATED })
+
+        expect(stopChild.mock.calls).toEqual(
+          ["child-1", "child-2"].map((childSessionId) => [
+            expect.objectContaining({ sessionId: sessionId(CREATED) }),
+            childSessionId,
+          ])
+        )
+        test.close()
+      }
+    )
   })
 
   // ACP replays a child through its parent's from-start resume: the child's

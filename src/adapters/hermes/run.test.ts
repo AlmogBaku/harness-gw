@@ -5910,9 +5910,10 @@ describe("Hermes child Sessions", () => {
 
   /**
    * A turn whose child is still at work when it ends, on a Session someone
-   * watches: every observer of the parent's live Session sees its frames.
+   * watches: every observer of the parent's live Session sees its frames. The
+   * turn completes, or ends as a Stop ends it when `stopped`.
    */
-  async function outlived() {
+  async function outlived({ stopped = false } = {}) {
     const observers = new Map<string, Set<AttachmentObserver>>()
     let latestSeq = 0
     const publish = (event: NativeFrame) => {
@@ -5946,7 +5947,10 @@ describe("Hermes child Sessions", () => {
     publish(started(t))
     await new Promise((resolve) => setTimeout(resolve, 0))
     publish(t.toolComplete("delegate-1", "delegate_task", { results: [] }))
-    publish(t.complete("m1", "Done."))
+    if (stopped) {
+      await handle.stop()
+      publish(t.complete("m1", "", "interrupted"))
+    } else publish(t.complete("m1", "Done."))
     const events = await collect(handle)
     return {
       ...delegation,
@@ -6018,6 +6022,26 @@ describe("Hermes child Sessions", () => {
     // Over, the child has nothing left to stop.
     await engine.stopChild(scope, CHILD)
     expect(interrupts).toHaveLength(1)
+  })
+
+  // ACP's cancel stops the foreground alone: the parent's Stop asks nothing of
+  // a child at work, which goes on as background work until a close stops it
+  // by name. (Hermes itself may halt it with the turn; it reports that too.)
+  it("asks nothing of a child at work as its parent's turn stops", async () => {
+    const { interrupts, listener, turnId, events } = await outlived({
+      stopped: true,
+    })
+
+    expect(events.at(-1)).toMatchObject({
+      kind: TurnEventKind.TurnEnded,
+      stopReason: StopReason.Cancelled,
+    })
+    expect(interrupts).toEqual([])
+    expect(listener.onChild).toHaveBeenCalledWith(turnId, {
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: CHILD,
+      status: ChildSessionStatus.Running,
+    })
   })
 
   // Hermes reports every child on the parent's live Session, whichever turn

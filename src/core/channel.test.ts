@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { useFakeClock } from "../../test/support/fake-clock"
 import { captureLogs } from "../../test/support/log-capture"
 import { defaultClock } from "../../lifecycle"
 import {
@@ -22,12 +23,14 @@ import {
   type SessionScope,
 } from "./runtime"
 import {
+  CloseUnconfirmedError,
   createChannels,
   type MembershipDelivery,
   type ChannelScope,
   type ChannelTurn,
 } from "./channel"
 import { providerSessionId, sessionId } from "./ids"
+import { CLOSE_DEADLINE_MS, DELETE_SHOWN_MS } from "./limits"
 import type { SessionCoordinator } from "./session-coordinator"
 
 /** No test here reads history; a channel that did would fail loudly. */
@@ -97,6 +100,7 @@ function member(
     child: () => undefined,
     offerChild: () => undefined,
     withdrawChild: () => undefined,
+    shown: async () => undefined,
   }
   return {
     fake,
@@ -540,6 +544,58 @@ const GUEST_SCOPE: SessionScope = {
   sessionId: sessionId("thread-guest"),
 }
 
+describe("a delete's wait for its members", () => {
+  // One member's slow reader never fails the delete for another, while the
+  // deleter is shown its turn's end before its answer, as its close would be.
+  it.each([
+    [
+      "any other member for at most its wait, and then goes on",
+      false,
+      "stopped",
+    ],
+    [
+      "the deleter for its whole deadline, as its close would",
+      true,
+      "unconfirmed",
+    ],
+  ])("waits on %s", async (_member, deleting, outcomeAtEnd) => {
+    const clock = useFakeClock()
+    const channels = createChannels({
+      coordinator: {
+        ...HOLDING,
+        snapshot: () => ({ state: "running" }),
+        state: () => "running",
+        stop: async () => "stopping",
+        idle: async () => undefined,
+      } as unknown as SessionCoordinator,
+      runtime: NO_HISTORY,
+      logger: captureLogs().logger,
+    })
+    const slow: MembershipDelivery = {
+      ...member().fake,
+      shown: () => new Promise<void>(() => {}),
+    }
+    channels.add(SCOPE, slow, { hasPrompt: false })
+    let outcome: unknown
+    void channels
+      .closing((signal) =>
+        channels.stopWork(SCOPE, signal, deleting ? slow : undefined)
+      )
+      .then(
+        () => (outcome = "stopped"),
+        (cause: unknown) =>
+          (outcome =
+            cause instanceof CloseUnconfirmedError ? "unconfirmed" : cause)
+      )
+
+    const wait = deleting ? CLOSE_DEADLINE_MS : DELETE_SHOWN_MS
+    await clock.advance(wait - 1)
+    expect(outcome).toBeUndefined()
+    await clock.advance(1)
+    expect(outcome).toBe(outcomeAtEnd)
+  })
+})
+
 describe("createChannel adopting runtime-started turns", () => {
   it("subscribes while the channel has members and stops when the last parts", () => {
     const runtime = adoptingHarness()
@@ -778,6 +834,7 @@ function joined(
       )
     },
     live: () => state.live,
+    fellBehind: () => undefined,
   }
   const { logger } = captureLogs()
   const membership = createChannels({
@@ -945,7 +1002,11 @@ describe("a membership's resume", () => {
       {
         principal: { id: GUEST, role: "guest" },
         middleware: [],
-        connection: { send: async () => undefined, live: () => true },
+        connection: {
+          send: async () => undefined,
+          live: () => true,
+          fellBehind: () => undefined,
+        },
       },
       SCOPE,
       {

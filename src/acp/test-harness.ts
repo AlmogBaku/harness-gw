@@ -59,6 +59,7 @@ import { withFaults, type Faults } from "./test-faults"
 import { turnError } from "./translate/updates"
 import type {
   AcpConnectionContext,
+  AcpListenerContext,
   AcpOutbound,
   ActivityFeed,
   Translators,
@@ -539,10 +540,13 @@ export type ClientAnswers = {
 /**
  * An SDK client connected in process to one gateway connection, recording every
  * notification and request it receives. Unanswered permission requests allow
- * once and unanswered questions accept, as an attentive browser would.
+ * once and unanswered questions accept, as an attentive browser would. In
+ * process there is no socket to close, so a member left behind closes nothing
+ * unless `context` says what its socket would do.
  */
 export function connectClient(
-  context: AcpConnectionContext,
+  context: AcpListenerContext &
+    Partial<Pick<AcpConnectionContext, "fellBehind">>,
   { name, permission, question }: ClientAnswers & { name: string }
 ) {
   const recorder = createRecorder()
@@ -584,7 +588,12 @@ export function connectClient(
         recorder.add({ method, params })
       }
     )
-  return { connection: clientApp.connect(createHgwAcpAgent(context)), recorder }
+  return {
+    connection: clientApp.connect(
+      createHgwAcpAgent({ fellBehind: () => undefined, ...context })
+    ),
+    recorder,
+  }
 }
 
 export type HarnessOptions = {
@@ -940,10 +949,12 @@ export async function harness(options: HarnessOptions = {}) {
     /**
      * One browser connection's side of the gateway. Every connection shares the
      * one coordinator, engine, and channels, as one deployment's listeners do.
+     * Its socket's close as a reader that fell behind is only recorded.
      */
     function contextFor(connectionId: string): AcpConnectionContext {
       const base = options.translators ?? translators
       return {
+        fellBehind: vi.fn(),
         connectionId,
         principalId: PRINCIPAL,
         publicError: (cause) => faults.runtime.publicError(cause),
@@ -1001,6 +1012,8 @@ export async function harness(options: HarnessOptions = {}) {
         close: () => connection.close(),
         initialize,
         recorder,
+        /** Each time the socket would close as a reader that fell behind. */
+        fellBehind: context.fellBehind,
         attachmentStages: context.attachmentStages,
         /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
         list: () => connection.agent.request(methods.agent.session.list, {}),

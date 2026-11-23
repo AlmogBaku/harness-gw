@@ -28,7 +28,7 @@ import {
   authenticationRequired,
   errorNotificationOf,
   invalidParams,
-  notFound,
+  sessionNotFound,
 } from "./validation"
 
 /**
@@ -247,7 +247,7 @@ export function createSessions(
         agentId === undefined
           ? undefined
           : catalog.scope(agentId, publicSessionId)
-      if (!scope) throw notFound()
+      if (!scope) throw sessionNotFound(publicSessionId)
       return scope
     },
 
@@ -277,6 +277,18 @@ export function createSessions(
     },
 
     /**
+     * The Session's membership while the Session is active on this
+     * connection, as ACP has it: from a create, fork or resume here that
+     * succeeded until a close or a part, or until the membership ends on its
+     * own, its Session gone. A fresh invitation's, which has no Session yet,
+     * counts.
+     */
+    active(publicSessionId: string) {
+      const membership = memberships.get(publicSessionId)
+      return membership?.detached ? undefined : membership
+    },
+
+    /**
      * The Session's membership on this connection, while it lasts and once
      * its Session exists.
      */
@@ -289,6 +301,13 @@ export function createSessions(
 
     part(publicSessionId: string) {
       memberships.get(publicSessionId)?.part()
+      memberships.delete(publicSessionId)
+    },
+
+    /** Parts `membership`, while it is still the Session's on this connection. */
+    leave(publicSessionId: string, membership: Membership) {
+      if (memberships.get(publicSessionId) !== membership) return
+      membership.part()
       memberships.delete(publicSessionId)
     },
 

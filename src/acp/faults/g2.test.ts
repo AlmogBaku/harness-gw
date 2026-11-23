@@ -47,11 +47,13 @@ async function running(test: Test, members: readonly Pick<Test, "recorder">[]) {
  * Each Session command, failing as the provider finds its Session gone, on a
  * turn every member follows when it acts on one. A command with an answer
  * answers not found, save a delete, which succeeds; a stop and an answer to
- * the provider's own request have none to give.
+ * the provider's own request have none to give. One that `closes` the Session
+ * on its own connection first is no member to tell.
  */
 const COMMANDS: {
   command: string
   live?: true
+  closes?: true
   fail(test: Test): Promise<void>
 }[] = [
   {
@@ -140,6 +142,8 @@ const COMMANDS: {
   })),
   {
     command: "delete",
+    // As ACP's delete closes the Session first.
+    closes: true,
     // A delete finds what it asked for: the Session is gone.
     async fail(test) {
       test.faults.failOnce("deleteSession", gone())
@@ -155,7 +159,7 @@ const COMMANDS: {
 describe("gone Session commands", () => {
   it.each(COMMANDS)(
     "ends a Session its $command finds gone for every member once, and reads it no more",
-    async ({ live, fail }) => {
+    async ({ live, closes, fail }) => {
       const test = await harness({ providerIds: true })
       const other = await test.connect("connection-2")
       await test.list()
@@ -163,27 +167,32 @@ describe("gone Session commands", () => {
       await open(test)
       await open(other)
       const members = [test, other] as const
+      const told = closes ? [other] : members
       if (live) await running(test, members)
       const clock = useFakeClock()
 
       await fail(test)
-      for (const { recorder } of members)
+      for (const { recorder } of told)
         await recorder.wait(notice, "the not_found notice")
       const ended = reads(test)
       for (const source of test.sources) source.finish()
       await clock.advance(60_000)
 
       for (const { recorder } of members)
-        expect(recorder.of(HGW_METHODS.notify.error)).toEqual([
-          {
-            method: HGW_METHODS.notify.error,
-            params: {
-              sessionId: SESSION,
-              code: "not_found",
-              message: "not_found",
-            },
-          },
-        ])
+        expect(recorder.of(HGW_METHODS.notify.error)).toEqual(
+          told.some((member) => member.recorder === recorder)
+            ? [
+                {
+                  method: HGW_METHODS.notify.error,
+                  params: {
+                    sessionId: SESSION,
+                    code: "not_found",
+                    message: "not_found",
+                  },
+                },
+              ]
+            : []
+        )
       expect(reads(test)).toBe(ended)
       expect(
         test.logs.records().filter(({ message }) => message === "session.gone")

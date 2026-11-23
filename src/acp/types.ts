@@ -90,26 +90,39 @@ type AcpConnectionBase = {
 }
 
 /**
- * One connection's context, typed by its role: only an operator reads the
- * activity feed and owns read state, since a guest learns nothing about the
- * rest of the Agent, and only a guest authenticates over ACP rather than at
- * its upgrade.
+ * Only an operator reads the activity feed and owns read state, since a guest
+ * learns nothing about the rest of the Agent, and only a guest authenticates
+ * over ACP rather than at its upgrade.
  */
-export type AcpConnectionContext = AcpConnectionBase &
-  (
-    | {
-        role: "operator"
-        activityFeed: ActivityFeed
-        readState: ReadState
-        authentication?: never
-      }
-    | {
-        role: "guest"
-        authentication: ConnectionAuthentication
-        activityFeed?: never
-        readState?: never
-      }
-  )
+type AcpConnectionRole =
+  | {
+      role: "operator"
+      activityFeed: ActivityFeed
+      readState: ReadState
+      authentication?: never
+    }
+  | {
+      role: "guest"
+      authentication: ConnectionAuthentication
+      activityFeed?: never
+      readState?: never
+    }
+
+/**
+ * One connection's context as its listener builds it, before the socket the
+ * service accepts exists, typed by its role.
+ */
+export type AcpListenerContext = AcpConnectionBase & AcpConnectionRole
+
+/** One connection's context, with what only its socket can do. */
+export type AcpConnectionContext = AcpListenerContext & {
+  /**
+   * Called by the agent once one of its Sessions left a member behind: the
+   * socket closes as a reader that fell behind (4409), which its client
+   * reconnects on and resumes each Session it holds.
+   */
+  fellBehind: () => void
+}
 
 /**
  * How a connection that authenticates over ACP proves who it acts as. It

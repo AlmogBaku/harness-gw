@@ -55,6 +55,7 @@ import {
 import { HermesNativeRuntime, type HermesTurnNative } from "./run-native"
 import {
   createHermesWorkspaceOperations,
+  HermesModelChoiceRefusedError,
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
   latestHermesTodos,
@@ -1024,8 +1025,12 @@ export class HermesServerAdapter implements ServerRuntime {
     )
       return failureOf("uncertain", cause)
     // Hermes refuses to fork a Session with no visible message yet; the same
-    // fork meets the same refusal until one is sent.
-    if (cause instanceof HermesForkRefusedError)
+    // fork meets the same refusal until one is sent. A model choice it cannot
+    // take is refused before anything is written.
+    if (
+      cause instanceof HermesForkRefusedError ||
+      cause instanceof HermesModelChoiceRefusedError
+    )
       return failureOf("invalid_request", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.
@@ -2211,7 +2216,12 @@ export class HermesServerAdapter implements ServerRuntime {
 
   /**
    * A Session Hermes has not stored yet: a draft never prompted, or one this
-   * gateway holds live while Hermes stores its first turn.
+   * gateway holds live while Hermes stores its first turn. Read with a lazy
+   * `session.resume`, as a discard probes a draft: Hermes answers it from the
+   * live Session, and finds a key it holds neither a row nor a live draft
+   * for gone, where any other resume writes that key an empty row
+   * (`_resume_materialize_minted`), bringing back a draft discarded, deleted,
+   * or lost to a Hermes restart.
    */
   async #unpersistedDraft(profile: string, storedId: string) {
     let payload: unknown
@@ -2219,6 +2229,7 @@ export class HermesServerAdapter implements ServerRuntime {
       payload = await this.transport.request("session.resume", {
         session_id: storedId,
         profile,
+        lazy: true,
         omit_messages: true,
       })
     } catch (error) {
@@ -2354,7 +2365,19 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async deleteSession(profile: string, storedId: string) {
-    await this.getSession(profile, storedId)
+    // A draft Hermes has not stored lives in its live Session alone, which
+    // closing frees, as its discard does; one Hermes holds no draft for is
+    // gone already, as the read finds it.
+    if (!(await this.#storedSession(profile, storedId)).stored) {
+      if (await this.discardSession(profile, storedId)) return
+      // Running, or stored since: Hermes refuses to delete a live Session.
+      throw new HermesSessionConflictError()
+    }
+    await this.#deleteStored(profile, storedId)
+  }
+
+  /** Deletes a Session's stored row: through the dashboard, else its socket. */
+  async #deleteStored(profile: string, storedId: string) {
     try {
       return await this.#mutateSession((dashboard) =>
         dashboard.deleteSession(profile, storedId)
@@ -2385,8 +2408,11 @@ export class HermesServerAdapter implements ServerRuntime {
    * Session, so closing that frees it. A lazy resume says whether it is still
    * that draft, and writes nothing: Hermes answers it from the live draft,
    * and finds a key it holds neither a row nor a live draft for gone, where
-   * any other resume writes that key an empty row (`_resume_locate`). One
-   * Hermes since stored, or runs, is kept.
+   * any other resume writes that key an empty row (`_resume_locate`). Such a
+   * row, which a resume of a draft Hermes restarted out of left, holds no
+   * message, so it is deleted too, as OpenCode's and OpenClaw's discards
+   * delete a Session with none. One Hermes since stored a message of, or
+   * runs, is kept.
    */
   async discardSession(profile: string, storedId: string) {
     let resumed: unknown
@@ -2409,12 +2435,16 @@ export class HermesServerAdapter implements ServerRuntime {
     if (
       !isRecord(resumed) ||
       !validLiveSessionId(resumed.session_id) ||
-      !isUnpersistedDraft(resumed, profile, storedId) ||
       resumedRunning(resumed)
     )
       return false
+    const draft = isUnpersistedDraft(resumed, profile, storedId)
+    const emptyRow =
+      !draft && resumed.session_key === storedId && resumed.message_count === 0
+    if (!draft && !emptyRow) return false
     await this.#closeNativeSession(resumed.session_id)
     this.#attachments.invalidate(resumed.session_id)
+    if (emptyRow) await this.#deleteStored(profile, storedId)
     return true
   }
 

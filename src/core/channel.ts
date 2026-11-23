@@ -1,6 +1,9 @@
+import { isDeepStrictEqual } from "node:util"
+
 import {
   backoffDelay,
   createOwner,
+  Deadline,
   defaultClock,
   ownerSetup,
   type Clock,
@@ -15,8 +18,9 @@ import type {
 } from "../../protocol"
 import {
   CHILD_FOLLOW_GRACE_MS,
+  CLOSE_DEADLINE_MS,
+  DELETE_SHOWN_MS,
   JOIN_DEADLINE_MS,
-  PAUSED_DEADLINE_MS,
   READING_BACKOFF,
   READING_RETRIES,
 } from "./limits"
@@ -116,7 +120,12 @@ export type MembershipDelivery = {
   /** Offer the member a request such a child asks, or withdraw one. */
   offerChild(request: PendingRequest): void
   withdrawChild(requestId: string): void
+  /** Settles once the member was shown the last stream it follows, whole. */
+  shown(): Promise<void>
 }
+
+/** A member a wait follows until it was shown the last stream it follows. */
+type ShownMember = Pick<MembershipDelivery, "shown">
 
 export type Channels = ReturnType<typeof createChannels>
 type ChannelTable = ReturnType<typeof createChannelTable>
@@ -605,6 +614,18 @@ function createChannelTable({
       return channel !== undefined && currentChildren(channel).length > 0
     },
 
+    /**
+     * The children that outlived their turns and are still at work: the
+     * Session's background work, which closing it stops.
+     */
+    backgroundChildren(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      return [...(channel?.children ?? [])].flatMap(
+        ([childSessionId, { report }]) =>
+          atWork(report) ? [childSessionId] : []
+      )
+    },
+
     /** A request a child that outlived its turn asks, while it is open. */
     childRequest(scope: ChannelScope, requestId: string) {
       return channels.get(channelKey(scope))?.childRequests.get(requestId)
@@ -743,6 +764,14 @@ function createChannelTable({
       if (channel) await adopt(channel)
     },
 
+    /** Settles once every member was shown the last stream it follows. */
+    async shown(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      await Promise.all(
+        [...(channel?.memberships.keys() ?? [])].map((member) => member.shown())
+      )
+    },
+
     /** How many members every channel holds, for the health gauges. */
     memberships() {
       let count = 0
@@ -794,19 +823,19 @@ type MembershipContext = MembershipOptions & {
 
 /**
  * What moves a membership: a join and the answer that lands it, each stream
- * it follows, falling behind that stream's bounds, and parting.
+ * it follows, and parting.
  */
 type MembershipSignal =
   | { type: "join" }
   | { type: "joined" }
   | { type: "followed" }
-  | { type: "fell-behind" }
   | { type: "part" }
 
 /**
  * One membership's lifetime: joining until the answer to its join lands,
- * joined while it follows its Session, paused once it fell behind until its
- * view rejoins, and detached for good once it parts or a deadline passes.
+ * joined while it follows its Session, and detached for good once it parts
+ * or its join's deadline passes. A member that cannot catch up with its
+ * Session is never left behind on it: its connection closes, which parts it.
  * Each stream it follows is a generation of its own, so a stream another one
  * replaced settles nothing.
  */
@@ -830,14 +859,9 @@ export function membershipMachine(logger: Logger, clock: Clock) {
           // whole deadline.
           join: { target: "joining", reenter: true },
           joined: "joined",
-          "fell-behind": "paused",
         },
       },
-      joined: { on: { join: "joining", "fell-behind": "paused" } },
-      paused: {
-        after: { [PAUSED_DEADLINE_MS]: "detached" },
-        on: { join: "joining" },
-      },
+      joined: { on: { join: "joining" } },
       detached: { type: "final" },
     },
   })
@@ -851,6 +875,37 @@ export class MembershipDetachedError extends Error {
     super("The membership detached before its join landed")
     this.name = "MembershipDetachedError"
   }
+}
+
+/**
+ * A close or a delete its runtime did not confirm within `CLOSE_DEADLINE_MS`:
+ * its Stop, a background stop or a delete's own call may still land.
+ */
+export class CloseUnconfirmedError extends Error {
+  constructor() {
+    super("The runtime did not confirm the close in time")
+    this.name = "CloseUnconfirmedError"
+  }
+}
+
+/**
+ * Stops a Session's turn with `stop`, as `session/close` asks, and settles
+ * once the turn rests idle and `shown` settled: what the members it names were
+ * owed of how the turn ended. A turn already idle is stopped no further and
+ * owes nothing more. Each step takes what is left of the close's deadline
+ * through `signal`, and rejects with its reason once it aborts.
+ */
+async function stopAndSettle(
+  coordinator: SessionCoordinator,
+  scope: SessionScope,
+  stop: () => Promise<unknown>,
+  shown: (signal: AbortSignal) => Promise<unknown>,
+  signal: AbortSignal
+) {
+  if (coordinator.state(scope) === "idle") return
+  await unlessAborted(stop(), signal)
+  await coordinator.idle(scope, signal)
+  await shown(signal)
 }
 
 /** Settles as `work` does, unless `signal` aborts first: then with its reason. */
@@ -921,6 +976,60 @@ export function createChannels(options: CreateChannelsOptions) {
       scope.providerSessionId,
       childSessionId
     )
+  }
+
+  /**
+   * Stops each of the Session's background children `includes` takes, as
+   * closing a Session stops its background work beside its turn: every one
+   * is asked, and the first failure is thrown once all were, or the reason
+   * `signal` aborts with first. A runtime that cannot stop a child alone
+   * leaves each running.
+   */
+  async function stopBackground(
+    scope: SessionScope,
+    signal: AbortSignal,
+    includes: (childSessionId: string) => boolean = () => true
+  ) {
+    const stopped = await unlessAborted(
+      Promise.allSettled(
+        channels
+          .backgroundChildren(scope)
+          .filter(includes)
+          .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+      ),
+      signal
+    )
+    const failed = stopped.find((settled) => settled.status === "rejected")
+    if (failed) throw failed.reason
+  }
+
+  /**
+   * Settles once the `deleter`, if a member, was shown how the Session's turn
+   * ended, as its close would wait, and once every member was or
+   * `DELETE_SHOWN_MS` passed: any other member slower than that is behind its
+   * socket, and a delete goes on without it, so one member's slow reader
+   * never fails another's delete. Rejects with `signal`'s reason once it
+   * aborts.
+   */
+  async function everyMemberShown(
+    scope: SessionScope,
+    signal: AbortSignal,
+    deleter?: ShownMember
+  ) {
+    const wait = new Deadline(DELETE_SHOWN_MS, clock, signal)
+    const othersShown = async () => {
+      try {
+        await wait.run(() => channels.shown(scope))
+      } catch (cause) {
+        if (signal.aborted || cause !== wait.signal.reason) throw cause
+        const { agentId, sessionId } = scope
+        logger.warn({ agentId, sessionId }, "channel.delete.shown_late")
+      }
+    }
+    await Promise.all([
+      deleter && unlessAborted(deleter.shown(), signal),
+      othersShown(),
+    ])
   }
 
   return {
@@ -1020,11 +1129,61 @@ export function createChannels(options: CreateChannelsOptions) {
     },
 
     /**
-     * Discards a Session a member closed, where a create here made it, no
-     * prompt reached it, and nothing else holds it.
+     * Runs one close or one delete, `work`, under one `CLOSE_DEADLINE_MS`,
+     * which each of its steps takes what is left of through `signal`. One
+     * still waiting when it passes throws `CloseUnconfirmedError`: what it
+     * asked of the runtime may still land.
      */
-    closed(scope: SessionScope) {
-      return coordinator.closed(scope)
+    async closing<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+      const deadline = new Deadline(CLOSE_DEADLINE_MS, clock)
+      try {
+        return await work(deadline.signal)
+      } catch (cause) {
+        const { signal } = deadline
+        if (signal.aborted && cause === signal.reason)
+          throw new CloseUnconfirmedError()
+        throw cause
+      } finally {
+        deadline.clear()
+      }
+    },
+
+    /**
+     * Discards a Session a member closed, where a create here made it, no
+     * prompt reached it, and nothing else holds it. The member has left, so
+     * the close waits on the discard only until `signal` aborts, and the
+     * discard goes on.
+     */
+    async closed(scope: SessionScope, signal: AbortSignal) {
+      await unlessAborted(coordinator.closed(scope), signal).catch(
+        (cause: unknown) => {
+          if (cause !== signal.reason) throw cause
+        }
+      )
+    },
+
+    stopBackground,
+
+    /**
+     * Stops all of a Session's work as `session/delete` asks, as a close on
+     * every connection would: its turn, settling once the `deleter`, if a
+     * member, was shown how it ended, and each member was or
+     * `DELETE_SHOWN_MS` passed, then every background child. Throws as
+     * `stopAndSettle` and `stopBackground` do.
+     */
+    async stopWork(
+      scope: SessionScope,
+      signal: AbortSignal,
+      deleter?: ShownMember
+    ) {
+      await stopAndSettle(
+        coordinator,
+        scope,
+        () => coordinator.stop(scope),
+        (shownSignal) => everyMemberShown(scope, shownSignal, deleter),
+        signal
+      )
+      await stopBackground(scope, signal)
     },
 
     /** Whether the runtime forks Sessions. */
@@ -1037,20 +1196,28 @@ export function createChannels(options: CreateChannelsOptions) {
       return coordinator.forkSession(scope)
     },
 
+    /** The model options the Session offers now, which a switch picks from. */
+    models(scope: SessionScope) {
+      return coordinator.models(scope)
+    },
+
     /**
-     * Switches the Session's model. Every member hears the switch, and the
-     * `membership` that asked for it once its answer is written.
+     * Switches the model of the Session `membership` asked it of. As ACP
+     * has a writer told, its member is shown the switch before its answer,
+     * and every member hears the readings the switch moved once that answer
+     * is written; the writer is not shown its own switch again.
      */
     switchModel(
-      scope: SessionScope,
-      write: SessionModelUpdateRequest,
-      membership?: Membership
+      membership: Membership,
+      write: SessionModelUpdateRequest
     ): Promise<SessionModelsResponse> {
       return coordinator.switchModel(
-        scope,
+        membership.scope,
         write,
-        membership &&
-          ((report) => membership.afterResponse(async () => report()))
+        async (models, report) => {
+          await membership.showSwitch(models)
+          membership.afterResponse(async () => report())
+        }
       )
     },
   }
@@ -1086,6 +1253,11 @@ class Membership {
   #followedTurn: string | undefined
   /** The turn whose stream this member last fell behind and rebuilt for. */
   #rebuiltTurn: string | undefined
+  /**
+   * The model options this member's own switch was shown, which the reading
+   * that follows the switch shows it no more.
+   */
+  #switched: SessionModelsResponse | undefined
   /** Whether this member's view pages older history itself. */
   #paged = false
   /** Settles once the member was shown what the journal buffered. */
@@ -1193,6 +1365,7 @@ class Membership {
       },
       offerChild: (request) => this.#offerChild(request),
       withdrawChild: (requestId) => this.#withdraw(requestId),
+      shown: () => this.shown(),
     }
   }
 
@@ -1432,7 +1605,8 @@ class Membership {
   /**
    * Rebuilds this member's view in place, as a from-start resume builds it:
    * what a view that fell behind, lost its place, or was shown a prompt
-   * without its reply is owed. One that cannot be rebuilt pauses.
+   * without its reply is owed. One that cannot be rebuilt is told why, and
+   * left behind no further: its connection closes, and its client resumes.
    */
   async #rebuild() {
     if (this.detached || this.pending) return
@@ -1446,9 +1620,24 @@ class Membership {
         }
       )
     } catch (cause) {
-      this.#send({ type: "fell-behind" })
       await this.report(cause)
+      this.#cannotCatchUp()
     }
+  }
+
+  /**
+   * Closes the connection of a member whose view its Session left behind,
+   * which ends each Session's activity on it, as ACP has a connection's end
+   * do: its client reconnects and resumes every Session it holds, rather
+   * than holding one the gateway no longer streams to it.
+   */
+  #cannotCatchUp() {
+    if (this.detached) return
+    this.#options.logger.warn(
+      { membershipId: this.#options.membershipId },
+      "membership.cannot_catch_up"
+    )
+    this.#member.connection.fellBehind()
   }
 
   /**
@@ -1918,6 +2107,29 @@ class Membership {
   }
 
   /**
+   * Stops the Session's turn as `session/close` asks, as `cancel` does, and
+   * settles once this member was shown how it ended: ACP has a closer shown
+   * the turn's final updates and its idle state before the close's answer.
+   * Throws as `stopAndSettle` does, under the close's `signal`.
+   */
+  closeTurn(signal: AbortSignal) {
+    return stopAndSettle(
+      this.#coordinator,
+      this.#scope,
+      () => this.cancel(),
+      (shownSignal) => unlessAborted(this.shown(), shownSignal),
+      signal
+    )
+  }
+
+  /** Settles once this member was shown the last stream it follows, whole. */
+  async shown() {
+    // A follow in flight subscribes before its stream can be waited on.
+    await this.#exclusive(async () => undefined)
+    await this.#streamed?.done
+  }
+
+  /**
    * Reports the Session's execution outside a turn stream: what a resume or
    * an acknowledged Stop owes the member.
    */
@@ -1957,7 +2169,7 @@ class Membership {
     const readings = coordinator.subscribeReadings(this.#scope, membershipId, {
       execution: () => this.#followInterrupted(),
       usage: (usage) => this.#deliver({ kind: "usage", usage }),
-      model: (models) => this.#deliver({ kind: "model", models }),
+      model: (models) => this.#showModels(models),
       gone: (cause) => this.#end(cause),
     })
     const capabilities = subscribeCapabilities()
@@ -1971,6 +2183,27 @@ class Membership {
       capabilities()
       row()
     }
+  }
+
+  /**
+   * Shows this member the model options its own switch left, ahead of the
+   * switch's answer, which a failure to show them does not fail.
+   */
+  showSwitch(models: SessionModelsResponse) {
+    this.#switched = models
+    return this.#deliver({ kind: "model", models })
+  }
+
+  /**
+   * Shows one model reading, unless it is the first since this member's own
+   * switch and repeats the options that switch showed it.
+   */
+  #showModels(models: SessionModelsResponse) {
+    const switched = this.#switched
+    this.#switched = undefined
+    return switched && isDeepStrictEqual(switched, models)
+      ? Promise.resolve()
+      : this.#deliver({ kind: "model", models })
   }
 
   /**
@@ -2431,8 +2664,8 @@ class Membership {
 
   /**
    * Rebuilds the view of a member whose stream was dropped for falling behind
-   * its bounds, once per turn: one that falls behind the same turn again is
-   * paused until it resumes.
+   * its bounds, once per turn: one that falls behind the same turn again
+   * cannot catch up, and its connection closes.
    *
    * The turn itself is unharmed and may still be going, so this is not a turn
    * failure and the segment did not settle: reporting either would leave the
@@ -2450,7 +2683,7 @@ class Membership {
       "membership.fell-behind"
     )
     if (this.#rebuiltTurn === turnId) {
-      this.#send({ type: "fell-behind" })
+      this.#cannotCatchUp()
       return
     }
     this.#rebuiltTurn = turnId

@@ -281,6 +281,8 @@ export type MemberEncoderOptions = {
   report(sessionId: string, cause: unknown): unknown
   /** Whether the connection's credential still holds. */
   live(): boolean
+  /** Closes the connection as a reader that fell behind. */
+  fellBehind(): void
   /** The child Sessions this connection's Sessions announced. */
   children: {
     /** Registers one; `false` means it may not be shown. */
@@ -306,6 +308,7 @@ export function createMemberEncoder({
   elicits,
   report,
   live,
+  fellBehind,
   children,
 }: MemberEncoderOptions): MemberConnection {
   const { translators, logger } = context
@@ -690,5 +693,6 @@ export function createMemberEncoder({
   return {
     send: encode,
     live,
+    fellBehind,
   }
 }

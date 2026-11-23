@@ -1,5 +1,11 @@
-import type { PreparedWebSocketUpgrade } from "@agentclientprotocol/sdk/experimental/server"
-import { methods } from "@agentclientprotocol/sdk/experimental/v2/unstable"
+import {
+  DEFAULT_MAX_ID_LENGTH,
+  type PreparedWebSocketUpgrade,
+} from "@agentclientprotocol/sdk/experimental/server"
+import {
+  methods,
+  RequestError,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   ACP_PROTOCOL_VERSION,
@@ -21,6 +27,28 @@ const DEFAULT_INPUT_FRAMES_PER_WINDOW = 64
  * Session, on a single large prompt.
  */
 const DEFAULT_INPUT_BYTES_PER_WINDOW = 2 * MAX_FRAME_BYTES
+/**
+ * The unanswered requests naming a Session one socket records, while failures
+ * are made public. The ACP SDK bounds no number of pending requests, so this
+ * is the gateway's: a guest reaches one invited Session, and a real tab holds
+ * a few requests naming it at once (its resume, prompt, steer or page), so
+ * the bound is a backstop that keeps a flood to about 256 KiB a socket, each
+ * entry two ids of at most `DEFAULT_MAX_ID_LENGTH`.
+ */
+const DEFAULT_MAX_NAMED_REQUESTS = 64
+
+/**
+ * What ACP v2 answers a request whose id is a number but no integer
+ * (`rejectInvalidRequestId`, `v2/acp.js`): `-32600` under `id: null`.
+ */
+const NON_INTEGER_ID_REPLY = JSON.stringify({
+  jsonrpc: "2.0",
+  id: null,
+  error: RequestError.invalidRequest(
+    undefined,
+    "ACP v2 request IDs must be strings or integers"
+  ).toErrorResponse(),
+})
 
 const decoder = new TextDecoder()
 
@@ -30,9 +58,11 @@ export type AcpErrorReply = { code: number; message: string; data?: unknown }
 /**
  * How a listener shows its failures: an error reply's code, whatever it is, as
  * a public reply, and an `_hgw/error` notification's code as a public code.
+ * `sessionId` is the Session the request a reply answers named, if it named
+ * one as a string: what alone a public not-found may name back.
  */
 export type PublicErrors = {
-  reply(code: unknown): AcpErrorReply
+  reply(code: unknown, sessionId?: string): AcpErrorReply
   notice(code: unknown): string
 }
 
@@ -61,6 +91,8 @@ export type AcpSocketOptions = {
   inputWindowMs?: number
   maxInputFramesPerWindow?: number
   maxInputBytesPerWindow?: number
+  /** At most this many unanswered requests' Sessions are recorded at once. */
+  maxNamedRequests?: number
 }
 
 export type AcpSocket = {
@@ -93,8 +125,22 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     options.maxInputBytesPerWindow,
     DEFAULT_INPUT_BYTES_PER_WINDOW
   )
+  const maxNamed = positiveLimit(
+    options.maxNamedRequests,
+    DEFAULT_MAX_NAMED_REQUESTS
+  )
 
   const listeners = new Map<string, Set<(event: unknown) => void>>()
+  /**
+   * The Session each request still unanswered named, by its id, while
+   * failures are made public: the reply to it may name that id back, and
+   * nothing the gateway wrote in its place. Once full it records no more, so
+   * a request past the bound is answered without its Session, and none is
+   * dropped to make room.
+   */
+  const named = new Map<string | number, string>()
+  /** Whether a frame the SDK begins its handshake on has passed. */
+  let handshaking = false
   let closed = false
   let windowStartedAt = now()
   let windowFrames = 0
@@ -111,6 +157,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     options.close(code, reason)
     dispatch("close", { type: "close", code, reason })
     listeners.clear()
+    named.clear()
   }
 
   /**
@@ -118,7 +165,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
    * required, so it is the last frame written, and closes the connection.
    */
   function refuse(data: string) {
-    const id = requestIdOf(data)
+    const id = requestIdOf(parsed(data))
     if (id !== undefined) {
       const { code, message } = authenticationRequired()
       options.send(
@@ -148,7 +195,9 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         return
       }
       options.send(
-        options.publicErrors ? publicFrame(raw, options.publicErrors) : raw
+        options.publicErrors
+          ? publicFrame(raw, options.publicErrors, named)
+          : raw
       )
     },
     get bufferedAmount() {
@@ -185,13 +234,30 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         refuse(data)
         return
       }
-      dispatch("message", { type: "message", data: askingVersion2(data) })
+      const frame = parsed(data)
+      // Answered here as the SDK would answer it, so the SDK keeps no route
+      // for it that its answer would never free.
+      if (handshaking && strandsRoute(frame)) {
+        socket.send(NON_INTEGER_ID_REPLY)
+        return
+      }
+      if (beginsHandshake(frame)) handshaking = true
+      if (options.publicErrors) {
+        const request = namedSessionOf(frame)
+        if (request && (named.has(request.id) || named.size < maxNamed))
+          named.set(request.id, request.sessionId)
+      }
+      dispatch("message", {
+        type: "message",
+        data: askingVersion2(data, frame),
+      })
     },
     close() {
       if (closed) return
       closed = true
       dispatch("close", { type: "close" })
       listeners.clear()
+      named.clear()
     },
   }
 }
@@ -202,21 +268,24 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
  * leave with 4409, which the client reconnects on, so a tab that slept
  * through a large replay comes back. Its other limits stay terminal.
  */
-const READER_FELL_BEHIND = 4409
+export const READER_FELL_BEHIND = 4409
 const READER_LIMITS = /\b(maxBufferedBytes|maxOutputStallMs)\b/u
 
 function peerCloseCode(code: number, reason: string) {
   return code === 1008 && READER_LIMITS.test(reason) ? READER_FELL_BEHIND : code
 }
 
-/** The id of the one JSON-RPC request a frame carries, if it carries one. */
-function requestIdOf(data: string): string | number | undefined {
-  let frame: unknown
+/** A frame's JSON, or `undefined` for one that is not JSON. */
+function parsed(data: string): unknown {
   try {
-    frame = JSON.parse(data)
+    return JSON.parse(data) as unknown
   } catch {
     return undefined
   }
+}
+
+/** The id of the one JSON-RPC request a frame carries, if it carries one. */
+function requestIdOf(frame: unknown): string | number | undefined {
   if (typeof frame !== "object" || frame === null || Array.isArray(frame))
     return undefined
   const { id, method } = frame as { id?: unknown; method?: unknown }
@@ -227,17 +296,105 @@ function requestIdOf(data: string): string | number | undefined {
 }
 
 /**
+ * The one request a frame carries and the Session it names as a string, where
+ * the SDK answers that request under its own id, so the reply settles it. The
+ * SDK answers `id: null` to a frame without the `jsonrpc: "2.0"` envelope
+ * (`isRequestMessage`, `core/jsonrpc.js`) and to an id ACP v2 forbids, `null`
+ * or a non-integer number (`isV2RequestId`), and closes the connection on a
+ * string id or a Session id longer than `maxIdLength` (`validateRequestId`,
+ * `validateSessionId`, `transports/connection.js`), which the gateway leaves
+ * at `DEFAULT_MAX_ID_LENGTH`. None of those is recorded.
+ */
+function namedSessionOf(frame: unknown) {
+  if (typeof frame !== "object" || frame === null || Array.isArray(frame))
+    return undefined
+  const { jsonrpc, id, method, params } = frame as {
+    jsonrpc?: unknown
+    id?: unknown
+    method?: unknown
+    params?: unknown
+  }
+  if (jsonrpc !== "2.0" || typeof method !== "string" || !answeredUnder(id))
+    return undefined
+  const sessionId =
+    typeof params === "object" && params !== null
+      ? (params as { sessionId?: unknown }).sessionId
+      : undefined
+  return typeof sessionId === "string" && withinIdLength(sessionId)
+    ? { id, sessionId }
+    : undefined
+}
+
+/**
+ * Whether the SDK begins its handshake on a frame: an `initialize` it reads
+ * as a request (`isRequestMessage`, `core/jsonrpc.js`) under an id other than
+ * `null` (`handleInitialize`, `transports/ws-server.js`). Before one, it
+ * closes the connection on any other request itself.
+ */
+function beginsHandshake(frame: unknown) {
+  if (typeof frame !== "object" || frame === null) return false
+  const { jsonrpc, id, method } = frame as {
+    jsonrpc?: unknown
+    id?: unknown
+    method?: unknown
+  }
+  return (
+    jsonrpc === "2.0" &&
+    method === methods.agent.initialize &&
+    (typeof id === "string" || Number.isFinite(id))
+  )
+}
+
+/**
+ * Whether the SDK, once its handshake began, would keep a route for a frame
+ * that nothing frees until the socket closes. It keeps one for each request
+ * under its id (`trackInboundRoutes`, `transports/ws-server.js`), and frees
+ * it on the answer under that id (`routeOutboundResponse`,
+ * `transports/connection.js`); ACP v2 answers an id that is a finite number
+ * but no integer under `null` (`rejectInvalidRequestId`, `v2/acp.js`), so its
+ * route stays. The SDK answers an `initialize` itself and keeps no route for
+ * it, frees a `null` id's route under `null`, and closes on a Session id past
+ * `DEFAULT_MAX_ID_LENGTH` before it keeps one, so none of those strands one.
+ */
+function strandsRoute(frame: unknown) {
+  if (typeof frame !== "object" || frame === null || Array.isArray(frame))
+    return false
+  const { jsonrpc, id, method, params } = frame as {
+    jsonrpc?: unknown
+    id?: unknown
+    method?: unknown
+    params?: unknown
+  }
+  if (
+    jsonrpc !== "2.0" ||
+    typeof method !== "string" ||
+    method === methods.agent.initialize ||
+    !Number.isFinite(id) ||
+    Number.isInteger(id)
+  )
+    return false
+  const sessionId =
+    typeof params === "object" && params !== null
+      ? (params as { sessionId?: unknown }).sessionId
+      : undefined
+  return typeof sessionId !== "string" || withinIdLength(sessionId)
+}
+
+/** Whether the SDK answers a request under `id` itself. */
+function answeredUnder(id: unknown): id is string | number {
+  return typeof id === "string" ? withinIdLength(id) : Number.isInteger(id)
+}
+
+function withinIdLength(id: string) {
+  return id.length <= DEFAULT_MAX_ID_LENGTH
+}
+
+/**
  * A frame whose `initialize` asks for a version, with that version set to 2,
  * so the SDK answers the one version it serves rather than refusing the
  * handshake. Every other frame is passed on untouched.
  */
-function askingVersion2(data: string) {
-  let frame: unknown
-  try {
-    frame = JSON.parse(data)
-  } catch {
-    return data
-  }
+function askingVersion2(data: string, frame: unknown) {
   if (typeof frame !== "object" || frame === null) return data
   const { method, params } = frame as { method?: unknown; params?: unknown }
   if (
@@ -265,25 +422,49 @@ function frameSize(raw: string | Uint8Array) {
 }
 
 /**
- * One serialized frame as `shown` makes it public. The SDK writes no batch,
- * but its v2 entrypoints are experimental, so an array is made public entry
- * by entry rather than passed on as it is.
+ * One serialized frame as `shown` makes it public, each reply settling the
+ * request `named` held for it. The SDK writes no batch, but its v2
+ * entrypoints are experimental, so an array is made public entry by entry
+ * rather than passed on as it is.
  */
-function publicFrame(raw: string, shown: PublicErrors) {
+function publicFrame(
+  raw: string,
+  shown: PublicErrors,
+  named: Map<string | number, string>
+) {
   const frame = JSON.parse(raw) as unknown
   if (Array.isArray(frame))
-    return JSON.stringify(frame.map((message) => publicMessage(message, shown)))
-  const message = publicMessage(frame, shown)
+    return JSON.stringify(
+      frame.map((message) => publicMessage(message, shown, named))
+    )
+  const message = publicMessage(frame, shown, named)
   return message === frame ? raw : JSON.stringify(message)
+}
+
+/** The Session the request a reply answers named, which it settles. */
+function answeredSession(frame: object, named: Map<string | number, string>) {
+  if (!("id" in frame) || !("result" in frame || "error" in frame))
+    return undefined
+  const { id } = frame
+  if (typeof id !== "string" && typeof id !== "number") return undefined
+  const sessionId = named.get(id)
+  named.delete(id)
+  return sessionId
 }
 
 /**
  * One message as `shown` makes it public: an error reply rebuilt from its
- * code alone, and an error notification from its Session and its code, which
- * is its message too. Any other message is returned as it is.
+ * code and the Session its request named, and an error notification from its
+ * Session and its code, which is its message too. Any other message is
+ * returned as it is.
  */
-function publicMessage(frame: unknown, shown: PublicErrors): unknown {
+function publicMessage(
+  frame: unknown,
+  shown: PublicErrors,
+  named: Map<string | number, string>
+): unknown {
   if (typeof frame !== "object" || frame === null) return frame
+  const sessionId = answeredSession(frame, named)
   if ("error" in frame) {
     const { error } = frame
     return {
@@ -291,7 +472,8 @@ function publicMessage(frame: unknown, shown: PublicErrors): unknown {
       error: shown.reply(
         typeof error === "object" && error !== null && "code" in error
           ? error.code
-          : undefined
+          : undefined,
+        sessionId
       ),
     }
   }
