@@ -35,6 +35,7 @@ import {
   createGuestInvitationService,
   type GuestInvitationService,
 } from "../auth/guest-invitation"
+import { guestErrorDescription } from "../auth/guest-projection"
 import { AttachmentStageRegistry } from "../core/attachment-stages"
 import { createCatalog } from "../core/catalog"
 import {
@@ -1496,6 +1497,55 @@ describe("guest ACP listener", () => {
       expect(params).toMatchObject({
         update: { _meta: { [HGW_META_KEY]: { historyPage: { cursor } } } },
       })
+    test.close()
+  })
+
+  it("replays a failed turn on its message with the failure's public description alone", async () => {
+    const test = harness({
+      existing: true,
+      history: () => ({
+        ...HISTORY,
+        messages: [
+          {
+            id: "assistant-failed",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-15T00:00:02.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error: "Upstream 503 from api.internal.example",
+            },
+            turnErrorCode: "HGW_PROVIDER_RETRYABLE_FAILURE",
+          },
+        ],
+        total: 1,
+        nextOffset: 1,
+      }),
+    })
+    await test.initialize()
+    await test.login(await invite(test.invitations))
+
+    await test.resume(REF, true)
+
+    const failed = updates(test.recorder).find(
+      ({ update }) =>
+        SessionUpdate.isAgentMessage(update) &&
+        update.messageId === "assistant-failed"
+    )
+    expect(failed?.update._meta).toEqual({
+      [HGW_META_KEY]: {
+        sequence: 0,
+        turnId: "history",
+        failure: {
+          message: guestErrorDescription("temporarily_unavailable"),
+          at: "2026-09-15T00:00:02.000Z",
+        },
+      },
+    })
+    const replayed = JSON.stringify(updates(test.recorder))
+    expect(replayed).not.toContain("api.internal.example")
+    expect(replayed).not.toContain("HGW_PROVIDER_RETRYABLE_FAILURE")
     test.close()
   })
 

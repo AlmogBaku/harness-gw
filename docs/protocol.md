@@ -600,8 +600,7 @@ still carries `truncated: true` when the reading stopped at a reach bound.
 - The page's messages arrive as `session/update`s before the response, each
   tagged `_meta.hgw.historyPage: { cursor }` (`HgwHistoryPageTagSchema`). The
   client keeps them out of the turn position and every live listener. A page
-  never carries `plan_update`; the Todo plan and a restored failed turn come
-  only with the newest page.
+  never carries `plan_update`: the Todo plan comes only with the newest page.
 - The response carries `_meta.hgw.history`
   (`HgwHistoryPageResponseMetaSchema`) beside the Session's setup, as every
   resume answer does (see [Response `_meta.hgw` shapes](#response-_metahgw-shapes)). A missing `nextCursor` means the
@@ -678,11 +677,28 @@ Every event emitted from a turn carries a base of
 | `plan_update`                         | `sequence`, `turnId?`, `todos` ()                                 |
 | `usage_update`                        | `source`, `estimated?`, `breakdown?` (); no sequence/turnId       |
 
-A failed turn ends with ACP's `state_update { state: "idle", stopReason:
+A failed turn ends live with ACP's `state_update { state: "idle", stopReason:
 "error" }`. Its `error` is the public error: `-32603` and, as its `message`,
-the failure's machine code (`internal_error` for a stored failure that kept
-none). The provider's own words travel only as `_meta.hgw.message`, beside the
-same `code`.
+the failure's machine code (`internal_error` when it has none). The provider's
+own words travel only as `_meta.hgw.message`, beside the same `code`.
+
+A replay sends no past `state_update`, as ACP asks, so a turn the provider
+stored as failed replays its failure on the message it ended: after that
+message's own parts, one `agent_message` upsert for the same `messageId`
+carries `_meta.hgw.failure: { message, code?, at? }`
+(`HgwMessageFailureMetaSchema`, `protocol/acp.ts`). It leaves the content the
+parts streamed; a turn that failed before any output replays as this upsert
+alone, with `content: []`. `message` is what the reader is shown of the
+failure, masked as its live form is: the provider's words for an operator, the
+public description of the failure's class for a guest. `code` is the
+normalized code the runtime stored, which a guest is never sent. `at` is when
+the turn failed. The same form arrives on the newest page and on every older
+one, and a live failure never takes it. Both forms reach a reader for one turn
+only when the turn fails while that reader resumes, its row stored before the
+replay read it and its live end following the replay: the upsert names the
+message, under `turnId: "history"`, and the live `state_update` names the
+turn's own `turnId`, so a reader marks the message failed from the one and
+ends the turn from the other, and the failure reads once.
 
 Two refusals end a prompt before anything is stored, so `session/prompt` itself
 answers `-32602` with the refusal's code as the error's `data.code`, for the
