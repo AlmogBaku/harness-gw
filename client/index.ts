@@ -19,6 +19,7 @@ export type {
   AcpSessionSetup,
   AcpSessionState,
   AcpSessionUpdateListener,
+  AcpSubscribeOptions,
 } from "./types"
 export {
   createAcpWorkspaceClient,

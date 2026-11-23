@@ -437,7 +437,10 @@ Agent before listing. A position in `_meta.hgw` (version 1's `after` and
 `replayFrom` is one of:
 
 - absent: nothing is replayed, as ACP asks. The view follows the live turn from
-  its next event, and is never rebuilt from history.
+  its next event, and is never rebuilt from history. The SDK client resumes so
+  a Session it opened with `subscribe(sessionId, listener, { replay: false })`,
+  as a send from outside the Session's view does, while no subscription asks
+  for a replay; one that then asks has it replayed from `start`.
 - `{ type: "start" }`: the whole Session is replayed.
 - `{ type: "_hgw/position", turnId?, from? }` (`HGW_REPLAY_POSITION`,
   `HgwReplayPositionSchema`): the reconnect cursor. `from` is the first

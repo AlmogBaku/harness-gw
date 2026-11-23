@@ -86,6 +86,7 @@ import type {
   AcpSessionListener,
   AcpSessionSetup,
   AcpSessionState,
+  AcpSubscribeOptions,
 } from "./types"
 
 /**
@@ -759,9 +760,13 @@ export function createAcpConnection(
   >()
   /**
    * One `subscribe` call: a listener subscribed twice holds the Session until
-   * each of its subscriptions leaves.
+   * each of its subscriptions leaves. `replays` says whether it asks the
+   * Session replayed from the start.
    */
-  type Subscription = { readonly listener: AcpSessionListener }
+  type Subscription = {
+    readonly listener: AcpSessionListener
+    readonly replays: boolean
+  }
   /**
    * One opened Session: whoever listens, the owner that joins it, and what a
    * rejoin and a page read need, all dropped once it parts.
@@ -1260,7 +1265,7 @@ export function createAcpConnection(
     const open = sessions.get(sessionId)
     if (!open) throw notOpen()
     if (signal.aborted) return
-    const fromStart = !open.replayed || open.replayOwed
+    const fromStart = replayWanted(open)
     open.replayOwed = false
     const named = [...open.listeners].find(({ listener }) => listener.agentId)
     const agentId = named?.listener.agentId ?? owners.get(sessionId)
@@ -1282,9 +1287,13 @@ export function createAcpConnection(
             {
               sessionId,
               cwd: AGENT_CWD,
-              replayFrom: fromStart
-                ? { type: "start" }
-                : rejoinCursor(open.position),
+              // A Session never replayed, which nothing asks to be, names
+              // no cursor: ACP then replays nothing at all.
+              ...(fromStart
+                ? { replayFrom: { type: "start" } }
+                : open.replayed
+                  ? { replayFrom: rejoinCursor(open.position) }
+                  : {}),
               _meta: {
                 [HGW_META_KEY]: agentId === undefined ? {} : { agentId },
               },
@@ -1337,6 +1346,17 @@ export function createAcpConnection(
           )
       ),
     }
+  }
+
+  /**
+   * Whether the Session's next join replays it from the start: one is owed,
+   * or none has yet and a subscription asks for one.
+   */
+  function replayWanted(open: OpenSession) {
+    return (
+      open.replayOwed ||
+      (!open.replayed && [...open.listeners].some(({ replays }) => replays))
+    )
   }
 
   /** A listener's part in a from-start replay: its settle callback, if any. */
@@ -1404,7 +1424,7 @@ export function createAcpConnection(
     if (!open) return Promise.reject(notOpen())
     const served = open.replaying
       ? !open.replaying.delivered
-      : !open.replayed || open.replayOwed
+      : replayWanted(open)
     if (!served) open.owner?.actor.send({ type: "replay" })
     return joined(sessionId)
   }
@@ -1429,11 +1449,15 @@ export function createAcpConnection(
       )
   }
 
-  function subscribe(sessionId: string, listener: AcpSessionListener) {
+  function subscribe(
+    sessionId: string,
+    listener: AcpSessionListener,
+    options: AcpSubscribeOptions = {}
+  ) {
     if (ended) return () => {}
     // A Session opened before the transport joins once it is ready.
     start()
-    const subscription = { listener }
+    const subscription = { listener, replays: options.replay ?? true }
     const known = sessions.get(sessionId)
     if (known) {
       clock.clearTimeout(known.grace)
@@ -1443,6 +1467,11 @@ export function createAcpConnection(
       // Session whole to this listener too.
       if (known.replaying && !known.replaying.delivered)
         known.replaying.settles.push(...settleOf(subscription))
+      // A Session opened without a replay, and replayed by none since, is
+      // replayed for the first subscription that asks, after any join in
+      // flight.
+      else if (subscription.replays && !known.replayed && !known.replaying)
+        known.owner?.actor.send({ type: "replay" })
       // No answer or update restates the setup for this listener alone.
       hand(known, known.setup, [subscription])
       return () => leave(sessionId, known, subscription)

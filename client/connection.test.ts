@@ -872,6 +872,37 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  // A send from outside the Session's view needs it active, not its history.
+  it("opens a Session with no replay for a subscription that asks none, and replays it once one asks", async () => {
+    const gateway = createGatewayAgent()
+    const connection = connectInProcess(gateway)
+    const release = connection.subscribe(
+      SESSION_ID,
+      { agentId: AGENT_ID },
+      { replay: false }
+    )
+    await connection.joined(SESSION_ID)
+    // ACP replays nothing for a resume that names no cursor.
+    expect(gateway.callsOf(methods.agent.session.resume)).toEqual([
+      {
+        sessionId: SESSION_ID,
+        cwd: "",
+        _meta: { [HGW_META_KEY]: { agentId: AGENT_ID } },
+      },
+    ])
+
+    const dropTranscript = vi.fn()
+    connection.subscribe(SESSION_ID, { replay: dropTranscript })
+    await connection.joined(SESSION_ID)
+
+    expect(gateway.callsOf(methods.agent.session.resume)[1]).toMatchObject({
+      replayFrom: { type: "start" },
+    })
+    expect(dropTranscript).toHaveBeenCalledOnce()
+    release()
+    connection.close()
+  })
+
   it.each([
     // The answer replaces what came before it, as ACP has a client apply it.
     ["before the resume answered", true, "sonnet"],

@@ -146,6 +146,20 @@ export type AcpSessionListener = {
   state?: (state: AcpSessionState) => void
 }
 
+/** How one `subscribe` opens its Session. */
+export type AcpSubscribeOptions = {
+  /**
+   * `false` opens the Session without asking for its history, as a send from
+   * outside its view does: the Session is made active on the connection, as a
+   * prompt needs, and while no subscription asks for a replay, its join names
+   * no `replayFrom`, which ACP answers with no replay at all, and a rejoin
+   * after a reconnect follows only what streams next. A later subscription
+   * that asks for one, to a Session not replayed yet, has it replayed from the
+   * start then, after any join in flight. Defaults to `true`.
+   */
+  replay?: boolean
+}
+
 /**
  * A read (`listAgents`, `listSessions`, `searchSessions`, `resumePage`) waits
  * out a reconnect and goes out again on the transport that recovers, and a
@@ -218,9 +232,14 @@ export interface AcpConnection {
    * parts, with `_hgw/session/part`, 2 s after the last listener leaves, so a
    * listener back within that grace costs neither a part nor a resume. A
    * listener that subscribes before anything of a from-start replay under way
-   * has arrived takes part in that replay.
+   * has arrived takes part in that replay. A subscription with
+   * `{ replay: false }` asks for none (see `AcpSubscribeOptions`).
    */
-  subscribe(sessionId: string, listener: AcpSessionListener): () => void
+  subscribe(
+    sessionId: string,
+    listener: AcpSessionListener,
+    options?: AcpSubscribeOptions
+  ): () => void
   /** Resolves once the opened Session is joined; rejects once it is gone or parts. */
   joined(sessionId: string): Promise<void>
   /**
