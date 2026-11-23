@@ -138,7 +138,11 @@ standard ACP field or to `_meta.hgw`:
   progress as a patch. Its own stream is `ChildSessionEvent`, and its asks are
   the turn's requests with `childSessionId`. Report `cancellable` only where
   `stopChild` stops that child alone, and never reuse a child id or give one a
-  top-level Session's id.
+  top-level Session's id. A child still at work as its turn ends, which the
+  adapter goes on reporting through `ServerTurnListener.onChild`, is the
+  Session's background work: a Stop of the parent's turn asks nothing of it,
+  and a `session/close` or `session/delete` of the parent asks
+  `ServerTurnEngine.stopChild` to stop each one still at work.
 - Stored history carries the same tool kind, locations, diffs, timing, and
   stop reason where the provider's stored rows have them, so a reload reads
   like the live turn.

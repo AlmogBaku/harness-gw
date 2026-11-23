@@ -254,29 +254,30 @@ keeps only a public code. Any other failure reads `-31013`
 `session/close` stops the Session's active work for every member and then
 detaches this connection: its turn, as `session/cancel` does, and then its
 background work, each child still at work after its turn that this connection
-was told of (see [Child Sessions](#child-sessions)). The closer is shown how a turn it stopped ended,
-its final updates and its idle `state_update` with `stopReason: "cancelled"`,
-before the answer; closing an idle Session sends no idle of its own. A close
-whose Stop fails answers that failure, and one whose Stop the runtime does not
-confirm within 30 s (`CLOSE_DEADLINE_MS`) answers `-31014`
-`uncertain_mutation`: either way the Session stays active on the connection,
-which is shown the turn's end once it comes, and the close may be sent again.
-Closing is idempotent: a close of a Session not
-active on this connection, already closed, gone, or never known answers `{}`,
-as a close of a fresh invitation does, which only detaches it.
-`_hgw/session/part` (`HgwSessionPartRequestSchema`,
-`protocol/acp.ts`) only detaches this connection; the Session's work and all other
-members continue. `session/delete` closes the Session first, as a close on
-every connection would: it stops the turn and waits, as a close does, until
-each member was shown how it ended, stops every background child still at
-work, and detaches this connection; then the runtime deletes the Session, and
-every other member is told it is gone with an `_hgw/error` `not_found` and
-detached. A delete whose Stop fails, or goes unconfirmed, answers as a close
-would and deletes nothing. `session/delete` of a Session not known to this connection
-succeeds rather than returning not-found. The SDK client parts a Session its
-last listener left, after a 2 s grace, and closes one only when asked
-(`closeSession`), forgetting it at once with no part; as ACP asks, it takes a
-`-32002` answer to `session/close` or `session/delete` as success.
+was told of (see [Child Sessions](#child-sessions)). The closer is shown how a
+turn it stopped ended, its final updates and its idle `state_update` with
+`stopReason: "cancelled"`, before the answer; closing an idle Session sends no
+idle of its own. A close whose Stop fails answers that failure, and one whose
+Stop the runtime does not confirm within 30 s (`CLOSE_DEADLINE_MS`) answers
+`-31014` `uncertain_mutation`: either way the Session stays active on the
+connection, which is shown the turn's end once it comes, and the close may be
+sent again. Closing is idempotent: a close of a Session not active on this
+connection, already closed, gone, or never known answers `{}`, as a close of a
+fresh invitation does, which only detaches it. `_hgw/session/part`
+(`HgwSessionPartRequestSchema`, `protocol/acp.ts`) only detaches this
+connection; the Session's work and all other members continue.
+
+`session/delete` closes the Session first, as a close on every connection
+would: it stops the turn and waits, as a close does, until each member was
+shown how it ended, stops every background child still at work, and detaches
+this connection; then the runtime deletes the Session, and every other member
+is told it is gone with an `_hgw/error` `not_found` and detached. A delete
+whose Stop fails, or goes unconfirmed, answers as a close would and deletes
+nothing. A delete of a Session not known to this connection succeeds rather
+than returning not-found. The SDK client parts a Session its last listener
+left, after a 2 s grace, and closes one only when asked (`closeSession`),
+forgetting it at once with no part; as ACP asks, it takes a `-32002` answer to
+`session/close` or `session/delete` as success.
 
 A Session a `session/new` created is **unprompted** until the first prompt is
 sent to its runtime, whether or not the runtime confirms the start, or until
