@@ -2211,7 +2211,12 @@ export class HermesServerAdapter implements ServerRuntime {
 
   /**
    * A Session Hermes has not stored yet: a draft never prompted, or one this
-   * gateway holds live while Hermes stores its first turn.
+   * gateway holds live while Hermes stores its first turn. Read with a lazy
+   * `session.resume`, as a discard probes a draft: Hermes answers it from the
+   * live Session, and finds a key it holds neither a row nor a live draft
+   * for gone, where any other resume writes that key an empty row
+   * (`_resume_materialize_minted`), bringing back a draft discarded, deleted,
+   * or lost to a Hermes restart.
    */
   async #unpersistedDraft(profile: string, storedId: string) {
     let payload: unknown
@@ -2219,6 +2224,7 @@ export class HermesServerAdapter implements ServerRuntime {
       payload = await this.transport.request("session.resume", {
         session_id: storedId,
         profile,
+        lazy: true,
         omit_messages: true,
       })
     } catch (error) {
@@ -2354,7 +2360,14 @@ export class HermesServerAdapter implements ServerRuntime {
   }
 
   async deleteSession(profile: string, storedId: string) {
-    await this.getSession(profile, storedId)
+    // A draft Hermes has not stored lives in its live Session alone, which
+    // closing frees, as its discard does; one Hermes holds no draft for is
+    // gone already, as the read finds it.
+    if (!(await this.#storedSession(profile, storedId)).stored) {
+      if (await this.discardSession(profile, storedId)) return
+      // Running, or stored since: Hermes refuses to delete a live Session.
+      throw new HermesSessionConflictError()
+    }
     try {
       return await this.#mutateSession((dashboard) =>
         dashboard.deleteSession(profile, storedId)

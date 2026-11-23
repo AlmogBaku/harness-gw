@@ -1514,10 +1514,13 @@ describe("Hermes server adapter", () => {
         status: "idle",
       }
     )
+    // Lazy, so a key Hermes holds no draft for is found gone, never written
+    // an empty row.
     expect(router.calls("session.resume")[0]?.params).toEqual({
       session_id: "stored/1",
       profile: "researcher",
       source: "aos-ui",
+      lazy: true,
       omit_messages: true,
     })
   })
@@ -1566,6 +1569,46 @@ describe("Hermes server adapter", () => {
       )
     }
   )
+
+  // A draft has no row to delete: it lives in its live Session alone, or, once
+  // discarded or lost to a Hermes restart, nowhere, where a non-lazy resume of
+  // its key would write it an empty row (`_resume_materialize_minted`).
+  it.each([
+    ["frees a draft Hermes holds live by closing its live Session", true],
+    [
+      "finds a draft Hermes no longer holds gone, writing its key no row",
+      false,
+    ],
+  ])("deletes an unsaved draft: %s", async (_case, live) => {
+    const rows: unknown[] = []
+    const router = rpcRouter({
+      "session.resume": async (params) => {
+        if (live) return lazySnapshot
+        if (params.lazy === true)
+          throw new HermesRpcRejectedError(4007, "session not found")
+        rows.push(params.session_id)
+        return { session_id: "live-private", session_key: "stored/1" }
+      },
+      "session.close": async () => ({ closed: true }),
+    })
+    const adapter = new HermesServerAdapter({
+      ...router,
+      http: vi.fn(async () => {
+        throw new HermesHttpError(404)
+      }),
+    })
+
+    const answered = await adapter.deleteSession("researcher", "stored/1").then(
+      () => "deleted",
+      (cause: unknown) => adapter.publicError(cause)?.kind
+    )
+
+    expect(answered).toBe(live ? "deleted" : "gone")
+    expect(rows).toEqual([])
+    expect(router.calls("session.close").map(({ params }) => params)).toEqual(
+      live ? [{ session_id: "live-private" }] : []
+    )
+  })
 
   it("returns empty Todos for an unpersisted lazy Session", async () => {
     const { adapter } = unstoredAdapter(lazySnapshot)
