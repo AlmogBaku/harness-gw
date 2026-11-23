@@ -67,6 +67,7 @@ import {
 import { AcpConnectionClosedError, AgentUpdateError } from "./workspace"
 import {
   CAPACITY_BACKOFF,
+  FELL_BEHIND_WINDOW_MS,
   HANDSHAKE_DEADLINE_MS,
   LIVENESS_SILENCE_MS,
   PART_GRACE_MS,
@@ -96,6 +97,7 @@ import type {
 /** The close codes the gateway ends a connection with on purpose. */
 const TRY_AGAIN_LATER = 1013
 const POLICY_VIOLATION = 1008
+const READER_FELL_BEHIND = 4409
 
 /** Where the client logs when its caller passes no logger. */
 export const SILENT_LOGGER: Logger = {
@@ -455,7 +457,12 @@ export function connectionMachine({
     recover: fromAbortable(() => recover()),
   }
   const connectionSetup = ownerSetup<
-    { generation: number; attempt: number },
+    {
+      generation: number
+      attempt: number
+      /** When the transport last recovered, and the attempt it started over. */
+      recovered?: { at: number; attempt: number }
+    },
     ConnectionEvent,
     typeof actors
   >("connection", logger, clock, actors)
@@ -464,6 +471,11 @@ export function connectionMachine({
     { guard: "inProcess", target: "closed" },
     { guard: "policyViolation", target: "closed" },
     { guard: "tryAgainLater", target: "capacity" },
+    {
+      guard: "fellBehindAgain",
+      target: "reconnecting",
+      actions: "keepBackoff",
+    },
     { target: "reconnecting" },
   ] as const
   return connectionSetup
@@ -485,6 +497,11 @@ export function connectionMachine({
           event.type === "closed" && event.code === POLICY_VIOLATION,
         tryAgainLater: ({ event }) =>
           event.type === "closed" && event.code === TRY_AGAIN_LATER,
+        fellBehindAgain: ({ context, event }) =>
+          event.type === "closed" &&
+          event.code === READER_FELL_BEHIND &&
+          context.recovered !== undefined &&
+          clock.now() - context.recovered.at < FELL_BEHIND_WINDOW_MS,
       },
       actions: {
         // A handshake or replay that cannot complete leaves an unusable
@@ -496,7 +513,23 @@ export function connectionMachine({
         countAttempt: connectionSetup.assign({
           attempt: ({ context }) => context.attempt + 1,
         }),
-        resetAttempts: connectionSetup.assign({ attempt: 0 }),
+        resetAttempts: connectionSetup.assign({
+          attempt: 0,
+          recovered: undefined,
+        }),
+        startOver: connectionSetup.assign({
+          attempt: 0,
+          recovered: ({ context }) => ({
+            at: clock.now(),
+            attempt: context.attempt,
+          }),
+        }),
+        // A reader that fell behind again soon after its recovery backs off
+        // from where that recovery found it, as a repeated failure does.
+        keepBackoff: connectionSetup.assign({
+          attempt: ({ context }) =>
+            Math.max(context.attempt, context.recovered?.attempt ?? 0),
+        }),
       },
     })
     .createMachine({
@@ -522,10 +555,10 @@ export function connectionMachine({
         ready: {
           entry: "markReady",
           // Every Session rejoined, or a transport up long enough, starts the
-          // backoff over.
+          // backoff over; a fall-behind soon after the rejoin takes it back.
           invoke: {
             src: "recover",
-            onDone: { actions: "resetAttempts" },
+            onDone: { actions: "startOver" },
             onError: { actions: "closeTransport" },
           },
           on: { closed: onTransportClosed },

@@ -32,6 +32,16 @@ export const RECONNECT_BACKOFF = { baseMs: 250, capMs: 5_000 }
 export const STABLE_AFTER_MS = 60_000
 
 /**
+ * A transport the gateway closes as a reader that fell behind (4409) within
+ * this long of its recovery keeps the backoff that recovery started over, so a
+ * reader that keeps falling behind a running turn backs off as any repeated
+ * failure does, each cycle costing a rebuild and a resume of every Session.
+ * The same as STABLE_AFTER_MS: until then the transport has not shown that it
+ * keeps up.
+ */
+export const FELL_BEHIND_WINDOW_MS = STABLE_AFTER_MS
+
+/**
  * How long an opened Session outlives its last listener before it parts, so
  * an unsubscribe a resubscribe follows at once, as Strict Mode does, costs
  * neither a close nor a resume.

@@ -89,7 +89,9 @@ replay, the same resume rebuilds the Session from history, as described under
 
 The SDK client reconnects with jittered backoff starting at 250 ms, capped at
 5 000 ms, and resetting once every resumed Session has rejoined or the link has
-been stable for a while. A guest connection re-sends `auth/login` after every
+been stable for a while. A `4409` within 60 s of that rejoin
+(`FELL_BEHIND_WINDOW_MS`) takes the reset back, so a reader that keeps falling
+behind a running turn backs off as any repeated failure does. A guest connection re-sends `auth/login` after every
 transport recovery before resuming sessions. A read (`_hgw/agents/list`,
 `session/list`, `_hgw/sessions/search`) that its transport closes under, or
 that is made while the client reconnects, goes out again once a transport has
@@ -106,7 +108,7 @@ Close codes the gateway sends:
 | `1008` | Policy violation (expired credential, rate or frame size exceeded, or another protocol limit the ACP SDK enforces)                                 | No reconnect; ends connection |
 | `1013` | Gateway at capacity                                                                                                                                | Backs off 30–60 s with jitter |
 | `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
-| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, its waiting requests passed that buffer, or a Session left it behind | Normal reconnect              |
+| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, its waiting requests passed that buffer, or a Session left it behind | Normal reconnect; within 60 s of a rejoin, the backoff grows |
 
 Any other code triggers a normal reconnect.
 

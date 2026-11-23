@@ -1611,6 +1611,36 @@ describe("ACP connection", () => {
     connection.close()
   })
 
+  // Each cycle costs the gateway a history rebuild and a resume of every
+  // Session on the tab, so a reader that keeps falling behind backs off.
+  it("backs off a reader that falls behind again soon after its recovery, and only such a reader", async () => {
+    const clock = useFakeClock()
+    // Full jitter at its ceiling: each backoff is its whole window, less 1 ms.
+    vi.spyOn(Math, "random").mockReturnValue(0.999)
+    const gateway = createGatewayAgent()
+    const { pipe, connection } = connectOverSockets(gateway)
+    connection.subscribe(SESSION_ID, { agentId: AGENT_ID })
+    await connection.joined(SESSION_ID)
+    /** Advances past `ms` and reports how many sockets opened by then. */
+    const opened = async (ms: number) => {
+      await clock.advance(ms)
+      return pipe.sockets.length
+    }
+
+    pipe.sockets[0]?.closeFromGateway(4409, "ACP member fell behind")
+    expect(await opened(249)).toBe(2)
+    await connection.joined(SESSION_ID)
+    pipe.sockets[1]?.closeFromGateway(4409, "ACP member fell behind")
+    expect(await opened(498)).toBe(2)
+    expect(await opened(1)).toBe(3)
+    await connection.joined(SESSION_ID)
+    // Any other close after a recovery reconnects from the start of the
+    // backoff, as before.
+    pipe.sockets[2]?.drop()
+    expect(await opened(249)).toBe(4)
+    connection.close()
+  })
+
   it("rejoins a Session it saw no turn of at the position it holds", async () => {
     const clock = useFakeClock()
     const gateway = createGatewayAgent()
