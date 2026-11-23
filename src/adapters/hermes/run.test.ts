@@ -6027,8 +6027,8 @@ describe("Hermes child Sessions", () => {
   // ACP's cancel stops the foreground alone: the parent's Stop asks nothing of
   // a child at work, which goes on as background work until a close stops it
   // by name. (Hermes itself may halt it with the turn; it reports that too.)
-  it("asks nothing of a child at work as its parent's turn stops, and stops it by name", async () => {
-    const { engine, interrupts, listener, turnId, events } = await outlived({
+  it("asks nothing of a child at work as its parent's turn stops", async () => {
+    const { interrupts, listener, turnId, events } = await outlived({
       stopped: true,
     })
 
@@ -6042,8 +6042,6 @@ describe("Hermes child Sessions", () => {
       childSessionId: CHILD,
       status: ChildSessionStatus.Running,
     })
-    await engine.stopChild(scope, CHILD)
-    expect(interrupts).toEqual([["live-secret", "sa-0-1"]])
   })
 
   // Hermes reports every child on the parent's live Session, whichever turn

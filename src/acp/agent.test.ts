@@ -1015,30 +1015,24 @@ describe("AOS ACP agent", () => {
     other.close()
   })
 
-  it.each([
-    [
-      "a value type the option does not take",
-      { type: "_vendor", value: "opus" },
-    ],
-    ["a model the Session does not offer", { type: "id", value: "gpt" }],
-  ] as const)(
-    "refuses a config write of %s, changing nothing",
-    async (_label, choice) => {
-      const test = await harness()
-      await test.list()
-      await open(test)
+  // `offers` decides which writes an option takes; this proves its refusal
+  // reaches the wire and changes nothing.
+  it("refuses a config write of a model the Session does not offer, changing nothing", async () => {
+    const test = await harness()
+    await test.list()
+    await open(test)
 
-      await expect(
-        test.agent.request(methods.agent.session.setConfigOption, {
-          sessionId: SESSION,
-          configId: "model",
-          ...choice,
-        })
-      ).rejects.toMatchObject(INVALID_PARAMS)
-      expect(test.updateModel).not.toHaveBeenCalled()
-      test.close()
-    }
-  )
+    await expect(
+      test.agent.request(methods.agent.session.setConfigOption, {
+        sessionId: SESSION,
+        configId: "model",
+        type: "id",
+        value: "gpt",
+      })
+    ).rejects.toMatchObject(INVALID_PARAMS)
+    expect(test.updateModel).not.toHaveBeenCalled()
+    test.close()
+  })
 
   // ACP has a Session active on a connection from a create or resume there
   // that succeeded until its close; a prompt or config write of any other is
