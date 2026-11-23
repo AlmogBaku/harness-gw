@@ -55,6 +55,7 @@ import {
 import { HermesNativeRuntime, type HermesTurnNative } from "./run-native"
 import {
   createHermesWorkspaceOperations,
+  HermesModelChoiceRefusedError,
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
   latestHermesTodos,
@@ -1024,8 +1025,12 @@ export class HermesServerAdapter implements ServerRuntime {
     )
       return failureOf("uncertain", cause)
     // Hermes refuses to fork a Session with no visible message yet; the same
-    // fork meets the same refusal until one is sent.
-    if (cause instanceof HermesForkRefusedError)
+    // fork meets the same refusal until one is sent. A model choice it cannot
+    // take is refused before anything is written.
+    if (
+      cause instanceof HermesForkRefusedError ||
+      cause instanceof HermesModelChoiceRefusedError
+    )
       return failureOf("invalid_request", cause)
     // An unconfirmed Stop is not an outage: Hermes may have accepted it, so the
     // browser must reconcile instead of treating the Session as unavailable.

@@ -69,6 +69,18 @@ export class HermesWorkspaceUnavailableError extends Error {
   }
 }
 
+/**
+ * A model or thought level Hermes cannot be asked to switch to: an id this
+ * module did not mint, an effort off Hermes' ladder, or its default once an
+ * effort is set. The caller's to fix; nothing was written.
+ */
+export class HermesModelChoiceRefusedError extends Error {
+  constructor() {
+    super("Hermes cannot switch the Session to this model choice")
+    this.name = "HermesModelChoiceRefusedError"
+  }
+}
+
 export type HermesWorkspaceCapabilities = {
   models: {
     status: "available"
@@ -572,7 +584,7 @@ export function createHermesWorkspaceOperations(input: {
           ? undefined
           : parseModelId(patch.selectedId)
       if (patch.selectedId !== undefined && !requested)
-        throw new HermesWorkspaceUnavailableError()
+        throw new HermesModelChoiceRefusedError()
       const effortId =
         patch.effortId === undefined
           ? undefined
@@ -586,7 +598,7 @@ export function createHermesWorkspaceOperations(input: {
           await input.transport.sessionInfo?.(session).catch(() => undefined)
         )
       if (patch.effortId !== undefined && !effortId && !keepsDefault)
-        throw new HermesWorkspaceUnavailableError()
+        throw new HermesModelChoiceRefusedError()
 
       let applied: { provider: string; model: string } | undefined
       if (requested) {

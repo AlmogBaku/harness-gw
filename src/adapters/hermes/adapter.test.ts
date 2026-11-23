@@ -38,6 +38,7 @@ import {
   HermesContentUnreadableError,
 } from "./content"
 import {
+  HermesModelChoiceRefusedError,
   HermesWorkspaceScopeError,
   HermesWorkspaceUnavailableError,
 } from "./workspace"
@@ -3383,9 +3384,11 @@ describe("Hermes server adapter", () => {
       new HermesInteractionPublicError("HGW_PROVIDER_UNAVAILABLE"),
     ])
       expect(kindOf(cause)).toBe("unavailable")
-    expect(
-      kindOf(new HermesInteractionPublicError("HGW_INVALID_INTERACTION"))
-    ).toBe("invalid_request")
+    for (const cause of [
+      new HermesInteractionPublicError("HGW_INVALID_INTERACTION"),
+      new HermesModelChoiceRefusedError(),
+    ])
+      expect(kindOf(cause)).toBe("invalid_request")
     expect(adapter.publicError(new Error("unclassified"))).toBeUndefined()
   })
 
