@@ -555,8 +555,9 @@ except `turn_conflict` and `internal_error`; maps to JSON-RPC via
 
 **JSON-RPC extension codes** (`protocol/acp.ts`, `HGW_JSONRPC_ERRORS`):
 ACP standard codes `-32000` (authentication required), `-32002` (resource not
-found), `-32601` (method not found), `-32602` (invalid params), `-32800`
-(request cancelled); HGW block `-31010` turnInProgress, `-31011` staleRequest,
+found, with `data.sessionId` when the request named a Session, also for one
+not active on the connection), `-32601` (method not found), `-32602` (invalid
+params), `-32800` (request cancelled); HGW block `-31010` turnInProgress, `-31011` staleRequest,
 `-31012` revisionConflict, `-31013` temporarilyUnavailable, `-31014`
 uncertainMutation, `-31016` requestTooLarge (raised by the client before
 sending; never sent by the gateway). A method a connection may not use, a
