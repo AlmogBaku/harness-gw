@@ -317,6 +317,7 @@ describe("AOS ACP agent", () => {
       )
     await expect(fork({ sessionId: "unknown" })).rejects.toMatchObject({
       code: notFound().code,
+      data: { sessionId: "unknown" },
     })
     expect(test.forkSession).not.toHaveBeenCalled()
     test.close()
@@ -2025,9 +2026,10 @@ describe("Session rooms", () => {
         sessionId: "missing",
         cwd: "/",
       })
-    ).rejects.toMatchObject({ code: -32002 })
+    ).rejects.toMatchObject({ code: -32002, data: { sessionId: "missing" } })
     await expect(prompt(test, "Summarize")).rejects.toMatchObject({
       code: -32002,
+      data: { sessionId: SESSION },
     })
     // A start that found its Session gone tells its sender, who holds no
     // readings yet, and asks the runtime after it no more.
@@ -4211,6 +4213,7 @@ describe("History pages", () => {
 
     await expect(older(test, cursorOf(5))).rejects.toMatchObject({
       code: notFound().code,
+      data: { sessionId: SESSION },
     })
     await test.create()
     expect(historyOf(await older(test, cursorOf(5), CREATED))).toEqual({

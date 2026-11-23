@@ -83,11 +83,12 @@ import {
   authenticationRequired,
   errorNotificationOf,
   invalidParams,
-  notFound,
+  namingSession,
   parseMeta,
   publicCodeOf,
   publicRequestError,
   refusalError,
+  sessionNotFound,
   unsupported,
 } from "./validation"
 
@@ -276,11 +277,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     try {
       return await runCommand(stack(), kind, command, current)
     } catch (cause) {
-      const error =
+      const { sessionId } = command as { sessionId?: string | null }
+      // A not-found of a command naming a Session names the one it named.
+      const error = namingSession(
         cause instanceof CommandRefusedError
           ? refusalError(cause.refusal, cause.hint)
-          : publicRequestError(context.publicError, cause)
-      const { sessionId } = command as { sessionId?: string | null }
+          : publicRequestError(context.publicError, cause),
+        sessionId ?? undefined
+      )
       context.logger.warn(
         {
           command: kind,
@@ -440,7 +444,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
     cursor,
   }: MemberCommands["older-page"]): Promise<CommandResults["older-page"]> {
     const membership = sessions.membership(sessionId)
-    if (!membership) throw notFound()
+    if (!membership) throw sessionNotFound(sessionId)
     return context.channels.olderPage(membership, {
       cursor,
       offset: decodeHistoryCursor(cursor, maxOffset),
@@ -1045,7 +1049,7 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         async (command) => {
           // A connection steers only a Session it joined, as it stops one.
           const membership = sessions.membership(command.sessionId)
-          if (!membership) throw notFound()
+          if (!membership) throw sessionNotFound(command.sessionId)
           const steered = await membership.steer(
             command.requestId,
             command.text

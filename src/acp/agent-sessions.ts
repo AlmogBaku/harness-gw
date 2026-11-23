@@ -28,7 +28,7 @@ import {
   authenticationRequired,
   errorNotificationOf,
   invalidParams,
-  notFound,
+  sessionNotFound,
 } from "./validation"
 
 /**
@@ -247,7 +247,7 @@ export function createSessions(
         agentId === undefined
           ? undefined
           : catalog.scope(agentId, publicSessionId)
-      if (!scope) throw notFound()
+      if (!scope) throw sessionNotFound(publicSessionId)
       return scope
     },
 

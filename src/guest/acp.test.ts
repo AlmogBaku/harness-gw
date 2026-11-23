@@ -1670,7 +1670,8 @@ describe("guest scope and commands", () => {
     const test = harness({ existing: true })
     await test.initialize()
     await test.login(await invite(test.invitations))
-    const notFound = { code: NOT_FOUND }
+    // A not-found names the Session the guest named, and nothing else.
+    const notFound = { code: NOT_FOUND, data: { sessionId: "another-session" } }
 
     await expect(test.resume("another-session")).rejects.toMatchObject(notFound)
     await expect(test.prompt("Hello", "another-session")).rejects.toMatchObject(

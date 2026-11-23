@@ -989,13 +989,17 @@ block covers only the failures ACP has no code for (`HGW_JSONRPC_ERRORS`,
 
 **ACP standard codes:**
 
-| Code     | SDK constructor      | Meaning                                              |
-| -------- | -------------------- | ---------------------------------------------------- |
-| `-32000` | `authRequired()`     | Authentication required (guest: no valid invitation) |
-| `-32002` | `resourceNotFound()` | Agent or Session does not exist                      |
-| `-32601` | `methodNotFound()`   | Method does not exist, or is not available here      |
-| `-32602` | `invalidParams()`    | Request parameters failed validation                 |
-| `-32800` | `requestCancelled()` | Request timed out or the transport closed            |
+| Code     | SDK constructor                           | Meaning                                              |
+| -------- | ----------------------------------------- | ---------------------------------------------------- |
+| `-32000` | `authRequired()`                          | Authentication required (guest: no valid invitation) |
+| `-32002` | `sessionNotFound()`, `resourceNotFound()` | Session or Agent does not exist                      |
+| `-32601` | `methodNotFound()`                        | Method does not exist, or is not available here      |
+| `-32602` | `invalidParams()`                         | Request parameters failed validation                 |
+| `-32800` | `requestCancelled()`                      | Request timed out or the transport closed            |
+
+A `-32002` answering a request that names a Session carries
+`data: { sessionId }`, the id the request named, whatever it was that could
+not be found; one answering any other request carries no `data`.
 
 **Gateway codes (`HGW_JSONRPC_ERRORS`, block from -31010):**
 

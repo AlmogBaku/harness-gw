@@ -50,8 +50,31 @@ export function authenticationRequired() {
   return RequestError.authRequired()
 }
 
+/** A request naming something that does not exist: ACP's `-32002`. */
 export function notFound() {
   return RequestError.resourceNotFound()
+}
+
+/**
+ * A request naming a Session that does not exist or is not active on this
+ * connection: ACP's `-32002`, with `data.sessionId` the id it named.
+ */
+export function sessionNotFound(sessionId: string) {
+  return RequestError.sessionNotFound(sessionId)
+}
+
+const NOT_FOUND = notFound().code
+
+/**
+ * `error` as an answer to a request naming the Session `sessionId`: ACP has
+ * its `-32002` carry the id the request named, whatever was not found.
+ */
+export function namingSession(error: unknown, sessionId: string | undefined) {
+  return sessionId !== undefined &&
+    error instanceof RequestError &&
+    error.code === NOT_FOUND
+    ? sessionNotFound(sessionId)
+    : error
 }
 
 /**
