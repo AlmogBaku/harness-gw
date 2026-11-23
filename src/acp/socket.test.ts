@@ -7,6 +7,20 @@ import { authenticationRequired, notFound, PUBLIC_ERRORS } from "./validation"
 
 const NOW = 1_700_000_000_000
 const NOT_FOUND = notFound().code
+/** The frame the SDK begins its handshake on. */
+const INITIALIZE = JSON.stringify({
+  jsonrpc: "2.0",
+  id: 0,
+  method: "initialize",
+  params: { protocolVersion: 2 },
+})
+/** A request under an id ACP v2 forbids, a number but no integer. */
+const NON_INTEGER_ID = {
+  jsonrpc: "2.0",
+  id: 0.5,
+  method: "session/prompt",
+  params: { sessionId: "ref" },
+}
 
 function harness(overrides: Partial<AcpSocketOptions> = {}) {
   const closed: Array<{ code: number; reason: string }> = []
@@ -282,6 +296,63 @@ describe("ACP WebSocket shim", () => {
       error: { code: NOT_FOUND, message: "not_found" },
     })
   })
+
+  // The SDK keeps a route for each request until an answer under its id, but
+  // ACP v2 answers a non-integer id under `null`, so each such request would
+  // hold its route until the socket closed.
+  it.each([
+    [
+      "operator",
+      {},
+      "Invalid request: ACP v2 request IDs must be strings or integers",
+    ],
+    ["guest", { publicErrors: PUBLIC_ERRORS }, "malformed_request"],
+  ])(
+    "answers a request with a non-integer id on the %s listener as the SDK does, and hands the SDK none of it",
+    (_listener, overrides, message) => {
+      const { socket, messages, sent } = harness(overrides)
+      const valid = JSON.stringify({ ...NON_INTEGER_ID, id: 2 })
+      socket.receive(INITIALIZE)
+      socket.receive(JSON.stringify(NON_INTEGER_ID))
+      socket.receive(valid)
+
+      expect(messages).toEqual([INITIALIZE, valid])
+      expect(sent.map((raw) => JSON.parse(raw) as unknown)).toEqual([
+        { jsonrpc: "2.0", id: null, error: { code: -32600, message } },
+      ])
+    }
+  )
+
+  it.each([
+    ["before its handshake, on which it closes", [], NON_INTEGER_ID],
+    [
+      "that is an initialize, which it answers itself",
+      [INITIALIZE],
+      { ...NON_INTEGER_ID, method: "initialize" },
+    ],
+    [
+      "naming a Session id past its id length, on which it closes",
+      [INITIALIZE],
+      { ...NON_INTEGER_ID, params: { sessionId: "r".repeat(1_025) } },
+    ],
+    [
+      "whose id is null, which it answers and frees under null",
+      [INITIALIZE],
+      { ...NON_INTEGER_ID, id: null },
+    ],
+  ])(
+    "hands the SDK a request with an id ACP v2 forbids %s",
+    (_label, before, frame) => {
+      const { socket, messages, sent } = harness({
+        publicErrors: PUBLIC_ERRORS,
+      })
+      for (const earlier of before) socket.receive(earlier)
+      socket.receive(JSON.stringify(frame))
+
+      expect(messages).toEqual([...before, JSON.stringify(frame)])
+      expect(sent).toEqual([])
+    }
+  )
 
   it("records at most its bound of unanswered requests, dropping none to make room", () => {
     const { socket, sent } = harness({

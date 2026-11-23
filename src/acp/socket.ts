@@ -2,7 +2,10 @@ import {
   DEFAULT_MAX_ID_LENGTH,
   type PreparedWebSocketUpgrade,
 } from "@agentclientprotocol/sdk/experimental/server"
-import { methods } from "@agentclientprotocol/sdk/experimental/v2/unstable"
+import {
+  methods,
+  RequestError,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable"
 
 import {
   ACP_PROTOCOL_VERSION,
@@ -33,6 +36,19 @@ const DEFAULT_INPUT_BYTES_PER_WINDOW = 2 * MAX_FRAME_BYTES
  * entry two ids of at most `DEFAULT_MAX_ID_LENGTH`.
  */
 const DEFAULT_MAX_NAMED_REQUESTS = 64
+
+/**
+ * What ACP v2 answers a request whose id is a number but no integer
+ * (`rejectInvalidRequestId`, `v2/acp.js`): `-32600` under `id: null`.
+ */
+const NON_INTEGER_ID_REPLY = JSON.stringify({
+  jsonrpc: "2.0",
+  id: null,
+  error: RequestError.invalidRequest(
+    undefined,
+    "ACP v2 request IDs must be strings or integers"
+  ).toErrorResponse(),
+})
 
 const decoder = new TextDecoder()
 
@@ -123,6 +139,8 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
    * dropped to make room.
    */
   const named = new Map<string | number, string>()
+  /** Whether a frame the SDK begins its handshake on has passed. */
+  let handshaking = false
   let closed = false
   let windowStartedAt = now()
   let windowFrames = 0
@@ -217,6 +235,13 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         return
       }
       const frame = parsed(data)
+      // Answered here as the SDK would answer it, so the SDK keeps no route
+      // for it that its answer would never free.
+      if (handshaking && strandsRoute(frame)) {
+        socket.send(NON_INTEGER_ID_REPLY)
+        return
+      }
+      if (beginsHandshake(frame)) handshaking = true
       if (options.publicErrors) {
         const request = namedSessionOf(frame)
         if (request && (named.has(request.id) || named.size < maxNamed))
@@ -298,6 +323,61 @@ function namedSessionOf(frame: unknown) {
   return typeof sessionId === "string" && withinIdLength(sessionId)
     ? { id, sessionId }
     : undefined
+}
+
+/**
+ * Whether the SDK begins its handshake on a frame: an `initialize` it reads
+ * as a request (`isRequestMessage`, `core/jsonrpc.js`) under an id other than
+ * `null` (`handleInitialize`, `transports/ws-server.js`). Before one, it
+ * closes the connection on any other request itself.
+ */
+function beginsHandshake(frame: unknown) {
+  if (typeof frame !== "object" || frame === null) return false
+  const { jsonrpc, id, method } = frame as {
+    jsonrpc?: unknown
+    id?: unknown
+    method?: unknown
+  }
+  return (
+    jsonrpc === "2.0" &&
+    method === methods.agent.initialize &&
+    (typeof id === "string" || Number.isFinite(id))
+  )
+}
+
+/**
+ * Whether the SDK, once its handshake began, would keep a route for a frame
+ * that nothing frees until the socket closes. It keeps one for each request
+ * under its id (`trackInboundRoutes`, `transports/ws-server.js`), and frees
+ * it on the answer under that id (`routeOutboundResponse`,
+ * `transports/connection.js`); ACP v2 answers an id that is a finite number
+ * but no integer under `null` (`rejectInvalidRequestId`, `v2/acp.js`), so its
+ * route stays. The SDK answers an `initialize` itself and keeps no route for
+ * it, frees a `null` id's route under `null`, and closes on a Session id past
+ * `DEFAULT_MAX_ID_LENGTH` before it keeps one, so none of those strands one.
+ */
+function strandsRoute(frame: unknown) {
+  if (typeof frame !== "object" || frame === null || Array.isArray(frame))
+    return false
+  const { jsonrpc, id, method, params } = frame as {
+    jsonrpc?: unknown
+    id?: unknown
+    method?: unknown
+    params?: unknown
+  }
+  if (
+    jsonrpc !== "2.0" ||
+    typeof method !== "string" ||
+    method === methods.agent.initialize ||
+    !Number.isFinite(id) ||
+    Number.isInteger(id)
+  )
+    return false
+  const sessionId =
+    typeof params === "object" && params !== null
+      ? (params as { sessionId?: unknown }).sessionId
+      : undefined
+  return typeof sessionId !== "string" || withinIdLength(sessionId)
 }
 
 /** Whether the SDK answers a request under `id` itself. */
