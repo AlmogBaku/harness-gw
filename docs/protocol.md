@@ -343,7 +343,10 @@ runtime deletes the Session, and once it holds it no longer, deleted or
 already gone, this connection is detached, as its close would detach it, and
 every other member is told it is gone with an `_hgw/error` `not_found` and
 detached. The whole delete, its close and the runtime's delete, shares one
-30 s deadline (`CLOSE_DEADLINE_MS`). It waits for each member to be shown the
+30 s deadline (`CLOSE_DEADLINE_MS`). The deleter, if a member, is shown how a
+turn the delete stopped ended, its final updates and its idle `state_update`
+with `stopReason: "cancelled"`, before the answer, within that deadline, as
+its close would show it. It waits for each other member to be shown the
 turn's end for at most 5 s (`DELETE_SHOWN_MS`) and then goes on without it,
 so one member's slow socket never fails another's delete: such a member is
 told the Session is gone without the turn's updates it was not yet written.

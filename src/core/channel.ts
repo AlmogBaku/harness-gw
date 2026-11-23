@@ -124,6 +124,9 @@ export type MembershipDelivery = {
   shown(): Promise<void>
 }
 
+/** A member a wait follows until it was shown the last stream it follows. */
+type ShownMember = Pick<MembershipDelivery, "shown">
+
 export type Channels = ReturnType<typeof createChannels>
 type ChannelTable = ReturnType<typeof createChannelTable>
 /** What lets a channel adopt a turn the runtime started by itself. */
@@ -1001,20 +1004,32 @@ export function createChannels(options: CreateChannelsOptions) {
   }
 
   /**
-   * Settles once every member was shown how the Session's turn ended, or once
-   * `DELETE_SHOWN_MS` passed: a member slower than that is behind its socket,
-   * and a delete goes on without it, so one member's slow reader never fails
-   * another's delete. Rejects with `signal`'s reason once it aborts.
+   * Settles once the `deleter`, if a member, was shown how the Session's turn
+   * ended, as its close would wait, and once every member was or
+   * `DELETE_SHOWN_MS` passed: any other member slower than that is behind its
+   * socket, and a delete goes on without it, so one member's slow reader
+   * never fails another's delete. Rejects with `signal`'s reason once it
+   * aborts.
    */
-  async function everyMemberShown(scope: SessionScope, signal: AbortSignal) {
+  async function everyMemberShown(
+    scope: SessionScope,
+    signal: AbortSignal,
+    deleter?: ShownMember
+  ) {
     const wait = new Deadline(DELETE_SHOWN_MS, clock, signal)
-    try {
-      await wait.run(() => channels.shown(scope))
-    } catch (cause) {
-      if (signal.aborted || cause !== wait.signal.reason) throw cause
-      const { agentId, sessionId } = scope
-      logger.warn({ agentId, sessionId }, "channel.delete.shown_late")
+    const othersShown = async () => {
+      try {
+        await wait.run(() => channels.shown(scope))
+      } catch (cause) {
+        if (signal.aborted || cause !== wait.signal.reason) throw cause
+        const { agentId, sessionId } = scope
+        logger.warn({ agentId, sessionId }, "channel.delete.shown_late")
+      }
     }
+    await Promise.all([
+      deleter && unlessAborted(deleter.shown(), signal),
+      othersShown(),
+    ])
   }
 
   return {
@@ -1151,16 +1166,21 @@ export function createChannels(options: CreateChannelsOptions) {
 
     /**
      * Stops all of a Session's work as `session/delete` asks, as a close on
-     * every connection would: its turn, settling once each member was shown
-     * how it ended or `DELETE_SHOWN_MS` passed, then every background child.
-     * Throws as `stopAndSettle` and `stopBackground` do.
+     * every connection would: its turn, settling once the `deleter`, if a
+     * member, was shown how it ended, and each member was or
+     * `DELETE_SHOWN_MS` passed, then every background child. Throws as
+     * `stopAndSettle` and `stopBackground` do.
      */
-    async stopWork(scope: SessionScope, signal: AbortSignal) {
+    async stopWork(
+      scope: SessionScope,
+      signal: AbortSignal,
+      deleter?: ShownMember
+    ) {
       await stopAndSettle(
         coordinator,
         scope,
         () => coordinator.stop(scope),
-        (shownSignal) => everyMemberShown(scope, shownSignal),
+        (shownSignal) => everyMemberShown(scope, shownSignal, deleter),
         signal
       )
       await stopBackground(scope, signal)
@@ -1345,7 +1365,7 @@ class Membership {
       },
       offerChild: (request) => this.#offerChild(request),
       withdrawChild: (requestId) => this.#withdraw(requestId),
-      shown: () => this.#shownStream(),
+      shown: () => this.shown(),
     }
   }
 
@@ -2097,13 +2117,13 @@ class Membership {
       this.#coordinator,
       this.#scope,
       () => this.cancel(),
-      (shownSignal) => unlessAborted(this.#shownStream(), shownSignal),
+      (shownSignal) => unlessAborted(this.shown(), shownSignal),
       signal
     )
   }
 
   /** Settles once this member was shown the last stream it follows, whole. */
-  async #shownStream() {
+  async shown() {
     // A follow in flight subscribes before its stream can be waited on.
     await this.#exclusive(async () => undefined)
     await this.#streamed?.done

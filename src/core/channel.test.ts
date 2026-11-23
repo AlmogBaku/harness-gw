@@ -23,13 +23,14 @@ import {
   type SessionScope,
 } from "./runtime"
 import {
+  CloseUnconfirmedError,
   createChannels,
   type MembershipDelivery,
   type ChannelScope,
   type ChannelTurn,
 } from "./channel"
 import { providerSessionId, sessionId } from "./ids"
-import { DELETE_SHOWN_MS } from "./limits"
+import { CLOSE_DEADLINE_MS, DELETE_SHOWN_MS } from "./limits"
 import type { SessionCoordinator } from "./session-coordinator"
 
 /** No test here reads history; a channel that did would fail loudly. */
@@ -544,8 +545,20 @@ const GUEST_SCOPE: SessionScope = {
 }
 
 describe("a delete's wait for its members", () => {
-  // One member's slow reader never fails the delete for another.
-  it("goes on without a member not shown its turn's end in time", async () => {
+  // One member's slow reader never fails the delete for another, while the
+  // deleter is shown its turn's end before its answer, as its close would be.
+  it.each([
+    [
+      "any other member for at most its wait, and then goes on",
+      false,
+      "stopped",
+    ],
+    [
+      "the deleter for its whole deadline, as its close would",
+      true,
+      "unconfirmed",
+    ],
+  ])("waits on %s", async (_member, deleting, outcomeAtEnd) => {
     const clock = useFakeClock()
     const channels = createChannels({
       coordinator: {
@@ -565,16 +578,21 @@ describe("a delete's wait for its members", () => {
     channels.add(SCOPE, slow, { hasPrompt: false })
     let outcome: unknown
     void channels
-      .closing((signal) => channels.stopWork(SCOPE, signal))
+      .closing((signal) =>
+        channels.stopWork(SCOPE, signal, deleting ? slow : undefined)
+      )
       .then(
         () => (outcome = "stopped"),
-        (cause: unknown) => (outcome = cause)
+        (cause: unknown) =>
+          (outcome =
+            cause instanceof CloseUnconfirmedError ? "unconfirmed" : cause)
       )
 
-    await clock.advance(DELETE_SHOWN_MS - 1)
+    const wait = deleting ? CLOSE_DEADLINE_MS : DELETE_SHOWN_MS
+    await clock.advance(wait - 1)
     expect(outcome).toBeUndefined()
     await clock.advance(1)
-    expect(outcome).toBe("stopped")
+    expect(outcome).toBe(outcomeAtEnd)
   })
 })
 

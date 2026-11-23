@@ -79,11 +79,13 @@ export const JOIN_DEADLINE_MS = ADMISSION_DEADLINE_MS
 export const CLOSE_DEADLINE_MS = ADMISSION_DEADLINE_MS
 
 /**
- * How long a delete waits, inside its CLOSE_DEADLINE_MS, for every member to
- * be shown how the turn it stopped ended. A member slower than this is behind
- * its socket, and the delete goes on without it, so one slow reader never
- * fails the delete for another: that member is then told the Session is gone,
- * and shown none of the turn's last updates it was not yet written.
+ * How long a delete waits, inside its CLOSE_DEADLINE_MS, for each member but
+ * the deleter to be shown how the turn it stopped ended; the deleter it waits
+ * for under the whole deadline, as its close would. Any other member slower
+ * than this is behind its socket, and the delete goes on without it, so one
+ * slow reader never fails the delete for another: that member is then told
+ * the Session is gone, and shown none of the turn's last updates it was not
+ * yet written.
  */
 export const DELETE_SHOWN_MS = 5_000
 
