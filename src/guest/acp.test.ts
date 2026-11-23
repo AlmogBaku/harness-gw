@@ -1495,10 +1495,20 @@ describe("guest ACP listener", () => {
     expect(replayed).not.toContain("/private")
     // The invitation's setup turn stays hidden on whichever page holds it.
     expect(replayed).not.toContain(INSTRUCTION)
+    // The page, its end included, is tagged; the Session's current state
+    // that closes the read is not.
+    const state = sent.pop()
     for (const { params } of sent)
       expect(params).toMatchObject({
         update: { _meta: { [HGW_META_KEY]: { historyPage: { cursor } } } },
       })
+    expect(sent.at(-1)?.params).toMatchObject({
+      update: { sessionUpdate: "replay_complete" },
+    })
+    expect(state?.params).toEqual({
+      sessionId: REF,
+      update: { sessionUpdate: "state_update", state: "idle" },
+    })
     test.close()
   })
 

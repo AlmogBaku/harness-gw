@@ -4211,6 +4211,14 @@ const pageTag = (update: SentUpdate) =>
   (update._meta?.[HGW_META_KEY] as { historyPage?: unknown } | undefined)
     ?.historyPage
 
+/** A page's own updates since `from`: those tagged as a page's, its end aside. */
+const pagedUpdates = (recorder: Recorder, from: number) =>
+  pageUpdates(recorder, from).filter(
+    (update) =>
+      pageTag(update) !== undefined &&
+      update.sessionUpdate !== "replay_complete"
+  )
+
 const INVALID_PARAMS = { code: invalidParams().code }
 
 /** Pages of five rows reaching back twenty, so a few rows make a long Session. */
@@ -4309,7 +4317,7 @@ describe("History pages", () => {
 
     const page = await older(test, cursorOf(5))
 
-    const sent = pageUpdates(test.recorder, from)
+    const sent = pagedUpdates(test.recorder, from)
     expect(historyOf(page)).toEqual({ nextCursor: cursorOf(10) })
     // A page read is a resume, whose answer restates the setup.
     expect(page).toMatchObject(ANSWERED_SETUP)
@@ -4336,7 +4344,7 @@ describe("History pages", () => {
     const oldest = await older(test, cursorOf(10))
 
     expect(historyOf(oldest)).toEqual({})
-    expect(pageUpdates(test.recorder, last)).toHaveLength(2)
+    expect(pagedUpdates(test.recorder, last)).toHaveLength(2)
     test.close()
   })
 
@@ -4392,7 +4400,10 @@ describe("History pages", () => {
     test.close()
   })
 
-  it("reads a page without rejoining, following, or reporting the Session", async () => {
+  // ACP closes every resume with `replay_complete` after its replay and the
+  // Session's current state after that: a page read's too, the state apart
+  // from the page, for its live listeners.
+  it("reads a page without rejoining or following the Session, then ends its replay and states the Session", async () => {
     const test = await harness({
       historyReach: REACH,
       transcript: conversation(12),
@@ -4405,8 +4416,16 @@ describe("History pages", () => {
     await older(test, cursorOf(5))
     await settled()
 
-    expect(test.recorder.entries.slice(from)).toHaveLength(5)
-    expect(pageUpdates(test.recorder, from).every(pageTag)).toBe(true)
+    const sent = pageUpdates(test.recorder, from)
+    expect(test.recorder.entries.slice(from)).toHaveLength(7)
+    expect(sent.slice(0, 5).every(pageTag)).toBe(true)
+    expect(sent.slice(5)).toEqual([
+      {
+        sessionUpdate: "replay_complete",
+        _meta: { [HGW_META_KEY]: { historyPage: { cursor: cursorOf(5) } } },
+      },
+      { sessionUpdate: "state_update", state: "idle" },
+    ])
     await liveTurn(test, [test])
     const live = await test.recorder.wait(
       said("Live"),
@@ -4476,7 +4495,7 @@ describe("History pages", () => {
         ? [outbound.update]
         : []
     )
-    const sent = pageUpdates(test.recorder, from)
+    const sent = pagedUpdates(test.recorder, from)
     expect(sent).toEqual(
       expected.map((update) => {
         const meta = update._meta as Record<string, unknown> | undefined
@@ -4494,6 +4513,8 @@ describe("History pages", () => {
     )
     expect(JSON.stringify(sent)).toContain("Provider failed")
     expect(JSON.stringify(sent)).not.toContain("plan_update")
+    // Its failure rides on its message: a page replays no state of its own.
+    expect(JSON.stringify(sent)).not.toContain("state_update")
     test.close()
   })
 
@@ -4723,7 +4744,7 @@ describe("History pages", () => {
     const pageIds = async (offset: number) => {
       const from = test.recorder.entries.length
       await older(test, cursorOf(offset))
-      return pageUpdates(test.recorder, from).map(({ messageId }) => messageId)
+      return pagedUpdates(test.recorder, from).map(({ messageId }) => messageId)
     }
     const ids = (from: number, to: number) =>
       transcript.slice(from, to).map(({ id }) => id)

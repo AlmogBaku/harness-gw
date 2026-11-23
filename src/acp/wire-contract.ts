@@ -47,11 +47,15 @@ import {
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
   HGW_METHODS,
+  HGW_REPLAY_BEFORE,
   HGW_REPLAY_POSITION,
+  HgwHistoryPageTagSchema,
+  HgwSessionResumeResponseMetaSchema,
   hgwAcpAgentPath,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredGateway } from "../composition"
+import type { HistoryReach } from "../core/channel"
 import { stubUnreachableTransports, until } from "../core/runtime-contract"
 import { CredentialValues } from "../redaction"
 
@@ -89,6 +93,7 @@ export type WireContractRow =
   | "childHiddenFromGuest"
   | "replayCompleteAfterHistory"
   | "replayCompletePerChild"
+  | "olderPageClosesAsResume"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -251,6 +256,11 @@ type WireHarness = Readonly<{
 type ClientOptions = {
   /** Whether the client declares it answers form elicitations; it does. */
   elicits?: boolean
+  /**
+   * Whether the client declares it reads older pages itself, an extra
+   * (`_meta.hgw.historyPages`); a plain client does not.
+   */
+  pagesHistory?: boolean
 }
 
 /**
@@ -259,7 +269,11 @@ type ClientOptions = {
  * Awaited directly, not on the fake clock: composing reads that key from
  * disk, and real I/O takes no fixed count of clock steps.
  */
-async function composeGateway(runtime: WireRuntime, limits: SubscriberLimits) {
+async function composeGateway(
+  runtime: WireRuntime,
+  limits: SubscriberLimits,
+  historyReach?: HistoryReach
+) {
   const directory = await mkdtemp(join(tmpdir(), "aos-wire-contract-"))
   const invitationKey = join(directory, "invitation-key")
   await writeFile(
@@ -296,6 +310,7 @@ async function composeGateway(runtime: WireRuntime, limits: SubscriberLimits) {
         runtimeFactory: runtime.runtimeFactory,
         logger: captureLogs().logger,
         credentials: new CredentialValues(),
+        ...(historyReach ? { historyReach } : {}),
       }
     )
     return { gateway, release }
@@ -311,7 +326,7 @@ function connectClient(
   origin: string,
   path: string,
   folder: string,
-  { elicits = true }: ClientOptions = {}
+  { elicits = true, pagesHistory = false }: ClientOptions = {}
 ) {
   const bridge = acpBridge(service)
   const updates: SessionUpdate[] = []
@@ -417,7 +432,12 @@ function connectClient(
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: 2,
         info: { name: "wire-contract", version: "1.0.0" },
-        capabilities: elicits ? { elicitation: { form: {} } } : {},
+        capabilities: {
+          ...(elicits ? { elicitation: { form: {} } } : {}),
+          ...(pagesHistory
+            ? { _meta: { [HGW_META_KEY]: { historyPages: true } } }
+            : {}),
+        },
       }),
   }
 }
@@ -692,16 +712,28 @@ const HISTORY_UPDATES = new Set<string>([
  * run of history read as one `history` step and anything else by its kind.
  */
 function resumeShape(reader: WireClient, sessionId: string) {
+  return shapeOf(addressedBefore(reader, resumeAnswer), sessionId)
+}
+
+/**
+ * The updates of `sessionId` as `resumeShape` reads them, one an older page
+ * tagged as its own read with `page` before it.
+ */
+function shapeOf(
+  addressed: ReturnType<typeof addressedBefore>,
+  sessionId: string
+) {
   const shape: string[] = []
-  for (const { sessionId: target, update } of addressedBefore(
-    reader,
-    resumeAnswer
-  )) {
+  for (const { sessionId: target, update } of addressed) {
     if (target !== sessionId) continue
-    const step = HISTORY_UPDATES.has(update.sessionUpdate)
+    const meta = update._meta as Record<string, unknown> | null | undefined
+    const paged = HgwHistoryPageTagSchema.safeParse(meta?.[HGW_META_KEY]).data
+      ?.historyPage
+    const kind = HISTORY_UPDATES.has(update.sessionUpdate)
       ? "history"
       : update.sessionUpdate
-    if (step !== "history" || shape.at(-1) !== step) shape.push(step)
+    const step = paged ? `page ${kind}` : kind
+    if (!step.endsWith("history") || shape.at(-1) !== step) shape.push(step)
   }
   return shape
 }
@@ -950,12 +982,17 @@ function questionsOf(turn: WireTurn): WireQuestions {
 function wireCase(
   createRuntime: () => WireRuntime,
   body: (harness: WireHarness) => Promise<void>,
-  limits = SUBSCRIBER_LIMITS
+  limits = SUBSCRIBER_LIMITS,
+  historyReach?: HistoryReach
 ) {
   return async () => {
     const clock = useFakeClock()
     const runtime = createRuntime()
-    const { gateway, release } = await composeGateway(runtime, limits)
+    const { gateway, release } = await composeGateway(
+      runtime,
+      limits,
+      historyReach
+    )
     const clients: WireClient[] = []
     const connect: WireHarness["connect"] = (
       service,
@@ -1042,9 +1079,12 @@ export function runWireContract(
     body: (harness: WireHarness) => Promise<void>,
     {
       limits,
+      historyReach,
       gapCheck,
     }: {
       limits?: SubscriberLimits
+      /** How far the gateway reads history, a small one for a long Session. */
+      historyReach?: HistoryReach
       gapCheck?: Readonly<{
         title: string
         body: (harness: WireHarness) => Promise<void>
@@ -1052,11 +1092,12 @@ export function runWireContract(
     } = {}
   ) {
     const gap = gaps[id]
-    if (gap === undefined) it(title, wireCase(createRuntime, body, limits))
+    if (gap === undefined)
+      it(title, wireCase(createRuntime, body, limits, historyReach))
     else if (gapCheck)
       it(
         `${gapCheck.title} (gap: ${gap})`,
-        wireCase(createRuntime, gapCheck.body, limits)
+        wireCase(createRuntime, gapCheck.body, limits, historyReach)
       )
     else it.skip(`${title} (gap: ${gap})`)
   }
@@ -1543,6 +1584,53 @@ export function runWireContract(
             )
           ).not.toEqual([])
         }
+      )
+
+      row(
+        "olderPageClosesAsResume",
+        "ends an older page with its own replay_complete, then states the Session apart from the page, before the page's answer",
+        async (harness) => {
+          const { clock, turn, connectPlain } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          await playTurn(clock, plain, sessionId, turn, "and their sizes")
+          const reader = connectPlain({ pagesHistory: true })
+          await until(clock, reader.initialize())
+          const resumed = await until(clock, resumeFromStart(reader, sessionId))
+          const { history } = HgwSessionResumeResponseMetaSchema.parse(
+            resumed._meta?.[HGW_META_KEY]
+          )
+          const from = framesOf(reader).length
+
+          await until(
+            clock,
+            reader.connection.agent.request(methods.agent.session.resume, {
+              sessionId,
+              cwd: reader.folder,
+              replayFrom: {
+                type: HGW_REPLAY_BEFORE,
+                cursor: history?.nextCursor ?? "",
+              },
+            })
+          )
+
+          const frames = framesOf(reader).slice(from)
+          const answer = frames.findIndex((frame) => "result" in frame)
+          const read = frames
+            .slice(0, answer)
+            .flatMap(({ method, params }) =>
+              method === methods.client.session.update && params?.update
+                ? [{ sessionId: params.sessionId, update: params.update }]
+                : []
+            )
+          expect(history?.nextCursor).toEqual(expect.any(String))
+          expect(shapeOf(read, sessionId)).toEqual([
+            "page history",
+            "page replay_complete",
+            "state_update",
+          ])
+        },
+        { historyReach: { pageSize: 1, maxOffset: 1_000 } }
       )
 
       row(

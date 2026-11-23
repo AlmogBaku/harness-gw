@@ -486,7 +486,9 @@ request's withdrawal are not held. Each child Session the replay announces
 gets its own `replay_complete` on the child's id, after its announcement and
 its transcript, and one first announced after the replay completed and before
 the answer gets one right after its announcement. A replay that cannot finish
-sends no `replay_complete`, and its resume answers an error.
+sends no `replay_complete`, and its resume answers an error. An `_hgw/before`
+page read is a resume with a cursor too, and closes the same way (see
+[Older history pages](#older-history-pages)).
 
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
@@ -624,8 +626,16 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   messages can't be loaded.
 - A page is read only for a Session this connection has resumed, whether by
   a resume, `session/new`, or a prompt, one at a time per Session. It never
-  resumes, restates usage, or reports execution. A cursor that does not decode, or points past the
+  resumes or restates usage. A cursor that does not decode, or points past the
   history, is invalid params.
+- As ACP closes every resume with a cursor, a page ends with its own
+  `replay_complete`, tagged as the page's, after the page's updates and each
+  child transcript's (each child's tagged on the child's id), and then the
+  Session's current `state_update`, untagged, before the response. Until the
+  page's `replay_complete` the gateway holds the Session's other updates, as
+  a resume's replay does, and sends them after it. The client hands the page
+  its tagged updates, the `replay_complete` among them, and its live
+  listeners the state, which a reader applies as any current state.
 - An accepted rewind deletes the newest rows, so it marks the client's cursor
   stale and drops a page still loading; the next load resumes from `start`
   first. A resume rebuilt from history likewise returns the thread to the

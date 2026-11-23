@@ -1100,7 +1100,8 @@ export function createChannels(options: CreateChannelsOptions) {
 
     /**
      * Shows one member an older page of its Session, as tagged updates ahead
-     * of the answer. A member reads one page at a time.
+     * of the answer, its `replay_complete` and the Session's current state
+     * after them. A member reads one page at a time.
      */
     async olderPage(
       membership: Membership,
@@ -1109,12 +1110,15 @@ export function createChannels(options: CreateChannelsOptions) {
       if (paging.has(membership)) throw new CommandRefusedError("invalid")
       paging.add(membership)
       try {
-        const page = await readHistory(membership.scope, older.offset)
-        // A cursor past this Session's history was never issued for it. One
-        // at its end was: a runtime that estimates `total` learns the start
-        // only by reading an empty page there.
-        if (older.offset > page.total) throw new CommandRefusedError("invalid")
-        await membership.showOlderPage(page, older)
+        const page = await membership.showOlderPage(async () => {
+          const page = await readHistory(membership.scope, older.offset)
+          // A cursor past this Session's history was never issued for it. One
+          // at its end was: a runtime that estimates `total` learns the start
+          // only by reading an empty page there.
+          if (older.offset > page.total)
+            throw new CommandRefusedError("invalid")
+          return page
+        }, older)
         // Every resume answer restates the setup, a page read's as well.
         return { page, setup: await membership.setup() }
       } catch (cause) {
@@ -1122,6 +1126,7 @@ export function createChannels(options: CreateChannelsOptions) {
         throw cause
       } finally {
         paging.delete(membership)
+        membership.answered()
       }
     },
 
@@ -1817,14 +1822,15 @@ class Membership {
 
   /**
    * Closes a view with the Session's state, once the member was shown what
-   * the journal buffered: stated unless its stream already said it, with the
-   * requests a wait still holds asked again.
+   * the journal buffered: stated unless its stream already said it, or
+   * whatever it said when `restate` asks, with the requests a wait still
+   * holds asked again.
    */
-  async #reportView() {
+  async #reportView(restate = false) {
     await this.#caughtUp
     const { state, awaitingStop } = this.#coordinator.snapshot(this.#scope)
     const stated = viewState(state, awaitingStop)
-    if (this.#stated !== stated) {
+    if (restate || this.#stated !== stated) {
       this.#stated = stated
       await this.reportExecution()
     }
@@ -1924,18 +1930,30 @@ class Membership {
   }
 
   /**
-   * Shows this member one older page of its Session. A page resumes
-   * nothing: the view keeps its channel, follow, and reports, and learns
-   * only where the next page starts. A turn longer than the newest page
-   * leaves its first rows on older pages too, and the live turn's replay owns
-   * those, so the page drops them as the newest page does.
+   * Shows this member the older page `read` reads, as ACP has a resume with
+   * a cursor replay: from the request on, the member is shown only the page,
+   * then the page's `replay_complete`, then what it held and the Session's
+   * current state. A page resumes nothing else: the view keeps its channel,
+   * follow, and reports, and learns only where the next page starts. A turn
+   * longer than the newest page leaves its first rows on older pages too,
+   * and the live turn's replay owns those, so the page drops them as the
+   * newest page does. Returns the page read.
    */
-  showOlderPage(
-    page: SessionHistoryResponse,
-    older: { cursor: string; offset: number }
+  async showOlderPage(
+    read: () => Promise<SessionHistoryResponse>,
+    older: OlderPage
   ) {
-    const live = this.#coordinator.replayStart(this.#scope)?.ids
-    return this.#showHistory(live ? withoutLiveRows(page, live) : page, older)
+    const replay = this.#openReplay(older)
+    try {
+      const page = await read()
+      const live = this.#coordinator.replayStart(this.#scope)?.ids
+      await this.#showHistory(live ? withoutLiveRows(page, live) : page, older)
+      await this.#completeReplay(replay)
+      await this.#reportView(true)
+      return page
+    } finally {
+      this.#endReplay(replay)
+    }
   }
 
   /**
