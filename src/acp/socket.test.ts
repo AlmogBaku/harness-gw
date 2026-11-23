@@ -3,9 +3,10 @@ import { describe, expect, it } from "vitest"
 import { HGW_JSONRPC_ERRORS, HGW_METHODS } from "../../protocol/acp"
 
 import { createAcpSocket, type AcpSocketOptions } from "./socket"
-import { authenticationRequired, PUBLIC_ERRORS } from "./validation"
+import { authenticationRequired, notFound, PUBLIC_ERRORS } from "./validation"
 
 const NOW = 1_700_000_000_000
+const NOT_FOUND = notFound().code
 
 function harness(overrides: Partial<AcpSocketOptions> = {}) {
   const closed: Array<{ code: number; reason: string }> = []
@@ -155,6 +156,77 @@ describe("ACP WebSocket shim", () => {
         { jsonrpc: "2.0", id: 3, error: unavailable },
       ],
       { jsonrpc: "2.0", id: 4, error: unavailable },
+    ])
+  })
+
+  // ACP has a not-found name the Session the request named; a guest is shown
+  // that id, its own, and never one the gateway wrote in its place.
+  it("names back on a not-found only the Session the request named as a string", () => {
+    const { socket, sent } = harness({ publicErrors: PUBLIC_ERRORS })
+    const request = (id: number, sessionId: unknown) =>
+      socket.receive(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "session/prompt",
+          params: { sessionId },
+        })
+      )
+    const reply = (id: number, code: number) =>
+      socket.socket.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code,
+            message: "internal detail 7f3a",
+            data: {
+              sessionId: "stored-native",
+              detail: "internal detail 7f3a",
+            },
+          },
+        })
+      )
+    request(1, "ref")
+    request(2, "ref")
+    request(3, 7)
+    request(4, "ref")
+    socket.socket.send(JSON.stringify({ jsonrpc: "2.0", id: 4, result: {} }))
+
+    reply(1, NOT_FOUND)
+    reply(2, HGW_JSONRPC_ERRORS.turnInProgress)
+    reply(3, NOT_FOUND)
+    // Its request was answered already, so nothing names a Session for it.
+    reply(4, NOT_FOUND)
+
+    expect(sent.slice(-4).map((raw) => JSON.parse(raw) as unknown)).toEqual([
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        error: {
+          code: NOT_FOUND,
+          message: "not_found",
+          data: { sessionId: "ref" },
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        error: {
+          code: HGW_JSONRPC_ERRORS.turnInProgress,
+          message: "turn_in_progress",
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: { code: NOT_FOUND, message: "not_found" },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 4,
+        error: { code: NOT_FOUND, message: "not_found" },
+      },
     ])
   })
 

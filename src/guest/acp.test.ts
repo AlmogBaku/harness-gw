@@ -664,7 +664,7 @@ type Frame = {
   id?: number | string
   method?: string
   result?: unknown
-  error?: { code: number }
+  error?: { code: number; data?: unknown }
   params?: unknown
 }
 
@@ -1647,12 +1647,21 @@ const PUBLIC_CODES: readonly number[] = [
   RequestError.requestCancelled().code,
 ]
 
-/** A reply's error carries a public code and nothing that describes the host. */
-function expectPublicError(reply: Frame) {
+/**
+ * A reply's error carries a public code and nothing that describes the host:
+ * a not-found names `requested`, the Session the guest's request named, and
+ * no other error carries `data` at all.
+ */
+function expectPublicError(reply: Frame, requested?: string) {
   expect(reply.error).toBeDefined()
-  expect(Object.keys(reply.error ?? {}).sort()).toEqual(["code", "message"])
+  const { data, ...error } = reply.error ?? {}
+  expect(Object.keys(error).sort()).toEqual(["code", "message"])
   expect(PUBLIC_CODES).toContain(reply.error?.code)
+  if (reply.error?.code === NOT_FOUND)
+    expect(data).toEqual({ sessionId: requested })
+  else expect(reply.error).not.toHaveProperty("data")
   expect(JSON.stringify(reply)).not.toContain(OPERATOR_SECRET)
+  expect(JSON.stringify(reply)).not.toContain(STORED)
 }
 
 /** A run the guest started that stays open and accepts a steer. */
@@ -1828,13 +1837,13 @@ describe("guest scope and commands", () => {
 
     // Another connection on the same invitation steers only once it joins.
     const other = await loggedInWire(test.listener, token)
-    expect(
-      await other.request(HGW_METHODS.session.steer, {
-        sessionId: REF,
-        requestId: "steer-2",
-        text: "Longer",
-      })
-    ).toMatchObject({ error: { code: NOT_FOUND } })
+    const refused = await other.request(HGW_METHODS.session.steer, {
+      sessionId: REF,
+      requestId: "steer-2",
+      text: "Longer",
+    })
+    expect(refused).toMatchObject({ error: { code: NOT_FOUND } })
+    expectPublicError(refused, REF)
     expect(test.handles.at(0)?.steer).toHaveBeenCalledOnce()
     other.close()
     test.close()

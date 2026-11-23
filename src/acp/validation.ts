@@ -177,18 +177,22 @@ const PUBLIC_NOTICE_CODES: ReadonlySet<string> = new Set([
 
 /**
  * A failure as a public client may read it: a public code, and never the
- * detail a failure carries. Any other reply is reported temporarily
- * unavailable, and any other notice code as an internal error.
+ * detail a failure carries. A not-found names back the Session the client's
+ * own request named, as ACP has it, and nothing the gateway wrote. Any other
+ * reply is reported temporarily unavailable, and any other notice code as an
+ * internal error.
  */
 export const PUBLIC_ERRORS: PublicErrors = {
-  reply(code) {
+  reply(code, sessionId) {
     const name =
       typeof code === "number" ? PUBLIC_ERROR_NAMES.get(code) : undefined
-    return name === undefined
-      ? {
-          code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
-          message: "temporarily_unavailable",
-        }
+    if (name === undefined)
+      return {
+        code: HGW_JSONRPC_ERRORS.temporarilyUnavailable,
+        message: "temporarily_unavailable",
+      }
+    return code === NOT_FOUND && sessionId !== undefined
+      ? { code, message: name, data: { sessionId } }
       : { code: code as number, message: name }
   },
   notice: (code) =>

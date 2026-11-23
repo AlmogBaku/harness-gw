@@ -244,7 +244,10 @@ Guest errors carry only a public code (`PUBLIC_ERRORS`,
 `src/acp/validation.ts`): an error reply keeps its JSON-RPC code
 with the code's public name as its message, and an `_hgw/error` notification
 keeps only a public code. Any other failure reads `-31013`
-`temporarily_unavailable`.
+`temporarily_unavailable`. No reply keeps `data`, but a `-32002`: it carries
+`data: { sessionId }`, the `sessionId` the guest's own request named, when
+that was a string, and nothing the gateway wrote (`src/acp/socket.ts`), so a
+guest is shown its invitation's reference and never the native id behind it.
 
 ## Session lifecycle methods
 

@@ -30,9 +30,11 @@ export type AcpErrorReply = { code: number; message: string; data?: unknown }
 /**
  * How a listener shows its failures: an error reply's code, whatever it is, as
  * a public reply, and an `_hgw/error` notification's code as a public code.
+ * `sessionId` is the Session the request a reply answers named, if it named
+ * one as a string: what alone a public not-found may name back.
  */
 export type PublicErrors = {
-  reply(code: unknown): AcpErrorReply
+  reply(code: unknown, sessionId?: string): AcpErrorReply
   notice(code: unknown): string
 }
 
@@ -95,6 +97,12 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
   )
 
   const listeners = new Map<string, Set<(event: unknown) => void>>()
+  /**
+   * The Session each request still unanswered named, by its id, while
+   * failures are made public: the reply to it may name that id back, and
+   * nothing the gateway wrote in its place.
+   */
+  const named = new Map<string | number, string>()
   let closed = false
   let windowStartedAt = now()
   let windowFrames = 0
@@ -111,6 +119,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
     options.close(code, reason)
     dispatch("close", { type: "close", code, reason })
     listeners.clear()
+    named.clear()
   }
 
   /**
@@ -118,7 +127,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
    * required, so it is the last frame written, and closes the connection.
    */
   function refuse(data: string) {
-    const id = requestIdOf(data)
+    const id = requestIdOf(parsed(data))
     if (id !== undefined) {
       const { code, message } = authenticationRequired()
       options.send(
@@ -148,7 +157,9 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         return
       }
       options.send(
-        options.publicErrors ? publicFrame(raw, options.publicErrors) : raw
+        options.publicErrors
+          ? publicFrame(raw, options.publicErrors, named)
+          : raw
       )
     },
     get bufferedAmount() {
@@ -185,13 +196,22 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
         refuse(data)
         return
       }
-      dispatch("message", { type: "message", data: askingVersion2(data) })
+      const frame = parsed(data)
+      if (options.publicErrors) {
+        const request = namedSessionOf(frame)
+        if (request) named.set(request.id, request.sessionId)
+      }
+      dispatch("message", {
+        type: "message",
+        data: askingVersion2(data, frame),
+      })
     },
     close() {
       if (closed) return
       closed = true
       dispatch("close", { type: "close" })
       listeners.clear()
+      named.clear()
     },
   }
 }
@@ -209,14 +229,17 @@ function peerCloseCode(code: number, reason: string) {
   return code === 1008 && READER_LIMITS.test(reason) ? READER_FELL_BEHIND : code
 }
 
-/** The id of the one JSON-RPC request a frame carries, if it carries one. */
-function requestIdOf(data: string): string | number | undefined {
-  let frame: unknown
+/** A frame's JSON, or `undefined` for one that is not JSON. */
+function parsed(data: string): unknown {
   try {
-    frame = JSON.parse(data)
+    return JSON.parse(data) as unknown
   } catch {
     return undefined
   }
+}
+
+/** The id of the one JSON-RPC request a frame carries, if it carries one. */
+function requestIdOf(frame: unknown): string | number | undefined {
   if (typeof frame !== "object" || frame === null || Array.isArray(frame))
     return undefined
   const { id, method } = frame as { id?: unknown; method?: unknown }
@@ -226,18 +249,24 @@ function requestIdOf(data: string): string | number | undefined {
     : undefined
 }
 
+/** The one request a frame carries and the Session it names as a string. */
+function namedSessionOf(frame: unknown) {
+  const id = requestIdOf(frame)
+  if (id === undefined) return undefined
+  const { params } = frame as { params?: unknown }
+  const sessionId =
+    typeof params === "object" && params !== null && !Array.isArray(params)
+      ? (params as { sessionId?: unknown }).sessionId
+      : undefined
+  return typeof sessionId === "string" ? { id, sessionId } : undefined
+}
+
 /**
  * A frame whose `initialize` asks for a version, with that version set to 2,
  * so the SDK answers the one version it serves rather than refusing the
  * handshake. Every other frame is passed on untouched.
  */
-function askingVersion2(data: string) {
-  let frame: unknown
-  try {
-    frame = JSON.parse(data)
-  } catch {
-    return data
-  }
+function askingVersion2(data: string, frame: unknown) {
   if (typeof frame !== "object" || frame === null) return data
   const { method, params } = frame as { method?: unknown; params?: unknown }
   if (
@@ -265,25 +294,49 @@ function frameSize(raw: string | Uint8Array) {
 }
 
 /**
- * One serialized frame as `shown` makes it public. The SDK writes no batch,
- * but its v2 entrypoints are experimental, so an array is made public entry
- * by entry rather than passed on as it is.
+ * One serialized frame as `shown` makes it public, each reply settling the
+ * request `named` held for it. The SDK writes no batch, but its v2
+ * entrypoints are experimental, so an array is made public entry by entry
+ * rather than passed on as it is.
  */
-function publicFrame(raw: string, shown: PublicErrors) {
+function publicFrame(
+  raw: string,
+  shown: PublicErrors,
+  named: Map<string | number, string>
+) {
   const frame = JSON.parse(raw) as unknown
   if (Array.isArray(frame))
-    return JSON.stringify(frame.map((message) => publicMessage(message, shown)))
-  const message = publicMessage(frame, shown)
+    return JSON.stringify(
+      frame.map((message) => publicMessage(message, shown, named))
+    )
+  const message = publicMessage(frame, shown, named)
   return message === frame ? raw : JSON.stringify(message)
+}
+
+/** The Session the request a reply answers named, which it settles. */
+function answeredSession(frame: object, named: Map<string | number, string>) {
+  if (!("id" in frame) || !("result" in frame || "error" in frame))
+    return undefined
+  const { id } = frame
+  if (typeof id !== "string" && typeof id !== "number") return undefined
+  const sessionId = named.get(id)
+  named.delete(id)
+  return sessionId
 }
 
 /**
  * One message as `shown` makes it public: an error reply rebuilt from its
- * code alone, and an error notification from its Session and its code, which
- * is its message too. Any other message is returned as it is.
+ * code and the Session its request named, and an error notification from its
+ * Session and its code, which is its message too. Any other message is
+ * returned as it is.
  */
-function publicMessage(frame: unknown, shown: PublicErrors): unknown {
+function publicMessage(
+  frame: unknown,
+  shown: PublicErrors,
+  named: Map<string | number, string>
+): unknown {
   if (typeof frame !== "object" || frame === null) return frame
+  const sessionId = answeredSession(frame, named)
   if ("error" in frame) {
     const { error } = frame
     return {
@@ -291,7 +344,8 @@ function publicMessage(frame: unknown, shown: PublicErrors): unknown {
       error: shown.reply(
         typeof error === "object" && error !== null && "code" in error
           ? error.code
-          : undefined
+          : undefined,
+        sessionId
       ),
     }
   }
