@@ -235,8 +235,9 @@ export type SessionCoordinatorOptions = {
    */
   unpromptedIdleMs?: number
   /**
-   * How many of the Sessions it discarded the coordinator still finds gone
-   * itself, the most recent kept (`DISCARDED_REFUSALS`).
+   * How many of the Sessions it discarded, or deleted unprompted, the
+   * coordinator still finds gone itself, the most recent kept
+   * (`DISCARDED_REFUSALS`).
    */
   discardedRefusals?: number
   /** How long a setup answer waits on a reading it reads (`SETUP_READ_MS`). */
@@ -1054,9 +1055,9 @@ export class SessionCoordinator {
     }
   >()
   /**
-   * The Sessions discarded here, by session key, oldest first: the gateway
-   * finds each gone itself, as Hermes would make it anew, until the bound
-   * (`DISCARDED_REFUSALS`) drops it.
+   * The unprompted Sessions discarded or deleted here, by session key, oldest
+   * first: the gateway finds each gone itself, as Hermes would make it anew,
+   * until the bound (`DISCARDED_REFUSALS`) drops it.
    */
   readonly #discarded = new Set<string>()
   /** How many memberships, of either listener, are on each Session. */
@@ -1702,8 +1703,12 @@ export class SessionCoordinator {
   }
 
   /**
-   * Forgets the mark of a Session its delete removed, or found gone: nothing
-   * is left to discard, so no idle window or discard follows.
+   * Ends the mark of an unprompted Session its delete removed, or found
+   * gone: nothing is left to discard, so no idle window or discard follows,
+   * and it is found gone here from then on, as a discarded one is, since
+   * Hermes would make it anew for a resume of its key. A Session a prompt
+   * reached is left to the runtime's own answer: a runtime may make a
+   * conversation anew under its key itself, as an OpenClaw channel does.
    */
   deleted(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const key = scopeKey(scope)
@@ -1711,6 +1716,7 @@ export class SessionCoordinator {
     if (!marked) return
     this.#clearIdle(marked)
     this.#unprompted.delete(key)
+    this.#refuse(key)
   }
 
   /**
@@ -1791,7 +1797,15 @@ export class SessionCoordinator {
     }
     this.#logger.info({ agentId, sessionId, discarded }, "session.discarded")
     this.#unprompted.delete(key)
-    if (!discarded || this.#closed) return
+    if (discarded) this.#refuse(key)
+  }
+
+  /**
+   * Finds a Session gone here from now on, among the last `discardedRefusals`
+   * so found.
+   */
+  #refuse(key: string) {
+    if (this.#closed) return
     this.#discarded.add(key)
     const bound = this.options.discardedRefusals ?? DISCARDED_REFUSALS
     if (this.#discarded.size > bound) {
@@ -1801,8 +1815,8 @@ export class SessionCoordinator {
   }
 
   /**
-   * Refuses a Session being or already discarded, as OpenCode and OpenClaw
-   * would once it is: Hermes would make it anew.
+   * Refuses a Session being or already discarded, or deleted unprompted, as
+   * OpenCode and OpenClaw would once it is: Hermes would make it anew.
    */
   refuseDiscarded(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
     const key = scopeKey(scope)

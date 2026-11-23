@@ -1588,7 +1588,9 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("discards nothing of a created Session once its delete removed it", async () => {
+  // ACP fails a later request for a deleted Session, a resume included, with
+  // -32002; Hermes would make the draft anew for a resume of its key.
+  it("discards nothing of a created Session once its delete removed it, and finds it gone after", async () => {
     const test = await harness()
     await test.create()
     const clock = useFakeClock()
@@ -1600,6 +1602,17 @@ describe("AOS ACP agent", () => {
 
     expect(test.deleteSession).toHaveBeenCalledWith(AGENT, CREATED)
     expect(test.discardSession).not.toHaveBeenCalled()
+    // A client that still holds it names its Agent, as one that never
+    // listed it does.
+    await expect(
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: "start" },
+        _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+      })
+    ).rejects.toMatchObject({ code: notFound().code })
+    expect(test.history).not.toHaveBeenCalled()
     test.close()
   })
 

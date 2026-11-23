@@ -100,11 +100,11 @@ export const UNPROMPTED_IDLE_MS = 5 * 60_000
 export const DISCARD_ATTEMPTS = 3
 
 /**
- * How many of the Sessions it discarded the gateway still answers as not
- * found itself, the most recent kept: Hermes makes a server-minted draft anew
- * for any resume of its key, so a client that held one would bring it back,
- * however long after. A browser holds a few drafts at most, so the bound only
- * keeps the record finite.
+ * How many of the Sessions it discarded, or deleted unprompted, the gateway
+ * still answers as not found itself, the most recent kept: Hermes makes a
+ * server-minted draft anew for any resume of its key, so a client that held
+ * one would bring it back, however long after. A browser holds a few drafts
+ * at most, so the bound only keeps the record finite.
  */
 export const DISCARDED_REFUSALS = 4_096
 

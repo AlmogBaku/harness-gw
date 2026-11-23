@@ -353,7 +353,11 @@ runtime delete is not confirmed within the deadline answers `-31014`; in each
 case the Session stays active on the connection, as after a failed close, so
 the delete may be sent again, and a delete that lands after its `-31014`
 tells this connection the Session is gone as it tells every other member. A deleted Session that was
-unprompted is not discarded afterwards: nothing is left to free. A delete of
+unprompted is not discarded afterwards: nothing is left to free, and a resume
+or a prompt of it answers `-32002` from then on, as one discarded does
+(below). A Session a prompt reached is left to the runtime's own answer once
+deleted, since a runtime may make a conversation anew under its key itself, as
+an OpenClaw channel does. A delete of
 a Session not known to this connection succeeds rather than returning
 not-found. The SDK client parts a Session its last listener left, after a
 2 s grace, and closes one only when asked (`closeSession`): no grace parts it
@@ -382,9 +386,10 @@ its first turn, closes its live Session, and deletes the empty row a resume of
 its key may have written; OpenCode and OpenClaw delete it only
 after their own read shows no message and no running turn, and keep any other,
 which is listed again. A Session the runtime already reports gone counts as
-discarded. Once the discard settles the mark ends. A discarded Session stays
-`-32002` here however long after, among the last 4096 the gateway discarded
-(`DISCARDED_REFUSALS`), and out of every list: OpenCode and OpenClaw answer
+discarded. Once the discard settles the mark ends. A discarded Session, and
+an unprompted one deleted, stays `-32002` here however long after, among the
+last 4096 the gateway discarded or deleted so (`DISCARDED_REFUSALS`), and out
+of every list: OpenCode and OpenClaw answer
 not found for it themselves, but Hermes makes a server-minted draft anew for
 any resume of its key, so the gateway's own answer is what keeps a client
 that held one from bringing it back. A discard that fails for any other
