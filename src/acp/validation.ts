@@ -151,6 +151,10 @@ const KIND_ERRORS: Readonly<Record<PublicFailure["kind"], () => RequestError>> =
 const PUBLIC_ERROR_NAMES: ReadonlyMap<number, string> = new Map(
   (
     [
+      // ACP's invalid params took `invalid_request` first, so JSON-RPC's own
+      // Invalid Request, a refused batch among them, is a malformed one.
+      [RequestError.parseError(), "parse_error"],
+      [RequestError.invalidRequest(), "malformed_request"],
       [invalidParams(), "invalid_request"],
       [authenticationRequired(), "authentication_required"],
       [notFound(), "not_found"],

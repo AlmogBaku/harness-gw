@@ -54,7 +54,6 @@ import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredGateway } from "../composition"
 import { stubUnreachableTransports, until } from "../core/runtime-contract"
 import { CredentialValues } from "../redaction"
-import { PUBLIC_ERRORS } from "./validation"
 
 /** The contract's rows, each named for the rule it protects. */
 export type WireContractRow =
@@ -2321,7 +2320,7 @@ export function runWireListenerContract(
       )
 
       it(
-        "shows a guest each error reply as its public code and name alone, a batch's refusal too",
+        "shows a guest each error reply as its public code and name alone, a refused batch and an unreadable frame too",
         wireCase(createRuntime, async ({ gateway, agentId, clock }) => {
           const guest = gateway.guest!
           const ref = "wire-contract"
@@ -2357,6 +2356,7 @@ export function runWireListenerContract(
               },
             ])
           )
+          raw.send("{not json")
           raw.send(
             JSON.stringify({
               jsonrpc: "2.0",
@@ -2369,15 +2369,27 @@ export function runWireListenerContract(
           const replies = [
             await until(clock, raw.next()),
             await until(clock, raw.next()),
+            await until(clock, raw.next()),
           ]
 
           expect(JSON.stringify(replies)).not.toContain("internal detail 7f3a")
+          // Each keeps its JSON-RPC code, as every guest error reply does.
           expect(replies).toEqual([
-            // As every guest error reply reads.
             {
               jsonrpc: "2.0",
               id: null,
-              error: PUBLIC_ERRORS.reply(RequestError.invalidRequest().code),
+              error: {
+                code: RequestError.invalidRequest().code,
+                message: "malformed_request",
+              },
+            },
+            {
+              jsonrpc: "2.0",
+              id: null,
+              error: {
+                code: RequestError.parseError().code,
+                message: "parse_error",
+              },
             },
             {
               jsonrpc: "2.0",

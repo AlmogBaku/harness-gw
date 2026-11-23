@@ -113,10 +113,11 @@ an oversized prompt or steer locally with `requestTooLarge`.
 
 ACP uses no JSON-RPC batches. A frame holding a JSON array is answered with one
 `-32600` Invalid Request error whose `id` is `null`, and none of its messages
-runs. A guest reads that answer as it reads every error reply (see
-[Guest listener](#guest-listener)). The gateway writes no batch either; one
-written all the same reaches a guest with each entry made public as a lone
-reply is.
+runs; a frame that is not JSON gets `-32700` Parse error, `id` `null` too. A
+guest reads either answer as it reads every error reply (see
+[Guest listener](#guest-listener)): `malformed_request` and `parse_error`. The
+gateway writes no batch either; one written all the same reaches a guest with
+each entry made public as a lone reply is.
 
 ## Handshake: `initialize` and `auth/login`
 
@@ -1024,6 +1025,8 @@ The machine name an error travels as — the `message` of a public reply, and th
 
 | Code     | Machine name              |
 | -------- | ------------------------- |
+| `-32700` | `parse_error`             |
+| `-32600` | `malformed_request`       |
 | `-32000` | `authentication_required` |
 | `-32002` | `not_found`               |
 | `-32601` | `method_not_found`        |
