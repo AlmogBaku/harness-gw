@@ -2368,6 +2368,11 @@ export class HermesServerAdapter implements ServerRuntime {
       // Running, or stored since: Hermes refuses to delete a live Session.
       throw new HermesSessionConflictError()
     }
+    await this.#deleteStored(profile, storedId)
+  }
+
+  /** Deletes a Session's stored row: through the dashboard, else its socket. */
+  async #deleteStored(profile: string, storedId: string) {
     try {
       return await this.#mutateSession((dashboard) =>
         dashboard.deleteSession(profile, storedId)
@@ -2398,8 +2403,11 @@ export class HermesServerAdapter implements ServerRuntime {
    * Session, so closing that frees it. A lazy resume says whether it is still
    * that draft, and writes nothing: Hermes answers it from the live draft,
    * and finds a key it holds neither a row nor a live draft for gone, where
-   * any other resume writes that key an empty row (`_resume_locate`). One
-   * Hermes since stored, or runs, is kept.
+   * any other resume writes that key an empty row (`_resume_locate`). Such a
+   * row, which a resume of a draft Hermes restarted out of left, holds no
+   * message, so it is deleted too, as OpenCode's and OpenClaw's discards
+   * delete a Session with none. One Hermes since stored a message of, or
+   * runs, is kept.
    */
   async discardSession(profile: string, storedId: string) {
     let resumed: unknown
@@ -2422,12 +2430,16 @@ export class HermesServerAdapter implements ServerRuntime {
     if (
       !isRecord(resumed) ||
       !validLiveSessionId(resumed.session_id) ||
-      !isUnpersistedDraft(resumed, profile, storedId) ||
       resumedRunning(resumed)
     )
       return false
+    const draft = isUnpersistedDraft(resumed, profile, storedId)
+    const emptyRow =
+      !draft && resumed.session_key === storedId && resumed.message_count === 0
+    if (!draft && !emptyRow) return false
     await this.#closeNativeSession(resumed.session_id)
     this.#attachments.invalidate(resumed.session_id)
+    if (emptyRow) await this.#deleteStored(profile, storedId)
     return true
   }
 

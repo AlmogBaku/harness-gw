@@ -3547,11 +3547,21 @@ describe("Hermes server adapter", () => {
     }
   })
 
+  /** Hermes' lazy resume of a key it stores a row for: no stored id. */
+  const storedRow = { stored_session_id: undefined, session_key: "draft" }
+
   it.each([
-    ["an unsent draft, closing its live Session", {}, true],
-    ["no draft Hermes stored since", { message_count: 4 }, false],
-    ["no draft Hermes runs", { running: true }, false],
-  ] as const)("discards %s", async (_, resumed, discarded) => {
+    ["an unsent draft, closing its live Session", {}, "closed"],
+    // A non-lazy resume of a draft Hermes restarted out of wrote its key one.
+    [
+      "an empty row, closing its live Session and deleting the row",
+      storedRow,
+      "deleted",
+    ],
+    ["no draft Hermes stored since", { message_count: 4 }, "kept"],
+    ["no row holding a message", { ...storedRow, message_count: 2 }, "kept"],
+    ["no draft Hermes runs", { running: true }, "kept"],
+  ] as const)("discards %s", async (_, resumed, outcome) => {
     const router = rpcRouter({
       "session.resume": async () => ({
         session_id: "live-draft",
@@ -3563,14 +3573,26 @@ describe("Hermes server adapter", () => {
       }),
       "session.close": async () => ({ closed: true }),
     })
-    const adapter = new HermesServerAdapter(router)
+    const http = vi.fn<
+      (path: string, init?: { method?: string }) => Promise<unknown>
+    >(async (path) =>
+      path.includes("/mutation-snapshot?")
+        ? { exists: true, runtime_revision: 0, runtime_generation: 0 }
+        : {}
+    )
+    const adapter = new HermesServerAdapter({ ...router, http })
 
     await expect(adapter.discardSession("researcher", "draft")).resolves.toBe(
-      discarded
+      outcome !== "kept"
     )
     expect(router.calls("session.close").map(({ params }) => params)).toEqual(
-      discarded ? [{ session_id: "live-draft" }] : []
+      outcome === "kept" ? [] : [{ session_id: "live-draft" }]
     )
+    expect(
+      http.mock.calls.flatMap(([path, init]) =>
+        init?.method === "DELETE" ? [path.split("?")[0]] : []
+      )
+    ).toEqual(outcome === "deleted" ? ["/api/sessions/draft"] : [])
   })
 
   it("finds a draft Hermes restarted out of gone, writing its key no row", async () => {

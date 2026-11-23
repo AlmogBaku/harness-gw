@@ -294,7 +294,8 @@ and that no member, joining or joined, of either listener, is on the Session,
 and takes it as discarding in the same turn. From then on a resume or a prompt
 of it answers `-32002`, and a client that still wants it creates a new one. The
 runtime then frees it (`discardSession`): Hermes, which lists no Session before
-its first turn, closes its live Session; OpenCode and OpenClaw delete it only
+its first turn, closes its live Session, and deletes the empty row a resume of
+its key may have written; OpenCode and OpenClaw delete it only
 after their own read shows no message and no running turn, and keep any other,
 which is listed again. A Session the runtime already reports gone counts as
 discarded. Once the discard settles the mark ends. A discarded Session stays
