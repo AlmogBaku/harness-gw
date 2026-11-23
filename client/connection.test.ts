@@ -30,7 +30,12 @@ import { createAcpConnection } from "./connection"
 import { PART_GRACE_MS, REQUEST_DEADLINE_MS } from "./limits"
 import { composerCapabilities } from "./test-capabilities"
 import { pipedSockets } from "./test-socket"
-import type { AcpConnection, AcpPendingRequest, AcpSessionSetup } from "./types"
+import type {
+  AcpConnection,
+  AcpPendingRequest,
+  AcpSessionSetup,
+  AcpSessionState,
+} from "./types"
 
 const SESSION_ID = "session-1"
 /** The Session a fork of `SESSION_ID` makes. */
@@ -1059,6 +1064,33 @@ describe("ACP connection", () => {
     expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
     connection.close()
   })
+
+  // The gateway tells its deleter nothing once it parted it.
+  it.each([
+    ["removed it", {}],
+    ["found it gone already", { gone: true }],
+  ])(
+    "forgets a Session once its delete %s, telling its listeners it is gone and parting it at no point",
+    async (_label, options) => {
+      const clock = useFakeClock()
+      const gateway = createGatewayAgent(options)
+      const connection = connectInProcess(gateway)
+      const { sessionId } = await connection.newSession({ agentId: AGENT_ID })
+      const states: AcpSessionState[] = []
+      const unsubscribe = connection.subscribe(sessionId, {
+        state: (state) => states.push(state),
+      })
+
+      await connection.deleteSession(sessionId)
+
+      expect(states).toEqual(["gone"])
+      expect(connection.sessionState(sessionId)).toBeUndefined()
+      unsubscribe()
+      await clock.advance(PART_GRACE_MS)
+      expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
+      connection.close()
+    }
+  )
 
   it.each(["closeSession", "deleteSession"] as const)(
     "takes a -32002 answer to %s as done: the Session is gone already",

@@ -366,8 +366,11 @@ not-found. The SDK client parts a Session its last listener left, after a
 2 s grace, and closes one only when asked (`closeSession`): no grace parts it
 while the close is out, and it forgets the Session, with no part, once the
 close succeeded, while a close that fails leaves it opened and joined, so it
-may be closed again. As ACP asks, it takes a `-32002` answer to
-`session/close` or `session/delete` as success.
+may be closed again. A delete (`deleteSession`) does the same, and once it
+succeeded, the gateway having told the deleter nothing, the Session's
+listeners hear it `gone`, as for a Session the gateway reports gone, before it
+is forgotten. As ACP asks, it takes a `-32002` answer to `session/close` or
+`session/delete` as success.
 
 A Session a `session/new` created is **unprompted** until the first prompt is
 sent to its runtime, whether or not the runtime confirms the start, or until

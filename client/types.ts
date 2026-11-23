@@ -290,7 +290,13 @@ export interface AcpConnection {
    * and may be closed again.
    */
   closeSession(sessionId: string): Promise<void>
-  /** Resolves, as `closeSession` does, for a Session already gone (`-32002`). */
+  /**
+   * Deletes the Session with ACP's `session/delete`, and once the delete
+   * succeeded, or found it already gone (`-32002`), forgets it here as
+   * `closeSession` does: its listeners' `state` hears `gone`, as for a
+   * Session the gateway reports gone, and then nothing more of it. A delete
+   * that fails changes nothing, as a failed close does.
+   */
   deleteSession(sessionId: string): Promise<void>
 
   updateSession(
