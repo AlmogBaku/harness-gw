@@ -262,9 +262,13 @@ export interface AcpConnection {
   ): Promise<SessionConfigOption[]>
   /**
    * Ends the Session with ACP's `session/close`, which stops its work, and
-   * forgets it here at once, with no `_hgw/session/part`: its listeners hear
-   * nothing more of it, and nothing rejoins it. A Session the gateway no
-   * longer has (`-32002`) is closed already, so that answer resolves too.
+   * forgets it here once the close succeeded, with no `_hgw/session/part`:
+   * its listeners hear nothing more of it, and nothing rejoins it. While the
+   * close is out its listeners still hear what the gateway shows the closer,
+   * and no grace parts it. A Session the gateway no longer has (`-32002`) is
+   * closed already, so that answer resolves too. A close that fails rejects
+   * with its error and changes nothing: the Session stays opened and joined,
+   * and may be closed again.
    */
   closeSession(sessionId: string): Promise<void>
   /** Resolves, as `closeSession` does, for a Session already gone (`-32002`). */

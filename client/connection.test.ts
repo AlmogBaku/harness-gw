@@ -142,9 +142,12 @@ function createGatewayAgent(
     reportedDuringResume?: SessionUpdate
     /** Answers `session/close` and `session/delete` with `-32002`. */
     gone?: boolean
+    /** The first `session/close` answers once this settles, failing as it fails. */
+    firstClose?: Promise<unknown>
   } = {}
 ) {
   const calls: AgentCall[] = []
+  let closes = 0
   let peer: AgentContext | undefined
   let logins = 0
   const record = (method: string, params: unknown) => {
@@ -286,8 +289,10 @@ function createGatewayAgent(
       record(methods.agent.session.setConfigOption, params)
       return { configOptions: [modelOption("opus")] }
     })
-    .onRequest(methods.agent.session.close, ({ params }) => {
+    .onRequest(methods.agent.session.close, async ({ params }) => {
       record(methods.agent.session.close, params)
+      closes += 1
+      if (closes === 1 && options.firstClose) await options.firstClose
       return goneOr({})
     })
     .onRequest(methods.agent.session.delete, ({ params }) => {
@@ -990,18 +995,34 @@ describe("ACP connection", () => {
     connection.close()
   })
 
-  it("closes a created Session, forgetting it at once and never parting it", async () => {
+  it("forgets a Session once its close succeeds, parting it at no point, and keeps it joined through a close that fails", async () => {
     const clock = useFakeClock()
-    const gateway = createGatewayAgent()
+    const refused = Promise.withResolvers<never>()
+    const gateway = createGatewayAgent({ firstClose: refused.promise })
     const connection = connectInProcess(gateway)
     const { sessionId } = await connection.newSession({ agentId: AGENT_ID })
+    const unsubscribe = connection.subscribe(sessionId, {})
+
+    const closing = connection.closeSession(sessionId)
+    unsubscribe()
+    // While the close is out, no grace parts what it may end.
+    await clock.advance(PART_GRACE_MS)
+    expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])
+    refused.reject(
+      new RequestError(HGW_JSONRPC_ERRORS.uncertainMutation, "unconfirmed")
+    )
+    await expect(closing).rejects.toMatchObject({
+      code: HGW_JSONRPC_ERRORS.uncertainMutation,
+    })
+    // A close that failed changed nothing, so it may be sent again.
+    expect(connection.sessionState(sessionId)).toBe("joined")
 
     await connection.closeSession(sessionId)
     expect(gateway.callsOf(methods.agent.session.close)).toEqual([
       { sessionId },
+      { sessionId },
     ])
     expect(connection.sessionState(sessionId)).toBeUndefined()
-
     // Its grace ends with nothing left to part.
     await clock.advance(PART_GRACE_MS)
     expect(gateway.callsOf(HGW_METHODS.session.part)).toEqual([])

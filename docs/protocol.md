@@ -349,8 +349,10 @@ tells this connection the Session is gone as it tells every other member. A dele
 unprompted is not discarded afterwards: nothing is left to free. A delete of
 a Session not known to this connection succeeds rather than returning
 not-found. The SDK client parts a Session its last listener left, after a
-2 s grace, and closes one only when asked (`closeSession`), forgetting it at
-once with no part; as ACP asks, it takes a `-32002` answer to
+2 s grace, and closes one only when asked (`closeSession`): no grace parts it
+while the close is out, and it forgets the Session, with no part, once the
+close succeeded, while a close that fails leaves it opened and joined, so it
+may be closed again. As ACP asks, it takes a `-32002` answer to
 `session/close` or `session/delete` as success.
 
 A Session a `session/new` created is **unprompted** until the first prompt is

@@ -756,6 +756,8 @@ export function createAcpConnection(
     /** Why the transport refused the join, while the Session stays refused. */
     refusal?: unknown
     grace?: unknown
+    /** Set while a close is out: no grace parts what the close may end. */
+    closing?: boolean
     /**
      * The newest setup the Session reported, by answer or update, which a
      * listener that subscribes later is handed.
@@ -1453,6 +1455,12 @@ export function createAcpConnection(
   ) {
     if (!open.listeners.delete(subscription) || open.listeners.size > 0) return
     if (sessions.get(sessionId) !== open) return
+    startGrace(sessionId, open)
+  }
+
+  /** Parts an opened Session nothing holds once its grace passes. */
+  function startGrace(sessionId: string, open: OpenSession) {
+    if (open.closing) return
     open.grace = clock.setTimeout(() => part(sessionId, open), PART_GRACE_MS)
   }
 
@@ -1467,13 +1475,9 @@ export function createAcpConnection(
   ) {
     let open = sessions.get(sessionId)
     if (!open) {
-      const created = openSession(sessionId, [], true)
+      open = openSession(sessionId, [], true)
       // It parts in its grace unless a listener comes to it.
-      created.grace = clock.setTimeout(
-        () => part(sessionId, created),
-        PART_GRACE_MS
-      )
-      open = created
+      startGrace(sessionId, open)
     }
     hand(open, report(open, setupOfAnswer(answer)))
   }
@@ -1865,13 +1869,31 @@ export function createAcpConnection(
     },
 
     async closeSession(sessionId) {
-      // Forgotten first, so neither its grace nor a reconnect parts or
-      // rejoins the Session this closes.
+      // While the close is out, no grace parts the Session: the close would
+      // only race its part.
       const open = sessions.get(sessionId)
-      if (open) forget(sessionId, open)
-      await request("short", (agent, options) =>
-        agent.request(methods.agent.session.close, { sessionId }, options)
-      )
+      if (open) {
+        clock.clearTimeout(open.grace)
+        open.grace = undefined
+        open.closing = true
+      }
+      try {
+        await request("short", (agent, options) =>
+          agent.request(methods.agent.session.close, { sessionId }, options)
+        )
+      } catch (error) {
+        // A close that failed changed nothing: the gateway keeps this
+        // connection on the Session, so it stays opened here, and joined,
+        // and may be closed again.
+        if (open) {
+          open.closing = false
+          if (open.listeners.size === 0 && sessions.get(sessionId) === open)
+            startGrace(sessionId, open)
+        }
+        throw error
+      }
+      // Forgotten once closed, with no part, so nothing rejoins it.
+      if (open && sessions.get(sessionId) === open) forget(sessionId, open)
     },
 
     async deleteSession(sessionId) {
