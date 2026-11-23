@@ -779,6 +779,7 @@ function joined(
       )
     },
     live: () => state.live,
+    fellBehind: () => undefined,
   }
   const { logger } = captureLogs()
   const membership = createChannels({
@@ -946,7 +947,11 @@ describe("a membership's resume", () => {
       {
         principal: { id: GUEST, role: "guest" },
         middleware: [],
-        connection: { send: async () => undefined, live: () => true },
+        connection: {
+          send: async () => undefined,
+          live: () => true,
+          fellBehind: () => undefined,
+        },
       },
       SCOPE,
       {

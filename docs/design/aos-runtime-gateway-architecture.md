@@ -417,9 +417,12 @@ Guest connections carry no activity feed (`src/acp/types.ts`).
 | `session_info_update` (`_meta.hgw`) | `SessionRows` subscriber on a changed row (`src/acp/agent.ts`; `src/core/session-rows.ts`)                                                                                                           |
 | `_hgw/activity`                     | Activity feed push (execution events, unread changes)                                                                                                                                                |
 
-A subscriber that falls behind the fanout bounds is detached (`membership.detached`
-in the log); catch-up happens through a standard `session/resume` with
-`replayFrom: { type: "start" }`, not through `_hgw/session_invalidated`.
+A subscriber that falls behind the fanout bounds is rebuilt from history in
+standard updates, once per turn (`membership.fell-behind` in the log). One that
+falls behind the same turn again, or whose view cannot be rebuilt, has its
+connection closed with 4409 (`membership.cannot_catch_up`); catch-up happens
+through the client's reconnect and a standard `session/resume`, not through
+`_hgw/session_invalidated`.
 
 ---
 
@@ -468,7 +471,7 @@ acceptance order.
 | Inbound rate window            | 1 s, 64 frames, 2 200 000 bytes (two frames at the cap)                                            |
 | Rate exceeded close code       | 1008                                                                                               |
 | Outbound                       | No gateway queue. The ACP SDK pauses at 8 MiB unsent (`maxBufferedBytes`, read from Bun's buffer) |
-| Reader fell behind close code  | 4409, after 60 s without reading a full buffer (`maxOutputStallMs`); the client reconnects        |
+| Reader fell behind close code  | 4409, after 60 s without reading a full buffer (`maxOutputStallMs`), or once a Session left a member behind; the client reconnects |
 | Backstop                       | Bun's 16 MiB `backpressureLimit` with `closeOnBackpressureLimit`                                   |
 | Peer capacity close code       | 1013                                                                                               |
 

@@ -249,6 +249,23 @@ describe("ACP WebSocket service", () => {
     ])
   })
 
+  it("closes a connection one of its members fell behind on with the code a reader that fell behind gets", async () => {
+    const { acp, contexts } = service()
+    const upgrade = accepted(
+      await acp.authorizeUpgrade(
+        new Request(`${ORIGIN}${PATH}`, { headers: { origin: ORIGIN } })
+      )
+    )
+    const transport = peer()
+    acp.open(upgrade, transport.peer)
+
+    contexts[0]?.fellBehind?.()
+
+    expect(transport.closed).toEqual([
+      { code: 4409, reason: expect.any(String) },
+    ])
+  })
+
   it("warns of a dropped send only while its socket is open", async () => {
     const logs = captureLogs()
     const acp = createAcpService({

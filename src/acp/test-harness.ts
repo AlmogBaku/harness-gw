@@ -940,10 +940,12 @@ export async function harness(options: HarnessOptions = {}) {
     /**
      * One browser connection's side of the gateway. Every connection shares the
      * one coordinator, engine, and channels, as one deployment's listeners do.
+     * Its socket's close as a reader that fell behind is only recorded.
      */
     function contextFor(connectionId: string): AcpConnectionContext {
       const base = options.translators ?? translators
       return {
+        fellBehind: vi.fn(),
         connectionId,
         principalId: PRINCIPAL,
         publicError: (cause) => faults.runtime.publicError(cause),
@@ -1001,6 +1003,8 @@ export async function harness(options: HarnessOptions = {}) {
         close: () => connection.close(),
         initialize,
         recorder,
+        /** Each time the socket would close as a reader that fell behind. */
+        fellBehind: context.fellBehind!,
         attachmentStages: context.attachmentStages,
         /** Registers the Agent that owns the seeded Sessions, as a roster read does. */
         list: () => connection.agent.request(methods.agent.session.list, {}),

@@ -18,7 +18,6 @@ import {
   CHILD_FOLLOW_GRACE_MS,
   CLOSE_DEADLINE_MS,
   JOIN_DEADLINE_MS,
-  PAUSED_DEADLINE_MS,
   READING_BACKOFF,
   READING_RETRIES,
 } from "./limits"
@@ -818,19 +817,19 @@ type MembershipContext = MembershipOptions & {
 
 /**
  * What moves a membership: a join and the answer that lands it, each stream
- * it follows, falling behind that stream's bounds, and parting.
+ * it follows, and parting.
  */
 type MembershipSignal =
   | { type: "join" }
   | { type: "joined" }
   | { type: "followed" }
-  | { type: "fell-behind" }
   | { type: "part" }
 
 /**
  * One membership's lifetime: joining until the answer to its join lands,
- * joined while it follows its Session, paused once it fell behind until its
- * view rejoins, and detached for good once it parts or a deadline passes.
+ * joined while it follows its Session, and detached for good once it parts
+ * or its join's deadline passes. A member that cannot catch up with its
+ * Session is never left behind on it: its connection closes, which parts it.
  * Each stream it follows is a generation of its own, so a stream another one
  * replaced settles nothing.
  */
@@ -854,14 +853,9 @@ export function membershipMachine(logger: Logger, clock: Clock) {
           // whole deadline.
           join: { target: "joining", reenter: true },
           joined: "joined",
-          "fell-behind": "paused",
         },
       },
-      joined: { on: { join: "joining", "fell-behind": "paused" } },
-      paused: {
-        after: { [PAUSED_DEADLINE_MS]: "detached" },
-        on: { join: "joining" },
-      },
+      joined: { on: { join: "joining" } },
       detached: { type: "final" },
     },
   })
@@ -1537,7 +1531,8 @@ class Membership {
   /**
    * Rebuilds this member's view in place, as a from-start resume builds it:
    * what a view that fell behind, lost its place, or was shown a prompt
-   * without its reply is owed. One that cannot be rebuilt pauses.
+   * without its reply is owed. One that cannot be rebuilt is told why, and
+   * left behind no further: its connection closes, and its client resumes.
    */
   async #rebuild() {
     if (this.detached || this.pending) return
@@ -1551,9 +1546,24 @@ class Membership {
         }
       )
     } catch (cause) {
-      this.#send({ type: "fell-behind" })
       await this.report(cause)
+      this.#cannotCatchUp()
     }
+  }
+
+  /**
+   * Closes the connection of a member whose view its Session left behind,
+   * which ends each Session's activity on it, as ACP has a connection's end
+   * do: its client reconnects and resumes every Session it holds, rather
+   * than holding one the gateway no longer streams to it.
+   */
+  #cannotCatchUp() {
+    if (this.detached) return
+    this.#options.logger.warn(
+      { membershipId: this.#options.membershipId },
+      "membership.cannot_catch_up"
+    )
+    this.#member.connection.fellBehind()
   }
 
   /**
@@ -2559,8 +2569,8 @@ class Membership {
 
   /**
    * Rebuilds the view of a member whose stream was dropped for falling behind
-   * its bounds, once per turn: one that falls behind the same turn again is
-   * paused until it resumes.
+   * its bounds, once per turn: one that falls behind the same turn again
+   * cannot catch up, and its connection closes.
    *
    * The turn itself is unharmed and may still be going, so this is not a turn
    * failure and the segment did not settle: reporting either would leave the
@@ -2578,7 +2588,7 @@ class Membership {
       "membership.fell-behind"
     )
     if (this.#rebuiltTurn === turnId) {
-      this.#send({ type: "fell-behind" })
+      this.#cannotCatchUp()
       return
     }
     this.#rebuiltTurn = turnId

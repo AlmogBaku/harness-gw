@@ -424,8 +424,56 @@ describe("operator ACP listener", () => {
     expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     expect(JSON.stringify(turnUpdates(test.recorder))).not.toContain("end_turn")
     expect(usageUpdates(test.recorder)).toHaveLength(1)
+    expect(test.fellBehind).not.toHaveBeenCalled()
     test.close()
   })
+
+  // A member the Session leaves behind is never left holding it: its socket
+  // closes as a reader that fell behind, and its client resumes.
+  it.each([
+    [
+      "falls behind the same turn again",
+      async (test: Harness, burst: () => void) => {
+        burst()
+        await test.recorder.wait(
+          (entry) => JSON.stringify(entry.params).includes("Here they are"),
+          "the rebuilt view"
+        )
+        await settled()
+        expect(test.fellBehind).not.toHaveBeenCalled()
+        burst()
+      },
+    ],
+    [
+      "cannot be rebuilt",
+      async (test: Harness, burst: () => void) => {
+        test.faults.failOnce("history")
+        burst()
+      },
+    ],
+  ])(
+    "closes the socket of a browser whose view %s",
+    async (_label, fallBehind) => {
+      // One event of queue, so each burst outruns the send the pump awaits.
+      const test = await harness({ maxSubscriberEvents: 1 })
+      const { source } = await runningTurn(test, "Summarize")
+      source.emit(turnStarted())
+      const burst = () => {
+        for (const delta of ["one", "two", "three", "four"])
+          source.emit({
+            kind: TurnEventKind.MessageChunk,
+            messageId: "assistant-1",
+            text: delta,
+          })
+      }
+
+      await fallBehind(test, burst)
+
+      await vi.waitFor(() => expect(test.fellBehind).toHaveBeenCalledOnce())
+      source.finish()
+      test.close()
+    }
+  )
 
   // ACP scopes a question to its Session and, optionally, to the tool call
   // that asked it, so a client can show it on that call.

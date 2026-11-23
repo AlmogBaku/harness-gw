@@ -11,7 +11,11 @@ import {
 import { withinGrace } from "../grace"
 import type { SocketRefusal } from "../server"
 import { HANDSHAKE_BUDGET, HANDSHAKE_DEADLINE_MS } from "../core/limits"
-import { createAcpSocket, type PublicErrors } from "./socket"
+import {
+  createAcpSocket,
+  READER_FELL_BEHIND,
+  type PublicErrors,
+} from "./socket"
 import type { AcpConnectionContext, HgwAcpAgentFactory } from "./types"
 import { errorNotificationOf } from "./validation"
 import type { Role } from "../core/member"
@@ -242,6 +246,8 @@ export function createAcpService(options: AcpServiceOptions) {
       handshakeDeadline.clear()
     }
     context.handshakeComplete = handshakeEnded
+    context.fellBehind = () =>
+      socket.socket.close(READER_FELL_BEHIND, "ACP member fell behind")
     // A logout that ended a login hands the socket back to its handshake, as
     // the newest one in the budget, under a fresh deadline.
     context.handshakeRestart = () => {

@@ -96,9 +96,6 @@ export const DISCARD_ATTEMPTS = 3
  */
 export const DISCARDED_REFUSALS = 4_096
 
-/** How long a member that fell behind keeps its place for its view to rejoin. */
-export const PAUSED_DEADLINE_MS = 30_000
-
 /**
  * How long a peer may take to send its first `initialize` before the gateway
  * closes the connection; code 4408.

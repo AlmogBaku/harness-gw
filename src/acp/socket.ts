@@ -222,7 +222,7 @@ export function createAcpSocket(options: AcpSocketOptions): AcpSocket {
  * leave with 4409, which the client reconnects on, so a tab that slept
  * through a large replay comes back. Its other limits stay terminal.
  */
-const READER_FELL_BEHIND = 4409
+export const READER_FELL_BEHIND = 4409
 const READER_LIMITS = /\b(maxBufferedBytes|maxOutputStallMs)\b/u
 
 function peerCloseCode(code: number, reason: string) {

@@ -233,6 +233,11 @@ export type MemberConnection = {
   send(event: MemberEvent): Promise<void>
   /** Whether the connection's credential still holds. */
   live(): boolean
+  /**
+   * Closes the connection, one of whose members its Session left behind, as
+   * a reader that fell behind: its client reconnects and resumes.
+   */
+  fellBehind(): void
 }
 
 /**

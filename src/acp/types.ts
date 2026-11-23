@@ -87,6 +87,12 @@ type AcpConnectionBase = {
    * handshake again, under a fresh deadline and the listener's budget.
    */
   handshakeRestart?: () => void
+  /**
+   * Called by the agent once one of its Sessions left a member behind: the
+   * socket closes as a reader that fell behind (4409), which its client
+   * reconnects on and resumes each Session it holds.
+   */
+  fellBehind?: () => void
 }
 
 /**
