@@ -14,7 +14,12 @@ import * as ids from "./ids"
 import type { ProviderSessionId } from "./ids"
 import { createLink, type Link } from "./link"
 import { hasSession, type CommandResults, type MemberScope } from "./member"
-import type { ServerRuntime, SessionPatch, SessionScope } from "./runtime"
+import {
+  ServerSessionNotFoundError,
+  type ServerRuntime,
+  type SessionPatch,
+  type SessionScope,
+} from "./runtime"
 import {
   EXECUTION_STATUS,
   type SessionCoordinator,
@@ -85,6 +90,7 @@ export type Catalog = {
   update(scope: SessionScope, patch: SessionPatch): Promise<void>
   /** Settles one Session read at once, and tells the runtime. */
   markRead(agentId: string, sessionId: string): Promise<void>
+  /** Deletes one Session, which ends it for every member still on it. */
   delete(scope: SessionScope): Promise<void>
   /**
    * The Session list or an Agent changed and must be read again. `signaled`
@@ -325,6 +331,9 @@ export function createCatalog({
         runtime.deleteSession(target.agentId, target.providerSessionId)
       )
       rows.forget(target.agentId, target.sessionId)
+      // Every member still on it is told it is gone, as a read finding it so
+      // would tell it.
+      coordinator.endIfGone(target, new ServerSessionNotFoundError())
       invalidate()
     },
 

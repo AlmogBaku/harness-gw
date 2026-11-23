@@ -118,6 +118,8 @@ export type MembershipDelivery = {
   /** Offer the member a request such a child asks, or withdraw one. */
   offerChild(request: PendingRequest): void
   withdrawChild(requestId: string): void
+  /** Settles once the member was shown the last stream it follows, whole. */
+  shown(): Promise<void>
 }
 
 export type Channels = ReturnType<typeof createChannels>
@@ -757,6 +759,14 @@ function createChannelTable({
       if (channel) await adopt(channel)
     },
 
+    /** Settles once every member was shown the last stream it follows. */
+    async shown(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      await Promise.all(
+        [...(channel?.memberships.keys() ?? [])].map((member) => member.shown())
+      )
+    },
+
     /** How many members every channel holds, for the health gauges. */
     memberships() {
       let count = 0
@@ -978,6 +988,26 @@ export function createChannels(options: CreateChannelsOptions) {
     )
   }
 
+  /**
+   * Stops each of the Session's background children `includes` takes, as
+   * closing a Session stops its background work beside its turn: every one
+   * is asked, and the first failure is thrown once all were. A runtime that
+   * cannot stop a child alone leaves each running.
+   */
+  async function stopBackground(
+    scope: SessionScope,
+    includes: (childSessionId: string) => boolean = () => true
+  ) {
+    const stopped = await Promise.allSettled(
+      channels
+        .backgroundChildren(scope)
+        .filter(includes)
+        .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+    )
+    const failed = stopped.find((settled) => settled.status === "rejected")
+    if (failed) throw failed.reason
+  }
+
   return {
     ...channels,
     historyReach,
@@ -1082,24 +1112,23 @@ export function createChannels(options: CreateChannelsOptions) {
       return coordinator.closed(scope)
     },
 
+    stopBackground,
+
     /**
-     * Stops each of the Session's background children `includes` takes, as
-     * closing a Session stops its background work beside its turn: every one
-     * is asked, and the first failure is thrown once all were. A runtime that
-     * cannot stop a child alone leaves each running.
+     * Stops all of a Session's work as `session/delete` asks, as a close on
+     * every connection would: its turn, settling once each member was shown
+     * how it ended, then every background child. Throws as `stopAndSettle`
+     * and `stopBackground` do.
      */
-    async stopBackground(
-      scope: SessionScope,
-      includes: (childSessionId: string) => boolean = () => true
-    ) {
-      const stopped = await Promise.allSettled(
-        channels
-          .backgroundChildren(scope)
-          .filter(includes)
-          .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+    async stopWork(scope: SessionScope) {
+      await stopAndSettle(
+        coordinator,
+        clock,
+        scope,
+        () => coordinator.stop(scope),
+        () => channels.shown(scope)
       )
-      const failed = stopped.find((settled) => settled.status === "rejected")
-      if (failed) throw failed.reason
+      await stopBackground(scope)
     },
 
     /** Whether the runtime forks Sessions. */
@@ -1268,6 +1297,7 @@ class Membership {
       },
       offerChild: (request) => this.#offerChild(request),
       withdrawChild: (requestId) => this.#withdraw(requestId),
+      shown: () => this.#shownStream(),
     }
   }
 

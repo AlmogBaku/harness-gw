@@ -941,6 +941,14 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         const scope = catalog.scope(agentId, command.sessionId)
         // A Session its Agent cannot find is already gone.
         if (scope) {
+          // As ACP deletes a Session active anywhere: closed first, on every
+          // connection, its turn stopped and each member shown how it ended,
+          // and its background work stopped, so a runtime that refuses to
+          // delete a running Session is never asked to; this connection
+          // leaves it, as its close would, and then the delete tells every
+          // other member it is gone.
+          await context.channels.stopWork(scope)
+          sessions.part(command.sessionId)
           try {
             await catalog.delete(scope)
           } catch (cause) {

@@ -97,6 +97,7 @@ function member(
     child: () => undefined,
     offerChild: () => undefined,
     withdrawChild: () => undefined,
+    shown: async () => undefined,
   }
   return {
     fake,

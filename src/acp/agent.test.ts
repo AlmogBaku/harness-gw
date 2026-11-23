@@ -1383,19 +1383,32 @@ describe("AOS ACP agent", () => {
     test.close()
   })
 
-  it("deletes a Session and asks every operator connection to relist", async () => {
+  it("deletes a Session, asking every operator connection to relist and telling every other member it is gone", async () => {
     const test = await harness()
-    const other = await test.connect("connection-2")
     await test.list()
+    await open(test)
+    const other = await openInSecondTab(test)
 
     await test.agent.request(methods.agent.session.delete, {
       sessionId: SESSION,
     })
+    await other.recorder.wait(
+      (entry) => entry.method === HGW_METHODS.notify.error,
+      "the Session gone"
+    )
     await settled()
 
     expect(test.deleteSession).toHaveBeenCalledWith(AGENT, SESSION)
     expect(relists(test.recorder)).toHaveLength(1)
     expect(relists(other.recorder)).toHaveLength(1)
+    expect(other.recorder.of(HGW_METHODS.notify.error)).toEqual([
+      {
+        method: HGW_METHODS.notify.error,
+        params: { sessionId: SESSION, code: "not_found", message: "not_found" },
+      },
+    ])
+    // The deleter left the Session as its close would: told nothing more.
+    expect(test.recorder.of(HGW_METHODS.notify.error)).toEqual([])
     // The shared address cannot tell whose Session it never listed.
     await expect(
       test.agent.request(methods.agent.session.delete, {
@@ -1403,6 +1416,40 @@ describe("AOS ACP agent", () => {
       })
     ).rejects.toMatchObject(INVALID_PARAMS)
     expect(test.deleteSession).toHaveBeenCalledTimes(1)
+    test.close()
+    other.close()
+  })
+
+  // As ACP deletes a Session active anywhere: closed first, then deleted, so
+  // no runtime is asked to delete one still running.
+  it("deletes a Session while its turn runs once the turn stopped and every member was shown its end", async () => {
+    const test = await harness()
+    await test.list()
+    const other = await openInSecondTab(test)
+    await liveTurn(test, [test, other])
+
+    const deleting = test.agent.request(methods.agent.session.delete, {
+      sessionId: SESSION,
+    })
+    await waitFor(() => expect(test.sources[0]?.stop).toHaveBeenCalledOnce())
+    await settled()
+    expect(test.deleteSession).not.toHaveBeenCalled()
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+
+    await expect(deleting).resolves.toEqual({})
+    expect(test.deleteSession).toHaveBeenCalledWith(AGENT, SESSION)
+    await other.recorder.wait(
+      (entry) => entry.method === HGW_METHODS.notify.error,
+      "the Session gone"
+    )
+    for (const { recorder } of [test, other])
+      expect(flow(recorder).at(-1)).toBe("state idle")
+    const ended = other.recorder.entries.findIndex(endedTurn)
+    const gone = other.recorder.entries.findIndex(
+      (entry) => entry.method === HGW_METHODS.notify.error
+    )
+    expect(ended).toBeGreaterThanOrEqual(0)
+    expect(ended).toBeLessThan(gone)
     test.close()
     other.close()
   })

@@ -1114,39 +1114,44 @@ describe("operator ACP listener", () => {
       test.close()
     })
 
-    // ACP's cancel stops the foreground alone; its close stops the background
-    // work too, each child still at work, and nothing already over.
-    it("stops each child still at work as its parent closes, and none as it is cancelled", async () => {
-      const { test, listener, turnId, stopChild } = await outlived()
-      for (const [childSessionId, status] of [
-        ["child-2", ChildSessionStatus.Running],
-        ["child-3", ChildSessionStatus.Idle],
-      ] as const)
-        listener.onChild!(turnId, {
-          kind: TurnEventKind.ChildSessionUpdated,
-          childSessionId,
-          status,
+    // ACP's cancel stops the foreground alone; its close, and a delete, which
+    // closes first, stop the background work too: each child still at work,
+    // and nothing already over.
+    it.each([
+      ["closes", methods.agent.session.close],
+      ["is deleted", methods.agent.session.delete],
+    ] as const)(
+      "stops each child still at work as its parent %s, and none as it is cancelled",
+      async (_ending, method) => {
+        const { test, listener, turnId, stopChild } = await outlived()
+        for (const [childSessionId, status] of [
+          ["child-2", ChildSessionStatus.Running],
+          ["child-3", ChildSessionStatus.Idle],
+        ] as const)
+          listener.onChild!(turnId, {
+            kind: TurnEventKind.ChildSessionUpdated,
+            childSessionId,
+            status,
+          })
+        await test.recorder.wait(
+          (entry) => JSON.stringify(entry.params).includes("child-3"),
+          "the child that is over"
+        )
+
+        await test.agent.notify(methods.agent.session.cancel, {
+          sessionId: CREATED,
         })
-      await test.recorder.wait(
-        (entry) => JSON.stringify(entry.params).includes("child-3"),
-        "the child that is over"
-      )
+        await test.agent.request(method, { sessionId: CREATED })
 
-      await test.agent.notify(methods.agent.session.cancel, {
-        sessionId: CREATED,
-      })
-      await test.agent.request(methods.agent.session.close, {
-        sessionId: CREATED,
-      })
-
-      expect(stopChild.mock.calls).toEqual(
-        ["child-1", "child-2"].map((childSessionId) => [
-          expect.objectContaining({ sessionId: sessionId(CREATED) }),
-          childSessionId,
-        ])
-      )
-      test.close()
-    })
+        expect(stopChild.mock.calls).toEqual(
+          ["child-1", "child-2"].map((childSessionId) => [
+            expect.objectContaining({ sessionId: sessionId(CREATED) }),
+            childSessionId,
+          ])
+        )
+        test.close()
+      }
+    )
   })
 
   // ACP replays a child through its parent's from-start resume: the child's

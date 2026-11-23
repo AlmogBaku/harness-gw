@@ -266,7 +266,13 @@ active on this connection, already closed, gone, or never known answers `{}`,
 as a close of a fresh invitation does, which only detaches it.
 `_hgw/session/part` (`HgwSessionPartRequestSchema`,
 `protocol/acp.ts`) only detaches this connection; the Session's work and all other
-members continue. `session/delete` of a Session not known to this connection
+members continue. `session/delete` closes the Session first, as a close on
+every connection would: it stops the turn and waits, as a close does, until
+each member was shown how it ended, stops every background child still at
+work, and detaches this connection; then the runtime deletes the Session, and
+every other member is told it is gone with an `_hgw/error` `not_found` and
+detached. A delete whose Stop fails, or goes unconfirmed, answers as a close
+would and deletes nothing. `session/delete` of a Session not known to this connection
 succeeds rather than returning not-found. The SDK client parts a Session its
 last listener left, after a 2 s grace, and closes one only when asked
 (`closeSession`), forgetting it at once with no part; as ACP asks, it takes a
