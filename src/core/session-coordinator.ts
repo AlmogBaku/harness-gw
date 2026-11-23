@@ -1702,6 +1702,18 @@ export class SessionCoordinator {
   }
 
   /**
+   * Forgets the mark of a Session its delete removed, or found gone: nothing
+   * is left to discard, so no idle window or discard follows.
+   */
+  deleted(scope: Pick<SessionScope, "agentId" | "providerSessionId">) {
+    const key = scopeKey(scope)
+    const marked = this.#unprompted.get(key)
+    if (!marked) return
+    this.#clearIdle(marked)
+    this.#unprompted.delete(key)
+  }
+
+  /**
    * Runs an operator's write to a Session, which keeps it: one a create here
    * made and no prompt reached is listed again and never discarded once the
    * write lands, as after its first prompt. One being or already discarded is

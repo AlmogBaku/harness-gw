@@ -38,6 +38,7 @@ import {
   READING_BACKOFF,
   SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
+  UNPROMPTED_IDLE_MS,
 } from "../core/limits"
 import {
   ServerAgentUpdateUnsupportedError,
@@ -1553,6 +1554,21 @@ describe("AOS ACP agent", () => {
     await waitFor(() => expect(test.start).toHaveBeenCalledOnce())
     reply(test.sources[0], "Still here")
     await test.recorder.wait(said("Still here"), "the turn's words")
+    test.close()
+  })
+
+  it("discards nothing of a created Session once its delete removed it", async () => {
+    const test = await harness()
+    await test.create()
+    const clock = useFakeClock()
+
+    await test.agent.request(methods.agent.session.delete, {
+      sessionId: CREATED,
+    })
+    await clock.advance(UNPROMPTED_IDLE_MS)
+
+    expect(test.deleteSession).toHaveBeenCalledWith(AGENT, CREATED)
+    expect(test.discardSession).not.toHaveBeenCalled()
     test.close()
   })
 

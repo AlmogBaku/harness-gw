@@ -115,7 +115,7 @@ export type Catalog = {
 export type CatalogOptions = {
   runtime: ServerRuntime
   coordinator: Pick<SessionCoordinator, "state" | "endIfGone"> &
-    Partial<Pick<SessionCoordinator, "unprompted" | "keep">>
+    Partial<Pick<SessionCoordinator, "unprompted" | "keep" | "deleted">>
   rows: SessionRows
   /** Where the runtime's change feed writes why it failed. */
   logger: Logger
@@ -334,6 +334,7 @@ export function createCatalog({
     async delete(target, leave = () => undefined) {
       /** Ends the Session for every member but the deleter, which leaves. */
       const end = (cause: unknown) => {
+        coordinator.deleted?.(target)
         leave()
         coordinator.endIfGone(target, cause)
       }

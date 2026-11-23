@@ -335,12 +335,13 @@ every other member is told it is gone with an `_hgw/error` `not_found` and
 detached. A delete whose Stop fails, or goes unconfirmed, answers as a close
 would and deletes nothing; one the runtime refuses answers that failure, and
 in either case the Session stays active on the connection, as after a failed
-close, so the delete may be sent again. A delete of a Session not known to
-this connection succeeds rather than returning not-found. The SDK client
-parts a Session its last listener left, after a 2 s grace, and closes one
-only when asked (`closeSession`), forgetting it at once with no part; as ACP
-asks, it takes a `-32002` answer to `session/close` or `session/delete` as
-success.
+close, so the delete may be sent again. A deleted Session that was
+unprompted is not discarded afterwards: nothing is left to free. A delete of
+a Session not known to this connection succeeds rather than returning
+not-found. The SDK client parts a Session its last listener left, after a
+2 s grace, and closes one only when asked (`closeSession`), forgetting it at
+once with no part; as ACP asks, it takes a `-32002` answer to
+`session/close` or `session/delete` as success.
 
 A Session a `session/new` created is **unprompted** until the first prompt is
 sent to its runtime, whether or not the runtime confirms the start, or until
