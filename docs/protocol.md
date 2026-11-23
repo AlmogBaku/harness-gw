@@ -473,6 +473,21 @@ rejects every other `replayFrom` type, and an `_hgw/before` without a string
 `cursor`, with `-32602` invalid params rather than guessing where to replay
 from.
 
+A resume with a `start` or `_hgw/position` cursor ends its replay with ACP's
+`replay_complete` update before its answer, once, also when it replays
+nothing; a resume with no cursor sends none. Only replayed history precedes
+it: the stored messages, and a running turn's events up to the replay's cut,
+which is what the turn's journal held when the resume followed the turn. From
+the request on, the gateway holds everything else for the Session (the turn's
+later events, a notice, a reading, the Session's row, a request it asks) and
+sends it after `replay_complete`, in the order it came, then the Session's
+current `state_update`, then the answer. A failure's `_hgw/error` and a
+request's withdrawal are not held. Each child Session the replay announces
+gets its own `replay_complete` on the child's id, after its announcement and
+its transcript, and one first announced after the replay completed and before
+the answer gets one right after its announcement. A replay that cannot finish
+sends no `replay_complete`, and its resume answers an error.
+
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
 the user message an Edit or Retry replaces; a Session offers it only where its
@@ -625,8 +640,10 @@ stop signal to the runtime; the turn continues until the runtime confirms it
 ended.
 
 On reconnect (session/resume with replay) a client with a pending prompt
-receives history first, then buffered live events, then the current state, then
-the stored prompt answer (if it arrived before the storage deadline).
+receives history first, then the live turn's buffered events up to the
+replay's cut, then `replay_complete`, then what was held meanwhile and the
+current state, then the stored prompt answer (if it arrived before the storage
+deadline).
 Catch-up uses only standard ACP session updates; no `_hgw/session_invalidated`
 or `_hgw/steer_accepted` is sent.
 
@@ -1062,6 +1079,10 @@ cursor. History stores a child as an `{ role: "activity", activityType:
 final state, then sends the child's whole transcript under its id, where the
 runtime keeps one (`ServerRuntime.childHistory`); a child's transcript is never
 paged. A resume while the turn runs leaves its children to the turn's replay.
+Whichever way a resume's replay announces a child, it ends the child's replay
+with `replay_complete` on the child's id, as ACP has each announced child's
+(see [Request `_meta.hgw` shapes](#request-_metahgw-shapes)); a guest, told of
+no child, is sent none.
 
 A guest is shown nothing of a child: no announcement, event, question,
 approval, stored row or transcript. A child's approval or question in a turn

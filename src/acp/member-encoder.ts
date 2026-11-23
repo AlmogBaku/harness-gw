@@ -646,6 +646,20 @@ export function createMemberEncoder({
                 : outbound.update
             )
         return
+      case "replay-complete": {
+        // A child's follows the announcement its replay made here.
+        const { child, older } = event
+        if (
+          child &&
+          !children.owns(child.parentSessionId, child.childSessionId)
+        )
+          return
+        const complete: SessionUpdate = { sessionUpdate: "replay_complete" }
+        return update(
+          sessionId,
+          older ? pageUpdate(complete, older.cursor) : complete
+        )
+      }
       case "request-asked":
         return ask(sessionId, event.request)
       case "request-withdrawn":

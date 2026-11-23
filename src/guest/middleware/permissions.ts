@@ -73,6 +73,7 @@ export function createPermissionsMiddleware({
         case "child-history":
         case "prompt":
         case "history":
+        case "replay-complete":
         case "request-withdrawn":
         case "question-answered":
         case "execution":

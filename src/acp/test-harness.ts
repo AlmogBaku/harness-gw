@@ -1138,6 +1138,8 @@ export function shown(update: object): string[] {
       return [`chunk ${(content as { text: string }).text}`]
     case "notice":
       return [`notice ${String(title)}`]
+    case "replay_complete":
+      return ["replay complete"]
     default:
       return []
   }
@@ -1301,9 +1303,12 @@ export function storedLiveTurn({
   ]
 }
 
-/** One browser's view of a Session without the states that bracket it. */
+/**
+ * One browser's view of a Session without the states that bracket it, and
+ * without the end of the replay that rebuilt it.
+ */
 export const withoutStates = (seen: readonly string[]) =>
-  seen.filter((item) => !item.startsWith("state"))
+  seen.filter((item) => !item.startsWith("state") && item !== "replay complete")
 
 /** A held step a test releases when the scenario needs it to go on. */
 export function gate() {

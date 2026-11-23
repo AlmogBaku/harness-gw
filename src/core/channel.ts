@@ -43,6 +43,7 @@ import {
   CommandRefusedError,
   hasSession,
   runEvents,
+  unhandledKind,
   type CommandResults,
   type Member,
   type MemberScope,
@@ -1058,10 +1059,10 @@ export function createChannels(options: CreateChannelsOptions) {
      * Resumes one member's view of its Session, rebuilt from its history
      * first when `view` asks `fromStart` or its position cannot be followed:
      * the newest page alone for a member that `paged` older history itself.
-     * The view reads the history, then the
-     * live events the journal buffered, then the Session's state, before the
-     * answer; the setup it tells is read beside all that, and built from
-     * after it. The join lands once the answer is written, and the Session's
+     * The view reads the history, then the live events the journal buffered,
+     * then, for a resume with a cursor, `replay_complete` and what it held,
+     * then the Session's state, before the answer; the setup it tells is read
+     * beside all that, and built from after it. The join lands once the answer is written, and the Session's
      * readings and row reach the member as events after it. A Session waiting
      * on input asks its runtime whether the wait still stands, which the
      * answer does not wait for. A resume the journal serves asks the provider
@@ -1074,23 +1075,27 @@ export function createChannels(options: CreateChannelsOptions) {
       position: ResumePosition,
       view?: ResumeView
     ): Promise<CommandResults["resume"]> {
-      // The setup is read beside the replay, and told after it.
-      const [resumed, readings] = await Promise.all([
-        membership.resume(position, view),
-        membership.readSetup(),
-      ])
-      const setup = await membership.setup(readings)
-      membership.joined()
-      if (
-        !membership.pending &&
-        coordinator.state(membership.scope) === "waiting-for-input"
-      )
-        channels
-          .recheck(membership.scope)
-          .catch((err: unknown) =>
-            logger.error({ err }, "channel.adopt.failed")
-          )
-      return { ...resumed, setup }
+      try {
+        // The setup is read beside the replay, and told after it.
+        const [resumed, readings] = await Promise.all([
+          membership.resume(position, view),
+          membership.readSetup(),
+        ])
+        const setup = await membership.setup(readings)
+        membership.joined()
+        if (
+          !membership.pending &&
+          coordinator.state(membership.scope) === "waiting-for-input"
+        )
+          channels
+            .recheck(membership.scope)
+            .catch((err: unknown) =>
+              logger.error({ err }, "channel.adopt.failed")
+            )
+        return { ...resumed, setup }
+      } finally {
+        membership.answered()
+      }
     },
 
     /**
@@ -1223,6 +1228,75 @@ export function createChannels(options: CreateChannelsOptions) {
   }
 }
 
+/** An older page one member asked for by its cursor. */
+type OlderPage = { cursor: string; offset: number }
+
+/**
+ * One replay a member is shown, a resume's from its cursor or an older
+ * page's, with each child Session it announced: ACP owes the Session one
+ * `replay_complete`, and each child one of its own.
+ */
+type Replay = { children: Set<string>; older?: OlderPage }
+
+/** One event a replay held back, and what learns once it is shown. */
+type HeldEvent = { event: SessionEvent; shown: PromiseWithResolvers<void> }
+
+/**
+ * Whether `event` reaches a member at once while a replay is in flight: the
+ * history it replays, as a page, a stream's buffer up to its cut, the prompt
+ * of the turn that buffer replays while a resume is `restating` the view, and
+ * a replay's end; and what is neither a `session/update` nor a request, a
+ * failure's report and a withdrawal of a request already asked. ACP has
+ * nothing else precede `replay_complete`.
+ */
+function showsInReplay(event: SessionEvent, restating: boolean) {
+  switch (event.kind) {
+    case "history":
+    case "child-history":
+    case "replay-complete":
+    case "request-withdrawn":
+    case "error":
+      return true
+    case "turn":
+    case "child":
+      return event.replayed === true
+    case "prompt":
+      return restating
+    case "request-asked":
+    case "question-answered":
+    case "execution":
+    case "usage":
+    case "model":
+    case "session-info":
+    case "commands":
+    case "notice":
+      return false
+  }
+  return unhandledKind(event) ?? false
+}
+
+/**
+ * The child Sessions `event` announces, as a member's transport announces
+ * them: each a page's row names, and each a report names, a child's child's
+ * included.
+ */
+function announcedChildren(event: SessionEvent): string[] {
+  if (event.kind === "history" || event.kind === "child-history")
+    return event.page.messages.flatMap((message) =>
+      message.role === "activity" && message.activityType === "CHILD_SESSION"
+        ? [message.content.childSessionId]
+        : []
+    )
+  if (event.kind !== "child") return []
+  const reported =
+    event.event.kind === TurnEventKind.ChildSessionEvent
+      ? event.event.event
+      : event.event
+  return reported.kind === TurnEventKind.ChildSessionUpdated
+    ? [reported.childSessionId]
+    : []
+}
+
 /**
  * One Session as one member observes it: at most one coordinator
  * subscription, the cursor it has reached, and the requests it was asked.
@@ -1282,6 +1356,22 @@ class Membership {
    * Set while a from-start replay rebuilds the view: the channel waits for it.
    */
   #rebuilding = false
+  /**
+   * The replays in flight on this member's view. Until each completes, the
+   * member is shown only replayed history, and every other event waits in
+   * `#held`, in the order it came.
+   */
+  readonly #replays = new Set<Replay>()
+  #held: HeldEvent[] = []
+  /** Set while the held events go out, which later ones queue behind. */
+  #releasing = false
+  /**
+   * The children a completed replay accounted for, until its answer is
+   * written: one first announced in between is owed its own
+   * `replay_complete` at once, as ACP has every child announced between a
+   * resume and its answer get one.
+   */
+  #answering: Replay | undefined
   /** The notices that arrived while the view was rebuilt, shown after its page. */
   #heldNotices: SessionNotice[] = []
   /** Background child events held, as notices are, while the view rebuilds. */
@@ -1327,6 +1417,9 @@ class Membership {
       this.#releaseCells()
       this.#subscription?.close()
       this.#subscription = undefined
+      // A member that detached is shown nothing more, so nothing waits on it.
+      this.#replays.clear()
+      for (const { shown } of this.#held.splice(0)) shown.resolve()
     })
     // A Session a member is on, joining or joined, is never discarded.
     if (hasSession(scope)) owner.stack.defer(options.coordinator.hold(scope))
@@ -1400,10 +1493,34 @@ class Membership {
    * resolved promise rather than `undefined`, because callers chain on what
    * this returns, and never an extra await, because a turn's delivery order
    * rides on the send starting now. What the stack declines runs once the
-   * event is delivered.
+   * event is delivered. While a replay is in flight an event it does not
+   * replay waits, and settles once shown after the replay's end; one that
+   * comes while held events go out waits behind them.
    */
   emit(event: SessionEvent): Promise<void> {
     if (this.detached) return Promise.resolve()
+    const holds =
+      this.#replays.size > 0
+        ? !showsInReplay(event, this.#restating)
+        : this.#held.length > 0
+    if (!holds) return this.#write(event)
+    const shown = Promise.withResolvers<void>()
+    this.#held.push({ event, shown })
+    return shown.promise
+  }
+
+  /**
+   * Writes one event now, as `emit` describes, then the `replay_complete`
+   * each child it announces is owed at once.
+   */
+  #write(event: SessionEvent): Promise<void> {
+    if (this.detached) return Promise.resolve()
+    // A request held while a replay ran, and settled meanwhile, is not asked.
+    if (
+      event.kind === "request-asked" &&
+      !this.#offered.has(event.request.requestId)
+    )
+      return Promise.resolve()
     const declines = new Set<string>()
     let shown: ReturnType<typeof runEvents>
     try {
@@ -1429,7 +1546,34 @@ class Membership {
             "membership.request.decline.failed"
           )
         )
-    return sent
+    const owed = this.#announced(event)
+    return owed.length === 0
+      ? sent
+      : sent.then(() => this.#completeChildren(owed, this.#answering?.older))
+  }
+
+  /**
+   * Records the children `event` announces. A replay in flight owes each its
+   * own `replay_complete` once it completes; a completed one whose answer is
+   * not written yet owes one at once to each it did not account for, which
+   * this returns.
+   */
+  #announced(event: SessionEvent): string[] {
+    const announced = announcedChildren(event)
+    if (announced.length === 0) return []
+    const older =
+      event.kind === "history" || event.kind === "child-history"
+        ? event.older
+        : undefined
+    for (const replay of this.#replays)
+      if (replay.older?.cursor === older?.cursor)
+        for (const childSessionId of announced)
+          replay.children.add(childSessionId)
+    const answering = this.#answering
+    if (this.#replays.size > 0 || !answering) return []
+    const owed = announced.filter((id) => !answering.children.has(id))
+    for (const childSessionId of owed) answering.children.add(childSessionId)
+    return owed
   }
 
   /** One event as this member's stack shows it, or `undefined` when hidden. */
@@ -1443,11 +1587,96 @@ class Membership {
             ? event.event.childSessionId
             : event.kind === "child-history"
               ? event.childSessionId
-              : this.#addressed.sessionId,
+              : event.kind === "replay-complete" && event.child
+                ? event.child.childSessionId
+                : this.#addressed.sessionId,
         ...event,
       },
       { decline }
     )
+  }
+
+  /**
+   * Starts one replay of this member's view, which holds every event it
+   * does not replay until `#completeReplay` or `#endReplay` ends it.
+   */
+  #openReplay(older?: OlderPage): Replay {
+    const replay: Replay = { children: new Set(), ...(older ? { older } : {}) }
+    this.#replays.add(replay)
+    return replay
+  }
+
+  /**
+   * Completes one replay as ACP asks, once all it replayed was shown: a
+   * `replay_complete` on each child it announced, then on the Session, and
+   * then what it held goes out. Until the answer is written, a child first
+   * announced is owed its own at once.
+   */
+  async #completeReplay(replay: Replay) {
+    const { older } = replay
+    await this.#completeChildren([...replay.children], older)
+    await this.#write({ kind: "replay-complete", ...(older ? { older } : {}) })
+    this.#answering = replay
+    this.#endReplay(replay)
+  }
+
+  /** Shows each child's `replay_complete`, under the Session that owns it. */
+  async #completeChildren(
+    childSessionIds: readonly string[],
+    older?: OlderPage
+  ) {
+    const parentSessionId = this.#addressed.sessionId
+    for (const childSessionId of childSessionIds)
+      await this.#write({
+        kind: "replay-complete",
+        child: { parentSessionId, childSessionId },
+        ...(older ? { older } : {}),
+      })
+  }
+
+  /**
+   * Ends one replay, completed or not: once none is in flight, the events
+   * the replays held go out in order. A replay that never completed sends no
+   * `replay_complete`, as ACP has a replay that cannot finish send none.
+   */
+  #endReplay(replay: Replay) {
+    if (!this.#replays.delete(replay) || this.#replays.size > 0) return
+    this.#release().catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.release.failed")
+    )
+  }
+
+  /**
+   * Shows the held events in order, each settling as it goes out, until none
+   * is left or another replay holds them again.
+   */
+  async #release() {
+    if (this.#releasing) return
+    this.#releasing = true
+    try {
+      while (this.#replays.size === 0) {
+        const next = this.#held.shift()
+        if (!next) break
+        await this.#write(next.event).then(
+          next.shown.resolve,
+          next.shown.reject
+        )
+      }
+    } finally {
+      this.#releasing = false
+    }
+  }
+
+  /**
+   * Ends what a completed replay owes the children first announced before
+   * its answer, once the answer to the request that asked for it is
+   * written. Call it as `afterResponse` asks.
+   */
+  answered() {
+    const answering = this.#answering
+    this.afterResponse(async () => {
+      if (this.#answering === answering) this.#answering = undefined
+    })
   }
 
   /**
@@ -1499,9 +1728,11 @@ class Membership {
    * The view keeps whether it pages older history, for each rebuild after.
    * Either way the
    * member joins the channel, reads the live events the journal buffered and
-   * then the Session's state. Returns the page it replayed. A join that has
-   * not landed by its deadline detaches the membership, and the resume
-   * rejects then; one that finds its Session gone ends it.
+   * then the Session's state. A resume with a cursor replays: from the
+   * request on, the member is shown only the history it replays until its
+   * `replay_complete`, and the rest after it. Returns the page it replayed. A
+   * join that has not landed by its deadline detaches the membership, and the
+   * resume rejects then; one that finds its Session gone ends it.
    */
   resume(
     position: ResumePosition,
@@ -1512,6 +1743,10 @@ class Membership {
     }
   ) {
     this.#releaseCells()
+    // A resume with a cursor replays, and holds from its request on all it
+    // does not replay, as ACP has only history precede `replay_complete`.
+    const replay =
+      view.fromStart || view.positioned ? this.#openReplay() : undefined
     // The resume answers before its join lands; a Session found gone between
     // the two still ends this member.
     if (!this.pending)
@@ -1522,8 +1757,8 @@ class Membership {
       )
     this.#send({ type: "join" })
     this.#paged = view.paged
-    return unlessAborted(this.#resume(position, view), this.#detaching).catch(
-      (cause: unknown) => {
+    return unlessAborted(this.#resume(position, view, replay), this.#detaching)
+      .catch((cause: unknown) => {
         // A join its deadline cut short; the membership's log names its Session.
         if (cause instanceof MembershipDetachedError && !this.#parted)
           this.#options.logger.warn(
@@ -1532,19 +1767,33 @@ class Membership {
           )
         this.endIfGone(cause)
         throw cause
-      }
-    )
+      })
+      .finally(() => {
+        if (replay) this.#endReplay(replay)
+      })
   }
 
+  /**
+   * Builds the view as `resume` describes. A `replay` completes once the
+   * history and what the view's own streams buffered were shown, before the
+   * Session's state; a stream the view already followed streams on behind it.
+   */
   async #resume(
     position: ResumePosition,
-    { fromStart, positioned }: ResumeView
+    { fromStart, positioned }: ResumeView,
+    replay?: Replay
   ): Promise<{ history?: SessionHistoryResponse }> {
-    // A fresh invitation has no history to replay and no turn to follow.
-    if (this.pending) return {}
+    // A fresh invitation has no history to replay and no turn to follow, and
+    // its empty history completes all the same.
+    if (this.pending) {
+      if (replay) await this.#completeReplay(replay)
+      return {}
+    }
     this.#options.coordinator.refuseDiscarded(this.#scope)
     this.#stated = undefined
     this.#restating = true
+    const followed = this.#caughtUp
+    if (replay) this.#caughtUp = Promise.resolve()
     try {
       this.#resuming = "follow"
       let history: SessionHistoryResponse | undefined
@@ -1553,6 +1802,11 @@ class Membership {
       else if (!(await this.#followPositioned(position)))
         history = await this.#replay()
       this.#resuming = "report"
+      if (replay) {
+        await this.#caughtUp
+        await this.#completeReplay(replay)
+        await followed
+      }
       await this.#reportView()
       return history === undefined ? {} : { history }
     } finally {
@@ -2429,7 +2683,11 @@ class Membership {
       } catch (cause) {
         if (after !== undefined || !(cause instanceof ReplayCursorLostError))
           throw cause
-        await this.#reportView()
+        // A replay in flight holds the state this states until it completes,
+        // which a follow inside its resume must not wait for.
+        const stated = this.#reportView()
+        if (this.#replays.size === 0) await stated
+        else stated.catch((err: unknown) => this.report(err))
         return undefined
       }
       this.#consume(subscription, replayedCorrections)
@@ -2657,8 +2915,12 @@ class Membership {
       return
     }
     // A stream that could not carry the wait it ended on, such as the reset of
-    // a discovered turn no journal replays, still leaves its requests open.
-    if (this.#coordinator.state(this.#scope) === "waiting-for-input")
+    // a discovered turn no journal replays, still leaves its requests open. A
+    // replay in flight asks them after the state it closes with.
+    if (
+      this.#replays.size === 0 &&
+      this.#coordinator.state(this.#scope) === "waiting-for-input"
+    )
       this.reissuePending()
   }
 

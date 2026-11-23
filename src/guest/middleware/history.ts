@@ -217,6 +217,7 @@ export function createHistoryMiddleware({
           return event
         case "child":
         case "child-history":
+        case "replay-complete":
         case "request-asked":
         case "request-withdrawn":
         case "question-answered":

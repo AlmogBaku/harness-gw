@@ -31,6 +31,7 @@ export function createFeedsMiddleware(): Middleware {
         case "child-history":
         case "prompt":
         case "history":
+        case "replay-complete":
         case "request-asked":
         case "request-withdrawn":
         case "question-answered":

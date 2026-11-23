@@ -87,6 +87,8 @@ export type WireContractRow =
   | "rewindReplacesTurn"
   | "guestRetryOfSlashRefused"
   | "childHiddenFromGuest"
+  | "replayCompleteAfterHistory"
+  | "replayCompletePerChild"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -613,7 +615,7 @@ async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
 /** One frame the gateway sent a client, as JSON-RPC shapes it. */
 type WireFrame = {
   method?: string
-  params?: { update?: SessionUpdate }
+  params?: { sessionId?: string; update?: SessionUpdate }
   result?: unknown
   error?: { code?: unknown }
 }
@@ -632,9 +634,9 @@ function errorCodes(client: WireClient) {
 
 /**
  * Each update `client` read off the wire before the first answer `answers`
- * picks out, or every one when none does.
+ * picks out, or every one when none does, with the Session it names.
  */
-function updatesBefore(
+function addressedBefore(
   client: WireClient,
   answers: (result: unknown) => boolean
 ) {
@@ -646,9 +648,62 @@ function updatesBefore(
     .slice(0, answer < 0 ? undefined : answer)
     .flatMap(({ method, params }) =>
       method === methods.client.session.update && params?.update
-        ? [params.update]
+        ? [{ sessionId: params.sessionId, update: params.update }]
         : []
     )
+}
+
+/** As `addressedBefore`, the updates alone. */
+function updatesBefore(
+  client: WireClient,
+  answers: (result: unknown) => boolean
+) {
+  return addressedBefore(client, answers).map(({ update }) => update)
+}
+
+/** Whether `result` answers a `session/resume`, not the handshake. */
+function resumeAnswer(result: unknown) {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    !("protocolVersion" in result)
+  )
+}
+
+/** The updates ACP counts as replayed history (session-setup, Replay contents). */
+const HISTORY_UPDATES = new Set<string>([
+  "user_message",
+  "user_message_chunk",
+  "agent_message",
+  "agent_message_chunk",
+  "agent_thought",
+  "agent_thought_chunk",
+  "tool_call_update",
+  "tool_call_content_chunk",
+  "terminal_update",
+  "terminal_output_chunk",
+  "plan_update",
+  "compaction_update",
+  "subagent_update",
+])
+
+/**
+ * What a fresh reader read of `sessionId` before its resume's answer, each
+ * run of history read as one `history` step and anything else by its kind.
+ */
+function resumeShape(reader: WireClient, sessionId: string) {
+  const shape: string[] = []
+  for (const { sessionId: target, update } of addressedBefore(
+    reader,
+    resumeAnswer
+  )) {
+    if (target !== sessionId) continue
+    const step = HISTORY_UPDATES.has(update.sessionUpdate)
+      ? "history"
+      : update.sessionUpdate
+    if (step !== "history" || shape.at(-1) !== step) shape.push(step)
+  }
+  return shape
 }
 
 /** Every frame the gateway sent `client` that names `id` anywhere in it. */
@@ -1394,6 +1449,99 @@ export function runWireContract(
               )
             ).toBe(true)
           }
+        }
+      )
+
+      row(
+        "replayCompleteAfterHistory",
+        "ends a replay from the start or a position with replay_complete after its history alone, then states the Session, all before the answer, and ends none without a cursor",
+        async (harness) => {
+          const { clock, turn, connectPlain } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          // A turn still running is split at the replay's cut.
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "and their sizes"))
+          await until(clock, turn.firstResponse())
+          const cursors = {
+            start: { type: "start" },
+            position: { type: HGW_REPLAY_POSITION },
+            none: undefined,
+          } as const
+          const read: Record<string, string[]> = {}
+          for (const [name, replayFrom] of Object.entries(cursors)) {
+            const reader = connectPlain()
+            await until(clock, reader.initialize())
+            await until(
+              clock,
+              reader.connection.agent.request(methods.agent.session.resume, {
+                sessionId,
+                cwd: reader.folder,
+                ...(replayFrom ? { replayFrom } : {}),
+              })
+            )
+            read[name] = resumeShape(reader, sessionId)
+          }
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+
+          const replayed = ["history", "replay_complete", "state_update"]
+          expect(read).toEqual({
+            start: replayed,
+            position: replayed,
+            none: ["state_update"],
+          })
+        }
+      )
+
+      row(
+        "replayCompletePerChild",
+        "ends the replay of each child Session a reload announces on the child, after its own history, before the answer",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const child = await until(clock, turn.spawnChild!())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const reader = await reload(harness, sessionId)
+
+          const before = addressedBefore(reader, resumeAnswer)
+          const announced = new Set(
+            before.flatMap(({ update }) =>
+              SessionUpdate.isSubagentUpdate(update) ? [update.sessionId] : []
+            )
+          )
+          expect([...announced]).toContain(child)
+          for (const id of announced) {
+            const own = before.flatMap(({ sessionId: target, update }) =>
+              target === id ? [update.sessionUpdate] : []
+            )
+            expect(own.filter((kind) => kind === "replay_complete")).toEqual([
+              "replay_complete",
+            ])
+            expect(own.at(-1)).toBe("replay_complete")
+          }
+          // The child's history came before its end, after its announcement.
+          const kinds = before.map(({ sessionId: target, update }) =>
+            target === child
+              ? `child ${update.sessionUpdate}`
+              : SessionUpdate.isSubagentUpdate(update) &&
+                  update.sessionId === child
+                ? "announced"
+                : "parent"
+          )
+          expect(kinds.indexOf("announced")).toBeLessThan(
+            kinds.findIndex((kind) => kind.startsWith("child "))
+          )
+          expect(
+            kinds.filter(
+              (kind) =>
+                kind.startsWith("child ") && kind !== "child replay_complete"
+            )
+          ).not.toEqual([])
         }
       )
 

@@ -2573,16 +2573,60 @@ describe("Session rooms", () => {
     )
 
     const seen = flow(other.recorder)
-    expect(seen.slice(0, 4)).toEqual([
+    expect(seen.slice(0, 5)).toEqual([
       "history message-1",
       `prompt ${messageId}`,
       "chunk Live",
+      "replay complete",
       "state running",
     ])
     expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
     expect(seen.filter((item) => item === "chunk Live")).toHaveLength(1)
     test.close()
     other.close()
+  })
+
+  // ACP has only replayed history precede `replay_complete`: what the
+  // runtime announces while the replay reads history follows it.
+  it("holds a notice announced while a resume replays until its replay is complete", async () => {
+    const watchers: ServerTurnListener[] = []
+    const reading = gate()
+    const page = gate()
+    let holding = false
+    const test = await harness({
+      providerIds: true,
+      subscribeTurns: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
+      beforeHistory: () => {
+        if (!holding) return Promise.resolve()
+        reading.release()
+        return page.held
+      },
+    })
+    await test.list()
+    await open(test)
+    const messageId = await liveTurn(test, [test])
+
+    holding = true
+    const from = test.recorder.entries.length
+    const reopened = open(test, { replayFrom: { type: "start" } })
+    await reading.held
+    watchers[0]!.onNotice?.({ severity: "info", title: "Heartbeat" })
+    await settled()
+    page.release()
+    await reopened
+
+    expect(flow(test.recorder, SESSION, from)).toEqual([
+      "history message-1",
+      `prompt ${messageId}`,
+      "chunk Live",
+      "replay complete",
+      "notice Heartbeat",
+      "state running",
+    ])
+    test.close()
   })
 
   it("shows a live turn history already stored once, after its prompt", async () => {
@@ -2905,6 +2949,7 @@ describe("Session rooms", () => {
     expect(flow(test.recorder, SESSION, from)).toEqual([
       `history ${messageId}`,
       "history assistant-1",
+      "replay complete",
       "state idle",
     ])
     test.close()
@@ -3044,7 +3089,11 @@ describe("Session rooms", () => {
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
-    expect(seen.slice(0, 2)).toEqual([`prompt ${messageId}`, "state running"])
+    expect(seen.slice(0, 3)).toEqual([
+      `prompt ${messageId}`,
+      "replay complete",
+      "state running",
+    ])
     expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
     expect(seen).toContain("chunk Done")
     test.close()
@@ -3397,10 +3446,11 @@ describe("Session rooms", () => {
       await reopening.recorder.wait(endedTurn, "the turn to end")
 
       const seen = flow(reopening.recorder, SESSION, from)
-      expect(seen.slice(0, 4)).toEqual([
+      expect(seen.slice(0, 5)).toEqual([
         "history message-1",
         `prompt ${messageId}`,
         "chunk Live",
+        "replay complete",
         "state running",
       ])
       expect(seen.filter(isPromptOrChunk)).toEqual([
@@ -3548,7 +3598,11 @@ describe("Session rooms", () => {
     await other.list()
     await open(other, { replayFrom: { type: "start" } })
 
-    expect(flow(other.recorder)).toEqual(["history message-1", "state idle"])
+    expect(flow(other.recorder)).toEqual([
+      "history message-1",
+      "replay complete",
+      "state idle",
+    ])
     test.close()
     other.close()
   })
@@ -4142,10 +4196,15 @@ function pageUpdates(recorder: Recorder, from: number) {
     .map(({ params }) => (params as { update: SentUpdate }).update)
 }
 
-/** The messages a resume replayed since `from`, before the state it closes with. */
+/**
+ * The messages a resume replayed since `from`, before the end of its replay
+ * and the state it closes with.
+ */
 const replayedIds = (recorder: Recorder, from: number) =>
   pageUpdates(recorder, from).flatMap(({ sessionUpdate, messageId }) =>
-    sessionUpdate === "state_update" ? [] : [messageId]
+    sessionUpdate === "state_update" || sessionUpdate === "replay_complete"
+      ? []
+      : [messageId]
   )
 
 const pageTag = (update: SentUpdate) =>

@@ -161,6 +161,17 @@ export type SessionEvent =
       sequence: number
       older?: { cursor: string; offset: number }
     }
+  /**
+   * The replay a resume asked for is complete, as ACP's `replay_complete`
+   * says: of the Session, or of one `child` the replay announced, addressed
+   * to the child's own id as its events are. Only replayed history comes
+   * before it, and an `older` page's is part of that page.
+   */
+  | {
+      kind: "replay-complete"
+      child?: { parentSessionId: string; childSessionId: string }
+      older?: { cursor: string; offset: number }
+    }
   | { kind: "request-asked"; request: PendingRequest; startedBy?: string }
   | { kind: "request-withdrawn"; requestId: string }
   /** The answers this member just gave, as the member was shown them. */

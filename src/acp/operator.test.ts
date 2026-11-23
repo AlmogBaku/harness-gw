@@ -1204,7 +1204,7 @@ describe("operator ACP listener", () => {
 
   // ACP replays a child through its parent's from-start resume: the child's
   // announcement, then the child's own updates, under its id.
-  it("replays a stored child Session from the start: its announcement, then its transcript", async () => {
+  it("replays a stored child Session from the start: its announcement, its transcript, then the end of its replay", async () => {
     const childHistory = vi.fn(async (): Promise<SessionHistoryResponse> => ({
       sessionId: "child-1",
       messages: [
@@ -1260,6 +1260,7 @@ describe("operator ACP listener", () => {
       [SESSION, "subagent_update"],
       ["child-1", "agent_message"],
       ["child-1", "agent_message_chunk"],
+      ["child-1", "replay_complete"],
     ])
     expect(childHistory).toHaveBeenCalledWith(AGENT, SESSION, "child-1")
     test.close()
@@ -1321,8 +1322,9 @@ describe("operator ACP listener", () => {
   })
 
   // A reconnect is a new connection, which knows no child: one announced
-  // before its cursor is announced again ahead of the events after it.
-  it("announces a child again to a positioned reconnect, then streams the child's events after the cursor", async () => {
+  // before its cursor is announced again, and its replay ended, ahead of the
+  // events after it.
+  it("announces a child again to a positioned reconnect, ends its replay, then streams the child's events after the cursor", async () => {
     const test = await harness()
     const { source } = await runningTurn(test, "Review it")
     const said = (text: string) => ({
@@ -1377,6 +1379,7 @@ describe("operator ACP listener", () => {
         sessionId: CREATED,
         update: { sessionUpdate: "subagent_update", title: "Review the notes" },
       },
+      { sessionId: "child-1", update: { sessionUpdate: "replay_complete" } },
       {
         sessionId: "child-1",
         update: { sessionUpdate: "agent_message_chunk" },
@@ -1532,7 +1535,8 @@ describe("operator ACP listener", () => {
     })
 
     // The stored turn replays as its messages, each from empty content, and no
-    // state it passed; the Session's own state closes it.
+    // state it passed; the end of the replay, then the Session's own state,
+    // close it.
     expect(updates(test.recorder).slice(0, 5)).toMatchObject([
       {
         sessionId: SESSION,
@@ -1558,6 +1562,7 @@ describe("operator ACP listener", () => {
           content: { type: "text", text: "Here they are" },
         },
       },
+      { sessionId: SESSION, update: { sessionUpdate: "replay_complete" } },
       {
         sessionId: SESSION,
         update: { sessionUpdate: "state_update", state: "idle" },

@@ -1091,7 +1091,8 @@ describe("guest ACP listener", () => {
     )
     expect(test.history).not.toHaveBeenCalled()
     // What the guest can do there is all it is shown before its first Send,
-    // in the answer as in the update that follows it.
+    // in the answer as in the update that follows it, once the replay of its
+    // empty history ends, as ACP ends every replay.
     const commands = await test.recorder.wait(
       (entry) =>
         JSON.stringify(entry.params).includes("available_commands_update"),
@@ -1101,6 +1102,7 @@ describe("guest ACP listener", () => {
       _meta: { [HGW_META_KEY]: { capabilities: capabilitiesOf(commands) } },
     })
     expect(updates(test.recorder)).toMatchObject([
+      { sessionId: REF, update: { sessionUpdate: "replay_complete" } },
       {
         sessionId: REF,
         update: {
