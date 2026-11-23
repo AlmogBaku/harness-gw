@@ -607,6 +607,18 @@ function createChannelTable({
       return channel !== undefined && currentChildren(channel).length > 0
     },
 
+    /**
+     * The children that outlived their turns and are still at work: the
+     * Session's background work, which closing it stops.
+     */
+    backgroundChildren(scope: ChannelScope) {
+      const channel = channels.get(channelKey(scope))
+      return [...(channel?.children ?? [])].flatMap(
+        ([childSessionId, { report }]) =>
+          atWork(report) ? [childSessionId] : []
+      )
+    },
+
     /** A request a child that outlived its turn asks, while it is open. */
     childRequest(scope: ChannelScope, requestId: string) {
       return channels.get(channelKey(scope))?.childRequests.get(requestId)
@@ -1068,6 +1080,26 @@ export function createChannels(options: CreateChannelsOptions) {
      */
     closed(scope: SessionScope) {
       return coordinator.closed(scope)
+    },
+
+    /**
+     * Stops each of the Session's background children `includes` takes, as
+     * closing a Session stops its background work beside its turn: every one
+     * is asked, and the first failure is thrown once all were. A runtime that
+     * cannot stop a child alone leaves each running.
+     */
+    async stopBackground(
+      scope: SessionScope,
+      includes: (childSessionId: string) => boolean = () => true
+    ) {
+      const stopped = await Promise.allSettled(
+        channels
+          .backgroundChildren(scope)
+          .filter(includes)
+          .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+      )
+      const failed = stopped.find((settled) => settled.status === "rejected")
+      if (failed) throw failed.reason
     },
 
     /** Whether the runtime forks Sessions. */

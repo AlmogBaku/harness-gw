@@ -43,6 +43,7 @@ import {
   type ProviderSessionId,
 } from "../core/ids"
 import {
+  ChildSessionStatus,
   PendingRequestKind,
   TurnEventKind,
   type PendingRequest,
@@ -424,10 +425,15 @@ function harness(options: HarnessOptions = {}) {
     handles.push(handle)
     return handle
   })
+  // The runtime stops a child alone, between turns too.
+  const stopChild = vi.fn<NonNullable<ServerTurnEngine["stopChild"]>>(
+    async () => undefined
+  )
   const engine: ServerTurnEngine = {
     start,
     recover: vi.fn(unsupported),
     discover: vi.fn(async () => undefined),
+    stopChild,
   }
   const resolveInvitedSession = vi.fn<ServerRuntime["resolveInvitedSession"]>(
     async (_agentId, _ref, create) => {
@@ -575,6 +581,7 @@ function harness(options: HarnessOptions = {}) {
     listener,
     coordinator,
     start,
+    stopChild,
     handles,
     history,
     updateSession,
@@ -594,6 +601,19 @@ function harness(options: HarnessOptions = {}) {
     notice() {
       if (!watcher) throw new Error("Nothing watches the Session")
       watcher.onNotice?.({ severity: "info", title: "Heartbeat" })
+    },
+    /**
+     * The runtime reports a child an earlier turn spawned still at work, as
+     * background work an operator was shown and may stop.
+     */
+    backgroundChild(childSessionId: string) {
+      if (!watcher) throw new Error("Nothing watches the Session")
+      watcher.onChild?.("operator-turn", {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId,
+        status: ChildSessionStatus.Running,
+        cancellable: true,
+      })
     },
     /**
      * Advertises paging older history, as the aos-ui browser does, by default,
@@ -1993,13 +2013,28 @@ describe("guest scope and commands", () => {
     socket.close()
   })
 
-  it.each([
-    ["the invited Session", true],
-    ["a fresh invitation, which has no Session yet", false],
-  ])("lets a guest close %s", async (_case, existing) => {
-    const test = harness({ existing })
+  // ACP's close stops the Session's background work, but a guest can neither
+  // see the operator's nor stop it: its close stops the turn alone.
+  it("lets a guest close the invited Session, leaving a background child at work running", async () => {
+    const test = harness({ existing: true })
     // The SDK's client reads a `-32002` answer to a close as done, so the
     // answer is read off the wire.
+    const socket = await redeemedWire(
+      test.listener,
+      await invite(test.invitations)
+    )
+    test.backgroundChild("child-1")
+    await settled()
+
+    expect(
+      await socket.request(methods.agent.session.close, { sessionId: REF })
+    ).toMatchObject({ result: {} })
+    expect(test.stopChild).not.toHaveBeenCalled()
+    socket.close()
+  })
+
+  it("lets a guest close a fresh invitation, which has no Session yet", async () => {
+    const test = harness()
     const socket = await redeemedWire(
       test.listener,
       await invite(test.invitations)

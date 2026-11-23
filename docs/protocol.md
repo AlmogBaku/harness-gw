@@ -208,7 +208,7 @@ invited conversation by its reference alone; any other Session id is
 | `session/prompt`                                                                                                                             | Sends; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
 | `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
-| `session/close`                                                                                                                              | Stops the Session's active work for every member, then detaches.                                                                             |
+| `session/close`                                                                                                                              | Stops the invited conversation's turn for every member, then detaches. Unlike an operator's close, it stops no background child: a guest is told of none, and can neither see nor stop the operator's background work. |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
 | `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
 | `session/new`, `session/list`, `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded: ACP's code for a method that "does not exist or is not available", which these are to a guest, though the session capability promises `session/new` and `session/list`. |
@@ -252,7 +252,9 @@ keeps only a public code. Any other failure reads `-31013`
 (model → `category: "model"`, effort → `category: "thought_level"`).
 
 `session/close` stops the Session's active work for every member and then
-detaches this connection. The closer is shown how a turn it stopped ended,
+detaches this connection: its turn, as `session/cancel` does, and then its
+background work, each child still at work after its turn that this connection
+was told of (see [Child Sessions](#child-sessions)). The closer is shown how a turn it stopped ended,
 its final updates and its idle `state_update` with `stopReason: "cancelled"`,
 before the answer; closing an idle Session sends no idle of its own. A close
 whose Stop fails answers that failure, and one whose Stop the runtime does not
@@ -892,7 +894,12 @@ Later reports patch it.
   `background: true`, so no reader takes it as a position in that turn's
   stream; its requests are answered, and its `cancel` honored, without any
   turn. The parent first reports each child that outlives its turn as
-  `running`. A Session nobody watches any longer still follows its children
+  `running`. As ACP has it, `session/cancel` of the parent asks nothing of
+  such a child (a runtime may still end it with the turn, as Hermes does),
+  and `session/close` of the parent stops each one still at work that the
+  closing connection was told of, through the runtime's own stop of a child,
+  as a `cancel` of the child would; a child the runtime cannot stop alone
+  runs on. A guest is told of no child, so its close stops none. A Session nobody watches any longer still follows its children
   for a minute, so a reload or a reconnect comes back to them followed: a
   connection that joins is told each one's latest report, and each open
   request, including those of a child that ended in that minute. No turn's
