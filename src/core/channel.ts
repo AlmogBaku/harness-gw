@@ -3612,7 +3612,6 @@ class Membership {
       return run() ?? Promise.resolve()
     const { clock, logger, stateWaitMs } = this.#options
     return new Promise<void>((resolve, reject) => {
-      let backstop: unknown
       const waiter = {
         through,
         run: () => {
@@ -3620,8 +3619,7 @@ class Membership {
           ;(run() ?? Promise.resolve()).then(resolve, reject)
         },
       }
-      stream.waiters.add(waiter)
-      backstop = clock.setTimeout(() => {
+      const backstop = clock.setTimeout(() => {
         if (!stream.waiters.delete(waiter)) return
         logger.warn(
           { turnId, through, shown: stream.sequence },
@@ -3629,6 +3627,7 @@ class Membership {
         )
         waiter.run()
       }, stateWaitMs)
+      stream.waiters.add(waiter)
     })
   }
 
