@@ -224,6 +224,11 @@ type FollowedWork = {
   step: ChildReport | TerminalTurnEvent
   /** The tool call that started it, once a report named it. */
   toolCallId?: string
+  /**
+   * A terminal's latest output as the journal held it when a resume read
+   * its work back, which restating it shows, until a step of it is shown.
+   */
+  output?: string
   detached: boolean
   /**
    * Known only from a stored row, which holds what its runtime stored of a
@@ -249,6 +254,8 @@ type WorkStep = {
   shown: boolean
   /** It is a stored row's, not a report of the live Session's. */
   stored?: boolean
+  /** A terminal's output as a read of the journal holds it. */
+  output?: string
 }
 
 type BackgroundChild = {
@@ -2094,12 +2101,14 @@ class Membership {
         shown.event.kind === TurnEventKind.TerminalOutput)
     ) {
       // A process outlives its call where the call returned before its exit.
+      const { output } = shown.event as TerminalTurnEvent
       const step = withoutOutput(shown.event as TerminalTurnEvent)
       this.#track(
         { kind: "terminal", terminalId: step.terminalId },
         {
           turnId: shown.stream.turnId,
           step,
+          ...(written || output === undefined ? {} : { output }),
           toolCallId: step.toolCallId,
           betweenTurns: shown.kind === "terminal",
           stillRuns: step.exit === undefined,
@@ -2166,6 +2175,8 @@ class Membership {
     }
     const toolCallId = noted.toolCallId ?? followed?.toolCallId
     const shownIn = noted.shown ? this.#resumes : followed?.shownIn
+    // A step shown since says the output the member holds.
+    const output = noted.shown ? undefined : (noted.output ?? followed?.output)
     this.#followed.set(key, {
       item,
       turnId: noted.turnId,
@@ -2173,6 +2184,7 @@ class Membership {
         ? { ...followed.step, ...noted.step }
         : noted.step) as FollowedWork["step"],
       ...(toolCallId === undefined ? {} : { toolCallId }),
+      ...(output === undefined ? {} : { output }),
       detached: noted.stored
         ? false
         : (followed?.detached ?? false) || noted.betweenTurns,
@@ -2250,7 +2262,7 @@ class Membership {
   #restateWork() {
     return this.#emitBuilt(() =>
       [...this.#followed.values()].flatMap((followed) => {
-        const { item, turnId, step, shownIn } = followed
+        const { item, turnId, step, output, shownIn } = followed
         if (!listed(followed) || shownIn === this.#resumes) return []
         const stream = this.#backgroundStream(turnId)
         return [
@@ -2266,7 +2278,10 @@ class Membership {
             : {
                 kind: "terminal" as const,
                 stream,
-                event: step as TerminalTurnEvent,
+                event: {
+                  ...(step as TerminalTurnEvent),
+                  ...(output === undefined ? {} : { output }),
+                },
               },
         ]
       })

@@ -75,6 +75,7 @@ import * as ids from "./ids"
 import { coreFailure } from "./failures"
 import { retryBudget } from "./link"
 import { AnsweredPrompts } from "./answered-prompts"
+import { foldedOutput } from "./terminal-output"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
@@ -1477,8 +1478,9 @@ export class SessionCoordinator {
   /**
    * What the live turn `turnId` reported of its work at or before sequence
    * `upTo`, which a view positioned there rebuilds its background list from:
-   * each terminal's steps merged into one, its output aside, and each tool
-   * call that finished, which no foreground work waits on any longer.
+   * each terminal's steps merged into one, with the latest of its output the
+   * journal holds as its snapshot (`foldedOutput`), and each tool call that
+   * finished, which no foreground work waits on any longer.
    */
   workReports(
     scope: Pick<SessionScope, "agentId" | "providerSessionId">,
@@ -1493,12 +1495,15 @@ export class SessionCoordinator {
     for (const { value } of segment.journal.entries) {
       if (value.sequence > upTo) break
       const { event } = value
-      if (event.kind === TurnEventKind.TerminalOutput)
+      if (event.kind === TurnEventKind.TerminalOutput) {
+        const known = terminals.get(event.terminalId)
+        const output = foldedOutput(known?.output, event)
         terminals.set(event.terminalId, {
-          ...terminals.get(event.terminalId),
+          ...(known && withoutOutput(known)),
           ...withoutOutput(event),
+          ...(output === undefined ? {} : { output }),
         })
-      else if (event.kind === TurnEventKind.ToolCallFinished)
+      } else if (event.kind === TurnEventKind.ToolCallFinished)
         finished.push(event.toolCallId)
     }
     return { terminals: [...terminals.values()], finished }

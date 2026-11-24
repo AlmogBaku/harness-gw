@@ -785,8 +785,10 @@ under `docs/runtimes/` says what it reports of such work.
   names work it was not told of. A terminal is restated as its command
   and folder, its exit where it has one, and the latest of its output the
   gateway holds as ACP's replacement `output` snapshot: what it printed after
-  its turn, its last 16,384 characters (`RESTATED_TERMINAL_OUTPUT`), or what
-  its runtime's read gives, masked as its live output is. A Session nobody
+  its turn, its last 16,384 characters (`RESTATED_TERMINAL_OUTPUT`), what its
+  runtime's read gives, or, for one its live turn left running before the
+  replay's cut, what that turn's journal holds of it, masked as its live
+  output is. A Session nobody
   held is first asked of its runtime how each process its turns left running
   stands, which the resume's state waits for up to 2 s (`SETUP_READ_MS`); a
   read slower than that lands as updates after it.

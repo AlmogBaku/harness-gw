@@ -1583,7 +1583,7 @@ describe("operator ACP listener", () => {
   // after its cursor alone: the work the turn left running before it, a
   // child and a process whose calls returned, is listed all the same, and a
   // close in that window stops it.
-  it("lists the work a live turn detached before a positioned reconnect's cursor, announced first, and its close stops it", async () => {
+  it("lists the work a live turn detached before a positioned reconnect's cursor, announced first with the output the journal holds, and its close stops it", async () => {
     const stopChild = vi.fn<NonNullable<AcpHarnessOptions["stopChild"]>>(
       async () => undefined
     )
@@ -1604,6 +1604,13 @@ describe("operator ACP listener", () => {
       terminalId: "run-2:terminal",
       toolCallId: "run-2",
       command: "npm run dev",
+    })
+    // What it printed is in the turn's journal, a credential among it.
+    source.emit({
+      kind: TurnEventKind.TerminalOutput,
+      terminalId: "run-2:terminal",
+      toolCallId: "run-2",
+      data: `ready\n${["token", "abcdefgh1234"].join("=")}\n`,
     })
     for (const toolCallId of ["call-1", "run-2"])
       source.emit({
@@ -1664,6 +1671,18 @@ describe("operator ACP listener", () => {
     expect(shown.slice(0, -1)).toEqual(
       expect.arrayContaining(["announced child-1", "announced run-2:terminal"])
     )
+    // ACP: "While it is listed, the Agent SHOULD keep its output current".
+    const restated = updates(back.recorder).flatMap(({ update }) =>
+      update.sessionUpdate === "terminal_update" && update.output
+        ? [
+            Buffer.from(
+              z.object({ data: z.string() }).parse(update.output).data,
+              "base64"
+            ).toString("utf8"),
+          ]
+        : []
+    )
+    expect(restated).toEqual(["ready\ntoken=[credential redacted]\n"])
     // The close's Stop ends the turn, and its list is stopped beside it.
     source.stop.mockImplementation(async () => {
       source.emit({ kind: TurnEventKind.TurnEnded })
