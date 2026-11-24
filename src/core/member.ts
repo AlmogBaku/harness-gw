@@ -95,8 +95,16 @@ export type SessionNotice = {
 }
 
 /**
+ * One piece of a Session's background work, as ACP lists it: a child Session
+ * still at work after the turn that spawned it ended.
+ */
+export type BackgroundWork = { kind: "child"; childSessionId: string }
+
+/**
  * Everything a member is shown of one Session. Every consumer switches over
- * `kind` exhaustively.
+ * `kind` exhaustively. A `background` list is the Session's background work as
+ * this member was shown it, each item announced first: every state the event
+ * reports carries it, and a member that is not told the list gets none.
  */
 export type SessionEvent =
   | {
@@ -111,6 +119,7 @@ export type SessionEvent =
        * longer the turn's, which the view is told once caught up.
        */
       replayed?: true
+      background?: readonly BackgroundWork[]
     }
   /**
    * One report or event of a child Session a turn spawned, addressed to the
@@ -186,7 +195,13 @@ export type SessionEvent =
       awaitingStop?: true
       /** When the live turn began, as its stream's first state dated it. */
       startedAt?: string
+      background?: readonly BackgroundWork[]
     }
+  /**
+   * The Session's background work changed: the state the member was last
+   * shown, said again with this list, which is no move of its own.
+   */
+  | { kind: "background"; background: readonly BackgroundWork[] }
   | { kind: "usage"; usage: SessionContextResponse }
   | { kind: "model"; models: SessionModelsResponse }
   /** The Session's row, whose status is the one its live execution overlays. */

@@ -222,6 +222,7 @@ export function createHistoryMiddleware({
         case "request-withdrawn":
         case "question-answered":
         case "execution":
+        case "background":
         case "usage":
         case "model":
         case "session-info":

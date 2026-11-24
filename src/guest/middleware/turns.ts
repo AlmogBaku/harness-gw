@@ -214,6 +214,7 @@ export function createTurnsMiddleware({
         case "history":
         case "request-withdrawn":
         case "execution":
+        case "background":
         case "usage":
         case "model":
         case "error":

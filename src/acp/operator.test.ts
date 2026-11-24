@@ -816,7 +816,8 @@ describe("operator ACP listener", () => {
   // its requests and its cancel reach the runtime without any turn.
   describe("a child that outlives its parent's turn", () => {
     async function outlived(
-      saved: Pick<HarnessOptions, "history" | "childHistory"> = {}
+      saved: Pick<HarnessOptions, "history" | "childHistory"> = {},
+      ended: TurnEvent = { kind: TurnEventKind.TurnEnded }
     ) {
       let listener: ServerTurnListener | undefined
       const unsubscribed = vi.fn()
@@ -847,7 +848,7 @@ describe("operator ACP listener", () => {
         status: ChildSessionStatus.Running,
         cancellable: true,
       })
-      source.emit({ kind: TurnEventKind.TurnEnded })
+      source.emit(ended)
       source.finish()
       await test.recorder.wait(endedTurn, "the parent turn's end")
       await vi.waitFor(() => expect(listener).toBeDefined())
@@ -869,6 +870,123 @@ describe("operator ACP listener", () => {
         unsubscribed,
       }
     }
+
+    /** The parent's last state, as the client read it. */
+    function latestState(test: Awaited<ReturnType<typeof harness>>) {
+      return updates(test.recorder)
+        .filter(
+          ({ sessionId, update }) =>
+            sessionId === CREATED && update.sessionUpdate === "state_update"
+        )
+        .at(-1)?.update
+    }
+
+    // ACP's repeated snapshot moves nothing, and a client sums what each turn
+    // spent: the parent's end is said again with each list, without that.
+    it("says its parent's end again as its list moves, without what the turn spent", async () => {
+      const { test, listener, turnId } = await outlived(
+        {},
+        {
+          kind: TurnEventKind.TurnEnded,
+          usage: [{ inputTokens: 10, outputTokens: 2 }],
+          cost: { amount: 0.42, currency: "USD" },
+        }
+      )
+      listener.onChild!(turnId, {
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId: "child-1",
+        status: ChildSessionStatus.Idle,
+      })
+      const states = () =>
+        updates(test.recorder).flatMap(({ sessionId, update }) =>
+          sessionId === CREATED && update.sessionUpdate === "state_update"
+            ? [update]
+            : []
+        )
+      // Running, the turn's end, then its end said again with each list.
+      await vi.waitFor(() =>
+        expect(states().map(({ background }) => background)).toEqual([
+          [],
+          [],
+          [{ type: "subagent", sessionId: "child-1" }],
+          [],
+        ])
+      )
+
+      const ends = states()
+      const spent = { inputTokens: 10, outputTokens: 2, totalTokens: 12 }
+      const cost = { amount: 0.42, currency: "USD" }
+      expect(ends.at(1)).toMatchObject({
+        state: "idle",
+        stopReason: "end_turn",
+        usage: spent,
+        _meta: { [HGW_META_KEY]: { cost } },
+      })
+      for (const repeated of ends.slice(2)) {
+        expect(repeated).toMatchObject({
+          state: "idle",
+          stopReason: "end_turn",
+        })
+        expect(repeated).not.toHaveProperty("usage")
+        expect(
+          (repeated._meta as Record<string, unknown>)[HGW_META_KEY]
+        ).not.toHaveProperty("cost")
+      }
+      test.close()
+    })
+
+    // ACP's resume closes with the current state: a state this connection was
+    // shown before it closed the Session is no state to say again.
+    it("says no state from before a close again as a resume restates it", async () => {
+      const { test } = await outlived()
+      await test.agent.request(methods.agent.session.close, {
+        sessionId: CREATED,
+      })
+      const before = updates(test.recorder).length
+
+      await test.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+
+      const stated = updates(test.recorder)
+        .slice(before)
+        .filter(
+          ({ sessionId, update }) =>
+            sessionId === CREATED && update.sessionUpdate === "state_update"
+        )
+      expect(stated.map(({ update }) => update)).toMatchObject([
+        {
+          state: "idle",
+          background: [{ type: "subagent", sessionId: "child-1" }],
+        },
+      ])
+      test.close()
+    })
+
+    // ACP lists only work announced first: a background report naming a
+    // top-level Session, which no connection announces as a child, is none
+    // of this Session's.
+    it("lists no child whose report names a top-level Session", async () => {
+      const { test, listener, turnId } = await outlived()
+      for (const childSessionId of [SESSION, "child-2"])
+        listener.onChild!(turnId, {
+          kind: TurnEventKind.ChildSessionUpdated,
+          childSessionId,
+          status: ChildSessionStatus.Running,
+        })
+
+      await vi.waitFor(() =>
+        expect(latestState(test)).toMatchObject({
+          background: [
+            { type: "subagent", sessionId: "child-1" },
+            { type: "subagent", sessionId: "child-2" },
+          ],
+        })
+      )
+      test.close()
+    })
 
     it("streams its updates under its id while its parent is idle, at no position in the parent's turn", async () => {
       const { test, listener, turnId } = await outlived()

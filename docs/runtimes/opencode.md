@@ -174,6 +174,7 @@ OpenCode ships it, enabling the gateway to store icons without frontmatter.
 - OpenCode bounds no question or answer, so an answer is sent as written: any typed text where the question takes it, and every choice of a multi-select beside typed text, with an empty value dropped and a value given twice sent once. Question, header, and option text is read up to 512 KiB a field; the question card shows a header's first 256 characters.
 - A compaction OpenCode runs during a turn shows again, with its summary, when the Session is reloaded. One still open when its turn ends closes as cancelled.
 - Sessions cannot be forked. A child Session OpenCode's `task` tool makes outside the gateway stays out of every list and search, and naming it by id answers not found.
+- The adapter follows no work past its turn: a shell the operator runs is a terminal that ends with its call, and no child Session is followed, so every `state_update` carries `background: []`.
 - An invitation can resolve only an existing OpenCode Session titled `aos-invite:<ref>`. OpenCode cannot create that reserved Session safely because its pinned API has no title-bearing creation and a separate rename is not atomic; a new invitation therefore cannot create a Session on first Send.
 - AOS never restarts OpenCode automatically. Restart it under operator control after changing its configuration, once active work has finished.
 

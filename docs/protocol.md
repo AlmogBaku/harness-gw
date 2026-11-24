@@ -229,7 +229,7 @@ invited conversation by its reference alone; any other Session id is
 | `session/prompt`                                                                                                                             | Sends, once the guest resumed the invited conversation; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
 | `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
-| `session/close`                                                                                                                              | Stops the invited conversation's turn for every member, then detaches. Unlike an operator's close, it stops no background child: a guest is told of none, and can neither see nor stop the operator's background work. |
+| `session/close`                                                                                                                              | Stops the invited conversation's turn for every member, then detaches. Unlike an operator's close, it stops no background work: a guest is told no `background` list, and can neither see nor stop the operator's background work. |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
 | `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
 | `session/new`, `session/list`, `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded: ACP's code for a method that "does not exist or is not available", which these are to a guest, though the session capability promises `session/new` and `session/list`. |
@@ -319,8 +319,8 @@ search, create, or resume, active or not.
 
 `session/close` stops the Session's active work for every member and then
 detaches this connection: its turn, as `session/cancel` does, and then its
-background work, each child still at work after its turn that this connection
-was told of (see [Child Sessions](#child-sessions)). The closer is shown how a
+background work, everything in the latest `background` list this connection
+was shown (see [Background work](#background-work)). The closer is shown how a
 turn it stopped ended, its final updates and its idle `state_update` with
 `stopReason: "cancelled"`, before the answer; closing an idle Session sends no
 idle of its own. The whole close, its Stop, the wait for the turn's end, and
@@ -681,7 +681,7 @@ history passes the plan alone.
 | `agent_message_chunk`       | Streaming assistant prose                                                                                         |
 | `agent_thought_chunk`       | Streaming reasoning                                                                                               |
 | `tool_call_update`          | Tool lifecycle and argument deltas                                                                                |
-| `state_update`              | Run state transitions                                                                                             |
+| `state_update`              | Run state transitions, each with the Session's `background` list                                                  |
 | `plan_update`               | Session Todos in `_meta.hgw.todos`                                                                                |
 | `compaction_update`         | The provider compacted the conversation's context, with its summary once completed where the provider keeps one  |
 | `usage_update`              | Context window usage                                                                                              |
@@ -700,6 +700,38 @@ gateway sends one on `session/new`, on `session/resume`, after every settled tur
 and after a `session/set_config_option` that changes the model, because the
 window grows with the conversation and its size belongs to the model. A provider
 that cannot report usage sends none, and the last reading stands.
+
+### Background work
+
+Every `state_update` an operator is shown on a Session carries its
+`background` list, as ACP's background work has it: `[]` when nothing runs
+past its turn, and never omitted. The gateway lists a child still at work
+after the turn that spawned it ended, as `{ "type": "subagent", "sessionId" }`
+(see [Child Sessions](#child-sessions)); a child of a live turn is that turn's
+foreground work, and a child reported `unknown`, which nothing follows or can
+stop any longer, is not listed. No adapter follows a terminal or a tool call
+past its turn yet, and an item listed must be ended before it is dropped, so
+neither is listed; each runtime's page under `docs/runtimes/` says what it
+reports of such work.
+
+- An item is announced before the first list that names it: a child's
+  `subagent_update` at work comes first, and a child this connection could not
+  announce is never listed. A child's report that leaves it no longer at work
+  comes before the list that drops it.
+- When the list changes, the Session's state is said again with the new list:
+  the state this connection was last shown, a repeated snapshot that moves
+  nothing. It carries that state's stop reason, but not the turn's `usage` or
+  its `_meta.hgw.cost`, which a client counts once.
+- A resume restates each listed child before the state that closes it, which
+  carries the list, so no list reaches a resuming view ahead of the state its
+  resume closes with.
+- A child's own `state_update`s, and the state its parent's `subagent_update`
+  mirrors, carry `background: []`: the gateway follows no background work of a
+  child's own, so a child shown idle is over.
+- `session/cancel` leaves listed work running; `session/close` stops
+  everything in the latest list its connection was shown, each child through
+  the runtime's own stop of one. A guest is told no list on any state, not
+  even `[]`, and its close stops nothing in the background.
 
 ### Turn stream `_meta.hgw`
 
@@ -1053,12 +1085,13 @@ Later reports patch it.
   `background: true`, so no reader takes it as a position in that turn's
   stream; its requests are answered, and its `cancel` honored, without any
   turn. The parent first reports each child that outlives its turn as
-  `running`. As ACP has it, `session/cancel` of the parent asks nothing of
-  such a child (a runtime may still end it with the turn, as Hermes does),
-  and `session/close` of the parent stops each one still at work that the
-  closing connection was told of, through the runtime's own stop of a child,
-  as a `cancel` of the child would; a child the runtime cannot stop alone
-  runs on. A guest's close stops none, whatever its connection was told: a
+  `running`. Each one still at work is in the parent's `background` list
+  (see [Background work](#background-work)). As ACP has it, `session/cancel`
+  of the parent asks nothing of such a child (a runtime may still end it with
+  the turn, as Hermes does), and `session/close` of the parent stops each one
+  in the latest list the closing connection was shown, through the runtime's
+  own stop of a child, as a `cancel` of the child would; a child the runtime
+  cannot stop alone runs on. A guest's close stops none, whatever its connection was told: a
   guest is told of no child, and its stack's close asks no background work
   stopped. A Session nobody watches any longer still follows its children
   for a minute, so a reload or a reconnect comes back to them followed: a

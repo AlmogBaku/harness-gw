@@ -4424,7 +4424,7 @@ describe("History pages", () => {
         sessionUpdate: "replay_complete",
         _meta: { [HGW_META_KEY]: { historyPage: { cursor: cursorOf(5) } } },
       },
-      { sessionUpdate: "state_update", state: "idle" },
+      { sessionUpdate: "state_update", state: "idle", background: [] },
     ])
     await liveTurn(test, [test])
     const live = await test.recorder.wait(

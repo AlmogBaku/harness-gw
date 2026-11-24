@@ -4,6 +4,7 @@ import {
   SessionUpdate,
   StateUpdate,
   type AgentContext,
+  type BackgroundWork as AcpBackgroundWork,
   type CreateElicitationResponse,
   type RequestPermissionResponse,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
@@ -27,6 +28,7 @@ import {
 } from "../core/events"
 import {
   unhandledKind,
+  type BackgroundWork,
   type MemberConnection,
   type MemberEvent,
   type MemberSetup,
@@ -157,7 +159,7 @@ function executionUpdate({
   sequence,
   awaitingStop,
   startedAt,
-}: Extract<MemberEvent, { kind: "execution" }>): SessionUpdate {
+}: Extract<MemberEvent, { kind: "execution" }>): StateSnapshot {
   const live =
     state === "running" || state === "stopping" || state === "waiting-for-input"
   const meta =
@@ -185,6 +187,38 @@ function executionUpdate({
   if (state === "uncertain")
     return { sessionUpdate: "state_update", state: "unknown", ...meta }
   return { sessionUpdate: "state_update", state: "idle", ...meta }
+}
+
+/** A state update as the Session's own, which ACP keys by its `state`. */
+type StateSnapshot = Extract<SessionUpdate, { sessionUpdate: "state_update" }>
+
+/**
+ * The state last shown, said again with a new background list: ACP's repeated
+ * snapshot, which moves nothing. What the turn spent was counted once, so the
+ * repeat carries neither its usage nor its cost.
+ */
+function repeatedState(
+  last: StateSnapshot,
+  background: AcpBackgroundWork[]
+): StateSnapshot {
+  const meta = (last._meta ?? {}) as Record<string, unknown>
+  const hgw = meta[HGW_META_KEY]
+  const repeated = {
+    ...without(last, "usage"),
+    background,
+    _meta: {
+      ...meta,
+      [HGW_META_KEY]: without(typeof hgw === "object" ? hgw : null, "cost"),
+    },
+  }
+  return repeated as unknown as StateSnapshot
+}
+
+/** `value`'s fields but `key`. */
+function without(value: object | null, key: string) {
+  return Object.fromEntries(
+    Object.entries(value ?? {}).filter(([name]) => name !== key)
+  )
 }
 
 function sessionInfoUpdate(row: SessionRow): SessionUpdate {
@@ -312,6 +346,11 @@ export function createMemberEncoder({
   children,
 }: MemberEncoderOptions): MemberConnection {
   const { translators, logger } = context
+  /**
+   * The last state each Session was shown on this connection, with its
+   * background list, which a change of the list says again.
+   */
+  const shownStates = new Map<string, StateSnapshot>()
   const states = new WeakMap<TurnStream, TranslateState>()
   /** Each child's own translation, by the parent stream it streams in. */
   const childStates = new WeakMap<TurnStream, Map<string, TranslateState>>()
@@ -319,6 +358,41 @@ export function createMemberEncoder({
   const asked = new Map<string, AbortController>()
   const askedKey = (sessionId: string, requestId: string) =>
     `${sessionId}\u0000${requestId}`
+
+  /**
+   * The list as ACP names its items, each announced on `sessionId` already:
+   * a child its report could not announce here is not this Session's work.
+   */
+  function backgroundOf(
+    sessionId: string,
+    work: readonly BackgroundWork[]
+  ): AcpBackgroundWork[] {
+    return work.flatMap(({ childSessionId }): AcpBackgroundWork[] =>
+      children.owns(sessionId, childSessionId)
+        ? [{ type: "subagent", sessionId: childSessionId }]
+        : []
+    )
+  }
+
+  /**
+   * Shows the Session a state, with the background list where the member is
+   * told it, and keeps it for the repeat a change of that list sends.
+   */
+  function state(
+    sessionId: string,
+    value: StateSnapshot,
+    work: readonly BackgroundWork[] | undefined
+  ) {
+    const listed: StateSnapshot =
+      work === undefined
+        ? value
+        : ({
+            ...value,
+            background: backgroundOf(sessionId, work),
+          } as StateSnapshot)
+    shownStates.set(sessionId, listed)
+    return update(sessionId, listed)
+  }
 
   function update(sessionId: string, value: SessionUpdate) {
     const failure = turnFailureOf(value)
@@ -493,7 +567,12 @@ export function createMemberEncoder({
         outbound.update.sessionUpdate === "state_update"
       )
         continue
-      await send(sessionId, outbound, sequence)
+      if (
+        outbound.kind === "update" &&
+        outbound.update.sessionUpdate === "state_update"
+      )
+        await state(sessionId, outbound.update, event.background)
+      else await send(sessionId, outbound, sequence)
     }
   }
 
@@ -534,7 +613,13 @@ export function createMemberEncoder({
       if (outbound.kind !== "update") continue
       if (event.replayed && outbound.update.sessionUpdate === "state_update")
         continue
-      await send(childSessionId, outbound, sequence)
+      // The gateway follows no work of a child's own past its turn.
+      await update(
+        childSessionId,
+        outbound.update.sessionUpdate === "state_update"
+          ? { ...outbound.update, background: [] }
+          : outbound.update
+      )
     }
   }
 
@@ -672,7 +757,18 @@ export function createMemberEncoder({
         return
       }
       case "execution":
-        return update(sessionId, executionUpdate(event))
+        return state(sessionId, executionUpdate(event), event.background)
+      // A Session not yet stated here takes the list with its first state.
+      case "background": {
+        const last = shownStates.get(sessionId)
+        if (!last) return
+        const repeated = repeatedState(
+          last,
+          backgroundOf(sessionId, event.background)
+        )
+        shownStates.set(sessionId, repeated)
+        return update(sessionId, repeated)
+      }
       case "usage":
         return update(sessionId, usageUpdate(event.usage))
       case "model":

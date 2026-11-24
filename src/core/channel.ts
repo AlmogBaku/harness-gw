@@ -44,8 +44,10 @@ import {
   hasSession,
   runEvents,
   unhandledKind,
+  type BackgroundWork,
   type CommandResults,
   type Member,
+  type MemberEvent,
   type MemberScope,
   type MemberSetup,
   type PromptPart,
@@ -1278,6 +1280,7 @@ function showsInReplay(event: SessionEvent, restating: boolean) {
     case "request-asked":
     case "question-answered":
     case "execution":
+    case "background":
     case "usage":
     case "model":
     case "session-info":
@@ -1394,6 +1397,12 @@ class Membership {
   #heldNotices: SessionNotice[] = []
   /** Background child events held, as notices are, while the view rebuilds. */
   #heldChildren: { turnId: string; event: ChildTurnEvent }[] = []
+  /**
+   * The Session's background work as this member was shown it, by child id:
+   * each child shown at work after its turn ended, until shown otherwise.
+   * Every state it is shown carries this list.
+   */
+  readonly #background = new Map<string, BackgroundWork>()
   /**
    * The stream a background child event names, one per turn that spawned
    * it, so a transport keys the child's state the same across its events.
@@ -1542,7 +1551,9 @@ class Membership {
     const declines = new Set<string>()
     let shown: ReturnType<typeof runEvents>
     try {
-      shown = this.#shown(event, (requestId) => declines.add(requestId))
+      shown = this.#shown(this.#listing(event), (requestId) =>
+        declines.add(requestId)
+      )
     } catch (cause) {
       // A stack that throws costs this event alone, through the caller's own
       // handling of a failed send, never the members or events after it.
@@ -1551,6 +1562,11 @@ class Membership {
     if (shown?.kind === "request-asked")
       this.#delivered.add(shown.request.requestId)
     const sent = shown ? this.#member.connection.send(shown) : Promise.resolve()
+    // Said at once after the report that moved it, as ACP has a list follow
+    // what it announces or ends; a view not stated yet since its resume
+    // takes the list with the state that closes it.
+    const moved = shown !== undefined && this.#noteBackground(shown)
+    if (moved && this.#stated !== undefined) this.#restateBackground()
     // The caller learns whether the event was sent; the declines run either
     // way.
     const decline = () =>
@@ -1592,6 +1608,52 @@ class Membership {
     const owed = announced.filter((id) => !answering.children.has(id))
     for (const childSessionId of owed) answering.children.add(childSessionId)
     return owed
+  }
+
+  /** The Session's background work as this member was shown it. */
+  backgroundWork(): BackgroundWork[] {
+    return [...this.#background.values()]
+  }
+
+  /** `event` with the background list, where it reports the Session's state. */
+  #listing(event: SessionEvent): SessionEvent {
+    const states =
+      event.kind === "execution" ||
+      (event.kind === "turn" && statedBy(event.event) !== undefined)
+    return states ? { ...event, background: this.backgroundWork() } : event
+  }
+
+  /**
+   * Notes a child `shown` reports at work after its turn ended, or no longer
+   * at work, returning whether the list moved. A report that leaves its
+   * status as it was moves nothing.
+   */
+  #noteBackground(shown: MemberEvent) {
+    if (shown.kind !== "child") return false
+    const report = shown.event
+    if (
+      report.kind !== TurnEventKind.ChildSessionUpdated ||
+      report.status === undefined
+    )
+      return false
+    const { childSessionId } = report
+    const listed = this.#background.has(childSessionId)
+    const working = atWork(report)
+    // Only a child that outlived its turn is background work.
+    if (working === listed || (working && !shown.background)) return false
+    if (listed) this.#background.delete(childSessionId)
+    else this.#background.set(childSessionId, { kind: "child", childSessionId })
+    return true
+  }
+
+  /** Shows this member its state again, with the list as it stands now. */
+  #restateBackground() {
+    this.#write({
+      kind: "background",
+      background: this.backgroundWork(),
+    }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.background.failed")
+    )
   }
 
   /** One event as this member's stack shows it, or `undefined` when hidden. */

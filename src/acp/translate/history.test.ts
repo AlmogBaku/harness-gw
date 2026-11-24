@@ -376,7 +376,7 @@ describe("translateHistory", () => {
         sessionUpdate: "subagent_update",
         sessionId: "child-1",
         title: "Review the notes",
-        state: { state: "idle", stopReason: "end_turn" },
+        state: { state: "idle", stopReason: "end_turn", background: [] },
         _meta: {
           [HGW_META_KEY]: {
             sequence: 0,

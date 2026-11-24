@@ -54,6 +54,8 @@ runWireContract(
         "pending: whether gateway turns spawn children needs the live OpenCode check",
       childHiddenFromGuest:
         "pending: whether gateway turns spawn children needs the live OpenCode check",
+      backgroundListedOnEveryState:
+        "pending: whether gateway turns spawn children needs the live OpenCode check",
       replayCompletePerChild:
         "pending: whether gateway turns spawn children needs the live OpenCode check",
       // The Session reports rewind unavailable (`native-rewind-unproven`),

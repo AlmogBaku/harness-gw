@@ -27,6 +27,7 @@ import {
   RequestError,
   SessionConfigOption,
   SessionUpdate,
+  type BackgroundWork,
   type ContentBlock,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client"
@@ -87,6 +88,7 @@ export type WireContractRow =
   | "unpromptedSessionFreed"
   | "promptedSessionKept"
   | "childAnnouncedBeforeItsEvents"
+  | "backgroundListedOnEveryState"
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
   | "guestRetryOfSlashRefused"
@@ -130,6 +132,16 @@ export type WireTurn = Readonly<{
    * with the id the child is reported under. Absent when its row is a gap.
    */
   spawnChild?(): Promise<string>
+  /**
+   * Inside the running turn, after the first response: the turn spawns one
+   * child Session still at work when the turn ends; resolves with the id the
+   * child is reported under and `finish`, which ends the child's work once
+   * called, after the turn. Absent when its row is a gap.
+   */
+  spawnBackgroundChild?(): Promise<{
+    childId: string
+    finish(): Promise<void>
+  }>
   /**
    * Inside the running turn, after the first response: the turn compacts its
    * context and completes, stored; resolves with the compaction's id. Absent
@@ -736,6 +748,49 @@ function shapeOf(
     if (!step.endsWith("history") || shape.at(-1) !== step) shape.push(step)
   }
   return shape
+}
+
+/**
+ * What `client` read on `sessionId` of the child `childId` and the Session's
+ * background list, in order: each report of the child as `at work` or
+ * `over`, and each state as whether its list names the child, or
+ * `unreported` where it carries none.
+ */
+function childTrail(
+  addressed: readonly { sessionId?: string; update: SessionUpdate }[],
+  sessionId: string,
+  childId: string
+) {
+  return addressed.flatMap(({ sessionId: target, update }) => {
+    if (target !== sessionId) return []
+    if (SessionUpdate.isSubagentUpdate(update) && update.sessionId === childId)
+      return update.state?.state === "running" ? ["at work"] : ["over"]
+    if (!SessionUpdate.isStateUpdate(update)) return []
+    const listed = backgroundOf(update)
+    if (listed === undefined) return ["unreported"]
+    return [
+      `${listed.includes(childId) ? "listed" : "unlisted"} ${update.state}`,
+    ]
+  })
+}
+
+/**
+ * The ids a state's background list names, a subagent by its Session; or
+ * `undefined` where the state reports none.
+ */
+function backgroundOf(update: object) {
+  const { background } = update as { background?: unknown }
+  if (!Array.isArray(background)) return undefined
+  return (background as BackgroundWork[]).map((item) =>
+    item.type === "subagent" ? String(item.sessionId) : item.type
+  )
+}
+
+/** A guard for a state that does or does not list the child `childId`. */
+function listing(childId: string, listed: boolean) {
+  return (update: SessionUpdate): update is SessionUpdate =>
+    SessionUpdate.isStateUpdate(update) &&
+    backgroundOf(update)?.includes(childId) === listed
 }
 
 /** Every frame the gateway sent `client` that names `id` anywhere in it. */
@@ -1494,6 +1549,85 @@ export function runWireContract(
       )
 
       row(
+        "backgroundListedOnEveryState",
+        "lists a child still at work after its turn on every state of its Session, announced before the first that lists it and over before the one that drops it, says the state again as it starts and ends, and restates it before a resume's state",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const { childId, finish } = await until(
+            clock,
+            turn.spawnBackgroundChild!()
+          )
+          const shown = plain.next(listing(childId, true))
+          await until(clock, turn.secondResponse())
+          await until(clock, Promise.all([idle, shown]))
+          const reader = await reload(harness, sessionId)
+          const dropped = [plain, reader].map((client) =>
+            client.next(listing(childId, false))
+          )
+          await until(clock, finish())
+          await until(clock, Promise.all(dropped))
+
+          for (const client of [plain, reader]) {
+            const trail = childTrail(client.addressed, sessionId, childId)
+            expect(trail).not.toContain("unreported")
+            const first = trail.findIndex((step) => step.startsWith("listed"))
+            const last = trail.findLastIndex((step) =>
+              step.startsWith("listed")
+            )
+            // Announced at work before the first state that lists it.
+            expect(trail.slice(0, first)).toContain("at work")
+            // Over before the state that drops it, which says the state the
+            // last list carried again.
+            const removal = trail.findIndex(
+              (step, index) => index > last && step.startsWith("unlisted")
+            )
+            expect(trail.slice(last + 1, removal)).toContain("over")
+            expect(trail[removal]?.replace("unlisted", "listed")).toBe(
+              trail[last]
+            )
+            // The child reports no background work of its own, in its state
+            // and in the one its parent mirrors, so it is over once idle.
+            const childStates = client.addressed.flatMap(
+              ({ sessionId: target, update }) =>
+                SessionUpdate.isSubagentUpdate(update) &&
+                update.sessionId === childId &&
+                update.state
+                  ? [update.state]
+                  : target === childId && SessionUpdate.isStateUpdate(update)
+                    ? [update]
+                    : []
+            )
+            expect(childStates).not.toEqual([])
+            expect(childStates.map(backgroundOf)).toEqual(
+              childStates.map(() => [])
+            )
+          }
+          // The live view is told the list as the work starts, in a state
+          // said again with the list it now carries.
+          const live = childTrail(plain.addressed, sessionId, childId).filter(
+            (step) => step.includes("listed")
+          )
+          const started = live.findIndex((step) => step.startsWith("listed"))
+          expect(live[started - 1]?.replace("unlisted", "listed")).toBe(
+            live[started]
+          )
+          // A resume restates the child before the state it closes with,
+          // which lists it.
+          const resumed = childTrail(
+            addressedBefore(reader, resumeAnswer),
+            sessionId,
+            childId
+          )
+          expect(resumed.at(-1)).toBe("listed idle")
+          expect(resumed.slice(0, -1)).toContain("at work")
+        }
+      )
+
+      row(
         "replayCompleteAfterHistory",
         "ends a replay from the start or a position with replay_complete after its history alone, then states the Session and its row, all before the answer, and ends none without a cursor",
         async (harness) => {
@@ -1786,6 +1920,8 @@ export function runWireContract(
           await until(clock, prompt(guest, GUEST_REF, "list the files"))
           await until(clock, turn.firstResponse())
           const child = await until(clock, turn.spawnChild!())
+          // One that outlives the turn is the Session's background work.
+          const background = await until(clock, turn.spawnBackgroundChild!())
           await until(clock, turn.secondResponse())
           await until(clock, idle)
           const readBefore = childReads(child)
@@ -1793,15 +1929,30 @@ export function runWireContract(
           await until(clock, resumeFromStart(reloaded, GUEST_REF))
           const guestReads = childReads(child) - readBefore
           // An operator's reload reads the child's transcript, so the count
-          // is one a reload moves.
+          // is one a reload moves, and its state lists the work at hand.
           const operator = await reload(harness, operatorId)
+          await until(clock, background.finish())
 
           for (const client of [guest, reloaded]) {
             expect(
               client.updates.filter(SessionUpdate.isSubagentUpdate)
             ).toEqual([])
-            expect(framesNaming(client, child)).toEqual([])
+            for (const id of [child, background.childId])
+              expect(framesNaming(client, id)).toEqual([])
+            // A guest is told no background list, not even an empty one.
+            const stated = client.updates.filter(SessionUpdate.isStateUpdate)
+            expect(stated).not.toEqual([])
+            expect(stated.filter((update) => "background" in update)).toEqual(
+              []
+            )
           }
+          expect(
+            childTrail(
+              addressedBefore(operator, resumeAnswer),
+              operatorId,
+              background.childId
+            ).at(-1)
+          ).toBe("listed idle")
           // The guest read its own turn, the parent's side of it.
           expect(
             agentSide(guest.updates)

@@ -1060,6 +1060,73 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
     },
 
     /**
+     * A background `delegate_task` call inside the running turn: the call
+     * returns at once, and its one child is still at work when the turn
+     * ends. `finish` completes the child afterwards, on its parent's live
+     * Session, as Hermes reports a child that outlived its turn
+     * (`tools/delegate_tool.py`). Resolves with the child's stored id.
+     */
+    async spawnBackgroundChild() {
+      startStreaming()
+      const n = nextChild++
+      const childId = `20261013_120000_c${String(n).padStart(5, "0")}`
+      const callId = `call-delegate-${n}`
+      const goal = "Watch the notes"
+      emit(turn.toolStart(callId, "delegate_task", { goal, background: true }))
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: callId,
+            type: "function",
+            function: {
+              name: "delegate_task",
+              arguments: JSON.stringify({ goal, background: true }),
+            },
+          },
+        ],
+      })
+      others.set(childId, {
+        rows: [],
+        title: goal,
+        parent: STORED_ID,
+        source: "subagent",
+      })
+      const identity = {
+        subagent_id: `sa-0-${n}`,
+        child_session_id: childId,
+        goal,
+        depth: 0,
+        task_index: 0,
+        task_count: 1,
+        model: "contract-model",
+      }
+      emit(turn.frame("subagent.start", identity))
+      const result = { status: "started", delegation_id: `delegation-${n}` }
+      emit(turn.toolComplete(callId, "delegate_task", result))
+      store({
+        role: "tool",
+        tool_call_id: callId,
+        tool_name: "delegate_task",
+        content: JSON.stringify(result),
+      })
+      return {
+        childId,
+        finish: async () =>
+          emit(
+            turn.frame("subagent.complete", {
+              ...identity,
+              status: "completed",
+              summary: "Notes watched.",
+              duration_seconds: 3,
+            })
+          ),
+      }
+    },
+
+    /**
      * A compaction inside the running turn, as Hermes runs one: `compacting`,
      * the summary carrier it stores in place, then `compacted`. Resolves with
      * the id the adapter names it by: the prompt's row and its count in the
