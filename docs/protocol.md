@@ -121,8 +121,10 @@ history in standard updates, once per turn. One that overflows the same turn
 again, or whose view cannot be rebuilt, is not kept on the Session: the
 gateway closes its connection with `4409`, which ends every Session's activity
 on it, and the client reconnects and resumes each one. So it does when a
-replay of a member's view holds back more than 4,096 events or 8 MiB of their
-JSON (`HELD_LIMITS`) before it completes: what a replay holds reaches no
+replay of a member's view, or a rebuild of it from history, which holds the
+Session's background events and notices until its page is shown, holds back
+more than 4,096 events or 8 MiB of their JSON (`HELD_LIMITS`) before it
+completes: what a replay holds reaches no
 socket, so no socket bound sees it, and a replay held open while the Session
 streams on would hold without end. What it holds is folded where a later event
 says all an earlier one did: a process's steps held one after another become

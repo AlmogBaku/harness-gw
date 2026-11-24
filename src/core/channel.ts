@@ -1549,6 +1549,15 @@ type OlderPage = { cursor: string; offset: number }
  */
 type Replay = { children: Set<string>; older?: OlderPage }
 
+/** A notice, or a background event, a rebuild of the view holds back. */
+type RebuildHeld =
+  | { kind: "notice"; event: SessionNotice }
+  | {
+      kind: "background"
+      turnId: string
+      event: ChildTurnEvent | TerminalTurnEvent
+    }
+
 /**
  * One event a replay held back, or what builds the events it stands for as
  * they go out, and what learns once they are shown.
@@ -1592,8 +1601,31 @@ function mergedTerminal(
     : snapshot(outputTail(appended, RESTATED_TERMINAL_OUTPUT))
 }
 
+/**
+ * Where a terminal's step `next` folds among `queue`, held in order: into the
+ * latest step of the same terminal, under the same `key`, among the terminal
+ * steps that close the queue, with the step they fold to, as
+ * `mergedTerminal` folds them; `undefined` where it is held on its own.
+ * `read` names an entry's terminal step and its key, or none.
+ */
+function terminalFold<Entry>(
+  queue: readonly Entry[],
+  next: TerminalTurnEvent,
+  key: unknown,
+  read: (entry: Entry) => { key: unknown; step: TerminalTurnEvent } | undefined
+): { index: number; merged: TerminalTurnEvent } | undefined {
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const held = read(queue[index]!)
+    if (!held) return undefined
+    if (held.key !== key || held.step.terminalId !== next.terminalId) continue
+    const merged = mergedTerminal(held.step, next)
+    return merged ? { index, merged } : undefined
+  }
+  return undefined
+}
+
 /** An event's JSON bytes, or more than any limit when it has no JSON. */
-function heldBytes(event: SessionEvent) {
+function heldBytes(event: unknown) {
   try {
     return Buffer.byteLength(JSON.stringify(event) ?? "")
   } catch {
@@ -1751,16 +1783,13 @@ class Membership {
    * resume and its answer get one.
    */
   #answering: Replay | undefined
-  /** The notices that arrived while the view was rebuilt, shown after its page. */
-  #heldNotices: SessionNotice[] = []
   /**
-   * Background child and terminal events held, as notices are, while the
-   * view rebuilds.
+   * The notices and background child and terminal events that arrived while
+   * the view was rebuilt, in order, shown after its page, and their JSON
+   * bytes, which count against `HELD_LIMITS`.
    */
-  #heldBackground: {
-    turnId: string
-    event: ChildTurnEvent | TerminalTurnEvent
-  }[] = []
+  #heldBackground: RebuildHeld[] = []
+  #rebuildBytes = 0
   /**
    * The work this member was shown each child of its Session doing, by child
    * id. The Session's background work is each that still runs, at work or
@@ -1842,15 +1871,18 @@ class Membership {
         )
       },
       notice: (notice) => {
-        if (this.#rebuilding) this.#heldNotices.push(notice)
+        if (this.#rebuilding)
+          this.#holdForRebuild({ kind: "notice", event: notice })
         else this.#showNotice(notice)
       },
       child: (turnId, event) => {
-        if (this.#rebuilding) this.#heldBackground.push({ turnId, event })
+        if (this.#rebuilding)
+          this.#holdForRebuild({ kind: "background", turnId, event })
         else this.#showBackgroundChild(turnId, event)
       },
       terminal: (turnId, event) => {
-        if (this.#rebuilding) this.#heldBackground.push({ turnId, event })
+        if (this.#rebuilding)
+          this.#holdForRebuild({ kind: "background", turnId, event })
         else this.#showBackgroundTerminal(turnId, event)
       },
       offerChild: (request) => this.#offerChild(request),
@@ -1954,24 +1986,73 @@ class Membership {
       return undefined
     }
     if (event.kind !== "terminal") return undefined
-    for (let index = this.#held.length - 1; index >= 0; index -= 1) {
-      const held = this.#held[index]!
-      if (typeof held.event === "function" || held.event.kind !== "terminal")
-        return undefined
-      if (
-        held.event.stream !== event.stream ||
-        held.event.event.terminalId !== event.event.terminalId
+    const fold = terminalFold(this.#held, event.event, event.stream, (held) =>
+      typeof held.event === "function" || held.event.kind !== "terminal"
+        ? undefined
+        : { key: held.event.stream, step: held.event.event }
+    )
+    if (!fold) return undefined
+    const held = this.#held[fold.index]!
+    const folded = held.event as Extract<SessionEvent, { kind: "terminal" }>
+    held.event = { ...folded, event: fold.merged }
+    const bytes = heldBytes(held.event)
+    this.#heldBytes += bytes - held.bytes
+    held.bytes = bytes
+    return held.shown.promise
+  }
+
+  /**
+   * Holds one background event, or a notice, while the view is rebuilt from
+   * history, as a replay holds what it does not replay: a terminal's step
+   * folds into the one of it held last, and past `HELD_LIMITS` the member
+   * fell behind, its connection closes, and nothing more is held. No reading
+   * waits here: readings go through `emit`, whose hold folds them.
+   */
+  #holdForRebuild(held: RebuildHeld) {
+    if (this.#overHeld) return
+    if (
+      held.kind === "background" &&
+      held.event.kind === TurnEventKind.TerminalOutput
+    ) {
+      const fold = terminalFold(
+        this.#heldBackground,
+        held.event,
+        held.turnId,
+        (entry) =>
+          entry.kind === "background" &&
+          entry.event.kind === TurnEventKind.TerminalOutput
+            ? { key: entry.turnId, step: entry.event }
+            : undefined
       )
-        continue
-      const merged = mergedTerminal(held.event.event, event.event)
-      if (!merged) return undefined
-      held.event = { ...held.event, event: merged }
-      const bytes = heldBytes(held.event)
-      this.#heldBytes += bytes - held.bytes
-      held.bytes = bytes
-      return held.shown.promise
+      if (fold) {
+        const entry = this.#heldBackground[fold.index]! as RebuildHeld & {
+          kind: "background"
+        }
+        const before = heldBytes(entry.event)
+        entry.event = fold.merged
+        this.#rebuildBytes += heldBytes(fold.merged) - before
+        return
+      }
     }
-    return undefined
+    const bytes = heldBytes(held.event)
+    const { events, bytes: most } = this.#options.heldLimits
+    if (
+      this.#heldBackground.length >= events ||
+      this.#rebuildBytes + bytes > most
+    ) {
+      this.#overHeld = true
+      this.#options.logger.warn(
+        {
+          events: this.#heldBackground.length,
+          bytes: this.#rebuildBytes,
+        },
+        "membership.held.overflow"
+      )
+      this.#cannotCatchUp()
+      return
+    }
+    this.#rebuildBytes += bytes
+    this.#heldBackground.push(held)
   }
 
   /**
@@ -2879,8 +2960,8 @@ class Membership {
    */
   async #recoverReplay(needsFollow: boolean) {
     // A view that was not rebuilt shows nothing it held for after its page.
-    this.#heldNotices = []
     this.#heldBackground = []
+    this.#rebuildBytes = 0
     this.#rebuilding = false
     if (needsFollow) {
       this.joinChannel(false, true)
@@ -3133,17 +3214,16 @@ class Membership {
    */
   joinChannel(hasPrompt = false, replayed = false) {
     this.#rebuilding = false
-    // The notices held while the view was rebuilt follow its page.
-    const held = this.#heldNotices
-    this.#heldNotices = []
-    const background = this.#heldBackground
+    // What was held while the view was rebuilt follows its page.
+    const held = this.#heldBackground
     this.#heldBackground = []
+    this.#rebuildBytes = 0
     if (this.detached) return
-    for (const notice of held) this.#showNotice(notice)
-    for (const { turnId, event } of background)
-      if (event.kind === TurnEventKind.TerminalOutput)
-        this.#showBackgroundTerminal(turnId, event)
-      else this.#showBackgroundChild(turnId, event)
+    for (const entry of held)
+      if (entry.kind === "notice") this.#showNotice(entry.event)
+      else if (entry.event.kind === TurnEventKind.TerminalOutput)
+        this.#showBackgroundTerminal(entry.turnId, entry.event)
+      else this.#showBackgroundChild(entry.turnId, entry.event)
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,

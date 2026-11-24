@@ -1181,7 +1181,9 @@ function controlledSubscription(turnId: string, replayed = 0) {
  * `<kind> <sequence>`; a send of a turn event `slowSequence` names waits
  * for `slow`.
  */
-function drivenMember() {
+function drivenMember(
+  options: { heldLimits?: { events: number; bytes: number } } = {}
+) {
   const turn = {
     state: "running",
     turnId: "turn-1",
@@ -1220,6 +1222,8 @@ function drivenMember() {
   const slow = Promise.withResolvers<void>()
   let slowSequence: number | undefined
   let slowSends = 0
+  let fellBehind = 0
+  let listener: ServerTurnListener | undefined
   const logs = captureLogs()
   const { logger } = logs
   const membership = createChannels({
@@ -1239,6 +1243,16 @@ function drivenMember() {
       },
     },
     logger,
+    // The Session's channel hears the runtime's background reports.
+    adoption: {
+      subscribeTurns: (_scope, subscribed) => {
+        listener = subscribed
+        return () => undefined
+      },
+      discover: async () => undefined,
+      subscribeExecutions: () => () => undefined,
+    },
+    ...(options.heldLimits ? { heldLimits: options.heldLimits } : {}),
   }).join(
     {
       principal: { id: GUEST, role: "guest" },
@@ -1254,7 +1268,9 @@ function drivenMember() {
           else shown.push(event.kind)
         },
         live: () => true,
-        fellBehind: () => undefined,
+        fellBehind: () => {
+          fellBehind += 1
+        },
       },
     },
     SCOPE,
@@ -1270,6 +1286,13 @@ function drivenMember() {
     membership,
     shown,
     logs,
+    /** How often the member's connection closed as a reader behind. */
+    fellBehind: () => fellBehind,
+    /** The Session's runtime listener, once the member joined its channel. */
+    listener: () => {
+      if (!listener) throw new Error("The member joined no channel")
+      return listener
+    },
     /** How many follows and history reads the coordinator was asked. */
     calls,
     /** Arms the subscription the next follow gets. */
@@ -1437,6 +1460,62 @@ describe("a membership's closing state", () => {
       member.shown.indexOf("replay-complete")
     )
   })
+
+  // A view rebuilt from history holds the Session's background events until
+  // its page is shown: one process printing on folds into one step, and no
+  // more than the member may hold is held, past which it fell behind.
+  it.each([
+    {
+      burst: "ten processes' first steps",
+      step: (index: number) => ({
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: `run-${index}:terminal`,
+        toolCallId: `run-${index}`,
+        command: "npm run dev",
+      }),
+      closed: 1,
+    },
+    {
+      burst: "one process's ten chunks",
+      step: (index: number) => ({
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "run-0:terminal",
+        toolCallId: "run-0",
+        data: `${index}\n`,
+      }),
+      closed: 0,
+    },
+  ] as const)(
+    "holds no more than it may of $burst while a rebuild reads history",
+    async ({ step, closed }) => {
+      const clock = useFakeClock()
+      const member = drivenMember({ heldLimits: { events: 3, bytes: 100_000 } })
+      const first = member.follow()
+      first.push(turnEvent(1, { kind: TurnEventKind.TurnStarted }))
+      await member.membership.resume({ turnId: "turn-1", after: 0 })
+      // The process is known before the rebuild, so its chunks need no
+      // announcement of their own.
+      member.listener().onTerminal!("turn-0", {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "run-0:terminal",
+        toolCallId: "run-0",
+        data: "booting\n",
+      })
+      const release = member.holdRead()
+      first.fail(new FanoutOverflowError(4, 400))
+      await clock.advance(0)
+
+      for (let index = 0; index < 10; index += 1)
+        member.listener().onTerminal!("turn-0", step(index))
+      await clock.advance(0)
+      expect(member.fellBehind()).toBe(closed)
+      member.turn.state = "idle"
+      release()
+      await clock.advance(100)
+
+      expect(member.fellBehind()).toBe(closed)
+    }
+  )
 
   it("keeps a stream a resume replaced from releasing the state its replacement owes", async () => {
     const clock = useFakeClock()
