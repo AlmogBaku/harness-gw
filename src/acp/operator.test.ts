@@ -1419,7 +1419,12 @@ describe("operator ACP listener", () => {
 
       const restated = updates(later.recorder).flatMap(({ update }) =>
         update.sessionUpdate === "terminal_update" && update.output
-          ? [Buffer.from(update.output.data, "base64").toString("utf8")]
+          ? [
+              Buffer.from(
+                z.object({ data: z.string() }).parse(update.output).data,
+                "base64"
+              ).toString("utf8"),
+            ]
           : []
       )
       expect(restated).toEqual([

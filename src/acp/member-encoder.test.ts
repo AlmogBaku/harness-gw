@@ -38,6 +38,7 @@ describe("a repeated state", () => {
     const encoder = createMemberEncoder({
       context: { logger: captureLogs().logger, translators },
       client: { notify } as unknown as AgentContext,
+      steerAck: undefined,
       describe: () => ({ code: "internal", message: "" }),
       replied: async () => undefined,
       elicits: () => false,
