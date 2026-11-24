@@ -5,6 +5,7 @@ import { captureLogs } from "../../test/support/log-capture"
 import { defaultClock } from "../../lifecycle"
 import {
   PendingRequestKind,
+  TurnEventKind,
   type ExecutionEvent,
   type PendingRequest,
   type RequestReply,
@@ -31,7 +32,10 @@ import {
 } from "./channel"
 import { providerSessionId, sessionId } from "./ids"
 import { CLOSE_DEADLINE_MS, DELETE_SHOWN_MS } from "./limits"
-import type { SessionCoordinator } from "./session-coordinator"
+import type {
+  SequencedTurnEvent,
+  SessionCoordinator,
+} from "./session-coordinator"
 
 /** No test here reads history; a channel that did would fail loudly. */
 const NO_HISTORY = {
@@ -1023,4 +1027,95 @@ describe("a membership's resume", () => {
       membership.resume({ turnId: "turn-1", after: 2 })
     ).rejects.toBe(gone)
   })
+
+  // ACP: "The snapshot and subsequent live state changes MUST be delivered
+  // in order, without replacing a newer state with a stale snapshot." A turn
+  // that ended while a reconnect was positioned in it streams its last
+  // events to the view after the replay, and the state the resume closes
+  // with may not tell the view it ended ahead of them.
+  it("closes a positioned resume with no state ahead of the events its stream still owes the view", async () => {
+    const live: SequencedTurnEvent[] = [
+      chunkAt(3, "One"),
+      chunkAt(4, "Two"),
+      { sequence: 5, event: { kind: TurnEventKind.TurnEnded } },
+    ]
+    let state = "running"
+    const coordinator = {
+      snapshot: () => ({ state, turnId: "turn-1", requests: [] }),
+      nextCursor: () => 5,
+      subscribeScope: () => () => undefined,
+      subscribeReadings: () => () => undefined,
+      // The turn ends as the view follows it: its journal holds its last
+      // events and its end, which the view's stream has yet to show.
+      recover: async () => {
+        state = "idle"
+        return {
+          turnId: "turn-1",
+          replayed: 0,
+          close: () => undefined,
+          events: (async function* () {
+            yield* live
+          })(),
+        }
+      },
+      childReports: () => [],
+      workReports: () => ({ terminals: [], finished: [] }),
+      endIfGone: (_scope: SessionScope, cause: unknown) => {
+        throw cause
+      },
+      ...HOLDING,
+    } as unknown as SessionCoordinator
+    const shown: string[] = []
+    // A socket slow to take the first event, as a busy one is.
+    const first = Promise.withResolvers<void>()
+    const { logger } = captureLogs()
+    const membership = createChannels({
+      coordinator,
+      runtime: NO_HISTORY,
+      logger,
+    }).join(
+      {
+        principal: { id: GUEST, role: "guest" },
+        middleware: [],
+        connection: {
+          send: async (event) => {
+            shown.push(
+              event.kind === "turn" ? event.event.kind : String(event.kind)
+            )
+            if (shown.length === 2) await first.promise
+          },
+          live: () => true,
+          fellBehind: () => undefined,
+        },
+      },
+      SCOPE,
+      {
+        membershipId: "subscriber-1",
+        logger,
+        describe: () => ({ code: "failed", message: "failed" }),
+        subscribeRow: () => () => undefined,
+      }
+    )
+
+    const resumed = membership.resume({ turnId: "turn-1", after: 2 })
+    await settle()
+    first.resolve()
+    await resumed
+    await settle()
+
+    const ended = shown.indexOf(TurnEventKind.TurnEnded)
+    expect(shown.slice(0, ended + 1)).toEqual([
+      "replay-complete",
+      TurnEventKind.MessageChunk,
+      TurnEventKind.MessageChunk,
+      TurnEventKind.TurnEnded,
+    ])
+  })
 })
+
+function chunkAt(sequence: number, text: string): SequencedTurnEvent {
+  return {
+    sequence,
+    event: { kind: TurnEventKind.MessageChunk, messageId: "reply", text },
+  }
+}

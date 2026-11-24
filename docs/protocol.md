@@ -485,7 +485,11 @@ which is what the turn's journal held when the resume followed the turn. From
 the request on, the gateway holds everything else for the Session (the turn's
 later events, a notice, a reading, the Session's row, a request it asks) and
 sends it after `replay_complete`, in the order it came, then the Session's
-current `state_update`, then the answer. A failure's `_hgw/error` and a
+current `state_update`, then the answer. That state is read with how far the
+live turn's journal reached, and sent where the resuming view's stream of the
+turn has shown it that far, so it never precedes an event of the turn the
+stream still owes the view, such as the last chunks and the end of a turn that
+ended as the view resumed it. A failure's `_hgw/error` and a
 request's withdrawal are not held. Each child Session the replay announces
 gets its own `replay_complete` on the child's id, after its announcement and
 its transcript, and one first announced after the replay completed and before

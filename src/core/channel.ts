@@ -1701,6 +1701,17 @@ class Membership {
   /** The last stream this member was shown, settling once it has shown all. */
   #streamed: { turnId: string; done: Promise<void> } | undefined
   /**
+   * How far the last stream this member follows has shown it its turn, and
+   * what waits for it to reach a point of that turn: each runs there, in the
+   * stream's order, before any later event of it is shown.
+   */
+  #shownThrough: { turnId: string; sequence: number } | undefined
+  readonly #shownWaiters = new Set<{
+    turnId: string
+    through: number
+    run: () => void
+  }>()
+  /**
    * The follow or start in flight. Both subscribe this member, so one waits
    * for the other rather than both subscribing it to the same turn.
    */
@@ -2447,13 +2458,23 @@ class Membership {
    */
   async #reportView(restate = false) {
     await this.#caughtUp
-    const { state, awaitingStop } = this.#coordinator.snapshot(this.#scope)
-    const stated = viewState(state, awaitingStop)
+    const snapshot = this.#coordinator.snapshot(this.#scope)
+    const { state, awaitingStop } = snapshot
     if (restate) await this.reportExecution(true)
-    else if (this.#stated !== stated) {
-      this.#stated = stated
-      await this.reportExecution()
-    }
+    // The Session's state as of its journal's last event: stated where this
+    // member's stream has shown it that far, so it never runs ahead of the
+    // events of its turn the stream still owes the view.
+    else
+      await this.#whenShown(
+        snapshot.turnId,
+        this.#coordinator.nextCursor(this.#scope),
+        () => {
+          const stated = viewState(state, awaitingStop)
+          if (this.#stated === stated) return undefined
+          this.#stated = stated
+          return this.reportExecution(false, snapshot)
+        }
+      )
     if (state === "waiting-for-input") this.reissuePending()
   }
 
@@ -3034,13 +3055,17 @@ class Membership {
   }
 
   /**
-   * Reports the Session's execution outside a turn stream: what a resume or
-   * an acknowledged Stop owes the member, or, where it `repeats`, the state
-   * its stream last showed it, said again.
+   * Reports the Session's execution outside a turn stream, as the
+   * coordinator holds it now or as `snapshot` read it: what a resume or an
+   * acknowledged Stop owes the member, or, where it `repeats`, the state its
+   * stream last showed it, said again.
    */
-  reportExecution(repeats = false) {
-    const { state, turnId, awaitingStop, startedAt } =
-      this.#coordinator.snapshot(this.#scope)
+  reportExecution(
+    repeats = false,
+    { state, turnId, awaitingStop, startedAt } = this.#coordinator.snapshot(
+      this.#scope
+    )
+  ) {
     return this.emit({
       kind: "execution",
       state,
@@ -3359,7 +3384,12 @@ class Membership {
         else stated.catch((err: unknown) => this.report(err))
         return undefined
       }
-      this.#consume(subscription, replayedCorrections)
+      this.#consume(
+        subscription,
+        replayedCorrections,
+        undefined,
+        typeof cursor === "number" ? cursor : 0
+      )
       return turnId
     })
   }
@@ -3376,6 +3406,52 @@ class Membership {
     return !refollow && continues?.turnId === this.#followedTurn
       ? continues?.after
       : undefined
+  }
+
+  /**
+   * Notes that this member's stream of `turnId` showed it every event through
+   * `sequence`, and runs what waited for that point.
+   */
+  #reachShown(turnId: string, sequence: number) {
+    const shown = this.#shownThrough
+    if (shown?.turnId === turnId && Number.isFinite(sequence))
+      this.#shownThrough = {
+        turnId,
+        sequence: Math.max(shown.sequence, sequence),
+      }
+    for (const waiter of [...this.#shownWaiters])
+      if (waiter.turnId === turnId && waiter.through <= sequence) {
+        this.#shownWaiters.delete(waiter)
+        waiter.run()
+      }
+  }
+
+  /**
+   * Runs `run` where this member's stream of `turnId` has shown it every
+   * event through `through`: at once where it has, or where it carries no
+   * such stream, and else right as it gets there, before its next event.
+   */
+  #whenShown(
+    turnId: string | undefined,
+    through: number | undefined,
+    run: () => Promise<void> | undefined
+  ): Promise<void> {
+    const shown = this.#shownThrough
+    if (
+      turnId === undefined ||
+      through === undefined ||
+      this.#streamed?.turnId !== turnId ||
+      shown?.turnId !== turnId ||
+      shown.sequence >= through
+    )
+      return run() ?? Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      this.#shownWaiters.add({
+        turnId,
+        through,
+        run: () => (run() ?? Promise.resolve()).then(resolve, reject),
+      })
+    })
   }
 
   /** Runs one subscribing task once every earlier one has settled. */
@@ -3503,11 +3579,15 @@ class Membership {
     }
   }
 
-  /** Follows one subscription, whose stream waits for `shown` when given. */
+  /**
+   * Follows one subscription, whose stream waits for `shown` when given and
+   * reads its turn from after sequence `from`.
+   */
   #consume(
     subscription: CoordinatedTurnSubscription,
     replayedCorrections: number,
-    shown?: Promise<void>
+    shown?: Promise<void>,
+    from = 0
   ) {
     // A member that detached while its subscription was admitted keeps none.
     if (this.detached) {
@@ -3533,7 +3613,10 @@ class Membership {
         this.#options.logger.error({ err }, "membership.stream.failed")
       )
       .finally(caughtUp)
+      // A stream that ended shows nothing more of its turn.
+      .finally(() => this.#reachShown(subscription.turnId, Infinity))
     this.#streamed = { turnId: subscription.turnId, done }
+    this.#shownThrough = { turnId: subscription.turnId, sequence: from }
   }
 
   /**
@@ -3566,6 +3649,8 @@ class Membership {
       await shown
       for await (const { sequence, event } of subscription.events) {
         if (stream.dropped) break
+        // All before this event was shown.
+        this.#reachShown(subscription.turnId, sequence - 1)
         this.#sequence = sequence
         interrupted = isRedialableFailure(event)
         const replayed = view.restating && buffered > 0
@@ -3598,6 +3683,7 @@ class Membership {
             for (const request of event.requests) this.#offer(request)
         }
         if (--buffered === 0) view.caughtUp()
+        this.#reachShown(subscription.turnId, sequence)
       }
     } catch (cause) {
       if (cause instanceof FanoutOverflowError) overflow = cause
