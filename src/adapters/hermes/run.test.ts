@@ -34,6 +34,7 @@ import {
   type HermesRecovery,
   type HermesTurnScope,
 } from "./run"
+import { HermesSessionGoneError } from "./attachment-registry"
 import { HermesUnavailableError, type HermesLog } from "./gateway"
 import { HermesInteractionPublicError } from "./interactions"
 import { HermesPublishedArtifacts } from "./published-artifacts"
@@ -6090,7 +6091,9 @@ describe("Hermes child Sessions", () => {
     async function backgroundProcess(
       afterStart: (t: NativeTurnBuilder) => readonly NativeFrame[] = (t) => [
         t.complete("m1", "Started."),
-      ]
+      ],
+      native: Partial<HermesTurnNative> = {},
+      options: ConstructorParameters<typeof HermesTurnEngine>[1] = {}
     ) {
       const observers = new Map<string, Set<AttachmentObserver>>()
       let latestSeq = 0
@@ -6116,7 +6119,9 @@ describe("Hermes child Sessions", () => {
           },
           processes,
           killProcess,
-        })
+          ...native,
+        }),
+        options
       )
       const listener = {
         onTurn: vi.fn(),
@@ -6274,6 +6279,82 @@ describe("Hermes child Sessions", () => {
             },
           ],
         ])
+      }
+    )
+
+    // The processes one Session's turns leave running are followed up to a
+    // bound: past it the oldest is no longer read, and its terminal ends with
+    // no known status rather than listed for good.
+    it("follows a bounded number of a Session's processes, ending the oldest past it with no known status", async () => {
+      const { listener, handle, turnId } = await backgroundProcess(
+        (t) => {
+          const args = { command: "npm run worker", background: true }
+          return [
+            t.toolStart("run-2", "terminal", args),
+            t.frame("tool.complete", {
+              tool_id: "run-2",
+              name: "terminal",
+              args,
+              result: JSON.stringify({ session_id: "proc_2", exit_code: 0 }),
+            }),
+            t.complete("m1", "Started."),
+          ]
+        },
+        {},
+        { maxFollowedProcesses: 1 }
+      )
+      await collect(handle)
+
+      expect(listener.onTerminal.mock.calls).toEqual([
+        [turnId, { ...PROCESS_TERMINAL, command: "npm run dev" }],
+        [
+          turnId,
+          {
+            ...PROCESS_TERMINAL,
+            terminalId: "run-2:terminal",
+            toolCallId: "run-2",
+            command: "npm run worker",
+          },
+        ],
+        [turnId, { ...PROCESS_TERMINAL, exit: {} }],
+      ])
+    })
+
+    // A Session deleted, or one Hermes holds no more, runs no process the
+    // gateway still has to read: neither its poll nor a later resume asks
+    // Hermes of it again, once the one read that found it gone did.
+    it.each([
+      {
+        ends: "is deleted",
+        end: (engine: HermesTurnEngine) => engine.forgetSession(scope),
+        reads: 0,
+      },
+      { ends: "is gone at Hermes", end: () => undefined, reads: 1 },
+    ])(
+      "reads a Session's processes no more once it $ends",
+      async ({ end, reads }) => {
+        const clock = useFakeClock()
+        let gone = false
+        const resume = vi.fn(async () => {
+          if (gone) throw new HermesSessionGoneError()
+          return { liveSessionId: "live-secret", running: false }
+        })
+        const { engine, handle, processes } = await backgroundProcess(
+          undefined,
+          { resume }
+        )
+        await collect(handle)
+        await clock.advance(PROCESS_POLL_MS)
+        expect(processes).toHaveBeenCalledTimes(1)
+
+        gone = true
+        const before = resume.mock.calls.length
+        end(engine)
+        await clock.advance(PROCESS_POLL_MS * 4)
+        await engine.readTerminals(scope)
+
+        expect(resume.mock.calls.length - before).toBe(reads)
+        expect(processes).toHaveBeenCalledTimes(1)
       }
     )
 

@@ -2374,6 +2374,7 @@ export class HermesServerAdapter implements ServerRuntime {
       throw new HermesSessionConflictError()
     }
     await this.#deleteStored(profile, storedId)
+    this.turns.forgetSession({ agentId: profile, providerSessionId: storedId })
   }
 
   /** Deletes a Session's stored row: through the dashboard, else its socket. */
@@ -2445,6 +2446,7 @@ export class HermesServerAdapter implements ServerRuntime {
     await this.#closeNativeSession(resumed.session_id)
     this.#attachments.invalidate(resumed.session_id)
     if (emptyRow) await this.#deleteStored(profile, storedId)
+    this.turns.forgetSession({ agentId: profile, providerSessionId: storedId })
     return true
   }
 

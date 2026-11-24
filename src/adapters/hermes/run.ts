@@ -35,7 +35,10 @@ import {
 } from "../../core/runtime"
 import { isBlankText } from "../../core/member"
 import { storageReceipt } from "../../core/storage-receipt"
-import type { AttachmentSignal } from "./attachment-registry"
+import {
+  HermesSessionGoneError,
+  type AttachmentSignal,
+} from "./attachment-registry"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import {
@@ -161,6 +164,13 @@ const MAX_REWIND_SOURCE_LENGTH = 256
 const MAX_REMEMBERED_CORRECTIONS = 256
 
 /**
+ * The processes one Session's turns left running the gateway follows; past
+ * it the oldest is followed no more, and its terminal ends with no known
+ * status.
+ */
+const MAX_FOLLOWED_PROCESSES = 64
+
+/**
  * How often the processes a Session's terminals run are read while someone
  * holds it: Hermes streams a process's output but sends nothing as it exits,
  * so `process.list` is the only word of an exit. Hermes' own desktop reads
@@ -257,6 +267,7 @@ export class HermesTurnEngine {
   /** Each Session's next read of the processes its terminals run. */
   readonly #processPolls = new Map<string, unknown>()
   readonly #processPollMs: number
+  readonly #maxFollowedProcesses: number
   readonly #clock: Clock
   /**
    * Each Session's children that outlived their turns and are over since, by
@@ -299,12 +310,16 @@ export class HermesTurnEngine {
       watch?: Partial<HermesWatchOptions>
       /** How often a held Session's processes are read; `PROCESS_POLL_MS`. */
       processPollMs?: number
+      /** How many of a Session's processes it follows; `MAX_FOLLOWED_PROCESSES`. */
+      maxFollowedProcesses?: number
       /** The clock those reads are timed on. */
       clock?: Clock
     } = {}
   ) {
     this.#native = native
     this.#processPollMs = options.processPollMs ?? PROCESS_POLL_MS
+    this.#maxFollowedProcesses =
+      options.maxFollowedProcesses ?? MAX_FOLLOWED_PROCESSES
     this.#clock = options.clock ?? defaultClock
     this.#mcpToolNames = options.mcpToolNames
     this.#publishedArtifacts = options.publishedArtifacts
@@ -1179,7 +1194,27 @@ export class HermesTurnEngine {
       )
     }
     active.terminals.clear()
+    for (const [processId, oldest] of kept) {
+      if (kept.size <= this.#maxFollowedProcesses) break
+      kept.delete(processId)
+      this.#reportTerminal(
+        active.scope,
+        oldest.turnId,
+        terminalStep(oldest, { exit: {} })
+      )
+    }
     this.#pollProcesses(active.scope)
+  }
+
+  /**
+   * Forgets the processes a Session's turns left running, and stops reading
+   * them: the Session was deleted, or Hermes holds it no more.
+   */
+  forgetSession(scope: { agentId: string; providerSessionId: string }) {
+    const key = sessionKey(scope)
+    this.#terminals.delete(key)
+    this.#clock.clearTimeout(this.#processPolls.get(key))
+    this.#processPolls.delete(key)
   }
 
   /** Tells each of the Session's listeners one step of an outlived terminal. */
@@ -1211,9 +1246,11 @@ export class HermesTurnEngine {
     const timer = this.#clock.setTimeout(() => {
       this.#readProcesses(scope)
         .then((ended) => ended())
-        .catch((err: unknown) =>
-          this.#log.warn({ err }, "hermes.run.process_poll_failed")
-        )
+        .catch((err: unknown) => {
+          // A Session Hermes holds no more runs no process to read.
+          if (err instanceof HermesSessionGoneError) this.forgetSession(scope)
+          else this.#log.warn({ err }, "hermes.run.process_poll_failed")
+        })
         .finally(() => {
           if (this.#processPolls.get(key) !== timer) return
           this.#processPolls.delete(key)
@@ -1287,6 +1324,8 @@ export class HermesTurnEngine {
       const ended = await this.#readProcesses(scope)
       ended(true)
     } catch (err) {
+      if (err instanceof HermesSessionGoneError)
+        return this.forgetSession(scope)
       this.#log.warn({ err }, "hermes.run.process_read_failed")
       for (const terminal of kept.values())
         this.#reportTerminal(
