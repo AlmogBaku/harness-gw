@@ -22,6 +22,7 @@ import {
   type Middleware,
   type MemberCommands,
   type MemberEvent,
+  type SessionNotice,
 } from "./member"
 import { answeredChoice, askText, distinctChoices } from "./request-text"
 
@@ -194,6 +195,21 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent | undefined {
       return event
   }
   return unhandledKind(event)
+}
+
+/**
+ * A runtime's notice with its words masked: a status such as a background
+ * process's completion names the command it ran.
+ */
+function maskedNotice(notice: SessionNotice): SessionNotice {
+  const { title, description } = notice
+  return {
+    ...notice,
+    title: maskCredentials(title),
+    ...(description === undefined
+      ? {}
+      : { description: maskCredentials(description) }),
+  }
 }
 
 type HistoryMessage = SessionHistoryResponse["messages"][number]
@@ -397,6 +413,9 @@ export function createCredentialsMiddleware({
                 ),
               }
             : event
+        // A notice's words are masked as a terminal's are.
+        case "notice":
+          return { ...event, notice: maskedNotice(event.notice) }
         case "prompt":
         case "replay-complete":
         case "request-withdrawn":
@@ -406,7 +425,6 @@ export function createCredentialsMiddleware({
         case "model":
         case "session-info":
         case "commands":
-        case "notice":
         case "error":
         case "catalog-invalidated":
         case "activity":

@@ -123,6 +123,28 @@ describe("credentials middleware: tool data, for every runtime and both listener
     expect(masked).toMatchObject(expected)
   })
 
+  // Hermes tells a background process's completion in a notice that names
+  // the command, so its words are a terminal's command as well.
+  it("masks a notice's title and description", () => {
+    const notice = {
+      severity: "info" as const,
+      title: `Process finished: deploy --${assigned("token")}`,
+      description: `exit 0 after export ${assigned("TOKEN")}`,
+      kind: "process",
+    }
+
+    expect(shown({ sessionId: "s1", kind: "notice", notice })).toEqual({
+      sessionId: "s1",
+      kind: "notice",
+      notice: {
+        severity: "info",
+        title: `Process finished: deploy --${assigned("token", M)}`,
+        description: `exit 0 after export ${assigned("TOKEN", M)}`,
+        kind: "process",
+      },
+    })
+  })
+
   // A path or a patch a mask would break is dropped, not masked.
   it("drops a location, a diff, and a working directory that carry a credential", () => {
     const leaked = `/srv/${assigned("token")}`
