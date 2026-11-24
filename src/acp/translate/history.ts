@@ -40,6 +40,9 @@ const ARTIFACT_PART_NAME = "hgw.artifact"
 /** The `data` part name of the notice a stored turn leads with. */
 const NOTICE_PART_NAME = "hgw-notice"
 
+/** The most of a failure's words `HgwMessageFailureMetaSchema` carries. */
+const FAILURE_MESSAGE_MAX = 4_096
+
 /**
  * The turn identity the shared builders ask for, given a replay has no live turn
  * of its own. Reusing them is what makes a stored turn and a watched turn one stream,
@@ -159,6 +162,8 @@ function turnOpeningOutbound(message: SessionMessage): AcpOutbound[] {
  * and the live turn's current state follows the replay on its own. The upsert
  * follows the message's `parts`, whose content it leaves, and starts one that
  * streamed nothing from empty, so a failure before any output still shows.
+ * Its words are cut to what the schema carries, as the live failure's are:
+ * the member's stack masked them already, which can lengthen them.
  */
 function failureOutbound(
   context: TranslateContext,
@@ -167,7 +172,7 @@ function failureOutbound(
 ): AcpOutbound[] {
   if (message.status?.type !== "incomplete") return []
   const failure: HgwMessageFailureMeta["failure"] = {
-    message: message.status.error,
+    message: message.status.error.slice(0, FAILURE_MESSAGE_MAX),
     ...(message.turnErrorCode ? { code: message.turnErrorCode } : {}),
     at: message.completedAt ?? message.createdAt,
   }

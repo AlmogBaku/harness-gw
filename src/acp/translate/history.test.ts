@@ -453,6 +453,35 @@ describe("translateHistory", () => {
     }
   )
 
+  // The words a member's stack masked can outgrow what the schema carries,
+  // and a browser drops a failure it cannot read whole: they are cut, as the
+  // live failure's are.
+  it("cuts a replayed failure's words to what its schema carries", () => {
+    const updates = updatesOf(
+      translateHistory({
+        ...history,
+        messages: [
+          {
+            id: "a3",
+            role: "assistant",
+            content: [],
+            createdAt: "2026-09-19T09:00:04.000Z",
+            status: {
+              type: "incomplete",
+              reason: "error",
+              error: "x".repeat(5_000),
+            },
+          },
+        ],
+      })
+    )
+
+    const { failure } = HgwMessageFailureMetaSchema.parse(
+      aosMeta(updates.at(-1)!)
+    )
+    expect(failure.message).toBe("x".repeat(4_096))
+  })
+
   it("replays a message with no renderable content and no artifact as nothing", () => {
     expect(
       translateHistory({
