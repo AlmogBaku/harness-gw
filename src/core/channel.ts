@@ -1256,8 +1256,9 @@ export function createChannels(options: CreateChannelsOptions) {
 
     /**
      * Shows one member an older page of its Session, as tagged updates ahead
-     * of the answer, its `replay_complete` and the Session's current state
-     * after them. A member reads one page at a time.
+     * of the answer, its `replay_complete`, the Session's current state and
+     * the row the gateway holds after them, as a resume shows them. A member
+     * reads one page at a time.
      */
     async olderPage(
       membership: Membership,
@@ -1275,6 +1276,8 @@ export function createChannels(options: CreateChannelsOptions) {
             throw new CommandRefusedError("invalid")
           return page
         }, older)
+        // ACP's current session info follows a replay, a page's as well.
+        await membership.showRow()
         // Every resume answer restates the setup, a page read's as well.
         return { page, setup: await membership.setup() }
       } catch (cause) {

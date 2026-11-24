@@ -4424,7 +4424,7 @@ describe("History pages", () => {
   // ACP closes every resume with `replay_complete` after its replay and the
   // Session's current state after that: a page read's too, the state apart
   // from the page, for its live listeners.
-  it("reads a page without rejoining or following the Session, then ends its replay and states the Session", async () => {
+  it("reads a page without rejoining or following the Session, then ends its replay and states the Session and its row", async () => {
     const test = await harness({
       historyReach: REACH,
       transcript: conversation(12),
@@ -4438,7 +4438,7 @@ describe("History pages", () => {
     await settled()
 
     const sent = pageUpdates(test.recorder, from)
-    expect(test.recorder.entries.slice(from)).toHaveLength(7)
+    expect(test.recorder.entries.slice(from)).toHaveLength(8)
     expect(sent.slice(0, 5).every(pageTag)).toBe(true)
     expect(sent.slice(5)).toEqual([
       {
@@ -4446,6 +4446,10 @@ describe("History pages", () => {
         _meta: { [HGW_META_KEY]: { historyPage: { cursor: cursorOf(5) } } },
       },
       { sessionUpdate: "state_update", state: "idle", background: [] },
+      expect.objectContaining({
+        sessionUpdate: "session_info_update",
+        title: "Notes",
+      }),
     ])
     await liveTurn(test, [test])
     const live = await test.recorder.wait(

@@ -1881,7 +1881,7 @@ export function runWireContract(
 
       row(
         "olderPageClosesAsResume",
-        "ends an older page with its own replay_complete, then states the Session apart from the page, before the page's answer",
+        "ends an older page with its own replay_complete, then states the Session and its row apart from the page, before the page's answer",
         async (harness) => {
           const { clock, turn, connectPlain } = harness
           const { plain, sessionId } = await operatorSession(harness)
@@ -1921,6 +1921,7 @@ export function runWireContract(
             "page history",
             "page replay_complete",
             "state_update",
+            "session_info_update",
           ])
         },
         { historyReach: { pageSize: 1, maxOffset: 1_000 } }

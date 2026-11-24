@@ -641,7 +641,9 @@ still carries `truncated: true` when the reading stopped at a reach bound.
 - As ACP closes every resume with a cursor, a page ends with its own
   `replay_complete`, tagged as the page's, after the page's updates and each
   child transcript's (each child's tagged on the child's id), and then the
-  Session's current `state_update`, untagged, before the response. Until the
+  Session's current `state_update` and, as ACP has current session info
+  follow a replay, its `session_info_update` with the row the gateway holds,
+  both untagged, before the response. Until the
   page's `replay_complete` the gateway holds the Session's other updates, as
   a resume's replay does, and sends them after it. The client hands the page
   its tagged updates, the `replay_complete` among them, and its live
