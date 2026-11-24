@@ -4782,6 +4782,83 @@ describe("History pages", () => {
     }
   )
 
+  // What a replay holds back is folded where a later event says all the
+  // earlier one did: a process printing on through the replay holds one
+  // step, and each reading only its latest value, so neither alone closes a
+  // reader past what it may hold.
+  it("holds a process's burst as one step and a reading's latest value alone while a page is read", async () => {
+    const pending = gate()
+    let hold = false
+    let watcher: ServerTurnListener | undefined
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      heldLimits: { events: 3, bytes: 1_000_000 },
+      beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+      subscribeTurns: (_scope, listener) => {
+        watcher = listener
+        return () => undefined
+      },
+    })
+    await test.list()
+    await open(test)
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    const terminal = {
+      kind: TurnEventKind.TerminalOutput,
+      terminalId: "run-1:terminal",
+      toolCallId: "run-1",
+    } as const
+    watcher!.onTerminal!("turn-before", { ...terminal, command: "npm run dev" })
+    await settled()
+    hold = true
+    const from = updates(test.recorder).length
+
+    const read = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalled())
+    for (let count = 0; count < 10; count += 1)
+      watcher!.onTerminal!("turn-before", { ...terminal, data: `${count}` })
+    for (const value of ["opus", "sonnet", "opus"])
+      await other.agent.request(methods.agent.session.setConfigOption, {
+        sessionId: SESSION,
+        configId: "model",
+        type: "id",
+        value,
+      })
+    // Each switch's readings reach this member after its answer.
+    await settled()
+    pending.release()
+    await read
+    await settled()
+
+    expect(test.fellBehind).not.toHaveBeenCalled()
+    const after = updates(test.recorder)
+      .slice(from)
+      .filter(({ sessionId }) => sessionId === SESSION)
+      .map(({ update }) => update)
+    expect(
+      after.flatMap((update) =>
+        update.sessionUpdate === "terminal_output_chunk"
+          ? [Buffer.from(update.data, "base64").toString("utf8")]
+          : []
+      )
+    ).toEqual(["0123456789"])
+    expect(
+      after.filter(
+        ({ sessionUpdate }) => sessionUpdate === "config_option_update"
+      )
+    ).toMatchObject([
+      {
+        configOptions: [
+          expect.objectContaining({ configId: "model", currentValue: "opus" }),
+        ],
+      },
+    ])
+    other.close()
+    test.close()
+  })
+
   // ACP: "The snapshot and subsequent live state changes MUST be delivered
   // in order, without replacing a newer state with a stale snapshot". A turn
   // that ends while a page is read is held for the page's replay, and the

@@ -124,7 +124,11 @@ on it, and the client reconnects and resumes each one. So it does when a
 replay of a member's view holds back more than 4,096 events or 8 MiB of their
 JSON (`HELD_LIMITS`) before it completes: what a replay holds reaches no
 socket, so no socket bound sees it, and a replay held open while the Session
-streams on would hold without end.
+streams on would hold without end. What it holds is folded where a later event
+says all an earlier one did: a process's steps held one after another become
+one, its output appended, or past 16,384 characters the snapshot of its tail,
+and a reading of the Session's usage, model, commands or row replaces the held
+one of its kind, so a process printing on through a long replay holds one event.
 
 A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
 itself before the gateway reads it, so the client never sends one: it refuses

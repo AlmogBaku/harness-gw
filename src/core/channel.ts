@@ -1554,6 +1554,44 @@ type HeldEvent = {
   shown: PromiseWithResolvers<void>
 }
 
+/** The readings a later one of the same kind supersedes whole. */
+const READING_KINDS: ReadonlySet<string> = new Set([
+  "usage",
+  "model",
+  "session-info",
+  "commands",
+])
+
+/**
+ * Two steps of one terminal as the one a member is shown in their place,
+ * folded as the channel folds a restatement: the later command, folder and
+ * exit, and the output, which a snapshot replaces and a chunk appends to, as
+ * far as `RESTATED_TERMINAL_OUTPUT` reaches back, past which the appended
+ * output goes as the snapshot of its tail. A step that shows no output, as
+ * an announcement, takes none: `undefined`.
+ */
+function mergedTerminal(
+  held: TerminalTurnEvent,
+  next: TerminalTurnEvent
+): TerminalTurnEvent | undefined {
+  if (held.data === undefined && held.output === undefined) return undefined
+  const { data, output, ...step } = { ...withoutOutput(held), ...next }
+  const shown = (text: string | undefined) =>
+    text === undefined ? {} : { output: text }
+  if (output !== undefined) return { ...step, output }
+  if (held.output !== undefined)
+    return {
+      ...step,
+      ...shown(
+        outputTail(`${held.output}${data ?? ""}`, RESTATED_TERMINAL_OUTPUT)
+      ),
+    }
+  const appended = `${held.data ?? ""}${data ?? ""}`
+  return appended.length <= RESTATED_TERMINAL_OUTPUT
+    ? { ...step, data: appended }
+    : { ...step, ...shown(outputTail(appended, RESTATED_TERMINAL_OUTPUT)) }
+}
+
 /** An event's JSON bytes, or more than any limit when it has no JSON. */
 function heldBytes(event: SessionEvent) {
   try {
@@ -1873,6 +1911,8 @@ class Membership {
    */
   #hold(event: HeldEvent["event"], bytes: number): Promise<void> {
     if (this.#overHeld) return Promise.resolve()
+    const folded = typeof event === "function" ? undefined : this.#fold(event)
+    if (folded) return folded
     const { events, bytes: most } = this.#options.heldLimits
     if (this.#held.length >= events || this.#heldBytes + bytes > most) {
       this.#overHeld = true
@@ -1887,6 +1927,49 @@ class Membership {
     this.#heldBytes += bytes
     this.#held.push({ event, bytes, shown })
     return shown.promise
+  }
+
+  /**
+   * Folds `event` into what is held already, where it says no more than
+   * what it joins: a terminal's step into the step of it held last among
+   * the terminal steps that close the queue, which shows the same output,
+   * so a process printing on through a long replay holds one event; and a
+   * reading in place of the held one of its kind, which it supersedes.
+   * Returns what learns once the folded event is shown, or `undefined`
+   * where `event` is held on its own.
+   */
+  #fold(event: SessionEvent): Promise<void> | undefined {
+    if (READING_KINDS.has(event.kind)) {
+      const index = this.#held.findIndex(
+        (held) =>
+          typeof held.event !== "function" && held.event.kind === event.kind
+      )
+      const [superseded] = index === -1 ? [] : this.#held.splice(index, 1)
+      if (superseded) {
+        this.#heldBytes -= superseded.bytes
+        superseded.shown.resolve()
+      }
+      return undefined
+    }
+    if (event.kind !== "terminal") return undefined
+    for (let index = this.#held.length - 1; index >= 0; index -= 1) {
+      const held = this.#held[index]!
+      if (typeof held.event === "function" || held.event.kind !== "terminal")
+        return undefined
+      if (
+        held.event.stream !== event.stream ||
+        held.event.event.terminalId !== event.event.terminalId
+      )
+        continue
+      const merged = mergedTerminal(held.event.event, event.event)
+      if (!merged) return undefined
+      held.event = { ...held.event, event: merged }
+      const bytes = heldBytes(held.event)
+      this.#heldBytes += bytes - held.bytes
+      held.bytes = bytes
+      return held.shown.promise
+    }
+    return undefined
   }
 
   /**
