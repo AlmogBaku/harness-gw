@@ -691,15 +691,17 @@ function createChannelTable({
     const { data, output, ...step } = event
     const known = channel.terminals.get(step.terminalId)
     const merged = known ? { ...known.report, ...step } : step
-    const held =
+    const read =
       output ??
       (data === undefined ? known?.output : `${known?.output ?? ""}${data}`)
+    const held =
+      read === undefined
+        ? undefined
+        : outputTail(read, RESTATED_TERMINAL_OUTPUT)
     channel.terminals.set(step.terminalId, {
       turnId,
       report: merged,
-      ...(held === undefined
-        ? {}
-        : { output: outputTail(held, RESTATED_TERMINAL_OUTPUT) }),
+      ...(held === undefined ? {} : { output: held }),
       ...(merged.exit ? { endedAt: known?.endedAt ?? clock.now() } : {}),
     })
   }

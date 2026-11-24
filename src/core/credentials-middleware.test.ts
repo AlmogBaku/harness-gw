@@ -306,18 +306,40 @@ describe("credentials middleware: tool data, for every runtime and both listener
     ).toEqual({ apiKey: M, pad: "x".repeat(300_000) })
   })
 
-  it("drops the word a terminal's kept tail cuts into, so no name loses its head", () => {
-    // The tail starts inside `DB_PASSWORD`: read whole, `WORD` names nothing.
-    const tail = `WORD=${SECRET} `
-    const masked = shownTurn({
-      kind: TurnEventKind.TerminalOutput,
-      terminalId: "t1",
-      toolCallId: "c1",
-      data: `x DB_PASS${tail}${"y".repeat(262_144 - tail.length)}`,
-    })
+  // A name masks the value it is assigned on its line: a terminal's kept
+  // tail that a cut starts inside that line, after its name or inside it,
+  // would show the value bare, so the cut drops the whole line, and a tail
+  // with no line break to start from keeps nothing.
+  it.each([
+    {
+      cut: "between a name and its value",
+      head: "x pass",
+      tail: `word: ${SECRET}\n`,
+      kept: "y".repeat(262_144 - `word: ${SECRET}\n`.length),
+    },
+    {
+      cut: "inside a name, on a line with no break",
+      head: "x DB_PASS",
+      tail: `WORD=${SECRET} `,
+      kept: undefined,
+    },
+  ])(
+    "keeps a terminal's tail from the first line its cut leaves whole: $cut",
+    ({ head, tail, kept }) => {
+      const masked = shownTurn({
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "t1",
+        toolCallId: "c1",
+        data: `${head}${tail}${"y".repeat(262_144 - tail.length)}`,
+      })
 
-    expect(JSON.stringify(masked)).not.toContain(SECRET)
-  })
+      expect(JSON.stringify(masked)).not.toContain(SECRET)
+      expect(masked).toMatchObject({ kind: TurnEventKind.TerminalOutput })
+      expect(
+        masked?.kind === TurnEventKind.TerminalOutput ? masked.data : ""
+      ).toBe(kept)
+    }
+  )
 
   it("masks a replayed call and a replayed failure as the live ones were", () => {
     const command = `export ${assigned("TOKEN")}`

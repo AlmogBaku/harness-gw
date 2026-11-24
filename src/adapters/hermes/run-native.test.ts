@@ -923,14 +923,18 @@ describe("Hermes child watch", () => {
 describe("Hermes native processes", () => {
   // `_session_processes` lists the live Session's processes with the last
   // 4,000 characters of each one's output, cut wherever they fall.
-  it("reads each process's exit and the latest of its output, less a word the tail's cut split", async () => {
-    const cut = `ken=abcdefgh1234 ${"x".repeat(3_983)}`
+  // A credential's name masks the value on its line, so a cut inside that
+  // line drops it, and a cut tail with no line break is no output at all.
+  it("reads each process's exit and the latest of its output, less the line the tail's cut split", async () => {
+    const split = `word: abcdefgh1234\n${"x".repeat(3_981)}`
+    const unbroken = `ken=abcdefgh1234 ${"x".repeat(3_983)}`
     const { native, router } = runtime({
       "process.list": async () => ({
         processes: [
           { session_id: "proc_1", status: "running", output_tail: "ready\n" },
           { session_id: "proc_2", status: "exited", exit_code: 3 },
-          { session_id: "proc_3", status: "running", output_tail: cut },
+          { session_id: "proc_3", status: "running", output_tail: split },
+          { session_id: "proc_4", status: "running", output_tail: unbroken },
         ],
       }),
     })
@@ -938,7 +942,8 @@ describe("Hermes native processes", () => {
     await expect(native.processes("live-secret")).resolves.toEqual([
       { processId: "proc_1", exited: false, output: "ready\n" },
       { processId: "proc_2", exited: true, exitCode: 3 },
-      { processId: "proc_3", exited: false, output: "x".repeat(3_983) },
+      { processId: "proc_3", exited: false, output: "x".repeat(3_981) },
+      { processId: "proc_4", exited: false },
     ])
     expect(router.calls("process.list").map(({ params }) => params)).toEqual([
       { session_id: "live-secret" },

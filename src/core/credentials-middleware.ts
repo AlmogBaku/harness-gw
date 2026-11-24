@@ -47,18 +47,28 @@ const QUESTION_CALLS_PER_SESSION = 10
 const TERMINAL_TAIL = 262_144
 
 /**
- * The last `max` units of a terminal's output. A cut inside a word drops
- * that word, so a name's or a key's end is never read whole, masked or not.
+ * The last `max` units of a terminal's output, from the start of a line: a
+ * cut drops the line it lands in, since a credential is masked by the name
+ * or the word before it on its line, which a cut inside that line may take
+ * off. A tail with no line break is none: `undefined`.
  */
 export function outputTail(data: string, max: number) {
   if (data.length <= max) return data
   const tail = data.slice(-max)
-  return tail.slice(tail.search(/\s/u) + 1)
+  const lineEnd = tail.indexOf("\n")
+  return lineEnd === -1 ? undefined : tail.slice(lineEnd + 1)
 }
 
-/** The last `TERMINAL_TAIL` units of a terminal's output, masked. */
+/** The last `TERMINAL_TAIL` units of a terminal's output, masked, if any. */
 function maskedTerminalData(data: string) {
-  return maskCredentials(outputTail(data, TERMINAL_TAIL))
+  const tail = outputTail(data, TERMINAL_TAIL)
+  return tail === undefined ? undefined : maskCredentials(tail)
+}
+
+/** `{ [key]: text }` with `text` as `maskedTerminalData` keeps it, or `{}`. */
+function masked<Key extends "data" | "output">(key: Key, text?: string) {
+  const kept = text === undefined ? undefined : maskedTerminalData(text)
+  return (kept === undefined ? {} : { [key]: kept }) as { [K in Key]?: string }
 }
 
 /** Text that reads as a JSON object, array, or string, parsed; anything else `undefined`. */
@@ -173,8 +183,8 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent | undefined {
         ...rest,
         ...(command === undefined ? {} : { command: maskCredentials(command) }),
         ...(cwd === undefined || containsCredential(cwd) ? {} : { cwd }),
-        ...(data === undefined ? {} : { data: maskedTerminalData(data) }),
-        ...(output === undefined ? {} : { output: maskedTerminalData(output) }),
+        ...masked("data", data),
+        ...masked("output", output),
       }
     }
     case TurnEventKind.ChildSessionUpdated:

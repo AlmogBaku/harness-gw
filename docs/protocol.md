@@ -1051,8 +1051,10 @@ by key and by value, a secret-named key keeping its name and losing any value
 but a boolean or `null`; JSON with nothing to mask is sent as written, and
 streamed output is masked as plain text, never re-encoded. A terminal's output,
 a chunk or a restated `output` snapshot, keeps its last 262,144 UTF-16 units,
-the most a browser keeps of one, without the word the cut lands in, and so does
-every shorter tail the gateway or a runtime keeps of it; nothing else is cut. Each turn event is masked
+the most a browser keeps of one, from the first line the cut leaves whole, and
+so does every shorter tail the gateway or a runtime keeps of it: a name masks
+the value on its line, so a cut inside that line drops the line, and a cut tail
+with no line break is not sent at all. Nothing else is cut. Each turn event is masked
 once, however many members are shown it. An MCP App view's files are served from
 the stored call, never from its masked input.
 

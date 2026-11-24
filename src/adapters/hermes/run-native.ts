@@ -925,7 +925,12 @@ export class HermesNativeRuntime implements HermesTurnNative {
         : undefined
       if (!isRecord(row) || !processId) return []
       const exitCode = row.exit_code
-      const tail = row.output_tail
+      // A tail as long as Hermes gives may begin inside a line its cut
+      // split, which is dropped, and one with no line break is none.
+      const tail =
+        typeof row.output_tail === "string"
+          ? outputTail(row.output_tail, PROCESS_OUTPUT_TAIL - 1)
+          : undefined
       return [
         {
           processId,
@@ -933,11 +938,7 @@ export class HermesNativeRuntime implements HermesTurnNative {
           ...(Number.isSafeInteger(exitCode)
             ? { exitCode: exitCode as number }
             : {}),
-          // A tail as long as Hermes gives may begin inside a word its cut
-          // split, which is dropped.
-          ...(typeof tail === "string"
-            ? { output: outputTail(tail, PROCESS_OUTPUT_TAIL - 1) }
-            : {}),
+          ...(tail === undefined ? {} : { output: tail }),
         },
       ]
     })
