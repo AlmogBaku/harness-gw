@@ -2631,15 +2631,36 @@ describe("Session rooms", () => {
     test.close()
   })
 
-  it("shows a live turn history already stored once, after its prompt", async () => {
+  // ACP: a replayed prompt "MUST use the ID returned in that prompt
+  // response". One whose receipt outran its answer is stored under the
+  // provider's own id, which the page names by the answer's.
+  it("shows a live turn history already stored once, after its prompt, under the id its answer named", async () => {
     const history: StoredMessages = []
-    const test = await harness({ providerIds: true, history })
+    let store!: (storedId: string) => void
+    const test = await harness({
+      providerIds: true,
+      history,
+      onStart: (source) => {
+        Object.assign(source, {
+          stored: new Promise<string>((resolve) => (store = resolve)),
+        })
+      },
+    })
     await test.list()
     await open(test)
     const other = await test.connect("connection-2")
     await other.list()
-    const messageId = await liveTurn(test, [test])
-    history.push(...storedLiveTurn({ promptId: messageId }))
+    const clock = useFakeClock()
+    const answered = prompt(test, "Summarize")
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    const messageId = await answered
+    test.sources[0]?.emit(turnStarted())
+    chunk(test.sources[0], "Live")
+    await clock.advance(10)
+    await test.recorder.wait(said("Live"), "an update carrying Live")
+    store("stored-prompt")
+    history.push(...storedLiveTurn({ promptId: "stored-prompt" }))
+    await clock.advance(0)
 
     await open(other, { replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")
