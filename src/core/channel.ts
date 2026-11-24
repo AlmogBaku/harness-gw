@@ -3459,7 +3459,9 @@ class Membership {
       this.#shownWaiters.add({
         turnId,
         through,
-        run: () => (run() ?? Promise.resolve()).then(resolve, reject),
+        run: () => {
+          ;(run() ?? Promise.resolve()).then(resolve, reject)
+        },
       })
     })
   }

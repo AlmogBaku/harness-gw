@@ -4829,7 +4829,7 @@ describe("History pages", () => {
     const test = await harness({
       historyReach: REACH,
       transcript: conversation(12),
-      beforeHistory: () => gates.shift()?.held,
+      beforeHistory: () => gates.shift()?.held ?? Promise.resolve(),
     })
     await test.list()
     await open(test)

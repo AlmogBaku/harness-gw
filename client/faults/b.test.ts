@@ -284,7 +284,7 @@ describe("browser connection faults", () => {
         content: [{ type: "text" as const, text: `Message ${index}` }],
         createdAt: "2026-01-01T00:00:00.000Z",
       })),
-      beforeHistory: () => page?.promise,
+      beforeHistory: () => page?.promise ?? Promise.resolve(),
     })
     const { connection } = connectBrowser(test)
     const frames = sentFrames()
