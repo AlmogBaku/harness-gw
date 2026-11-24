@@ -307,6 +307,14 @@ visibility uses.
   completed tool results, presents the visible correction at that boundary,
   and continues under the same logical run until Hermes is authoritatively
   idle.
+- A steered message has one id live and another after a reload. Live, its
+  `user_message` carries the steer's request id, which Edit and Retry name
+  it by; a reload replays it under the id of the row Hermes stored it as.
+  Hermes' `session.redirect` answer carries only its status and text
+  (`_apply_correction`, `tui_gateway/methods_session_interrupt.py`), and no
+  event names the row, so the gateway cannot give the live message the
+  stored id, nor the stored row the live one. A client that holds the
+  live message and then reloads sees it under the stored id.
 - Questions, approvals, attachments, edit/regenerate, Artifacts, and Todos are projected from native Hermes interfaces when present. The `aos-ui` tools appear only in profiles that register the MCP server.
 - AOS needs `display.tool_progress` left at its default (`all`). With `off`, live tool calls are withheld from the tui gateway stream and appear only after a reload. `display.show_reasoning` gates nothing AOS reads; it only makes the messaging gateway prepend reasoning to chat replies.
 - Each served profile needs an existing `terminal.cwd` that is neither `.`, `auto`, `cwd`, nor a missing directory; the gateway reads it with `config.get project` and lists it as the Agent's folder. If the launch profile or `TERMINAL_CWD` sets a different path at runtime, the listed folder may not match where the Session actually runs. A named SSH profile needs a remote `terminal.cwd` that is an absolute path (`~/…` yields no folder), or AOS cannot list, start, or resume its Sessions.
