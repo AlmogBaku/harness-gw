@@ -20,6 +20,7 @@ import {
   CHILD_FOLLOW_GRACE_MS,
   CLOSE_DEADLINE_MS,
   DELETE_SHOWN_MS,
+  HELD_LIMITS,
   JOIN_DEADLINE_MS,
   READING_BACKOFF,
   READING_RETRIES,
@@ -993,6 +994,8 @@ type CreateChannelsOptions = Omit<
   clock?: Clock
   /** Defaults to `HISTORY_REACH`; a small one stands for a long Session. */
   historyReach?: HistoryReach
+  /** Defaults to `HELD_LIMITS`; a small one stands for a long replay. */
+  heldLimits?: typeof HELD_LIMITS
 }
 
 /** How a transport joins one member to one Session. */
@@ -1011,6 +1014,8 @@ export type MembershipOptions = {
 
 /** A membership's options, with the coordinator and clock its channels share. */
 type MembershipContext = MembershipOptions & {
+  /** How much a replay in flight may hold back before the member fell behind. */
+  heldLimits: typeof HELD_LIMITS
   coordinator: SessionCoordinator
   clock: Clock
   /** The history a from-start view replays, the newest page alone if `paged`. */
@@ -1128,6 +1133,7 @@ export function createChannels(options: CreateChannelsOptions) {
   const { coordinator, runtime, logger } = options
   const clock = options.clock ?? defaultClock
   const historyReach = options.historyReach ?? HISTORY_REACH
+  const heldLimits = options.heldLimits ?? HELD_LIMITS
   const channels = createChannelTable({
     ...options,
     clock,
@@ -1257,7 +1263,14 @@ export function createChannels(options: CreateChannelsOptions) {
         channels,
         member,
         scope,
-        { ...membership, coordinator, clock, readReplay, readChildHistory },
+        {
+          ...membership,
+          coordinator,
+          clock,
+          heldLimits,
+          readReplay,
+          readChildHistory,
+        },
         owner
       )
     },
@@ -1461,7 +1474,18 @@ type Replay = { children: Set<string>; older?: OlderPage }
  */
 type HeldEvent = {
   event: SessionEvent | (() => SessionEvent[])
+  /** Its JSON bytes, which count against the member's `HELD_LIMITS`. */
+  bytes: number
   shown: PromiseWithResolvers<void>
+}
+
+/** An event's JSON bytes, or more than any limit when it has no JSON. */
+function heldBytes(event: SessionEvent) {
+  try {
+    return Buffer.byteLength(JSON.stringify(event) ?? "")
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
 }
 
 /**
@@ -1597,6 +1621,12 @@ class Membership {
    */
   readonly #replays = new Set<Replay>()
   #held: HeldEvent[] = []
+  #heldBytes = 0
+  /**
+   * Set once what a replay held outgrew `HELD_LIMITS`: the connection is
+   * closing, and nothing more is held for it.
+   */
+  #overHeld = false
   /** Set while the held events go out, which later ones queue behind. */
   #releasing = false
   /**
@@ -1667,6 +1697,7 @@ class Membership {
       // A member that detached is shown nothing more, so nothing waits on it.
       this.#replays.clear()
       for (const { shown } of this.#held.splice(0)) shown.resolve()
+      this.#heldBytes = 0
     })
     // A Session a member is on, joining or joined, is never discarded.
     if (hasSession(scope)) owner.stack.defer(options.coordinator.hold(scope))
@@ -1755,8 +1786,31 @@ class Membership {
         ? !showsInReplay(event, this.#restating)
         : this.#held.length > 0
     if (!holds) return this.#write(event)
+    return this.#hold(event, heldBytes(event))
+  }
+
+  /**
+   * Holds `event` behind what a replay already holds, unless that outgrows
+   * the member's `HELD_LIMITS`: a replay held open while its Session streams
+   * on would otherwise hold without end, and no socket bound sees what never
+   * reaches it. Past them the member fell behind, its connection closes, and
+   * nothing more is held.
+   */
+  #hold(event: HeldEvent["event"], bytes: number): Promise<void> {
+    if (this.#overHeld) return Promise.resolve()
+    const { events, bytes: most } = this.#options.heldLimits
+    if (this.#held.length >= events || this.#heldBytes + bytes > most) {
+      this.#overHeld = true
+      this.#options.logger.warn(
+        { events: this.#held.length, bytes: this.#heldBytes },
+        "membership.held.overflow"
+      )
+      this.#cannotCatchUp()
+      return Promise.resolve()
+    }
     const shown = Promise.withResolvers<void>()
-    this.#held.push({ event, shown })
+    this.#heldBytes += bytes
+    this.#held.push({ event, bytes, shown })
     return shown.promise
   }
 
@@ -2155,9 +2209,7 @@ class Membership {
     if (this.detached) return Promise.resolve()
     if (this.#replays.size === 0 && this.#held.length === 0)
       return this.#writeHeld(build)
-    const shown = Promise.withResolvers<void>()
-    this.#held.push({ event: build, shown })
-    return shown.promise
+    return this.#hold(build, 0)
   }
 
   /**
@@ -2171,6 +2223,7 @@ class Membership {
       while (this.#replays.size === 0) {
         const next = this.#held.shift()
         if (!next) break
+        this.#heldBytes -= next.bytes
         await this.#writeHeld(next.event).then(
           next.shown.resolve,
           next.shown.reject

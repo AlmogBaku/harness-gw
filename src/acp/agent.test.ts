@@ -4732,6 +4732,50 @@ describe("History pages", () => {
     test.close()
   })
 
+  // Everything but history waits for a replay's end, and nothing reaches the
+  // socket meanwhile, so no socket bound sees it: a replay held open while
+  // the Session streams on holds no more than its bound, past which its
+  // reader fell behind and its connection closes, as a slow socket's does.
+  it.each([
+    { past: "events", heldLimits: { events: 2, bytes: 1_000_000 } },
+    { past: "bytes", heldLimits: { events: 1_000, bytes: 200 } },
+  ])(
+    "closes the connection of a reader whose replay held more $past than it may",
+    async ({ heldLimits }) => {
+      const pending = gate()
+      let hold = false
+      let watcher: ServerTurnListener | undefined
+      const test = await harness({
+        historyReach: REACH,
+        transcript: conversation(12),
+        heldLimits,
+        beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+        subscribeTurns: (_scope, listener) => {
+          watcher = listener
+          return () => undefined
+        },
+      })
+      await test.list()
+      await open(test)
+      hold = true
+
+      const read = older(test, cursorOf(5))
+      await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
+      for (let count = 1; count <= 10; count += 1)
+        watcher!.onNotice!({ severity: "info", title: `Notice ${count}` })
+      pending.release()
+      await read
+      await settled()
+
+      expect(test.fellBehind).toHaveBeenCalledTimes(1)
+      const shown = flow(test.recorder).filter((item) =>
+        item.startsWith("notice")
+      )
+      expect(shown.length).toBeLessThan(3)
+      test.close()
+    }
+  )
+
   // ACP: "The snapshot and subsequent live state changes MUST be delivered
   // in order, without replacing a newer state with a stale snapshot". A turn
   // that ends while a page is read is held for the page's replay, and the

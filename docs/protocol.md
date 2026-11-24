@@ -108,7 +108,7 @@ Close codes the gateway sends:
 | `1008` | Policy violation (expired credential, rate or frame size exceeded, or another protocol limit the ACP SDK enforces)                                 | No reconnect; ends connection |
 | `1013` | Gateway at capacity                                                                                                                                | Backs off 30–60 s with jitter |
 | `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
-| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, its waiting requests passed that buffer, or a Session left it behind | Normal reconnect; within 60 s of a rejoin, the backoff grows |
+| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, its waiting requests passed that buffer, a Session left it behind, or a replay held back more than it may | Normal reconnect; within 60 s of a rejoin, the backoff grows |
 
 Any other code triggers a normal reconnect.
 
@@ -120,7 +120,11 @@ member through a queue of `limits.subscriberEvents` events and
 history in standard updates, once per turn. One that overflows the same turn
 again, or whose view cannot be rebuilt, is not kept on the Session: the
 gateway closes its connection with `4409`, which ends every Session's activity
-on it, and the client reconnects and resumes each one.
+on it, and the client reconnects and resumes each one. So it does when a
+replay of a member's view holds back more than 4,096 events or 8 MiB of their
+JSON (`HELD_LIMITS`) before it completes: what a replay holds reaches no
+socket, so no socket bound sees it, and a replay held open while the Session
+streams on would hold without end.
 
 A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
 itself before the gateway reads it, so the client never sends one: it refuses

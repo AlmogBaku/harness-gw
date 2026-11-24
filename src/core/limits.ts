@@ -159,6 +159,14 @@ export const CHILD_FOLLOW_GRACE_MS = 60_000
 export const RESTATED_TERMINAL_OUTPUT = 16_384
 
 /**
+ * The most a member's view holds back while a replay of it is in flight, in
+ * events and in their JSON bytes: past either, the member is a reader that
+ * fell behind, and its connection closes (4409), as no replay that outlasts
+ * it is one its client still waits on.
+ */
+export const HELD_LIMITS = { events: 4_096, bytes: 8 * 1024 * 1024 }
+
+/**
  * Each of a runtime's question words is read whole up to this: it holds a
  * Hermes batch at Hermes' own limits, and neither OpenClaw nor OpenCode bounds
  * a question's text.

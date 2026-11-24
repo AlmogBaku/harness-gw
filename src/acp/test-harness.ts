@@ -654,6 +654,8 @@ export type HarnessOptions = {
   truncated?: boolean
   /** How history is paged; a small reach stands for a long Session. */
   historyReach?: HistoryReach
+  /** What a replay in flight may hold back; the gateway's default when absent. */
+  heldLimits?: { events: number; bytes: number }
   /** Replaces the harness's one-update-per-message history translation. */
   translateHistory?: Translators["translateHistory"]
   /** Gives provider Sessions ids of their own, as a real runtime does. */
@@ -941,6 +943,7 @@ export async function harness(options: HarnessOptions = {}) {
       coordinator,
       runtime: faults.runtime,
       ...(options.historyReach ? { historyReach: options.historyReach } : {}),
+      ...(options.heldLimits ? { heldLimits: options.heldLimits } : {}),
       ...(subscribeTurns
         ? {
             adoption: {
