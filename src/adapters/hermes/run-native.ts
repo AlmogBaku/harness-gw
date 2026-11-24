@@ -10,6 +10,7 @@
  * part of that vocabulary: when one fails Hermes never saw the user's text, so
  * the failure is an outage and the caller must not present it as a refusal.
  */
+import { outputTail } from "../../core/credentials-middleware"
 import type { PendingRequest, RequestReply } from "../../core/events"
 
 import {
@@ -159,10 +160,18 @@ export type HermesProcess = {
   processId: string
   exited: boolean
   exitCode?: number
+  /** The latest of its output Hermes holds, as `process.list` gives it. */
+  output?: string
 }
 
 /** Hermes' answer for a process the live Session does not hold. */
 const PROCESS_NOT_FOUND = 4044
+
+/**
+ * The most of a process's output `process.list` gives: the last 4,000
+ * characters of its buffer (`_session_processes`, `tui_gateway/server.py`).
+ */
+const PROCESS_OUTPUT_TAIL = 4_000
 
 /** A live binding, with the latest `session.info` the server retains for it. */
 export type HermesResumed = {
@@ -916,12 +925,18 @@ export class HermesNativeRuntime implements HermesTurnNative {
         : undefined
       if (!isRecord(row) || !processId) return []
       const exitCode = row.exit_code
+      const tail = row.output_tail
       return [
         {
           processId,
           exited: row.status === "exited",
           ...(Number.isSafeInteger(exitCode)
             ? { exitCode: exitCode as number }
+            : {}),
+          // A tail as long as Hermes gives may begin inside a word its cut
+          // split, which is dropped.
+          ...(typeof tail === "string"
+            ? { output: outputTail(tail, PROCESS_OUTPUT_TAIL - 1) }
             : {}),
         },
       ]

@@ -234,7 +234,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
    */
   const processes = new Map<
     string,
-    { command: string; exited: boolean; exitCode?: number }
+    { command: string; exited: boolean; exitCode?: number; output: string }
   >()
   let nextProcess = 1
 
@@ -556,6 +556,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
               ...(entry.exitCode === undefined
                 ? {}
                 : { exit_code: entry.exitCode }),
+              output_tail: entry.output.slice(-4000),
             })),
           },
         }
@@ -1184,7 +1185,7 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
           },
         ],
       })
-      processes.set(processId, { command, exited: false })
+      processes.set(processId, { command, exited: false, output: "" })
       const result = JSON.stringify({
         output: "Background process started",
         session_id: processId,
@@ -1207,13 +1208,17 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
       })
       return {
         terminalId: `${callId}:terminal`,
-        write: async (text: string) =>
+        // The registry's output sink streams what it buffers.
+        write: async (text: string) => {
+          const entry = processes.get(processId)
+          if (entry) entry.output += text
           emit(
             turn.frame("agent.terminal.output", {
               process_id: processId,
               chunk: text,
             })
-          ),
+          )
+        },
         exit: async (code: number) => {
           const entry = processes.get(processId)
           if (entry) Object.assign(entry, { exited: true, exitCode: code })

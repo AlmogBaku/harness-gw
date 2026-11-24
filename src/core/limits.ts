@@ -151,6 +151,14 @@ export const LINK_WAIT_MS = 10_000
 export const CHILD_FOLLOW_GRACE_MS = 60_000
 
 /**
+ * The most of a terminal's output, in UTF-16 units, its Session's channel
+ * keeps after the turn that started it, to restate it to a member who joins
+ * later: Hermes' own process list gives the last 4,000 characters, and a
+ * reader keeps its view current from there.
+ */
+export const RESTATED_TERMINAL_OUTPUT = 16_384
+
+/**
  * Each of a runtime's question words is read whole up to this: it holds a
  * Hermes batch at Hermes' own limits, and neither OpenClaw nor OpenCode bounds
  * a question's text.

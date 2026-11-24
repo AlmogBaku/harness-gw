@@ -395,30 +395,44 @@ function toolOutputChunk(
   ]
 }
 
+/** Text as ACP carries terminal bytes: its UTF-8 encoding, in base64. */
+function terminalBytes(text: string) {
+  return Buffer.from(text, "utf8").toString("base64")
+}
+
 /**
- * One step of a terminal as ACP's terminal updates: its command and working
- * directory, where named or where `announces` asks for its first update, the
- * output it appends, and its exit. ACP carries terminal output as base64
+ * One step of a terminal as ACP's terminal updates: its command, working
+ * directory and the latest output it holds, as ACP's replacement `output`
+ * snapshot, where named or where `announces` asks for its first update; the
+ * output it appends; and its exit. ACP carries terminal output as base64
  * bytes, so the adapter's text travels as its UTF-8 encoding.
  */
 function terminalUpdates(
   context: TranslateContext,
-  { terminalId, command, cwd, data, exit }: TerminalTurnEvent,
+  { terminalId, command, cwd, data, output, exit }: TerminalTurnEvent,
   announces: boolean
 ): Built<SessionUpdate>[] {
   const updates: Built<SessionUpdate>[] = []
-  if (announces || command !== undefined || cwd !== undefined)
+  if (
+    announces ||
+    command !== undefined ||
+    cwd !== undefined ||
+    output !== undefined
+  )
     updates.push({
       sessionUpdate: "terminal_update",
       terminalId,
       ...(command === undefined ? {} : { command }),
       ...(cwd === undefined ? {} : { cwd }),
+      ...(output === undefined
+        ? {}
+        : { output: { data: terminalBytes(output) } }),
     })
   if (data)
     updates.push({
       sessionUpdate: "terminal_output_chunk",
       terminalId,
-      data: Buffer.from(data, "utf8").toString("base64"),
+      data: terminalBytes(data),
     })
   if (exit)
     updates.push({
@@ -434,10 +448,16 @@ function terminalUpdates(
 
 /**
  * A terminal still running after its turn, as its terminal updates alone:
- * the call it belongs to already carries it.
+ * the call it belongs to already carries it. A step that neither appends
+ * output nor ends it restates the terminal, as a `terminal_update` whatever
+ * it names, so a list that names the terminal follows its announcement.
  */
 export const translateBackgroundTerminal = ((event, context) =>
-  terminalUpdates(context, event, false)) satisfies TranslateBackgroundTerminal
+  terminalUpdates(
+    context,
+    event,
+    event.data === undefined && event.exit === undefined
+  )) satisfies TranslateBackgroundTerminal
 
 /**
  * A terminal's first output announces it, both as ACP's terminal and as the

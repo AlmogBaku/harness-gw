@@ -47,13 +47,18 @@ const QUESTION_CALLS_PER_SESSION = 10
 const TERMINAL_TAIL = 262_144
 
 /**
- * The last `TERMINAL_TAIL` units of a terminal's output, masked. A cut inside
- * a word drops that word, so a name's or a key's end is never read whole.
+ * The last `max` units of a terminal's output. A cut inside a word drops
+ * that word, so a name's or a key's end is never read whole, masked or not.
  */
+export function outputTail(data: string, max: number) {
+  if (data.length <= max) return data
+  const tail = data.slice(-max)
+  return tail.slice(tail.search(/\s/u) + 1)
+}
+
+/** The last `TERMINAL_TAIL` units of a terminal's output, masked. */
 function maskedTerminalData(data: string) {
-  if (data.length <= TERMINAL_TAIL) return maskCredentials(data)
-  const tail = data.slice(-TERMINAL_TAIL)
-  return maskCredentials(tail.slice(tail.search(/\s/u) + 1))
+  return maskCredentials(outputTail(data, TERMINAL_TAIL))
 }
 
 /** Text that reads as a JSON object, array, or string, parsed; anything else `undefined`. */
@@ -163,12 +168,13 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent | undefined {
           : {}),
       }
     case TurnEventKind.TerminalOutput: {
-      const { command, cwd, data, ...rest } = event
+      const { command, cwd, data, output, ...rest } = event
       return {
         ...rest,
         ...(command === undefined ? {} : { command: maskCredentials(command) }),
         ...(cwd === undefined || containsCredential(cwd) ? {} : { cwd }),
         ...(data === undefined ? {} : { data: maskedTerminalData(data) }),
+        ...(output === undefined ? {} : { output: maskedTerminalData(output) }),
       }
     }
     case TurnEventKind.ChildSessionUpdated:

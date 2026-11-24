@@ -6213,22 +6213,38 @@ describe("Hermes child Sessions", () => {
     })
 
     // Nobody holds the Session: nothing reads its processes. A resume reads
-    // them once, and is told how each stands before its state.
+    // them once, and is told how each stands before its state, with the
+    // latest output Hermes holds, ACP's replacement snapshot.
     it.each([
       {
         stands: "still running",
-        listed: [{ processId: "proc_1", exited: false }],
+        listed: [
+          {
+            processId: "proc_1",
+            exited: false,
+            output: "\u001b[32mready\u001b[0m\n",
+          },
+        ],
         exit: undefined,
+        output: "ready\n",
       },
       {
         stands: "exited",
-        listed: [{ processId: "proc_1", exited: true, exitCode: 1 }],
+        listed: [
+          {
+            processId: "proc_1",
+            exited: true,
+            exitCode: 1,
+            output: "failed\n",
+          },
+        ],
         exit: { exitCode: 1 },
+        output: "failed\n",
       },
-      { stands: "pruned", listed: [], exit: {} },
+      { stands: "pruned", listed: [], exit: {}, output: undefined },
     ])(
       "reads no process while nobody holds its Session, and restates one $stands on a resume's read",
-      async ({ listed: now, exit }) => {
+      async ({ listed: now, exit, output }) => {
         const clock = useFakeClock()
         const { engine, listed, processes, unsubscribe, handle, turnId } =
           await backgroundProcess()
@@ -6253,6 +6269,7 @@ describe("Hermes child Sessions", () => {
             {
               ...PROCESS_TERMINAL,
               command: "npm run dev",
+              ...(output === undefined ? {} : { output }),
               ...(exit ? { exit } : {}),
             },
           ],

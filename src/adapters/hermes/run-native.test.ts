@@ -920,6 +920,32 @@ describe("Hermes child watch", () => {
   })
 })
 
+describe("Hermes native processes", () => {
+  // `_session_processes` lists the live Session's processes with the last
+  // 4,000 characters of each one's output, cut wherever they fall.
+  it("reads each process's exit and the latest of its output, less a word the tail's cut split", async () => {
+    const cut = `ken=abcdefgh1234 ${"x".repeat(3_983)}`
+    const { native, router } = runtime({
+      "process.list": async () => ({
+        processes: [
+          { session_id: "proc_1", status: "running", output_tail: "ready\n" },
+          { session_id: "proc_2", status: "exited", exit_code: 3 },
+          { session_id: "proc_3", status: "running", output_tail: cut },
+        ],
+      }),
+    })
+
+    await expect(native.processes("live-secret")).resolves.toEqual([
+      { processId: "proc_1", exited: false, output: "ready\n" },
+      { processId: "proc_2", exited: true, exitCode: 3 },
+      { processId: "proc_3", exited: false, output: "x".repeat(3_983) },
+    ])
+    expect(router.calls("process.list").map(({ params }) => params)).toEqual([
+      { session_id: "live-secret" },
+    ])
+  })
+})
+
 describe("Hermes native interrupt", () => {
   it("reports an acknowledged interrupt", async () => {
     const { native, router } = runtime({

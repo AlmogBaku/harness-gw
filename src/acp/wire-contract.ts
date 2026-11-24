@@ -1724,7 +1724,7 @@ export function runWireContract(
 
       row(
         "backgroundTerminalMasked",
-        "masks a credential in the command and output of a process that outlives its turn for an operator, live and on a resume, and shows a guest nothing of it",
+        "masks a credential in the command and output of a process that outlives its turn for an operator, live and in the output a resume restates it with, and shows a guest nothing of it",
         async (harness) => {
           const { clock, turn, invite } = harness
           const operatorId = await until(clock, invite(GUEST_REF))
@@ -1753,22 +1753,30 @@ export function runWireContract(
           const reader = await reload(harness, operatorId)
           await until(clock, server.exit(0))
 
+          const decoded = (data: string) =>
+            Buffer.from(data, "base64").toString("utf8")
           const shown = (client: WireClient) =>
             client.updates.flatMap((update) =>
               SessionUpdate.isTerminalUpdate(update) &&
               update.terminalId === server.terminalId
-                ? [update.command ?? ""]
+                ? [
+                    update.command ?? "",
+                    ...(update.output ? [decoded(update.output.data)] : []),
+                  ]
                 : SessionUpdate.isTerminalOutputChunk(update) &&
                     update.terminalId === server.terminalId
-                  ? [Buffer.from(update.data, "base64").toString("utf8")]
+                  ? [decoded(update.data)]
                   : []
             )
           for (const client of [plain, reader]) {
             const words = shown(client).join("\n")
             expect(words).toContain("deploy --token=")
+            // What it printed after its turn, live and as the snapshot a
+            // resume restates it with.
+            expect(words).toContain("password: ")
+            expect(words).not.toContain(secret)
             expect(JSON.stringify(framesOf(client))).not.toContain(secret)
           }
-          expect(shown(plain).join("\n")).toContain("password: ")
           // A guest is shown no terminal, during its turn or after it.
           expect(framesNaming(guest, server.terminalId)).toEqual([])
           expect(JSON.stringify(framesOf(guest))).not.toContain(secret)

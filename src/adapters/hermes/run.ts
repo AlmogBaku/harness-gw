@@ -190,7 +190,9 @@ function endOf(
 /** One step of the terminal a process runs as, as the gateway carries it. */
 function terminalStep(
   { terminalId, toolCallId, command }: ProcessTerminal,
-  step: Pick<TerminalTurnEvent, "data" | "exit"> & { restates?: boolean }
+  step: Pick<TerminalTurnEvent, "data" | "output" | "exit"> & {
+    restates?: boolean
+  }
 ): TerminalTurnEvent {
   return {
     kind: TurnEventKind.TerminalOutput,
@@ -198,6 +200,7 @@ function terminalStep(
     toolCallId,
     ...(step.restates && command ? { command } : {}),
     ...(step.data === undefined ? {} : { data: step.data }),
+    ...(step.output === undefined ? {} : { output: step.output }),
     ...(step.exit === undefined ? {} : { exit: step.exit }),
   }
 }
@@ -1253,11 +1256,17 @@ export class HermesTurnEngine {
         if (!judged.has(processId)) continue
         const exit = endOf(listed, processId)
         if (exit) kept?.delete(processId)
+        // A restatement carries the latest output Hermes holds, whole.
+        const tail = restate ? listed.get(processId)?.output : undefined
         if (exit || restate)
           this.#reportTerminal(
             scope,
             terminal.turnId,
-            terminalStep(terminal, { restates: restate, exit })
+            terminalStep(terminal, {
+              restates: restate,
+              exit,
+              ...(tail === undefined ? {} : { output: terminalText(tail) }),
+            })
           )
       }
       if (kept?.size === 0) this.#terminals.delete(key)
@@ -1266,9 +1275,10 @@ export class HermesTurnEngine {
 
   /**
    * Reads how each terminal the Session's turns left running stands, and
-   * restates each to its listeners: one still running with its command, one
-   * that ended with its exit too. One Hermes cannot be asked about now is
-   * restated as last known, and the poll that follows ends it.
+   * restates each to its listeners: one still running with its command and
+   * the latest output Hermes holds, one that ended with its exit too. One
+   * Hermes cannot be asked about now is restated as last known, and the poll
+   * that follows ends it.
    */
   async readTerminals(scope: HermesTurnScope) {
     const kept = this.#terminals.get(sessionKey(scope))

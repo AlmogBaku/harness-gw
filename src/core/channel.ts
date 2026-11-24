@@ -23,8 +23,10 @@ import {
   JOIN_DEADLINE_MS,
   READING_BACKOFF,
   READING_RETRIES,
+  RESTATED_TERMINAL_OUTPUT,
   SETUP_READ_MS,
 } from "./limits"
+import { outputTail } from "./credentials-middleware"
 import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
   isAwaitingStopFailure,
@@ -231,6 +233,11 @@ type BackgroundTerminal = {
   turnId: string
   /** Its command, folder and exit as last reported, without its output. */
   report: TerminalTurnEvent
+  /**
+   * The latest of its output the channel was shown, its last
+   * `RESTATED_TERMINAL_OUTPUT` units, unmasked: each member's stack masks it.
+   */
+  output?: string
   /** When its exit was reported, on the channels' clock. */
   endedAt?: number
 }
@@ -615,19 +622,28 @@ function createChannelTable({
     return [...channel.children.values()]
   }
 
-  /** Folds a background terminal's step, output aside, into its restatement. */
+  /**
+   * Folds a background terminal's step into its restatement: its command,
+   * folder and exit, and its output, which a snapshot replaces and a chunk
+   * appends to, as far as `RESTATED_TERMINAL_OUTPUT` reaches back.
+   */
   function noteTerminal(
     channel: Channel,
     turnId: string,
     event: TerminalTurnEvent
   ) {
-    const step = { ...event }
-    delete step.data
+    const { data, output, ...step } = event
     const known = channel.terminals.get(step.terminalId)
     const merged = known ? { ...known.report, ...step } : step
+    const held =
+      output ??
+      (data === undefined ? known?.output : `${known?.output ?? ""}${data}`)
     channel.terminals.set(step.terminalId, {
       turnId,
       report: merged,
+      ...(held === undefined
+        ? {}
+        : { output: outputTail(held, RESTATED_TERMINAL_OUTPUT) }),
       ...(merged.exit ? { endedAt: known?.endedAt ?? clock.now() } : {}),
     })
   }
@@ -635,14 +651,20 @@ function createChannelTable({
   /**
    * The background terminals a member who joins now is told of: each still
    * running, and each that exited within the grace, which a reload or a
-   * reconnect may have missed.
+   * reconnect may have missed. Each is restated whole, with the latest of
+   * its output the channel holds as its snapshot.
    */
   function currentTerminals(channel: Channel) {
     const now = clock.now()
     for (const [terminalId, { endedAt }] of channel.terminals)
       if (endedAt !== undefined && now - endedAt >= CHILD_FOLLOW_GRACE_MS)
         channel.terminals.delete(terminalId)
-    return [...channel.terminals.values()]
+    return [...channel.terminals.values()].map(
+      ({ turnId, report, output }) => ({
+        turnId,
+        report: output === undefined ? report : { ...report, output },
+      })
+    )
   }
 
   /**
@@ -3048,21 +3070,29 @@ class Membership {
   }
 
   /**
-   * Shows one event of a child that outlived its turn: the child's own, under
-   * its id, at no position in the turn that spawned it.
-   */
-  /**
    * Shows one step of a terminal still running after its turn: the
-   * Session's own, at no position in the turn that started it.
+   * Session's own, at no position in the turn that started it. One this
+   * member follows no step of yet is restated first, as ACP announces an
+   * item before any list names it, should output be the first it hears.
    */
   #showBackgroundTerminal(turnId: string, event: TerminalTurnEvent) {
-    this.#deliver({
-      kind: "terminal",
-      stream: this.#backgroundStream(turnId),
-      event,
-    }).catch((err: unknown) =>
-      this.#options.logger.error({ err }, "membership.terminal.failed")
-    )
+    const { terminalId, toolCallId } = event
+    const known = this.#followed.has(workKey({ kind: "terminal", terminalId }))
+    const steps: TerminalTurnEvent[] =
+      known || event.data === undefined
+        ? [event]
+        : [
+            { kind: TurnEventKind.TerminalOutput, terminalId, toolCallId },
+            event,
+          ]
+    for (const step of steps)
+      this.#deliver({
+        kind: "terminal",
+        stream: this.#backgroundStream(turnId),
+        event: step,
+      }).catch((err: unknown) =>
+        this.#options.logger.error({ err }, "membership.terminal.failed")
+      )
   }
 
   /** The stream a background event of `turnId`'s names, one per turn. */
@@ -3075,6 +3105,10 @@ class Membership {
     return stream
   }
 
+  /**
+   * Shows one event of a child that outlived its turn: the child's own, under
+   * its id, at no position in the turn that spawned it.
+   */
   #showBackgroundChild(turnId: string, event: ChildTurnEvent) {
     this.#deliver({
       kind: "child",

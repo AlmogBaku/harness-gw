@@ -1326,6 +1326,110 @@ describe("operator ACP listener", () => {
       test.close()
     })
 
+    /** Each `terminal_update` and listing state a browser read, in order. */
+    function terminalTrail(
+      recorder: Recorder,
+      terminalId: string,
+      from = 0
+    ): string[] {
+      return updates({ ...recorder, entries: recorder.entries.slice(from) })
+        .filter(({ sessionId }) => sessionId === CREATED)
+        .flatMap(({ update }) => {
+          if (
+            update.sessionUpdate === "terminal_update" &&
+            update.terminalId === terminalId
+          )
+            return ["announced"]
+          if (
+            update.sessionUpdate === "terminal_output_chunk" &&
+            update.terminalId === terminalId
+          )
+            return ["output"]
+          return update.sessionUpdate === "state_update" &&
+            JSON.stringify(update.background).includes(terminalId)
+            ? ["listed"]
+            : []
+        })
+    }
+
+    // ACP: an item is announced "before the first snapshot that lists it",
+    // with a terminal's `terminal_update`, whatever its runtime first reports
+    // of it: here neither its command nor anything but its output.
+    it("announces a terminal before any state lists it, live and to a member who joins later, should output be the first heard of it", async () => {
+      const { test, listener, turnId } = await outlived()
+      const terminal = {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "run-1:terminal",
+        toolCallId: "run-1",
+      } as const
+      listener.onTerminal!(turnId, { ...terminal, data: "booting\n" })
+      await vi.waitFor(() =>
+        expect(terminalTrail(test.recorder, "run-1:terminal")).toContain(
+          "listed"
+        )
+      )
+
+      const later = await test.connect("connection-2")
+      await later.list()
+      await later.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+
+      expect(terminalTrail(test.recorder, "run-1:terminal")).toEqual([
+        "announced",
+        "listed",
+        "output",
+      ])
+      expect(terminalTrail(later.recorder, "run-1:terminal")).toEqual([
+        "announced",
+        "listed",
+      ])
+      later.close()
+      test.close()
+    })
+
+    // ACP: "While it is listed, the Agent SHOULD keep its output current",
+    // and a terminal's `output` is a replacement snapshot: a member who joins
+    // later is shown the latest the gateway holds, masked as its live output
+    // is.
+    it("restates a terminal to a member who joins later with the latest output it printed after its turn, masked", async () => {
+      const { test, listener, turnId } = await outlived()
+      const secret = ["token", "abcdefgh1234"].join("=")
+      const terminal = {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "run-1:terminal",
+        toolCallId: "run-1",
+      } as const
+      listener.onTerminal!(turnId, { ...terminal, command: "npm run dev" })
+      listener.onTerminal!(turnId, { ...terminal, data: "ready\n" })
+      listener.onTerminal!(turnId, {
+        ...terminal,
+        data: `deploy --${secret}\n`,
+      })
+
+      const later = await test.connect("connection-2")
+      await later.list()
+      await later.agent.request(methods.agent.session.resume, {
+        sessionId: CREATED,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+
+      const restated = updates(later.recorder).flatMap(({ update }) =>
+        update.sessionUpdate === "terminal_update" && update.output
+          ? [Buffer.from(update.output.data, "base64").toString("utf8")]
+          : []
+      )
+      expect(restated).toEqual([
+        "ready\ndeploy --token=[credential redacted]\n",
+      ])
+      expect(JSON.stringify(later.recorder.entries)).not.toContain("abcdefgh")
+      later.close()
+      test.close()
+    })
+
     it("cancels it between turns through the runtime", async () => {
       const { test, stopChild } = await outlived()
 

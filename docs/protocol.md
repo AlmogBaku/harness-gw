@@ -730,7 +730,8 @@ under `docs/runtimes/` says what it reports of such work.
 
 - An item is announced before the first list that names it: a child's
   `subagent_update` at work, or a terminal's `terminal_update`, comes first,
-  and a child this connection could not announce is never listed. A child's
+  whatever its runtime first reports of it, output alone included, and a child
+  this connection could not announce is never listed. A child's
   report that it is over (idle, cancelled or failed), or a terminal's
   `exitStatus`, comes before the list that drops it.
 - When the list changes, the Session's state is said again with the new list:
@@ -740,10 +741,13 @@ under `docs/runtimes/` says what it reports of such work.
 - A resume restates each listed child and terminal before the state that
   closes it, which carries the list, so no list reaches a resuming view ahead
   of the state its resume closes with. A terminal is restated as its command
-  and folder, and its exit where it has one, without the output so far. A
-  Session nobody held is first asked of its runtime how each process its turns
-  left running stands, which the resume's state waits for up to 2 s
-  (`SETUP_READ_MS`); a read slower than that lands as updates after it.
+  and folder, its exit where it has one, and the latest of its output the
+  gateway holds as ACP's replacement `output` snapshot: what it printed after
+  its turn, its last 16,384 characters (`RESTATED_TERMINAL_OUTPUT`), or what
+  its runtime's read gives, masked as its live output is. A Session nobody
+  held is first asked of its runtime how each process its turns left running
+  stands, which the resume's state waits for up to 2 s (`SETUP_READ_MS`); a
+  read slower than that lands as updates after it.
 - A child's own `state_update`s, and the state its parent's `subagent_update`
   mirrors, carry `background: []`: the gateway follows no background work of a
   child's own, so a child shown idle is over.
@@ -1010,9 +1014,10 @@ twice leaves one placeholder per credential.
 Tool data is JSON-aware: a JSON value, and text that parses as one, is masked
 by key and by value, a secret-named key keeping its name and losing any value
 but a boolean or `null`; JSON with nothing to mask is sent as written, and
-streamed output is masked as plain text, never re-encoded. A terminal's output
-keeps its last 262,144 UTF-16 units, the most a browser keeps of one, without
-the word the cut lands in; nothing else is cut. Each turn event is masked
+streamed output is masked as plain text, never re-encoded. A terminal's output,
+a chunk or a restated `output` snapshot, keeps its last 262,144 UTF-16 units,
+the most a browser keeps of one, without the word the cut lands in, and so does
+every shorter tail the gateway or a runtime keeps of it; nothing else is cut. Each turn event is masked
 once, however many members are shown it. An MCP App view's files are served from
 the stored call, never from its masked input.
 
