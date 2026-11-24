@@ -35,6 +35,7 @@ import {
 import {
   ADMISSION_DEADLINE_MS,
   CLOSE_DEADLINE_MS,
+  JOIN_DEADLINE_MS,
   READING_BACKOFF,
   SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
@@ -4983,6 +4984,45 @@ describe("History pages", () => {
       "replay_complete",
       [{ type: "subagent", sessionId: "child-1" }],
     ])
+    test.close()
+  })
+
+  // A browser gives a positioned rejoin 45 s, and resends one that outlasts
+  // it, which a resume still in flight refuses for the rest of the
+  // transport: the wait for a page counts toward the resume's 30 s join
+  // deadline, so it answers within it however long the page reads.
+  it("answers a resume that waits for a page by its join deadline", async () => {
+    const pending = gate()
+    let hold = false
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+    })
+    await test.list()
+    await open(test)
+    hold = true
+    const page = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalled())
+    const clock = useFakeClock()
+    let answered = false
+    const resumed = test.agent
+      .request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      .finally(() => (answered = true))
+    resumed.catch(() => undefined)
+
+    await clock.advance(JOIN_DEADLINE_MS - 1)
+    expect(answered).toBe(false)
+    await clock.advance(1)
+    await clock.advance(0)
+
+    expect(answered).toBe(true)
+    pending.release()
+    await page.catch(() => undefined)
     test.close()
   })
 

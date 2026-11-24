@@ -1189,6 +1189,7 @@ function drivenMember() {
     replayStart: undefined as { turnId: string; ids: Set<string> } | undefined,
   }
   const follows: ReturnType<typeof controlledSubscription>[] = []
+  const calls = { recover: 0, history: 0 }
   let read: Promise<void> | undefined
   const coordinator = {
     snapshot: () => ({
@@ -1207,6 +1208,7 @@ function drivenMember() {
     childReports: () => [],
     workReports: () => ({ terminals: [], finished: [] }),
     recover: async () => {
+      calls.recover += 1
       const next = follows.shift()
       if (!next) throw new Error("No subscription was armed")
       return next.subscription
@@ -1224,6 +1226,7 @@ function drivenMember() {
     coordinator,
     runtime: {
       history: async () => {
+        calls.history += 1
         await read
         return {
           sessionId: "session-1",
@@ -1267,6 +1270,8 @@ function drivenMember() {
     membership,
     shown,
     logs,
+    /** How many follows and history reads the coordinator was asked. */
+    calls,
     /** Arms the subscription the next follow gets. */
     follow(replayed = 0) {
       const next = controlledSubscription(turn.turnId, replayed)
@@ -1380,6 +1385,57 @@ describe("a membership's closing state", () => {
         .records()
         .filter(({ message }) => message === "membership.state.wait_passed")
     ).toHaveLength(1)
+  })
+
+  // One build of a view at a time: a resume that comes while the view is
+  // rebuilt waits for the rebuild, and a rebuild a resume's own stream asks
+  // for waits for the resume, which the stream that fell behind no longer
+  // holds up.
+  it("starts a resume that comes during a rebuild only once the rebuild is done", async () => {
+    const clock = useFakeClock()
+    const member = drivenMember()
+    const first = member.follow()
+    first.push(turnEvent(1, { kind: TurnEventKind.TurnStarted }))
+    await member.membership.resume({ turnId: "turn-1", after: 0 })
+    const release = member.holdRead()
+    first.fail(new FanoutOverflowError(4, 400))
+    await clock.advance(0)
+    member.follow().push(turnEvent(2, chunkAt(2, "Two").event))
+    member.turn.through = 2
+    const follows = member.calls.recover
+
+    const resumed = member.membership.resume({ turnId: "turn-1", after: 1 })
+    await clock.advance(0)
+    expect(member.calls.recover).toBe(follows)
+    member.turn.state = "idle"
+    release()
+
+    expect(await settledWithin(clock.advance, resumed)).toBe(true)
+    expect(member.shown.at(-1)).toBe("state idle")
+  })
+
+  it("rebuilds a view whose resume's own stream fell behind once that resume is done", async () => {
+    const clock = useFakeClock()
+    const member = drivenMember()
+    const first = member.follow()
+    first.push(turnEvent(1, { kind: TurnEventKind.TurnStarted }))
+    await member.membership.resume({ turnId: "turn-1", after: 0 })
+    first.subscription.close()
+    await clock.advance(0)
+    // The resume's stream falls behind before it showed what it buffered.
+    const second = member.follow(3)
+    second.push(turnEvent(2, chunkAt(2, "Two").event))
+    second.fail(new FanoutOverflowError(4, 400))
+    member.turn.through = 4
+
+    const resumed = member.membership.resume({ turnId: "turn-1", after: 1 })
+
+    expect(await settledWithin(clock.advance, resumed)).toBe(true)
+    await clock.advance(100)
+    expect(member.calls.history).toBe(1)
+    expect(member.shown.indexOf("history")).toBeGreaterThan(
+      member.shown.indexOf("replay-complete")
+    )
   })
 
   it("keeps a stream a resume replaced from releasing the state its replacement owes", async () => {

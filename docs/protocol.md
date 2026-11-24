@@ -508,7 +508,10 @@ page read is a resume with a cursor too, and closes the same way (see
 of a Session at a time: a resume, or a page read, of a Session whose resume
 is still in flight on that connection is invalid params, and a resume sent
 while one of its pages is read waits for that page, then runs, counting as in
-flight while it waits.
+flight while it waits. So it waits for a rebuild of the view the gateway runs
+itself, as for a reader that fell behind, and such a rebuild waits for a
+resume in flight. The wait counts toward the resume's 30 s join deadline, so
+a resume always answers within it, before the browser's own deadline.
 
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names

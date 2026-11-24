@@ -1283,12 +1283,13 @@ export function createChannels(options: CreateChannelsOptions) {
   async function resumeView(
     membership: Membership,
     position: ResumePosition,
-    view?: ResumeView
+    view: ResumeView | undefined,
+    page: Promise<unknown> | undefined
   ): Promise<CommandResults["resume"]> {
     try {
       // The setup is read beside the replay, and told after it.
       const [resumed, readings] = await Promise.all([
-        membership.resume(position, view),
+        membership.resume(position, view, page),
         membership.readSetup(),
       ])
       await membership.showRow()
@@ -1392,8 +1393,12 @@ export function createChannels(options: CreateChannelsOptions) {
       if (resuming.has(membership)) throw new CommandRefusedError("invalid")
       resuming.add(membership)
       try {
-        await paging.get(membership)?.catch(() => undefined)
-        return await resumeView(membership, position, view)
+        return await resumeView(
+          membership,
+          position,
+          view,
+          paging.get(membership)
+        )
       } finally {
         resuming.delete(membership)
       }
@@ -1723,6 +1728,8 @@ class Membership {
    * once its coordinator settles whether it still runs.
    */
   #interrupted: string | undefined
+  /** The build of this member's view in flight, which the next waits for. */
+  #viewing: Promise<unknown> | undefined
   /**
    * Set while a from-start replay rebuilds the view: the channel waits for it.
    */
@@ -2471,13 +2478,10 @@ class Membership {
       fromStart: false,
       positioned: true,
       paged: this.#paged,
-    }
+    },
+    page?: Promise<unknown>
   ) {
     this.#releaseCells()
-    // A resume with a cursor replays, and holds from its request on all it
-    // does not replay, as ACP has only history precede `replay_complete`.
-    const replay =
-      view.fromStart || view.positioned ? this.#openReplay() : undefined
     // The resume answers before its join lands; a Session found gone between
     // the two still ends this member.
     if (!this.pending)
@@ -2488,7 +2492,24 @@ class Membership {
       )
     this.#send({ type: "join" })
     this.#paged = view.paged
-    return unlessAborted(this.#resume(position, view, replay), this.#detaching)
+    let replay: Replay | undefined
+    // An older page this member reads, and a build of its view in flight,
+    // finish first, inside the join's deadline, so the resume answers within
+    // it whatever they take, and they show all they owe before this replay
+    // holds anything back.
+    const start = () => {
+      if (this.detached) throw new MembershipDetachedError()
+      // A resume with a cursor replays, and holds from here on all it does
+      // not replay, as ACP has only history precede `replay_complete`.
+      replay =
+        view.fromStart || view.positioned ? this.#openReplay() : undefined
+      return this.#resume(position, view, replay)
+    }
+    // With nothing to wait for it starts at once, as its request came.
+    const resumed = this.#afterView(() =>
+      page ? page.catch(() => undefined).then(start) : start()
+    )
+    return unlessAborted(resumed, this.#detaching)
       .catch((cause: unknown) => {
         // A join its deadline cut short; the membership's log names its Session.
         if (cause instanceof MembershipDetachedError && !this.#parted)
@@ -2622,18 +2643,45 @@ class Membership {
   async #rebuild() {
     if (this.detached || this.pending) return
     try {
-      await this.#resume(
-        {},
-        {
-          fromStart: true,
-          positioned: false,
-          paged: this.#paged,
-        }
-      )
+      await this.#afterView(async () => {
+        if (this.detached) return
+        return this.#resume(
+          {},
+          {
+            fromStart: true,
+            positioned: false,
+            paged: this.#paged,
+          }
+        )
+      })
     } catch (cause) {
       await this.report(cause)
       this.#cannotCatchUp()
     }
+  }
+
+  /**
+   * Runs one build of this member's view, a resume's or a rebuild's, once
+   * the one in flight has settled: two at once would each clear and rebuild
+   * the same view. Neither waits on the other while it holds anything the
+   * other needs: a stream marks itself caught up and ended before the
+   * rebuild it starts waits here, so a resume in flight finishes without it.
+   */
+  #afterView<T>(task: () => Promise<T>): Promise<T> {
+    const before = this.#viewing
+    let run: Promise<T>
+    try {
+      // One with nothing in flight starts at once.
+      run = before ? before.catch(() => undefined).then(task) : task()
+    } catch (cause) {
+      run = Promise.reject(cause as Error)
+    }
+    this.#viewing = run
+    const settle = () => {
+      if (this.#viewing === run) this.#viewing = undefined
+    }
+    run.then(settle, settle)
+    return run
   }
 
   /**
@@ -3831,8 +3879,10 @@ class Membership {
     } finally {
       if (!this.#owner.stale(generation)) this.#subscription = undefined
     }
-    // It shows nothing more, before what follows here waits on a state: a
-    // rebuild this stream starts is never kept waiting on the stream itself.
+    // It shows nothing more, before what follows here waits on a view: a
+    // rebuild this stream starts, or the resume in flight that rebuild waits
+    // for, is never kept waiting on the stream itself.
+    view.caughtUp()
     this.#endShown(streamed)
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
