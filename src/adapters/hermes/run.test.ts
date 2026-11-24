@@ -6277,13 +6277,25 @@ describe("Hermes child Sessions", () => {
       }
     )
 
-    it("stops a terminal's process through process.kill, during its turn or after it", async () => {
-      const { engine, killProcess } = await backgroundProcess(() => [])
-      await engine.stopTerminal(scope, "run-1:terminal")
-      await engine.stopTerminal(scope, "run-2:terminal")
+    // ACP's close stops each listed terminal's process, whether its turn
+    // still runs or the process outlived it; one the Session never ran is
+    // left alone.
+    it.each([
+      { when: "during its turn", ended: false },
+      { when: "after it", ended: true },
+    ])(
+      "stops a terminal's process through process.kill $when",
+      async ({ ended }) => {
+        const { engine, handle, killProcess } = await backgroundProcess((t) =>
+          ended ? [t.complete("m1", "Started.")] : []
+        )
+        if (ended) await collect(handle)
+        await engine.stopTerminal(scope, "run-1:terminal")
+        await engine.stopTerminal(scope, "run-2:terminal")
 
-      expect(killProcess.mock.calls).toEqual([["live-secret", "proc_1"]])
-    })
+        expect(killProcess.mock.calls).toEqual([["live-secret", "proc_1"]])
+      }
+    )
   })
 
   it("streams a child's summary as its reply where the mirror relayed none", async () => {

@@ -944,6 +944,59 @@ describe("Hermes native processes", () => {
       { session_id: "live-secret" },
     ])
   })
+
+  it("kills one process on the live Session", async () => {
+    const { native, router } = runtime({
+      "process.kill": async () => ({ status: "killed", exit_code: -15 }),
+    })
+
+    await native.killProcess("live-secret", "proc_1")
+
+    expect(router.calls("process.kill").map(({ params }) => params)).toEqual([
+      { session_id: "live-secret", process_id: "proc_1" },
+    ])
+  })
+
+  // A process the Session no longer holds has nothing left to stop; a kill
+  // Hermes could not make, or a refusal, is a close that did not land.
+  it.each([
+    [
+      "a process Hermes holds no longer as stopped",
+      () => {
+        throw new HermesRpcRejectedError(4044, "no such process")
+      },
+      undefined,
+    ],
+    [
+      "a kill Hermes could not make as an outage",
+      async () => ({
+        status: "error",
+        error: "permission denied",
+      }),
+      HermesUnavailableError,
+    ],
+    [
+      "any other refusal as an outage",
+      () => {
+        throw new HermesRpcRejectedError(5010, "registry failed")
+      },
+      HermesUnavailableError,
+    ],
+    [
+      "a lost answer as uncertain",
+      () => {
+        throw new HermesRpcUncertainError()
+      },
+      HermesRpcUncertainError,
+    ],
+  ] as const)("reports %s", async (_case, kill, expected) => {
+    const { native } = runtime({ "process.kill": async () => kill() })
+
+    const killed = native.killProcess("live-secret", "proc_1")
+
+    if (expected) await expect(killed).rejects.toBeInstanceOf(expected)
+    else await expect(killed).resolves.toBeUndefined()
+  })
 })
 
 describe("Hermes native interrupt", () => {
