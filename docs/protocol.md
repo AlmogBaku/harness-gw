@@ -744,9 +744,14 @@ under `docs/runtimes/` says what it reports of such work.
   the state this connection was last shown, a repeated snapshot that moves
   nothing. It carries that state's stop reason, but not the turn's `usage` or
   its `_meta.hgw.cost`, which a client counts once.
-- A resume restates each listed child and terminal before the state that
-  closes it, which carries the list, so no list reaches a resuming view ahead
-  of the state its resume closes with. A terminal is restated as its command
+- Every resume, from any cursor and on a connection that holds the Session
+  already too, rebuilds the list from where the work is kept: the Session's
+  channel for work that outlived its turns, the live turn's journal for work
+  its calls left running before the replay's cut, and what the replay then
+  shows. It restates each listed child and terminal the replay did not show
+  before the state that closes it, which carries the list, so no list
+  reaches a resuming view ahead of the state its resume closes with, or
+  names work it was not told of. A terminal is restated as its command
   and folder, its exit where it has one, and the latest of its output the
   gateway holds as ACP's replacement `output` snapshot: what it printed after
   its turn, its last 16,384 characters (`RESTATED_TERMINAL_OUTPUT`), or what

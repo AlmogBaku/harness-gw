@@ -31,6 +31,7 @@ import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
   isAwaitingStopFailure,
   isChildTurnEvent,
+  withoutOutput,
   isRedialableFailure,
   ChildSessionStatus,
   ReplyStatus,
@@ -216,10 +217,28 @@ type ChildReport = TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>
  */
 type FollowedWork = {
   item: BackgroundWork
+  /** The turn that reported it, and its reports merged, its output aside. */
+  turnId: string
+  step: ChildReport | TerminalTurnEvent
   /** The tool call that started it, once a report named it. */
   toolCallId?: string
   detached: boolean
   runs: boolean
+  /** The resume of this member's view a step of it was last shown in. */
+  shownIn?: number
+}
+
+/** What one step of a piece of work tells, as a membership notes it. */
+type WorkStep = {
+  turnId: string
+  step: ChildReport | TerminalTurnEvent
+  toolCallId: string | undefined
+  /** It came between turns, which detaches it. */
+  betweenTurns: boolean
+  /** Whether it still runs, where the step says. */
+  stillRuns: boolean | undefined
+  /** It was shown to the member, rather than read back for a resume. */
+  shown: boolean
 }
 
 type BackgroundChild = {
@@ -667,6 +686,14 @@ function createChannelTable({
     )
   }
 
+  /** Tells `member` each child and terminal that outlived its turn. */
+  function restateWork(channel: Channel, member: MembershipDelivery) {
+    for (const { turnId, report } of currentChildren(channel))
+      member.child(turnId, report)
+    for (const { turnId, report } of currentTerminals(channel))
+      member.terminal(turnId, report)
+  }
+
   /**
    * The last member left. A child that outlived its turn is still followed
    * for a while, so a reload or a reconnect comes back to it followed, and
@@ -816,16 +843,23 @@ function createChannelTable({
       // A turn the runtime started while nobody watched found no member to
       // adopt it as.
       if (lingered) adoptLater(joined)
-      for (const { turnId, report } of currentChildren(joined))
-        member.child(turnId, report)
-      for (const { turnId, report } of currentTerminals(joined))
-        member.terminal(turnId, report)
+      restateWork(joined, member)
       for (const request of joined.childRequests.values())
         member.offerChild(request)
       // Subscribed once the first member joins, so a turn already running
       // has someone to adopt it as.
       if (created) subscribe(scope, joined)
       return remove
+    },
+
+    /**
+     * Tells a member already joined each child and terminal that outlived
+     * its turn as it stands, as a joiner is told: a resume rebuilds its
+     * background list from them.
+     */
+    restate(scope: ChannelScope, member: MembershipDelivery) {
+      const channel = channels.get(channelKey(scope))
+      if (channel?.memberships.has(member)) restateWork(channel, member)
     },
 
     /**
@@ -1402,8 +1436,14 @@ type OlderPage = { cursor: string; offset: number }
  */
 type Replay = { children: Set<string>; older?: OlderPage }
 
-/** One event a replay held back, and what learns once it is shown. */
-type HeldEvent = { event: SessionEvent; shown: PromiseWithResolvers<void> }
+/**
+ * One event a replay held back, or what builds the events it stands for as
+ * they go out, and what learns once they are shown.
+ */
+type HeldEvent = {
+  event: SessionEvent | (() => SessionEvent[])
+  shown: PromiseWithResolvers<void>
+}
 
 /**
  * Whether `event` reaches a member at once while a replay is in flight: the
@@ -1490,6 +1530,8 @@ class Membership {
   readonly #offered = new Set<string>()
   readonly #delivered = new Set<string>()
   #sequence = 0
+  /** Counts the resumes of this member's view, which rebuild its work. */
+  #resumes = 0
   #stopRequested = false
   /** The turnId the latest subscription carried, which outlives its stream. */
   #followedTurn: string | undefined
@@ -1795,7 +1837,7 @@ class Membership {
    * and a call's finish, which detaches the work it started from the
    * foreground, since no foreground work waits on that call any longer.
    */
-  #noteBackground(shown: MemberEvent) {
+  #noteBackground(shown: MemberEvent, written = true) {
     const before = this.backgroundWork().length
     const listed = new Set(this.backgroundWork().map(workKey))
     if (shown.kind === "child") {
@@ -1805,9 +1847,14 @@ class Membership {
       const { childSessionId, toolCallId, status } = report
       this.#track(
         { kind: "child", childSessionId },
-        toolCallId,
-        shown.background === true,
-        status === undefined ? undefined : runs(report)
+        {
+          turnId: shown.stream.turnId,
+          step: report,
+          toolCallId,
+          betweenTurns: shown.background === true,
+          stillRuns: status === undefined ? undefined : runs(report),
+          shown: written,
+        }
       )
     } else if (
       shown.kind === "terminal" ||
@@ -1815,12 +1862,17 @@ class Membership {
         shown.event.kind === TurnEventKind.TerminalOutput)
     ) {
       // A process outlives its call where the call returned before its exit.
-      const step = shown.event as TerminalTurnEvent
+      const step = withoutOutput(shown.event as TerminalTurnEvent)
       this.#track(
         { kind: "terminal", terminalId: step.terminalId },
-        step.toolCallId,
-        shown.kind === "terminal",
-        step.exit === undefined
+        {
+          turnId: shown.stream.turnId,
+          step,
+          toolCallId: step.toolCallId,
+          betweenTurns: shown.kind === "terminal",
+          stillRuns: step.exit === undefined,
+          shown: written,
+        }
       )
     } else if (
       shown.kind === "turn" &&
@@ -1843,33 +1895,122 @@ class Membership {
   }
 
   /**
-   * Notes one step of `item`: the call that started it, whether it came
-   * between turns, which detaches it, and whether it still runs, where the
-   * step says. Work shown over between turns is forgotten at once, and work
-   * shown over in a turn once that turn ends.
+   * Notes one step of `item`, as `WorkStep` tells it. Work shown over
+   * between turns is forgotten at once, and work shown over in a turn once
+   * that turn ends.
    */
-  #track(
-    item: BackgroundWork,
-    toolCallId: string | undefined,
-    betweenTurns: boolean,
-    stillRuns: boolean | undefined
-  ) {
+  #track(item: BackgroundWork, noted: WorkStep) {
     const key = workKey(item)
-    if (betweenTurns && stillRuns === false) {
+    if (noted.betweenTurns && noted.stillRuns === false) {
       this.#followed.delete(key)
       return
     }
-    const followed = this.#followed.get(key) ?? {
-      item,
-      detached: false,
-      runs: false,
-    }
+    const followed = this.#followed.get(key)
+    const toolCallId = noted.toolCallId ?? followed?.toolCallId
+    const shownIn = noted.shown ? this.#resumes : followed?.shownIn
     this.#followed.set(key, {
-      ...followed,
+      item,
+      turnId: noted.turnId,
+      step: (followed
+        ? { ...followed.step, ...noted.step }
+        : noted.step) as FollowedWork["step"],
       ...(toolCallId === undefined ? {} : { toolCallId }),
-      detached: followed.detached || betweenTurns,
-      runs: stillRuns ?? followed.runs,
+      detached: (followed?.detached ?? false) || noted.betweenTurns,
+      runs: noted.stillRuns ?? followed?.runs ?? false,
+      ...(shownIn === undefined ? {} : { shownIn }),
     })
+  }
+
+  /**
+   * Notes the work the live turn `turnId` reported up to `cursor`, which
+   * the stream this view follows from there does not show it again: each
+   * child and terminal, through the member's stack, and each call that
+   * returned, which detaches the work it started. A stream this member
+   * already follows that turn on goes on from where it is, so that far.
+   */
+  #noteLiveWork(turnId: string, cursor: number) {
+    const scope = this.#scope
+    if (this.#coordinator.snapshot(scope).state === "idle") return
+    const upTo = this.#subscription?.turnId === turnId ? this.#sequence : cursor
+    const stream: TurnStream = {
+      turnId,
+      replayedCorrections: 0,
+      dropped: false,
+    }
+    const note = (event: SessionEvent) => {
+      let shown: MemberEvent | undefined
+      try {
+        shown = this.#shown(event, () => undefined)
+      } catch {
+        // As a stack that throws on an event costs it that event alone.
+        return
+      }
+      if (shown) this.#noteBackground(shown, false)
+    }
+    for (const { sequence, event } of this.#coordinator.childReports(
+      scope,
+      turnId,
+      upTo
+    ))
+      note({
+        kind: "child",
+        parentSessionId: this.#addressed.sessionId,
+        stream,
+        sequence,
+        event,
+        replayed: true,
+      })
+    const { terminals, finished } = this.#coordinator.workReports(
+      scope,
+      turnId,
+      upTo
+    )
+    for (const event of terminals)
+      note({
+        kind: "turn",
+        stream,
+        sequence: 0,
+        event,
+        stopping: false,
+        replayed: true,
+      })
+    for (const toolCallId of finished)
+      for (const followed of this.#followed.values())
+        if (followed.toolCallId === toolCallId) followed.detached = true
+  }
+
+  /**
+   * Restates each listed item this resume showed no step of, as it last
+   * stood, before the state that closes the resume: ACP has a current
+   * update of each listed item the replay did not deliver precede that
+   * state. Built as it goes out, behind what was held, so no restatement is
+   * older than a step shown before it.
+   */
+  #restateWork() {
+    return this.#emitBuilt(() =>
+      [...this.#followed.values()].flatMap(
+        ({ item, turnId, step, detached, runs: still, shownIn }) => {
+          if (!detached || !still || shownIn === this.#resumes) return []
+          const stream = this.#backgroundStream(turnId)
+          return [
+            item.kind === "child"
+              ? {
+                  kind: "child" as const,
+                  parentSessionId: this.#addressed.sessionId,
+                  stream,
+                  sequence: 0,
+                  event: step as ChildReport,
+                  background: true as const,
+                }
+              : {
+                  kind: "terminal" as const,
+                  stream,
+                  event: step as TerminalTurnEvent,
+                },
+          ]
+        }
+      )
+    )
   }
 
   /** Shows this member its state again, with the list as it stands now. */
@@ -1952,6 +2093,26 @@ class Membership {
     )
   }
 
+  /** Writes one held event, or each a held builder builds as it goes out. */
+  async #writeHeld(held: HeldEvent["event"]) {
+    if (typeof held !== "function") return this.#write(held)
+    for (const event of held()) await this.#write(event)
+  }
+
+  /**
+   * Shows the events `build` builds once nothing held is ahead of them, and
+   * only then builds them, so they say what stands after all shown before:
+   * a replay in flight holds them as it holds any event it does not replay.
+   */
+  #emitBuilt(build: () => SessionEvent[]): Promise<void> {
+    if (this.detached) return Promise.resolve()
+    if (this.#replays.size === 0 && this.#held.length === 0)
+      return this.#writeHeld(build)
+    const shown = Promise.withResolvers<void>()
+    this.#held.push({ event: build, shown })
+    return shown.promise
+  }
+
   /**
    * Shows the held events in order, each settling as it goes out, until none
    * is left or another replay holds them again.
@@ -1963,7 +2124,7 @@ class Membership {
       while (this.#replays.size === 0) {
         const next = this.#held.shift()
         if (!next) break
-        await this.#write(next.event).then(
+        await this.#writeHeld(next.event).then(
           next.shown.resolve,
           next.shown.reject
         )
@@ -2097,6 +2258,12 @@ class Membership {
     }
     this.#options.coordinator.refuseDiscarded(this.#scope)
     this.#stated = undefined
+    // The view's background list is rebuilt from where the work is kept:
+    // the channel holds what outlived its turns, the journal what the live
+    // turn reported, and the streams this resume follows show the rest.
+    this.#resumes += 1
+    this.#followed.clear()
+    this.#channels.restate(this.#scope, this.#delivery)
     this.#restating = true
     const followed = this.#caughtUp
     if (replay) this.#caughtUp = Promise.resolve()
@@ -2115,8 +2282,10 @@ class Membership {
       }
       // ACP has each listed item's current update precede the state that
       // closes a resume: what the runtime reads of the terminals its turns
-      // left running reaches the view first.
+      // left running reaches the view first, then each item no step of
+      // which this resume showed.
       await this.#channels.terminalsRead(this.#scope)
+      await this.#restateWork()
       await this.#reportView()
       return history === undefined ? {} : { history }
     } finally {
@@ -2428,6 +2597,8 @@ class Membership {
     const { corrections, streamed } = replay
     const { turnId } = this.#coordinator.snapshot(this.#scope)
     if (streamed && streamed.turnId === turnId) {
+      // The page holds the turn that far, its work among it.
+      this.#noteLiveWork(turnId, streamed.after)
       const followed = await this.#follow(
         true,
         streamed.after,
@@ -2458,13 +2629,17 @@ class Membership {
     if (after === undefined) {
       if (state === "idle" || turnId === undefined) return true
       if (!this.#coordinator.replayStart(this.#scope)) return false
+      this.#noteLiveWork(turnId, 0)
       await this.#follow(true)
       return true
     }
     // A settled turn streams nothing more: the view holds it once its cursor
     // reached the turn's last event.
     if (state === "idle") return this.#coordinator.holds(this.#scope, after)
-    if (turnId !== undefined) await this.#reannounceChildren(turnId, after)
+    if (turnId !== undefined) {
+      this.#noteLiveWork(turnId, after)
+      await this.#reannounceChildren(turnId, after)
+    }
     return this.#follow(true, after).then(
       () => true,
       (cause: unknown) => {
@@ -2482,6 +2657,10 @@ class Membership {
    */
   async #followNext() {
     this.joinChannel(true)
+    const { turnId } = this.#coordinator.snapshot(this.#scope)
+    const next = this.#coordinator.nextCursor(this.#scope)
+    if (turnId !== undefined && next !== undefined)
+      this.#noteLiveWork(turnId, next)
     await this.#follow(true, "next")
   }
 

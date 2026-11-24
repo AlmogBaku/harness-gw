@@ -440,6 +440,14 @@ export type ChildTurnEvent = TurnEventOf<
 /** One step of a terminal a tool call runs. */
 export type TerminalTurnEvent = TurnEventOf<typeof TurnEventKind.TerminalOutput>
 
+/** A terminal's step as a restatement keeps it: all of it but its output. */
+export function withoutOutput(event: TerminalTurnEvent): TerminalTurnEvent {
+  const step = { ...event }
+  delete step.data
+  delete step.output
+  return step
+}
+
 export function isChildTurnEvent(event: TurnEvent): event is ChildTurnEvent {
   return (
     event.kind === TurnEventKind.ChildSessionUpdated ||

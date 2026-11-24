@@ -991,6 +991,7 @@ describe("a membership's resume", () => {
       subscribeReadings: () => () => undefined,
       recover: () => Promise.reject(gone),
       childReports: () => [],
+      workReports: () => ({ terminals: [], finished: [] }),
       endIfGone: (_scope: SessionScope, cause: unknown) => cause === gone,
       ...HOLDING,
     } as unknown as SessionCoordinator

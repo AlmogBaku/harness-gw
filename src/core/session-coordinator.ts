@@ -18,6 +18,7 @@ import {
   isRedialableFailure,
   OUTCOME_UNKNOWN_CODE,
   pendingRequestsOf,
+  withoutOutput,
   type ExecutionEvent,
   type PendingRequest,
   type PromptTurnInput,
@@ -25,6 +26,7 @@ import {
   type RequestReply,
   type TurnEvent,
   type ChildTurnEvent,
+  type TerminalTurnEvent,
   type TurnEventOf,
 } from "./events"
 
@@ -1470,6 +1472,36 @@ export class SessionCoordinator {
               event: report,
             },
     }))
+  }
+
+  /**
+   * What the live turn `turnId` reported of its work at or before sequence
+   * `upTo`, which a view positioned there rebuilds its background list from:
+   * each terminal's steps merged into one, its output aside, and each tool
+   * call that finished, which no foreground work waits on any longer.
+   */
+  workReports(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    turnId: string,
+    upTo: number
+  ): { terminals: TerminalTurnEvent[]; finished: string[] } {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment?.journal || segment.turnId !== turnId)
+      return { terminals: [], finished: [] }
+    const terminals = new Map<string, TerminalTurnEvent>()
+    const finished: string[] = []
+    for (const { value } of segment.journal.entries) {
+      if (value.sequence > upTo) break
+      const { event } = value
+      if (event.kind === TurnEventKind.TerminalOutput)
+        terminals.set(event.terminalId, {
+          ...terminals.get(event.terminalId),
+          ...withoutOutput(event),
+        })
+      else if (event.kind === TurnEventKind.ToolCallFinished)
+        finished.push(event.toolCallId)
+    }
+    return { terminals: [...terminals.values()], finished }
   }
 
   /**
