@@ -920,6 +920,11 @@ or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
 | `requestText` in `_hgw/activity`, and every Web Push text             | the one line it shows                                                                                                                                |
 | An MCP App view                                                       | its tool input and result                                                                                                                            |
 
+A `background` list names ids alone, so it passes unmasked; every event kind
+the middleware passes as it is, it names, so a kind added later fails to
+compile until its masking is decided, and one that arrives anyway is not
+shown.
+
 The ask card is not masked: a question and a permission reach the operator as
 the runtime wrote them, since the one asked must read exactly what they answer
 or approve, and the answers the operator gave are echoed as given. The call of

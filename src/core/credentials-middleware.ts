@@ -17,7 +17,12 @@ import {
   type ToolLocation,
   type TurnEvent,
 } from "./events"
-import type { Middleware, MemberCommands, MemberEvent } from "./member"
+import {
+  unhandledKind,
+  type Middleware,
+  type MemberCommands,
+  type MemberEvent,
+} from "./member"
 import { answeredChoice, askText, distinctChoices } from "./request-text"
 
 /**
@@ -126,8 +131,13 @@ function publicChild<Facts extends ChildFacts>(facts: Facts): Facts {
   }
 }
 
-/** A turn event with its tool data and failure masked; every other event as it is. */
-function maskedTurnEvent(event: TurnEvent): TurnEvent {
+/**
+ * A turn event with its tool data, terminals, child reports and failure
+ * masked; every other kind, named, as it is: a kind added later fails to
+ * compile until its masking is decided, and one that arrives anyway at run
+ * time is not shown at all.
+ */
+function maskedTurnEvent(event: TurnEvent): TurnEvent | undefined {
   switch (event.kind) {
     case TurnEventKind.ToolCallStarted:
       return {
@@ -162,18 +172,28 @@ function maskedTurnEvent(event: TurnEvent): TurnEvent {
     case TurnEventKind.ChildSessionUpdated:
       return publicChild(event)
     // A child's own event is masked as the same event of its parent would be.
-    case TurnEventKind.ChildSessionEvent:
-      return {
-        ...event,
-        event: maskedTurnEvent(event.event) as OwnTurnEvent,
-      }
+    case TurnEventKind.ChildSessionEvent: {
+      const own = maskedTurnEvent(event.event)
+      return own && { ...event, event: own as OwnTurnEvent }
+    }
     case TurnEventKind.TurnFailed:
       return event.message === undefined
         ? event
         : { ...event, message: maskCredentials(event.message) }
-    default:
+    case TurnEventKind.TurnStarted:
+    case TurnEventKind.TurnEnded:
+    case TurnEventKind.TurnRequiresAction:
+    case TurnEventKind.MessageChunk:
+    case TurnEventKind.ThoughtChunk:
+    case TurnEventKind.ToolCallInputEnded:
+    case TurnEventKind.CompactionUpdated:
+    case TurnEventKind.ModelChanged:
+    case TurnEventKind.PlanUpdated:
+    case TurnEventKind.ArtifactPublished:
+    case TurnEventKind.SteerAccepted:
       return event
   }
+  return unhandledKind(event)
 }
 
 type HistoryMessage = SessionHistoryResponse["messages"][number]
@@ -282,7 +302,7 @@ function maskedOnce(event: TurnEvent) {
   const known = maskedTurnEvents.get(event)
   if (known) return known
   const masked = maskedTurnEvent(event)
-  maskedTurnEvents.set(event, masked)
+  if (masked) maskedTurnEvents.set(event, masked)
   return masked
 }
 
@@ -332,21 +352,25 @@ export function createCredentialsMiddleware({
   }
 
   return {
-    event(event: MemberEvent): MemberEvent {
+    event(event: MemberEvent): MemberEvent | undefined {
       switch (event.kind) {
-        case "turn":
-          return !guest && askedByTool(event.sessionId, event.event)
-            ? event
-            : { ...event, event: maskedOnce(event.event) }
+        case "turn": {
+          if (!guest && askedByTool(event.sessionId, event.event)) return event
+          const masked = maskedOnce(event.event)
+          return masked && { ...event, event: masked }
+        }
         // A child's own question tool reaches the operator as written, as its
         // parent's does; everything else a child reports is masked.
         case "child": {
           const reported = event.event
-          return !guest &&
+          if (
+            !guest &&
             reported.kind === TurnEventKind.ChildSessionEvent &&
             askedByTool(event.sessionId, reported.event)
-            ? event
-            : { ...event, event: maskedOnce(reported) as ChildTurnEvent }
+          )
+            return event
+          const masked = maskedOnce(reported)
+          return masked && { ...event, event: masked as ChildTurnEvent }
         }
         case "history":
         case "child-history":
@@ -373,9 +397,22 @@ export function createCredentialsMiddleware({
                 ),
               }
             : event
-        default:
+        case "prompt":
+        case "replay-complete":
+        case "request-withdrawn":
+        case "execution":
+        case "background":
+        case "usage":
+        case "model":
+        case "session-info":
+        case "commands":
+        case "notice":
+        case "error":
+        case "catalog-invalidated":
+        case "activity":
           return event
       }
+      return unhandledKind(event)
     },
     ...(guest
       ? {
