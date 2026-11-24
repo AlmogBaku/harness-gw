@@ -1016,6 +1016,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             await context.channels.stopWork(
               scope,
               signal,
+              // A report naming another top-level Session is none of its own.
+              (childSessionId) =>
+                sessions.mayBeChildOf(
+                  command.sessionId,
+                  agentId,
+                  childSessionId
+                ),
               sessions.membership(command.sessionId)
             )
             try {

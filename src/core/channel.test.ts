@@ -584,7 +584,12 @@ describe("a delete's wait for its members", () => {
     let outcome: unknown
     void channels
       .closing((signal) =>
-        channels.stopWork(SCOPE, signal, deleting ? slow : undefined)
+        channels.stopWork(
+          SCOPE,
+          signal,
+          () => true,
+          deleting ? slow : undefined
+        )
       )
       .then(
         () => (outcome = "stopped"),

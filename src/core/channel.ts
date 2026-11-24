@@ -1443,12 +1443,14 @@ export function createChannels(options: CreateChannelsOptions) {
      * Stops all of a Session's work as `session/delete` asks, as a close on
      * every connection would: its turn, settling once the `deleter`, if a
      * member, was shown how it ended, and each member was or
-     * `DELETE_SHOWN_MS` passed, then every background child. Throws as
-     * `stopAndSettle` and `stopBackground` do.
+     * `DELETE_SHOWN_MS` passed, then its background work: each terminal,
+     * and each child its runtime reported that `isChild` takes for the
+     * Session's own. Throws as `stopAndSettle` and `stopBackground` do.
      */
     async stopWork(
       scope: SessionScope,
       signal: AbortSignal,
+      isChild: (childSessionId: string) => boolean,
       deleter?: ShownMember
     ) {
       await stopAndSettle(
@@ -1458,7 +1460,15 @@ export function createChannels(options: CreateChannelsOptions) {
         (shownSignal) => everyMemberShown(scope, shownSignal, deleter),
         signal
       )
-      await stopBackground(scope, signal, channels.backgroundWork(scope))
+      await stopBackground(
+        scope,
+        signal,
+        channels
+          .backgroundWork(scope)
+          .filter(
+            (item) => item.kind === "terminal" || isChild(item.childSessionId)
+          )
+      )
     },
 
     /** Whether the runtime forks Sessions. */

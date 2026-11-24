@@ -229,6 +229,23 @@ export function createSessions(
       return children.get(childSessionId)
     },
 
+    /**
+     * Whether a child its runtime reports under the top-level Session
+     * `sessionId` of Agent `agentId` may be that Session's, as
+     * `announceChild` would take it: never the Session itself, nor a
+     * top-level Session the gateway knows, nor a child this connection was
+     * announced under another Session.
+     */
+    mayBeChildOf(sessionId: string, agentId: string, childSessionId: string) {
+      if (childSessionId === sessionId) return false
+      if (children.has(childSessionId))
+        return rootOf(childSessionId) === sessionId
+      return (
+        !owners.has(childSessionId) &&
+        catalog.rows.get(agentId, childSessionId) === undefined
+      )
+    },
+
     /** The top-level Session a child descends from. */
     rootOf,
 

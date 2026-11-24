@@ -1520,10 +1520,13 @@ describe("operator ACP listener", () => {
       async (_ending, method) => {
         const { test, listener, turnId, stopChild, stopTerminal } =
           await outlived()
+        // A report naming a top-level Session is no child of this one's, and
+        // is neither listed nor stopped.
         for (const [childSessionId, status] of [
           ["child-2", ChildSessionStatus.Running],
           ["child-3", ChildSessionStatus.Idle],
           ["child-4", ChildSessionStatus.Unknown],
+          [SESSION, ChildSessionStatus.Running],
         ] as const)
           listener.onChild!(turnId, {
             kind: TurnEventKind.ChildSessionUpdated,

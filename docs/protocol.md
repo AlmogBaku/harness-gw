@@ -342,8 +342,10 @@ connection; the Session's work and all other members continue.
 
 `session/delete` closes the Session first, as a close on every connection
 would: it stops the turn and waits, as a close does, until each member was
-shown how it ended, and stops every background child still at work; then the
-runtime deletes the Session, and once it holds it no longer, deleted or
+shown how it ended, and stops its background work, each process still running
+and each child still at work, but none whose report names the Session itself,
+another top-level Session the gateway knows, or a child announced here under
+another Session, as no list names one; then the runtime deletes the Session, and once it holds it no longer, deleted or
 already gone, this connection is detached, as its close would detach it, and
 every other member is told it is gone with an `_hgw/error` `not_found` and
 detached. The whole delete, its close and the runtime's delete, shares one
