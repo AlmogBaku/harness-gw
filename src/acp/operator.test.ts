@@ -1788,6 +1788,75 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
+  // ACP: "A detached child is listed while its state is not `idle`." A
+  // stored row names the state its runtime stored a child in: one at work,
+  // waiting or `unknown` is listed after the row announced it, and a close
+  // asks it stopped; one over, or one whose row names no state, is not.
+  it("lists a stored child while its row names it not over, after announcing it, and its close stops it", async () => {
+    const stopChild = vi.fn<NonNullable<AcpHarnessOptions["stopChild"]>>(
+      async () => undefined
+    )
+    const row = (childSessionId: string, status?: string) => ({
+      id: `row-${childSessionId}`,
+      role: "activity" as const,
+      activityType: "CHILD_SESSION" as const,
+      content: {
+        childSessionId,
+        ...(status === undefined ? {} : { status }),
+      },
+    })
+    const test = await harness({
+      stopChild,
+      history: {
+        ...HISTORY,
+        messages: [
+          ...HISTORY.messages,
+          row("child-running", "running"),
+          row("child-unknown", "unknown"),
+          row("child-idle", "idle"),
+          row("child-failed", "failed"),
+          row("child-unstated"),
+        ],
+      } as SessionHistoryResponse,
+    })
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+    })
+
+    const shown = updates(test.recorder).flatMap(({ sessionId, update }) =>
+      sessionId !== SESSION
+        ? []
+        : update.sessionUpdate === "subagent_update"
+          ? [update.sessionId]
+          : update.sessionUpdate === "state_update"
+            ? [update.background]
+            : []
+    )
+    expect(shown).toEqual([
+      "child-running",
+      "child-unknown",
+      "child-idle",
+      "child-failed",
+      "child-unstated",
+      [
+        { type: "subagent", sessionId: "child-running" },
+        { type: "subagent", sessionId: "child-unknown" },
+      ],
+    ])
+    await test.agent.request(methods.agent.session.close, {
+      sessionId: SESSION,
+    })
+    expect(stopChild.mock.calls.map(([, id]) => id)).toEqual([
+      "child-running",
+      "child-unknown",
+    ])
+    test.close()
+  })
+
   // A child's own transcript names its children as the parent's names it:
   // each is announced under the child that owns it, by the same checks.
   it("replays a child's own children under it, refusing one that names a top-level Session or the child itself", async () => {

@@ -720,7 +720,14 @@ before its call returns is never listed. A child stays listed while its state is
 lists a detached child: at work, waiting on input, or `unknown`, which nothing
 follows any more and may still run, so it stays listed until a report says
 how it ended; a close stops an `unknown` one only where its runtime still can
-(see each runtime's page).
+(see each runtime's page). A child known only from a stored row, which a
+from-start resume or an older page replays, is listed by the state the row
+names, under the same rule: a row at work, waiting or `unknown` lists it once
+the row announced it, and it stays listed until a report of its runtime says
+it is over, while a close asks it stopped where the runtime still can; a row
+that is over, or that names no state, lists nothing. A report of the live
+Session's always outranks a stored row. A view positioned in a turn replays no
+row, so it lists only what the Session's reports name.
 
 A process a tool call leaves running is listed as its terminal,
 `{ "type": "terminal", "terminalId" }`, from the call's return, during the turn,

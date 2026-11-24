@@ -223,6 +223,12 @@ type FollowedWork = {
   /** The tool call that started it, once a report named it. */
   toolCallId?: string
   detached: boolean
+  /**
+   * Known only from a stored row, which holds what its runtime stored of a
+   * call long returned: listed while that row says it is not over, until a
+   * report of the live Session says how it stands.
+   */
+  stored: boolean
   runs: boolean
   /** The resume of this member's view a step of it was last shown in. */
   shownIn?: number
@@ -239,6 +245,8 @@ type WorkStep = {
   stillRuns: boolean | undefined
   /** It was shown to the member, rather than read back for a resume. */
   shown: boolean
+  /** It is a stored row's, not a report of the live Session's. */
+  stored?: boolean
 }
 
 type BackgroundChild = {
@@ -267,6 +275,17 @@ const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
 function workKey(item: BackgroundWork) {
   return `${item.kind}\u0000${item.kind === "child" ? item.childSessionId : item.terminalId}`
 }
+
+/** Whether a piece of work a member follows is in its background list. */
+function listed({ detached, stored, runs: still }: FollowedWork) {
+  return (detached || stored) && still
+}
+
+/**
+ * The turn a stored row is restated under, as replayed history names one:
+ * it has no live turn of its own.
+ */
+const HISTORY_TURN_ID = "history"
 
 /** The statuses that say how a child's work ended. */
 const OVER: ReadonlySet<string> = new Set([
@@ -1817,8 +1836,8 @@ class Membership {
 
   /** The Session's background work as this member was shown it. */
   backgroundWork(): BackgroundWork[] {
-    return [...this.#followed.values()].flatMap(({ item, detached, runs }) =>
-      detached && runs ? [item] : []
+    return [...this.#followed.values()].flatMap((followed) =>
+      listed(followed) ? [followed.item] : []
     )
   }
 
@@ -1881,6 +1900,30 @@ class Membership {
       const { toolCallId } = shown.event
       for (const followed of this.#followed.values())
         if (followed.toolCallId === toolCallId) followed.detached = true
+    } else if (shown.kind === "history") {
+      // ACP lists a detached child "while its state is not `idle`": a
+      // stored row names the state its runtime stored, and one that names
+      // none, or a final one, is over.
+      for (const message of shown.page.messages) {
+        if (message.role !== "activity") continue
+        if (message.activityType !== "CHILD_SESSION") continue
+        const report: ChildReport = {
+          kind: TurnEventKind.ChildSessionUpdated,
+          ...message.content,
+        }
+        this.#track(
+          { kind: "child", childSessionId: report.childSessionId },
+          {
+            turnId: HISTORY_TURN_ID,
+            step: report,
+            toolCallId: report.toolCallId,
+            betweenTurns: true,
+            stillRuns: runs(report),
+            shown: written,
+            stored: true,
+          }
+        )
+      }
     } else if (shown.kind === "turn" && statedBy(shown.event) === "idle") {
       // Past its turn, work shown over has no call left to detach it from.
       for (const [key, { runs: still }] of this.#followed)
@@ -1901,11 +1944,13 @@ class Membership {
    */
   #track(item: BackgroundWork, noted: WorkStep) {
     const key = workKey(item)
+    const followed = this.#followed.get(key)
+    // A stored row tells nothing a report of the live Session has not.
+    if (noted.stored && followed && !followed.stored) return
     if (noted.betweenTurns && noted.stillRuns === false) {
       this.#followed.delete(key)
       return
     }
-    const followed = this.#followed.get(key)
     const toolCallId = noted.toolCallId ?? followed?.toolCallId
     const shownIn = noted.shown ? this.#resumes : followed?.shownIn
     this.#followed.set(key, {
@@ -1915,7 +1960,10 @@ class Membership {
         ? { ...followed.step, ...noted.step }
         : noted.step) as FollowedWork["step"],
       ...(toolCallId === undefined ? {} : { toolCallId }),
-      detached: (followed?.detached ?? false) || noted.betweenTurns,
+      detached: noted.stored
+        ? false
+        : (followed?.detached ?? false) || noted.betweenTurns,
+      stored: noted.stored === true,
       runs: noted.stillRuns ?? followed?.runs ?? false,
       ...(shownIn === undefined ? {} : { shownIn }),
     })
@@ -1988,28 +2036,27 @@ class Membership {
    */
   #restateWork() {
     return this.#emitBuilt(() =>
-      [...this.#followed.values()].flatMap(
-        ({ item, turnId, step, detached, runs: still, shownIn }) => {
-          if (!detached || !still || shownIn === this.#resumes) return []
-          const stream = this.#backgroundStream(turnId)
-          return [
-            item.kind === "child"
-              ? {
-                  kind: "child" as const,
-                  parentSessionId: this.#addressed.sessionId,
-                  stream,
-                  sequence: 0,
-                  event: step as ChildReport,
-                  background: true as const,
-                }
-              : {
-                  kind: "terminal" as const,
-                  stream,
-                  event: step as TerminalTurnEvent,
-                },
-          ]
-        }
-      )
+      [...this.#followed.values()].flatMap((followed) => {
+        const { item, turnId, step, shownIn } = followed
+        if (!listed(followed) || shownIn === this.#resumes) return []
+        const stream = this.#backgroundStream(turnId)
+        return [
+          item.kind === "child"
+            ? {
+                kind: "child" as const,
+                parentSessionId: this.#addressed.sessionId,
+                stream,
+                sequence: 0,
+                event: step as ChildReport,
+                background: true as const,
+              }
+            : {
+                kind: "terminal" as const,
+                stream,
+                event: step as TerminalTurnEvent,
+              },
+        ]
+      })
     )
   }
 
