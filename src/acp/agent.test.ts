@@ -4864,6 +4864,51 @@ describe("History pages", () => {
     test.close()
   })
 
+  // ACP: "Every `session/update` that the Agent sends for the session
+  // between the request and `replay_complete` MUST be replayed history",
+  // and a child is announced "before the first snapshot that lists it". A
+  // page whose stored row names a child at work moves the list, which only
+  // the page's closing state says, after the row's announcement.
+  it("lists a child an older page names at work in the state that closes the page, not inside its replay", async () => {
+    const transcript: SessionHistoryResponse["messages"] = conversation(12)
+    transcript.splice(4, 0, {
+      id: "child-row",
+      role: "activity",
+      activityType: "CHILD_SESSION",
+      content: { childSessionId: "child-1", status: "running" },
+    })
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      translateHistory,
+    })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    await settled()
+    const from = updates(test.recorder).length
+
+    await older(test, cursorOf(5))
+
+    const read = updates(test.recorder)
+      .slice(from)
+      .flatMap(({ sessionId, update }) =>
+        sessionId !== SESSION
+          ? []
+          : update.sessionUpdate === "subagent_update" ||
+              update.sessionUpdate === "replay_complete"
+            ? [update.sessionUpdate]
+            : update.sessionUpdate === "state_update"
+              ? [update.background]
+              : []
+      )
+    expect(read).toEqual([
+      "subagent_update",
+      "replay_complete",
+      [{ type: "subagent", sessionId: "child-1" }],
+    ])
+    test.close()
+  })
+
   it("cuts a turn streamed from its start off every older page it reaches", async () => {
     const watchers: ServerTurnListener[] = []
     const background = new EventSource()

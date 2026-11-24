@@ -1327,12 +1327,8 @@ describe("operator ACP listener", () => {
     })
 
     /** Each `terminal_update` and listing state a browser read, in order. */
-    function terminalTrail(
-      recorder: Recorder,
-      terminalId: string,
-      from = 0
-    ): string[] {
-      return updates({ ...recorder, entries: recorder.entries.slice(from) })
+    function terminalTrail(recorder: Recorder, terminalId: string): string[] {
+      return updates(recorder)
         .filter(({ sessionId }) => sessionId === CREATED)
         .flatMap(({ update }) => {
           if (
@@ -1456,7 +1452,7 @@ describe("operator ACP listener", () => {
           ],
         })
       )
-      const from = test.recorder.entries.length
+      const from = updates(test.recorder).length
 
       await test.agent.request(methods.agent.session.resume, {
         sessionId: CREATED,
@@ -1464,22 +1460,21 @@ describe("operator ACP listener", () => {
         replayFrom: { type: "start" },
       })
 
-      const resumed = updates({
-        ...test.recorder,
-        entries: test.recorder.entries.slice(from),
-      }).flatMap(({ sessionId, update }) =>
-        sessionId !== CREATED
-          ? []
-          : update.sessionUpdate === "subagent_update"
-            ? [`announced ${update.sessionId}`]
-            : update.sessionUpdate === "terminal_update"
-              ? [`announced ${update.terminalId}`]
-              : update.sessionUpdate === "replay_complete"
-                ? ["replay complete"]
-                : update.sessionUpdate === "state_update"
-                  ? [update.background]
-                  : []
-      )
+      const resumed = updates(test.recorder)
+        .slice(from)
+        .flatMap(({ sessionId, update }) =>
+          sessionId !== CREATED
+            ? []
+            : update.sessionUpdate === "subagent_update"
+              ? [`announced ${update.sessionId}`]
+              : update.sessionUpdate === "terminal_update"
+                ? [`announced ${update.terminalId}`]
+                : update.sessionUpdate === "replay_complete"
+                  ? ["replay complete"]
+                  : update.sessionUpdate === "state_update"
+                    ? [update.background]
+                    : []
+        )
       const complete = resumed.indexOf("replay complete")
       expect(resumed.slice(complete + 1)).toEqual([
         "announced child-1",

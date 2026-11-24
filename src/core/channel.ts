@@ -1914,10 +1914,13 @@ class Membership {
       this.#delivered.add(shown.request.requestId)
     const sent = shown ? this.#member.connection.send(shown) : Promise.resolve()
     // Said at once after the report that moved it, as ACP has a list follow
-    // what it announces or ends; a view not stated yet since its resume
-    // takes the list with the state that closes it.
+    // what it announces or ends; a view not stated yet since its resume, or
+    // one a replay of is in flight, as an older page's, whose updates until
+    // its `replay_complete` are history alone, takes the list with the state
+    // that closes it.
     const moved = shown !== undefined && this.#noteBackground(shown)
-    if (moved && this.#stated !== undefined) this.#restateBackground()
+    if (moved && this.#stated !== undefined && this.#replays.size === 0)
+      this.#restateBackground()
     // The caller learns whether the event was sent; the declines run either
     // way.
     const decline = () =>
