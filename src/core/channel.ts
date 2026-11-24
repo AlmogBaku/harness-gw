@@ -1826,6 +1826,11 @@ class Membership {
       const { toolCallId } = shown.event
       for (const followed of this.#followed.values())
         if (followed.toolCallId === toolCallId) followed.detached = true
+    } else if (shown.kind === "turn" && statedBy(shown.event) === "idle") {
+      // Past its turn, work shown over has no call left to detach it from.
+      for (const [key, { runs: still }] of this.#followed)
+        if (!still) this.#followed.delete(key)
+      return false
     } else return false
     const after = this.backgroundWork()
     return (
@@ -1837,7 +1842,8 @@ class Membership {
   /**
    * Notes one step of `item`: the call that started it, whether it came
    * between turns, which detaches it, and whether it still runs, where the
-   * step says.
+   * step says. Work shown over between turns is forgotten at once, and work
+   * shown over in a turn once that turn ends.
    */
   #track(
     item: BackgroundWork,
@@ -1846,6 +1852,10 @@ class Membership {
     stillRuns: boolean | undefined
   ) {
     const key = workKey(item)
+    if (betweenTurns && stillRuns === false) {
+      this.#followed.delete(key)
+      return
+    }
     const followed = this.#followed.get(key) ?? {
       item,
       detached: false,
