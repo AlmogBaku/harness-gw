@@ -98,6 +98,7 @@ function member(
       notices.push(notice)
     },
     child: () => undefined,
+    terminal: () => undefined,
     offerChild: () => undefined,
     withdrawChild: () => undefined,
     shown: async () => undefined,

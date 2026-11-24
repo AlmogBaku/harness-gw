@@ -6,4 +6,4 @@ export {
   replyFromElicitation,
   replyFromPermission,
 } from "./requests"
-export { translateTurnEvent } from "./turn-events"
+export { translateBackgroundTerminal, translateTurnEvent } from "./turn-events"

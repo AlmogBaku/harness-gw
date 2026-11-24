@@ -23,6 +23,7 @@ import {
   JOIN_DEADLINE_MS,
   READING_BACKOFF,
   READING_RETRIES,
+  SETUP_READ_MS,
 } from "./limits"
 import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
@@ -36,6 +37,7 @@ import {
   type ExecutionEvent,
   type PendingRequest,
   type RequestReply,
+  type TerminalTurnEvent,
   type TurnEvent,
   type TurnEventOf,
 } from "./events"
@@ -120,6 +122,11 @@ export type MembershipDelivery = {
    * turn that spawned it, `turnId`, ended; live only.
    */
   child(turnId: string, event: ChildTurnEvent): void
+  /**
+   * Show the member one step of a terminal still running after the turn
+   * that started it, `turnId`, ended; live only.
+   */
+  terminal(turnId: string, event: TerminalTurnEvent): void
   /** Offer the member a request such a child asks, or withdraw one. */
   offerChild(request: PendingRequest): void
   withdrawChild(requestId: string): void
@@ -137,6 +144,11 @@ export type ChannelAdoption = {
   subscribeTurns(scope: SessionScope, listener: ServerTurnListener): () => void
   /** Adopts the runtime's running turn, if any. */
   discover(scope: SessionScope): Promise<unknown>
+  /**
+   * Reports how each terminal the Session's turns left running stands now,
+   * through the turn listener, before it settles; never rejects.
+   */
+  readTerminals?(scope: SessionScope): Promise<void>
   /** The Session's execution feed. */
   subscribeExecutions(
     scope: ChannelScope,
@@ -166,6 +178,16 @@ type Channel = {
    * restated to every member who joins later.
    */
   children: Map<string, BackgroundChild>
+  /**
+   * The latest step of each terminal still running after its turn, its output
+   * aside, under that turn, restated to every member who joins later.
+   */
+  terminals: Map<string, BackgroundTerminal>
+  /**
+   * The runtime's read of the terminals its turns left running, which a
+   * resume's state waits for, within `SETUP_READ_MS`.
+   */
+  terminalsRead: Promise<void>
   /** The close of a channel nobody watches, held for its background children. */
   lingering?: unknown
   /** Ends the channel's turn subscription and its execution feed. */
@@ -205,11 +227,19 @@ type BackgroundChild = {
   endedAt?: number
 }
 
+type BackgroundTerminal = {
+  turnId: string
+  /** Its command, folder and exit as last reported, without its output. */
+  report: TerminalTurnEvent
+  /** When its exit was reported, on the channels' clock. */
+  endedAt?: number
+}
+
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
 
 /** One item of background work as a list names it, its kind and its id. */
 function workKey(item: BackgroundWork) {
-  return `${item.kind}\u0000${item.childSessionId}`
+  return `${item.kind}\u0000${item.kind === "child" ? item.childSessionId : item.terminalId}`
 }
 
 /** The statuses that say how a child's work ended. */
@@ -585,6 +615,36 @@ function createChannelTable({
     return [...channel.children.values()]
   }
 
+  /** Folds a background terminal's step, output aside, into its restatement. */
+  function noteTerminal(
+    channel: Channel,
+    turnId: string,
+    event: TerminalTurnEvent
+  ) {
+    const step = { ...event }
+    delete step.data
+    const known = channel.terminals.get(step.terminalId)
+    const merged = known ? { ...known.report, ...step } : step
+    channel.terminals.set(step.terminalId, {
+      turnId,
+      report: merged,
+      ...(merged.exit ? { endedAt: known?.endedAt ?? clock.now() } : {}),
+    })
+  }
+
+  /**
+   * The background terminals a member who joins now is told of: each still
+   * running, and each that exited within the grace, which a reload or a
+   * reconnect may have missed.
+   */
+  function currentTerminals(channel: Channel) {
+    const now = clock.now()
+    for (const [terminalId, { endedAt }] of channel.terminals)
+      if (endedAt !== undefined && now - endedAt >= CHILD_FOLLOW_GRACE_MS)
+        channel.terminals.delete(terminalId)
+    return [...channel.terminals.values()]
+  }
+
   /**
    * The last member left. A child that outlived its turn is still followed
    * for a while, so a reload or a reconnect comes back to it followed, and
@@ -626,7 +686,19 @@ function createChannelTable({
           member.offerChild(request)
       },
       onChildRequestEnded: (requestId) => endChildRequest(channel, requestId),
+      onTerminal: (turnId, event) => {
+        noteTerminal(channel, turnId, event)
+        for (const member of channel.memberships.keys())
+          member.terminal(turnId, event)
+      },
     })
+    // Read once the listener is in place, which hears what the read finds.
+    channel.terminalsRead =
+      adoption
+        .readTerminals?.(scope)
+        .catch((err: unknown) =>
+          logger.warn({ err }, "channel.terminals.read_failed")
+        ) ?? Promise.resolve()
     channel.unsubscribe = () => {
       unsubscribeTurns()
       unsubscribeExecutions()
@@ -649,10 +721,32 @@ function createChannelTable({
      */
     backgroundWork(scope: ChannelScope): BackgroundWork[] {
       const channel = channels.get(channelKey(scope))
-      return [...(channel?.children ?? [])].flatMap(
-        ([childSessionId, { report }]) =>
-          runs(report) ? [{ kind: "child" as const, childSessionId }] : []
+      const children = [...(channel?.children ?? [])].flatMap(
+        ([childSessionId, { report }]): BackgroundWork[] =>
+          runs(report) ? [{ kind: "child", childSessionId }] : []
       )
+      const terminals = [...(channel?.terminals ?? [])].flatMap(
+        ([terminalId, { report }]): BackgroundWork[] =>
+          report.exit ? [] : [{ kind: "terminal", terminalId }]
+      )
+      return [...children, ...terminals]
+    },
+
+    /**
+     * Settles once the runtime's read of the terminals the Session's turns
+     * left running was reported, or `SETUP_READ_MS` passed: a state stated
+     * before it lands lists what the gateway holds, and the read still lands
+     * as an update.
+     */
+    async terminalsRead(scope: ChannelScope) {
+      const read = channels.get(channelKey(scope))?.terminalsRead
+      if (!read) return
+      const deadline = new Deadline(SETUP_READ_MS, clock)
+      try {
+        await unlessAborted(read, deadline.signal).catch(() => undefined)
+      } finally {
+        deadline.clear()
+      }
     },
 
     /** A request a child that outlived its turn asks, while it is open. */
@@ -679,6 +773,8 @@ function createChannelTable({
           memberships: new Map(),
           childRequests: new Map(),
           children: new Map(),
+          terminals: new Map(),
+          terminalsRead: Promise.resolve(),
           failures: 0,
           generation: 0,
         }
@@ -700,6 +796,8 @@ function createChannelTable({
       if (lingered) adoptLater(joined)
       for (const { turnId, report } of currentChildren(joined))
         member.child(turnId, report)
+      for (const { turnId, report } of currentTerminals(joined))
+        member.terminal(turnId, report)
       for (const request of joined.childRequests.values())
         member.offerChild(request)
       // Subscribed once the first member joins, so a turn already running
@@ -1026,8 +1124,10 @@ export function createChannels(options: CreateChannelsOptions) {
   ) {
     const stopped = await unlessAborted(
       Promise.allSettled(
-        work.map(({ childSessionId }) =>
-          coordinator.stopChild(scope, childSessionId)
+        work.map((item) =>
+          item.kind === "child"
+            ? coordinator.stopChild(scope, item.childSessionId)
+            : coordinator.stopTerminal(scope, item.terminalId)
         )
       ),
       signal
@@ -1299,6 +1399,9 @@ function showsInReplay(event: SessionEvent, restating: boolean) {
     case "turn":
     case "child":
       return event.replayed === true
+    // No journal keeps a terminal's steps between turns.
+    case "terminal":
+      return false
     case "prompt":
       return restating
     case "request-asked":
@@ -1419,8 +1522,14 @@ class Membership {
   #answering: Replay | undefined
   /** The notices that arrived while the view was rebuilt, shown after its page. */
   #heldNotices: SessionNotice[] = []
-  /** Background child events held, as notices are, while the view rebuilds. */
-  #heldChildren: { turnId: string; event: ChildTurnEvent }[] = []
+  /**
+   * Background child and terminal events held, as notices are, while the
+   * view rebuilds.
+   */
+  #heldBackground: {
+    turnId: string
+    event: ChildTurnEvent | TerminalTurnEvent
+  }[] = []
   /**
    * The work this member was shown each child of its Session doing, by child
    * id. The Session's background work is each that still runs, at work or
@@ -1505,8 +1614,12 @@ class Membership {
         else this.#showNotice(notice)
       },
       child: (turnId, event) => {
-        if (this.#rebuilding) this.#heldChildren.push({ turnId, event })
+        if (this.#rebuilding) this.#heldBackground.push({ turnId, event })
         else this.#showBackgroundChild(turnId, event)
+      },
+      terminal: (turnId, event) => {
+        if (this.#rebuilding) this.#heldBackground.push({ turnId, event })
+        else this.#showBackgroundTerminal(turnId, event)
       },
       offerChild: (request) => this.#offerChild(request),
       withdrawChild: (requestId) => this.#withdraw(requestId),
@@ -1665,17 +1778,25 @@ class Membership {
       // A child's own child is announced in its stream, not the Session's.
       if (report.kind !== TurnEventKind.ChildSessionUpdated) return false
       const { childSessionId, toolCallId, status } = report
-      const followed = this.#followed.get(childSessionId) ?? {
-        item: { kind: "child", childSessionId },
-        detached: false,
-        runs: false,
-      }
-      this.#followed.set(childSessionId, {
-        ...followed,
-        ...(toolCallId === undefined ? {} : { toolCallId }),
-        detached: followed.detached || shown.background === true,
-        runs: status === undefined ? followed.runs : runs(report),
-      })
+      this.#track(
+        { kind: "child", childSessionId },
+        toolCallId,
+        shown.background === true,
+        status === undefined ? undefined : runs(report)
+      )
+    } else if (
+      shown.kind === "terminal" ||
+      (shown.kind === "turn" &&
+        shown.event.kind === TurnEventKind.TerminalOutput)
+    ) {
+      // A process outlives its call where the call returned before its exit.
+      const step = shown.event as TerminalTurnEvent
+      this.#track(
+        { kind: "terminal", terminalId: step.terminalId },
+        step.toolCallId,
+        shown.kind === "terminal",
+        step.exit === undefined
+      )
     } else if (
       shown.kind === "turn" &&
       shown.event.kind === TurnEventKind.ToolCallFinished
@@ -1689,6 +1810,31 @@ class Membership {
       after.length !== before ||
       after.some((item) => !listed.has(workKey(item)))
     )
+  }
+
+  /**
+   * Notes one step of `item`: the call that started it, whether it came
+   * between turns, which detaches it, and whether it still runs, where the
+   * step says.
+   */
+  #track(
+    item: BackgroundWork,
+    toolCallId: string | undefined,
+    betweenTurns: boolean,
+    stillRuns: boolean | undefined
+  ) {
+    const key = workKey(item)
+    const followed = this.#followed.get(key) ?? {
+      item,
+      detached: false,
+      runs: false,
+    }
+    this.#followed.set(key, {
+      ...followed,
+      ...(toolCallId === undefined ? {} : { toolCallId }),
+      detached: followed.detached || betweenTurns,
+      runs: stillRuns ?? followed.runs,
+    })
   }
 
   /** Shows this member its state again, with the list as it stands now. */
@@ -1932,6 +2078,10 @@ class Membership {
         await this.#completeReplay(replay)
         await followed
       }
+      // ACP has each listed item's current update precede the state that
+      // closes a resume: what the runtime reads of the terminals its turns
+      // left running reaches the view first.
+      await this.#channels.terminalsRead(this.#scope)
       await this.#reportView()
       return history === undefined ? {} : { history }
     } finally {
@@ -2198,7 +2348,7 @@ class Membership {
   async #recoverReplay(needsFollow: boolean) {
     // A view that was not rebuilt shows nothing it held for after its page.
     this.#heldNotices = []
-    this.#heldChildren = []
+    this.#heldBackground = []
     this.#rebuilding = false
     if (needsFollow) {
       this.joinChannel(false, true)
@@ -2444,12 +2594,14 @@ class Membership {
     // The notices held while the view was rebuilt follow its page.
     const held = this.#heldNotices
     this.#heldNotices = []
-    const children = this.#heldChildren
-    this.#heldChildren = []
+    const background = this.#heldBackground
+    this.#heldBackground = []
     if (this.detached) return
     for (const notice of held) this.#showNotice(notice)
-    for (const { turnId, event } of children)
-      this.#showBackgroundChild(turnId, event)
+    for (const { turnId, event } of background)
+      if (event.kind === TurnEventKind.TerminalOutput)
+        this.#showBackgroundTerminal(turnId, event)
+      else this.#showBackgroundChild(turnId, event)
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
@@ -2899,16 +3051,35 @@ class Membership {
    * Shows one event of a child that outlived its turn: the child's own, under
    * its id, at no position in the turn that spawned it.
    */
-  #showBackgroundChild(turnId: string, event: ChildTurnEvent) {
+  /**
+   * Shows one step of a terminal still running after its turn: the
+   * Session's own, at no position in the turn that started it.
+   */
+  #showBackgroundTerminal(turnId: string, event: TerminalTurnEvent) {
+    this.#deliver({
+      kind: "terminal",
+      stream: this.#backgroundStream(turnId),
+      event,
+    }).catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.terminal.failed")
+    )
+  }
+
+  /** The stream a background event of `turnId`'s names, one per turn. */
+  #backgroundStream(turnId: string) {
     let stream = this.#backgroundStreams.get(turnId)
     if (!stream) {
       stream = { turnId, replayedCorrections: 0, dropped: false }
       this.#backgroundStreams.set(turnId, stream)
     }
+    return stream
+  }
+
+  #showBackgroundChild(turnId: string, event: ChildTurnEvent) {
     this.#deliver({
       kind: "child",
       parentSessionId: this.#addressed.sessionId,
-      stream,
+      stream: this.#backgroundStream(turnId),
       sequence: 0,
       event,
       background: true,

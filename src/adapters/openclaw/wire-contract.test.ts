@@ -71,6 +71,9 @@ runWireContract(
     gaps: {
       compactionReplaysAsLive:
         "out of scope: OpenClaw compaction replay is ALM-42",
+      // The adapter maps no OpenClaw tool call to a terminal.
+      terminalListedUntilExit: "the adapter shows no OpenClaw terminal",
+      backgroundTerminalMasked: "the adapter shows no OpenClaw terminal",
       sameIdsLiveAndAfterReload: LIVE_IDS_ADAPTER_MADE,
       historyAndLiveJoinedById: LIVE_IDS_ADAPTER_MADE,
       oneTurnThroughQuestion: LIVE_IDS_ADAPTER_MADE,

@@ -89,6 +89,8 @@ export type WireContractRow =
   | "promptedSessionKept"
   | "childAnnouncedBeforeItsEvents"
   | "backgroundListedOnEveryState"
+  | "terminalListedUntilExit"
+  | "backgroundTerminalMasked"
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
   | "guestRetryOfSlashRefused"
@@ -141,6 +143,18 @@ export type WireTurn = Readonly<{
   spawnBackgroundChild?(): Promise<{
     childId: string
     finish(): Promise<void>
+  }>
+  /**
+   * Inside the running turn, after the first response: a call runs `command`
+   * as a process that keeps running after the call returns. Resolves with the
+   * terminal it is shown as, `write`, which prints `text` from the process,
+   * and `exit`, which ends it with `code`, after the turn too. Absent when its
+   * row is a gap.
+   */
+  startProcess?(command: string): Promise<{
+    terminalId: string
+    write(text: string): Promise<void>
+    exit(code: number): Promise<void>
   }>
   /**
    * Inside the running turn, after the first response: the turn compacts its
@@ -751,41 +765,69 @@ function shapeOf(
 }
 
 /**
- * What `client` read on `sessionId` of the child `childId` and the Session's
- * background list, in order: each report of the child as `at work` or
- * `over`, and each state as whether its list names the child, or
+ * What `client` read on `sessionId` of the work `id` names, a child or a
+ * terminal, and the Session's background list, in order: each report of a
+ * child, or update of a terminal, as `at work` or `over`, output a terminal
+ * printed as `output`, and each state as whether its list names the work, or
  * `unreported` where it carries none.
  */
-function childTrail(
+function workTrail(
   addressed: readonly { sessionId?: string; update: SessionUpdate }[],
   sessionId: string,
-  childId: string
+  id: string
 ) {
   return addressed.flatMap(({ sessionId: target, update }) => {
     if (target !== sessionId) return []
-    if (SessionUpdate.isSubagentUpdate(update) && update.sessionId === childId)
+    if (SessionUpdate.isSubagentUpdate(update) && update.sessionId === id)
       return update.state?.state === "running" ? ["at work"] : ["over"]
+    if (SessionUpdate.isTerminalUpdate(update) && update.terminalId === id)
+      return update.exitStatus ? ["over"] : ["at work"]
+    if (SessionUpdate.isTerminalOutputChunk(update) && update.terminalId === id)
+      return ["output"]
     if (!SessionUpdate.isStateUpdate(update)) return []
     const listed = backgroundOf(update)
     if (listed === undefined) return ["unreported"]
-    return [
-      `${listed.includes(childId) ? "listed" : "unlisted"} ${update.state}`,
-    ]
+    return [`${listed.includes(id) ? "listed" : "unlisted"} ${update.state}`]
   })
 }
 
 /**
- * The ids a state's background list names, a subagent by its Session; or
- * `undefined` where the state reports none.
+ * The ids a state's background list names, each item by its own id, a
+ * subagent by its Session's; or `undefined` where the state reports none.
  */
 function backgroundOf(update: object) {
   const { background } = update as { background?: unknown }
   if (!Array.isArray(background)) return undefined
   return (background as BackgroundWork[]).map((item) =>
-    item.type === "subagent" ? String(item.sessionId) : item.type
+    String(
+      item.type === "subagent"
+        ? item.sessionId
+        : item.type === "terminal"
+          ? item.terminalId
+          : item.type === "tool_call"
+            ? item.toolCallId
+            : item.type
+    )
   )
 }
 
+/**
+ * ACP's rules for one item a trail follows: announced at work before the
+ * first state that lists it, and over before the state that drops it, which
+ * says the state the last list carried again, and no state left unreported.
+ */
+function expectListedFromAnnouncementToEnd(trail: readonly string[]) {
+  expect(trail).not.toContain("unreported")
+  const first = trail.findIndex((step) => step.startsWith("listed"))
+  const last = trail.findLastIndex((step) => step.startsWith("listed"))
+  expect(first).toBeGreaterThanOrEqual(0)
+  expect(trail.slice(0, first)).toContain("at work")
+  const removal = trail.findIndex(
+    (step, index) => index > last && step.startsWith("unlisted")
+  )
+  expect(trail.slice(last + 1, removal)).toContain("over")
+  expect(trail[removal]?.replace("unlisted", "listed")).toBe(trail[last])
+}
 /** A guard for a state that does or does not list the child `childId`. */
 function listing(childId: string, listed: boolean) {
   return (update: SessionUpdate): update is SessionUpdate =>
@@ -1572,22 +1614,8 @@ export function runWireContract(
           await until(clock, Promise.all(dropped))
 
           for (const client of [plain, reader]) {
-            const trail = childTrail(client.addressed, sessionId, childId)
-            expect(trail).not.toContain("unreported")
-            const first = trail.findIndex((step) => step.startsWith("listed"))
-            const last = trail.findLastIndex((step) =>
-              step.startsWith("listed")
-            )
-            // Announced at work before the first state that lists it.
-            expect(trail.slice(0, first)).toContain("at work")
-            // Over before the state that drops it, which says the state the
-            // last list carried again.
-            const removal = trail.findIndex(
-              (step, index) => index > last && step.startsWith("unlisted")
-            )
-            expect(trail.slice(last + 1, removal)).toContain("over")
-            expect(trail[removal]?.replace("unlisted", "listed")).toBe(
-              trail[last]
+            expectListedFromAnnouncementToEnd(
+              workTrail(client.addressed, sessionId, childId)
             )
             // The child reports no background work of its own, in its state
             // and in the one its parent mirrors, so it is over once idle.
@@ -1609,7 +1637,7 @@ export function runWireContract(
           // The live view is told the list as the work starts, while the
           // turn still runs, in a state said again with the list it now
           // carries.
-          const live = childTrail(plain.addressed, sessionId, childId).filter(
+          const live = workTrail(plain.addressed, sessionId, childId).filter(
             (step) => step.includes("listed")
           )
           const started = live.findIndex((step) => step.startsWith("listed"))
@@ -1619,13 +1647,131 @@ export function runWireContract(
           ])
           // A resume restates the child before the state it closes with,
           // which lists it.
-          const resumed = childTrail(
+          const resumed = workTrail(
             addressedBefore(reader, resumeAnswer),
             sessionId,
             childId
           )
           expect(resumed.at(-1)).toBe("listed idle")
           expect(resumed.slice(0, -1)).toContain("at work")
+        }
+      )
+
+      row(
+        "terminalListedUntilExit",
+        "lists a process the turn leaves running from its call's return until it exits, its terminal announced before the first state that lists it and its exit before the one that drops it, never its call, shows what it prints after the turn, and restates it before a resume's state",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "start the dev server"))
+          await until(clock, turn.firstResponse())
+          const server = await until(clock, turn.startProcess!("npm run dev"))
+          const { terminalId } = server
+          const listed = plain.next(listing(terminalId, true))
+          await until(clock, turn.secondResponse())
+          await until(clock, Promise.all([idle, listed]))
+          const printed = plain.next(
+            (update): update is SessionUpdate =>
+              SessionUpdate.isTerminalOutputChunk(update) &&
+              update.terminalId === terminalId
+          )
+          await until(clock, server.write("ready on :3000\n"))
+          await until(clock, printed)
+          const reader = await reload(harness, sessionId)
+          const dropped = [plain, reader].map((client) =>
+            client.next(listing(terminalId, false))
+          )
+          await until(clock, server.exit(0))
+          await until(clock, Promise.all(dropped))
+
+          for (const client of [plain, reader]) {
+            const trail = workTrail(client.addressed, sessionId, terminalId)
+            expectListedFromAnnouncementToEnd(trail)
+            // Its exit names the code the process ended with.
+            expect(
+              client.updates.filter(
+                (update) =>
+                  SessionUpdate.isTerminalUpdate(update) &&
+                  update.terminalId === terminalId &&
+                  update.exitStatus
+              )
+            ).toMatchObject([{ exitStatus: { exitCode: 0 } }])
+            // Process-backed work is listed as its terminal alone.
+            const items = client.updates.flatMap((update) =>
+              SessionUpdate.isStateUpdate(update)
+                ? (backgroundOf(update) ?? [])
+                : []
+            )
+            expect(items.filter((item) => item !== terminalId)).toEqual([])
+          }
+          // The live view is shown what the process printed after its turn.
+          const live = workTrail(plain.addressed, sessionId, terminalId)
+          expect(live.indexOf("output")).toBeGreaterThan(
+            live.indexOf("listed idle")
+          )
+          // A resume restates the terminal before the state it closes with,
+          // which lists it.
+          const resumed = workTrail(
+            addressedBefore(reader, resumeAnswer),
+            sessionId,
+            terminalId
+          )
+          expect(resumed.at(-1)).toBe("listed idle")
+          expect(resumed.slice(0, -1)).toContain("at work")
+        }
+      )
+
+      row(
+        "backgroundTerminalMasked",
+        "masks a credential in the command and output of a process that outlives its turn for an operator, live and on a resume, and shows a guest nothing of it",
+        async (harness) => {
+          const { clock, turn, invite } = harness
+          const operatorId = await until(clock, invite(GUEST_REF))
+          const guest = await invitedGuest(harness)
+          await until(clock, resumeFromStart(guest, GUEST_REF))
+          const plain = harness.connectPlain()
+          await until(clock, plain.initialize())
+          await until(clock, resumeFromStart(plain, operatorId))
+          const idle = guest.nextIdle()
+          await until(clock, prompt(guest, GUEST_REF, "deploy it"))
+          await until(clock, turn.firstResponse())
+          const secret = ["wire", "credential", "0001"].join("-")
+          const server = await until(
+            clock,
+            turn.startProcess!(`deploy --token=${secret}`)
+          )
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const printed = plain.next(
+            (update): update is SessionUpdate =>
+              SessionUpdate.isTerminalOutputChunk(update) &&
+              update.terminalId === server.terminalId
+          )
+          await until(clock, server.write(`password: ${secret}\n`))
+          await until(clock, printed)
+          const reader = await reload(harness, operatorId)
+          await until(clock, server.exit(0))
+
+          const shown = (client: WireClient) =>
+            client.updates.flatMap((update) =>
+              SessionUpdate.isTerminalUpdate(update) &&
+              update.terminalId === server.terminalId
+                ? [update.command ?? ""]
+                : SessionUpdate.isTerminalOutputChunk(update) &&
+                    update.terminalId === server.terminalId
+                  ? [Buffer.from(update.data, "base64").toString("utf8")]
+                  : []
+            )
+          for (const client of [plain, reader]) {
+            const words = shown(client).join("\n")
+            expect(words).toContain("deploy --token=")
+            expect(JSON.stringify(framesOf(client))).not.toContain(secret)
+          }
+          expect(shown(plain).join("\n")).toContain("password: ")
+          // A guest is shown no terminal, during its turn or after it.
+          expect(framesNaming(guest, server.terminalId)).toEqual([])
+          expect(JSON.stringify(framesOf(guest))).not.toContain(secret)
         }
       )
 
@@ -1949,7 +2095,7 @@ export function runWireContract(
             )
           }
           expect(
-            childTrail(
+            workTrail(
               addressedBefore(operator, resumeAnswer),
               operatorId,
               background.childId

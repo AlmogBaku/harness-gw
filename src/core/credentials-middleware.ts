@@ -13,6 +13,7 @@ import {
   type OwnTurnEvent,
   type PendingQuestion,
   type PendingRequest,
+  type TerminalTurnEvent,
   type ToolDiff,
   type ToolLocation,
   type TurnEvent,
@@ -387,6 +388,11 @@ export function createCredentialsMiddleware({
             return event
           const masked = maskedOnce(reported)
           return masked && { ...event, event: masked as ChildTurnEvent }
+        }
+        // A terminal past its turn is masked as a live turn's terminal is.
+        case "terminal": {
+          const masked = maskedOnce(event.event)
+          return masked && { ...event, event: masked as TerminalTurnEvent }
         }
         case "history":
         case "child-history":

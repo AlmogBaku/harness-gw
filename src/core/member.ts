@@ -15,6 +15,7 @@ import type {
   ChildTurnEvent,
   PendingRequest,
   RequestReply,
+  TerminalTurnEvent,
   TurnEvent,
 } from "./events"
 import type { ProviderSessionId } from "./ids"
@@ -96,9 +97,12 @@ export type SessionNotice = {
 
 /**
  * One piece of a Session's background work, as ACP lists it: a child Session
- * still at work after the turn that spawned it ended.
+ * still running, or the terminal of a process still running, once no
+ * foreground work waits on it.
  */
-export type BackgroundWork = { kind: "child"; childSessionId: string }
+export type BackgroundWork =
+  | { kind: "child"; childSessionId: string }
+  | { kind: "terminal"; terminalId: string }
 
 /**
  * Everything a member is shown of one Session. Every consumer switches over
@@ -141,6 +145,11 @@ export type SessionEvent =
        */
       background?: true
     }
+  /**
+   * One step of a terminal still running after the turn that started it,
+   * which `stream` names, ended: no position in that turn's stream.
+   */
+  | { kind: "terminal"; stream: TurnStream; event: TerminalTurnEvent }
   /**
    * The whole transcript of a child Session a history page named, addressed
    * to the child's own id as its live events are. It follows the page whose

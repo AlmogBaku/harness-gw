@@ -13,6 +13,7 @@ import {
   isUnobservedFailure,
   sumTokenCounts,
   TurnEventKind,
+  type TerminalTurnEvent,
   type TokenUsage,
   type TurnEvent,
   type TurnEventOf,
@@ -21,6 +22,7 @@ import {
   initialTranslateState,
   type AcpOutbound,
   type Built,
+  type TranslateBackgroundTerminal,
   type TranslateContext,
   type TranslateTurnEvent,
   type TranslateState,
@@ -394,54 +396,72 @@ function toolOutputChunk(
 }
 
 /**
+ * One step of a terminal as ACP's terminal updates: its command and working
+ * directory, where named or where `announces` asks for its first update, the
+ * output it appends, and its exit. ACP carries terminal output as base64
+ * bytes, so the adapter's text travels as its UTF-8 encoding.
+ */
+function terminalUpdates(
+  context: TranslateContext,
+  { terminalId, command, cwd, data, exit }: TerminalTurnEvent,
+  announces: boolean
+): Built<SessionUpdate>[] {
+  const updates: Built<SessionUpdate>[] = []
+  if (announces || command !== undefined || cwd !== undefined)
+    updates.push({
+      sessionUpdate: "terminal_update",
+      terminalId,
+      ...(command === undefined ? {} : { command }),
+      ...(cwd === undefined ? {} : { cwd }),
+    })
+  if (data)
+    updates.push({
+      sessionUpdate: "terminal_output_chunk",
+      terminalId,
+      data: Buffer.from(data, "utf8").toString("base64"),
+    })
+  if (exit)
+    updates.push({
+      sessionUpdate: "terminal_update",
+      terminalId,
+      exitStatus: exit,
+    })
+  return updates.map((value) => ({
+    ...value,
+    _meta: { [HGW_META_KEY]: turnMeta(context) },
+  }))
+}
+
+/**
+ * A terminal still running after its turn, as its terminal updates alone:
+ * the call it belongs to already carries it.
+ */
+export const translateBackgroundTerminal = ((event, context) =>
+  terminalUpdates(context, event, false)) satisfies TranslateBackgroundTerminal
+
+/**
  * A terminal's first output announces it, both as ACP's terminal and as the
- * call's content; later output only appends. ACP carries terminal output as
- * base64 bytes, so the adapter's text travels as its UTF-8 encoding.
+ * call's content; later output only appends.
  */
 function terminalStep(
   state: TranslateState,
   context: TranslateContext,
-  event: TurnEventOf<typeof TurnEventKind.TerminalOutput>
+  event: TerminalTurnEvent
 ): Step {
-  const { terminalId, command, cwd, data, exit } = event
+  const { terminalId } = event
   const first = state.terminals[terminalId] === undefined
-  const outbound: AcpOutbound[] = []
-  if (first || command !== undefined || cwd !== undefined)
-    outbound.push(
-      turnUpdate(context, {
-        sessionUpdate: "terminal_update",
-        terminalId,
-        ...(command === undefined ? {} : { command }),
-        ...(cwd === undefined ? {} : { cwd }),
-      })
-    )
+  const outbound = terminalUpdates(context, event, first).map(update)
+  // The update that announces it is followed by the call's content naming it.
   if (first)
-    outbound.push(
+    outbound.splice(
+      1,
+      0,
       toolContentOutbound(
         context,
         attachedTo(state, context, event.toolCallId),
         event.toolCallId,
-        {
-          type: "terminal",
-          terminalId,
-        }
+        { type: "terminal", terminalId }
       )
-    )
-  if (data)
-    outbound.push(
-      turnUpdate(context, {
-        sessionUpdate: "terminal_output_chunk",
-        terminalId,
-        data: Buffer.from(data, "utf8").toString("base64"),
-      })
-    )
-  if (exit)
-    outbound.push(
-      turnUpdate(context, {
-        sessionUpdate: "terminal_update",
-        terminalId,
-        exitStatus: exit,
-      })
     )
   return {
     state: first

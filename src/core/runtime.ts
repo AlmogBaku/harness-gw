@@ -3,6 +3,7 @@ import type {
   ExecutionEvent,
   PendingRequest,
   RequestReply,
+  TerminalTurnEvent,
   TurnEvent,
   TurnInput,
 } from "./events"
@@ -156,6 +157,21 @@ export type ServerTurnEngine = {
    */
   stopChild?(scope: SessionScope, childSessionId: string): Promise<void>
   /**
+   * Stops the process of one terminal a turn of the Session started, during
+   * that turn or after it, which the terminal's `exit` confirms. A terminal
+   * it does not hold, or whose process already ended, is left as it is.
+   * Present only where the runtime stops a process alone.
+   */
+  stopTerminal?(scope: SessionScope, terminalId: string): Promise<void>
+  /**
+   * Reads how each terminal the Session's turns left running stands now, and
+   * reports each to the Session's listeners (`ServerTurnListener.onTerminal`)
+   * before it settles: one still running as its current update, one that
+   * ended with its `exit`. Settles at once for a Session with none, and never
+   * rejects: one it cannot read is reported as last known.
+   */
+  readTerminals?(scope: SessionScope): Promise<void>
+  /**
    * Subscribes to one Session's turns that this adapter did not start: a
    * subagent result, a loop tick, a heartbeat, cron, or another native client.
    * Rules:
@@ -192,6 +208,14 @@ export type ServerTurnListener = {
   onChildRequest?(turnId: string, request: PendingRequest): void
   /** A child's request ended, answered or not. */
   onChildRequestEnded?(requestId: string): void
+  /**
+   * A terminal one of the Session's turns started, still running after that
+   * turn ended: its output and its exit, with `turnId` naming the turn. As
+   * the turn ends, each terminal that outlives it is reported first with its
+   * command, so the Session knows what it follows; while someone listens,
+   * one reported ends with its `exit` before it is reported no more.
+   */
+  onTerminal?(turnId: string, event: TerminalTurnEvent): void
 }
 
 export type RuntimeInstance = {

@@ -714,29 +714,45 @@ before its call returns is never listed. A child stays listed while its state is
 lists a detached child: at work, waiting on input, or `unknown`, which nothing
 follows any more and may still run, so it stays listed until a report says
 how it ended; a close stops an `unknown` one only where its runtime still can
-(see each runtime's page). No adapter follows a terminal or a tool call
-past its turn yet, and an item listed must be ended before it is dropped, so
-neither is listed; each runtime's page under `docs/runtimes/` says what it
-reports of such work.
+(see each runtime's page).
+
+A process a tool call leaves running is listed as its terminal,
+`{ "type": "terminal", "terminalId" }`, from the call's return, during the turn,
+until its `terminal_update` reports `exitStatus`: with the exit code where the
+runtime knows it, and as `{}`, exited with no known status, where the runtime
+no longer holds the process. Its call is never listed, since a listed
+terminal is all the work it has. Its output keeps arriving after the turn, as
+`terminal_output_chunk` on the Session, with the `_meta.hgw` of the turn that
+started it and `background: true`; the call already carries the terminal, so
+nothing is added to its content. No runtime here reports a tool call that
+outlives its turn without a process, so none is listed; each runtime's page
+under `docs/runtimes/` says what it reports of such work.
 
 - An item is announced before the first list that names it: a child's
-  `subagent_update` at work comes first, and a child this connection could not
-  announce is never listed. A child's report that it is over (idle, cancelled
-  or failed) comes before the list that drops it.
+  `subagent_update` at work, or a terminal's `terminal_update`, comes first,
+  and a child this connection could not announce is never listed. A child's
+  report that it is over (idle, cancelled or failed), or a terminal's
+  `exitStatus`, comes before the list that drops it.
 - When the list changes, the Session's state is said again with the new list:
   the state this connection was last shown, a repeated snapshot that moves
   nothing. It carries that state's stop reason, but not the turn's `usage` or
   its `_meta.hgw.cost`, which a client counts once.
-- A resume restates each listed child before the state that closes it, which
-  carries the list, so no list reaches a resuming view ahead of the state its
-  resume closes with.
+- A resume restates each listed child and terminal before the state that
+  closes it, which carries the list, so no list reaches a resuming view ahead
+  of the state its resume closes with. A terminal is restated as its command
+  and folder, and its exit where it has one, without the output so far. A
+  Session nobody held is first asked of its runtime how each process its turns
+  left running stands, which the resume's state waits for up to 2 s
+  (`SETUP_READ_MS`); a read slower than that lands as updates after it.
 - A child's own `state_update`s, and the state its parent's `subagent_update`
   mirrors, carry `background: []`: the gateway follows no background work of a
   child's own, so a child shown idle is over.
 - `session/cancel` leaves listed work running; `session/close` stops
   everything in the latest list its connection was shown, each child through
-  the runtime's own stop of one. A guest is told no list on any state, not
-  even `[]`, and its close stops nothing in the background.
+  the runtime's own stop of one and each terminal by stopping its process,
+  whose exit the terminal then reports. A guest is told no list on any state,
+  not even `[]`, is shown no terminal, during its turn or after it, and its
+  close stops nothing in the background.
 
 ### Turn stream `_meta.hgw`
 
@@ -918,7 +934,7 @@ or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
 
 | Where                                                                 | Masked                                                                                                                                               |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, and its terminal's command and output                                                        |
+| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, and its terminal's command and output, during its turn and after it                        |
 | A child Session, live and replayed                                    | its title, description and summary, and its own tool calls and failures as a turn's are                                                              |
 | A failed turn, live and replayed                                      | its message                                                                                                                                          |
 | A runtime's `notice`, on the operator listener (a guest is shown none) | its title and description, which a background process's completion names its command in                                                            |

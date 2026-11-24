@@ -2431,6 +2431,14 @@ export class SessionCoordinator {
   }
 
   /**
+   * Stops the process of one terminal a turn of the Session started, where
+   * the runtime stops one alone; one it does not hold is left as it is.
+   */
+  async stopTerminal(scope: SessionScope, terminalId: string) {
+    await this.options.engine.stopTerminal?.(scope, terminalId)
+  }
+
+  /**
    * Answers a request a child asked while no turn of its parent ran, which
    * continues no turn. A runtime that reports no such child has none to
    * answer.

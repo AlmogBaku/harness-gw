@@ -56,6 +56,7 @@ import { createSessionRows } from "../core/session-rows"
 import { createHgwAcpAgent } from "./agent"
 import { createChannels, type HistoryReach } from "../core/channel"
 import { withFaults, type Faults } from "./test-faults"
+import { translateBackgroundTerminal } from "./translate/turn-events"
 import { turnError } from "./translate/updates"
 import type {
   AcpConnectionContext,
@@ -285,6 +286,7 @@ const requestOutbound = (request: PendingRequest): RequestOutbound =>
 
 /** Deterministic stand-ins for the translators' pure projections. */
 export const translators: Translators = {
+  translateBackgroundTerminal,
   translateChildUpdate: (event, context) => ({
     sessionUpdate: "subagent_update",
     sessionId: event.childSessionId,
@@ -616,6 +618,9 @@ export type HarnessOptions = {
   /** A runtime that answers and stops a child between its parent's turns. */
   respondChild?: ServerTurnEngine["respondChild"]
   stopChild?: ServerTurnEngine["stopChild"]
+  /** A runtime that stops a process a turn left running, and reads them. */
+  stopTerminal?: ServerTurnEngine["stopTerminal"]
+  readTerminals?: ServerTurnEngine["readTerminals"]
   /** Defaults to a readable window; a rejection stands for one that is not. */
   context?: ServerRuntime["context"]
   /** Runs before each model catalog read; a slow one stands for a real provider. */
@@ -705,6 +710,8 @@ export async function harness(options: HarnessOptions = {}) {
       : {}),
     ...(options.respondChild ? { respondChild: options.respondChild } : {}),
     ...(options.stopChild ? { stopChild: options.stopChild } : {}),
+    ...(options.stopTerminal ? { stopTerminal: options.stopTerminal } : {}),
+    ...(options.readTerminals ? { readTerminals: options.readTerminals } : {}),
   }
 
   const rows = new Map(
@@ -928,7 +935,7 @@ export async function harness(options: HarnessOptions = {}) {
       },
     }
     const composed = options.compose?.({ runtimeInstance, catalog })
-    const { subscribeTurns } = faults.runtime.turns
+    const { subscribeTurns, readTerminals } = faults.runtime.turns
     const channels = createChannels({
       logger: logs.logger,
       coordinator,
@@ -941,6 +948,12 @@ export async function harness(options: HarnessOptions = {}) {
               discover: (channelScope) => coordinator.discover(channelScope),
               subscribeExecutions: (channelScope, listener) =>
                 coordinator.subscribeScope(channelScope, listener),
+              ...(readTerminals
+                ? {
+                    readTerminals: (channelScope: SessionScope) =>
+                      readTerminals(channelScope),
+                  }
+                : {}),
             },
           }
         : {}),

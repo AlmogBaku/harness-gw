@@ -38,6 +38,7 @@ export function createFeedsMiddleware(): Middleware {
           return unlisted(event)
         case "commands":
         case "child":
+        case "terminal":
         case "child-history":
         case "prompt":
         case "history":

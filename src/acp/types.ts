@@ -282,6 +282,12 @@ export type TranslateChildUpdate = (
   context: TranslateContext
 ) => Built<SessionUpdate>
 
+/** `translate/turn-events.ts` → `translateBackgroundTerminal` */
+export type TranslateBackgroundTerminal = (
+  event: TurnEventOf<typeof TurnEventKind.TerminalOutput>,
+  context: TranslateContext
+) => Built<SessionUpdate>[]
+
 export type TranslateTurnEvent = (
   state: TranslateState,
   event: TurnEvent,
@@ -333,6 +339,8 @@ export type Translators = {
   translateTurnEvent: TranslateTurnEvent
   /** A child Session's report, as the `subagent_update` its parent carries. */
   translateChildUpdate: TranslateChildUpdate
+  /** A terminal still running after its turn, as its terminal updates. */
+  translateBackgroundTerminal: TranslateBackgroundTerminal
   translateHistory: TranslateHistory
   pendingRequestToOutbound: PendingRequestToOutbound
   replyFromPermission: ReplyFromPermission

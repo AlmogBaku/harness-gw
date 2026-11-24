@@ -25,7 +25,7 @@ import {
 } from "./config"
 import type { McpServerOverrides } from "./mcp-apps/client"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
-import type { RuntimeInstance } from "./core/runtime"
+import type { RuntimeInstance, SessionScope } from "./core/runtime"
 import { createSessionRows, type SessionRows } from "./core/session-rows"
 import { createGuestAcpService } from "./guest/acp"
 import { createGuestApp } from "./guest/app"
@@ -325,6 +325,12 @@ export async function createConfiguredGateway(
             discover: (scope) => sessions.discover(scope),
             subscribeExecutions: (scope, listener) =>
               sessions.subscribeScope(scope, listener),
+            ...(turns.readTerminals
+              ? {
+                  readTerminals: (scope: SessionScope) =>
+                    turns.readTerminals!(scope),
+                }
+              : {}),
           },
         }
       : {}),

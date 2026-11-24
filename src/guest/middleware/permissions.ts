@@ -70,6 +70,7 @@ export function createPermissionsMiddleware({
             : undefined
         }
         case "child":
+        case "terminal":
         case "child-history":
         case "prompt":
         case "history":

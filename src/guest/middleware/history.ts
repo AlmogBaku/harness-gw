@@ -216,6 +216,7 @@ export function createHistoryMiddleware({
             show(event.event.requestId, [event.event.text])
           return event
         case "child":
+        case "terminal":
         case "child-history":
         case "replay-complete":
         case "request-asked":

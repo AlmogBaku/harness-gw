@@ -145,6 +145,8 @@ type HarnessOptions = Pick<
   | "subscribeTurns"
   | "respondChild"
   | "stopChild"
+  | "stopTerminal"
+  | "readTerminals"
 > & { history?: SessionHistoryResponse }
 
 async function harness({ history, ...options }: HarnessOptions = {}) {
@@ -875,6 +877,9 @@ describe("operator ACP listener", () => {
       const stopChild = vi.fn<NonNullable<AcpHarnessOptions["stopChild"]>>(
         async () => undefined
       )
+      const stopTerminal = vi.fn<
+        NonNullable<AcpHarnessOptions["stopTerminal"]>
+      >(async () => undefined)
       const test = await harness({
         ...saved,
         subscribeTurns: (_scope, subscribed) => {
@@ -883,6 +888,7 @@ describe("operator ACP listener", () => {
         },
         respondChild,
         stopChild,
+        stopTerminal,
         permission: async () => ({
           outcome: { outcome: "selected", optionId: "once" },
         }),
@@ -915,6 +921,7 @@ describe("operator ACP listener", () => {
         turnId,
         respondChild,
         stopChild,
+        stopTerminal,
         unsubscribed,
       }
     }
@@ -1330,15 +1337,16 @@ describe("operator ACP listener", () => {
 
     // ACP's cancel stops the foreground alone; its close, and a delete, which
     // closes first, stop the background work too: everything in the latest
-    // list, each child still at work or `unknown`, which is no idle, and
-    // nothing already over.
+    // list, each child still at work or `unknown`, which is no idle, and each
+    // process still running, and nothing already over.
     it.each([
       ["closes", methods.agent.session.close],
       ["is deleted", methods.agent.session.delete],
     ] as const)(
-      "stops each child its parent's latest list names as the parent %s, and none as it is cancelled",
+      "stops everything its parent's latest list names as the parent %s, and nothing as it is cancelled",
       async (_ending, method) => {
-        const { test, listener, turnId, stopChild } = await outlived()
+        const { test, listener, turnId, stopChild, stopTerminal } =
+          await outlived()
         for (const [childSessionId, status] of [
           ["child-2", ChildSessionStatus.Running],
           ["child-3", ChildSessionStatus.Idle],
@@ -1348,6 +1356,18 @@ describe("operator ACP listener", () => {
             kind: TurnEventKind.ChildSessionUpdated,
             childSessionId,
             status,
+          })
+        // A process the turn left running, and one that exited since.
+        for (const [terminalId, exit] of [
+          ["run-1:terminal", undefined],
+          ["run-2:terminal", { exitCode: 0 }],
+        ] as const)
+          listener.onTerminal!(turnId, {
+            kind: TurnEventKind.TerminalOutput,
+            terminalId,
+            toolCallId: terminalId.replace(":terminal", ""),
+            command: "npm run dev",
+            ...(exit ? { exit } : {}),
           })
         await test.recorder.wait(
           (entry) => JSON.stringify(entry.params).includes("child-3"),
@@ -1359,6 +1379,7 @@ describe("operator ACP listener", () => {
               { type: "subagent", sessionId: "child-1" },
               { type: "subagent", sessionId: "child-2" },
               { type: "subagent", sessionId: "child-4" },
+              { type: "terminal", terminalId: "run-1:terminal" },
             ],
           })
         )
@@ -1374,9 +1395,62 @@ describe("operator ACP listener", () => {
             childSessionId,
           ])
         )
+        expect(stopTerminal.mock.calls).toEqual([
+          [
+            expect.objectContaining({ sessionId: sessionId(CREATED) }),
+            "run-1:terminal",
+          ],
+        ])
         test.close()
       }
     )
+  })
+
+  // ACP has each listed item's current update precede the state a resume
+  // closes with: the runtime's read of the processes a Session's turns left
+  // running, which takes its time, reaches the view first.
+  it("waits for the runtime's read of a Session's terminals before a resume's state, which lists each", async () => {
+    let listener: ServerTurnListener | undefined
+    const readTerminals = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      listener?.onTerminal?.("turn-before", {
+        kind: TurnEventKind.TerminalOutput,
+        terminalId: "run-1:terminal",
+        toolCallId: "run-1",
+        command: "npm run dev",
+      })
+    })
+    const test = await harness({
+      subscribeTurns: (_scope, subscribed) => {
+        listener = subscribed
+        return () => undefined
+      },
+      readTerminals,
+    })
+
+    await test.agent.request(methods.agent.session.resume, {
+      sessionId: SESSION,
+      cwd: "/",
+      replayFrom: { type: "start" },
+      _meta: { [HGW_META_KEY]: { agentId: AGENT } },
+    })
+
+    const shown = updates(test.recorder).flatMap(({ sessionId, update }) =>
+      sessionId === SESSION &&
+      (update.sessionUpdate === "terminal_update" ||
+        update.sessionUpdate === "state_update")
+        ? [update]
+        : []
+    )
+    expect(shown).toMatchObject([
+      { sessionUpdate: "terminal_update", command: "npm run dev" },
+      {
+        sessionUpdate: "state_update",
+        background: [{ type: "terminal", terminalId: "run-1:terminal" }],
+      },
+    ])
+    expect(readTerminals).toHaveBeenCalledTimes(1)
+    test.close()
   })
 
   // ACP replays a child through its parent's from-start resume: the child's

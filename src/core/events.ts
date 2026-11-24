@@ -435,6 +435,9 @@ export type ChildTurnEvent = TurnEventOf<
   | typeof TurnEventKind.ChildSessionEvent
 >
 
+/** One step of a terminal a tool call runs. */
+export type TerminalTurnEvent = TurnEventOf<typeof TurnEventKind.TerminalOutput>
+
 export function isChildTurnEvent(event: TurnEvent): event is ChildTurnEvent {
   return (
     event.kind === TurnEventKind.ChildSessionUpdated ||

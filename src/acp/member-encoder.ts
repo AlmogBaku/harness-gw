@@ -367,11 +367,14 @@ export function createMemberEncoder({
     sessionId: string,
     work: readonly BackgroundWork[]
   ): AcpBackgroundWork[] {
-    return work.flatMap(({ childSessionId }): AcpBackgroundWork[] =>
-      children.owns(sessionId, childSessionId)
+    return work.flatMap((item): AcpBackgroundWork[] => {
+      if (item.kind === "terminal")
+        return [{ type: "terminal", terminalId: item.terminalId }]
+      const { childSessionId } = item
+      return children.owns(sessionId, childSessionId)
         ? [{ type: "subagent", sessionId: childSessionId }]
         : []
-    )
+    })
   }
 
   /**
@@ -751,6 +754,20 @@ export function createMemberEncoder({
         return withdraw(sessionId, event.requestId)
       case "child":
         return child(event)
+      // A terminal past its turn is the Session's own, at no position in the
+      // turn that started it; the call it belongs to already carries it.
+      case "terminal":
+        for (const value of translators.translateBackgroundTerminal(
+          event.event,
+          {
+            turnId: event.stream.turnId,
+            sequence: 0,
+            stopping: false,
+            background: true,
+          }
+        ))
+          await update(sessionId, value)
+        return
       case "question-answered": {
         const record = answeredQuestionOutbound(event.request, event.answers)
         if (record) await send(sessionId, record, 0)

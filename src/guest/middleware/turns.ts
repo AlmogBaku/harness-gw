@@ -203,9 +203,11 @@ export function createTurnsMiddleware({
             : { ...event, request }
         }
         // A child Session is never a guest's: no announcement, event,
-        // transcript or end of replay of one reaches it.
+        // transcript or end of replay of one reaches it; nor is a terminal,
+        // during its turn or after it.
         case "child":
         case "child-history":
+        case "terminal":
           return undefined
         case "replay-complete":
           return event.child ? undefined : event

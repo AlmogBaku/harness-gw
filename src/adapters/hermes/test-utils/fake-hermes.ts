@@ -228,6 +228,15 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   /** The child Sessions waiting for a watch, each told its live id once open. */
   const watchers = new Map<string, (liveId: string) => void>()
   let nextChild = 1
+  /**
+   * The background processes the Session owns in Hermes' process registry,
+   * by process id: running until a test ends one, or a kill does.
+   */
+  const processes = new Map<
+    string,
+    { command: string; exited: boolean; exitCode?: number }
+  >()
+  let nextProcess = 1
 
   const socket = () => sockets.at(-1)
   /** Each live Session numbers its own frames (`event_replay._stamp_event`). */
@@ -534,6 +543,29 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         open = undefined
         answered.settle()
         return { result: { status: "ok" } }
+      }
+      // `_session_processes`: the registry's rows the live Session's key owns,
+      // running and recently ended (`tui_gateway/server.py:1884`).
+      case "process.list":
+        return {
+          result: {
+            processes: [...processes].map(([id, entry]) => ({
+              session_id: id,
+              command: entry.command,
+              status: entry.exited ? "exited" : "running",
+              ...(entry.exitCode === undefined
+                ? {}
+                : { exit_code: entry.exitCode }),
+            })),
+          },
+        }
+      // One process the caller's Session owns, killed; `kill_process` marks
+      // it exited by SIGTERM (`tools/process_registry.py:2200`).
+      case "process.kill": {
+        const entry = processes.get(String(params.process_id))
+        if (!entry) return { error: { code: 4044, message: "no such process" } }
+        Object.assign(entry, { exited: true, exitCode: -15 })
+        return { result: { status: "killed", exit_code: -15 } }
       }
       case "session.interrupt":
         // `_interrupt_session_turn` withdraws the open requests at once; the
@@ -1123,6 +1155,69 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
               duration_seconds: 3,
             })
           ),
+      }
+    },
+
+    /**
+     * A `terminal` call inside the running turn that starts `command` as a
+     * background process (`background: true`) and returns at once, as
+     * `tools/terminal_tool.py` does; the process streams what it `write`s on
+     * the Session through the registry's output sink, and its `exit` is told
+     * only by `process.list`.
+     */
+    async startProcess(command: string) {
+      startStreaming()
+      const n = nextProcess++
+      const callId = `call-terminal-${n}`
+      const processId = `proc_${n}`
+      const args = { command, background: true }
+      emit(turn.toolStart(callId, "terminal", args))
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: callId,
+            type: "function",
+            function: { name: "terminal", arguments: JSON.stringify(args) },
+          },
+        ],
+      })
+      processes.set(processId, { command, exited: false })
+      const result = JSON.stringify({
+        output: "Background process started",
+        session_id: processId,
+        pid: 100 + n,
+        exit_code: 0,
+      })
+      emit(
+        turn.frame("tool.complete", {
+          tool_id: callId,
+          name: "terminal",
+          args,
+          result,
+        })
+      )
+      store({
+        role: "tool",
+        tool_call_id: callId,
+        tool_name: "terminal",
+        content: result,
+      })
+      return {
+        terminalId: `${callId}:terminal`,
+        write: async (text: string) =>
+          emit(
+            turn.frame("agent.terminal.output", {
+              process_id: processId,
+              chunk: text,
+            })
+          ),
+        exit: async (code: number) => {
+          const entry = processes.get(processId)
+          if (entry) Object.assign(entry, { exited: true, exitCode: code })
+        },
       }
     },
 
