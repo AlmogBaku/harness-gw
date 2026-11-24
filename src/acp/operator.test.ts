@@ -1281,13 +1281,13 @@ describe("operator ACP listener", () => {
     })
 
     // ACP's cancel stops the foreground alone; its close, and a delete, which
-    // closes first, stop the background work too: each child still at work,
-    // and nothing already over.
+    // closes first, stop the background work too: everything in the latest
+    // list, each child still at work, and nothing already over.
     it.each([
       ["closes", methods.agent.session.close],
       ["is deleted", methods.agent.session.delete],
     ] as const)(
-      "stops each child still at work as its parent %s, and none as it is cancelled",
+      "stops each child its parent's latest list names as the parent %s, and none as it is cancelled",
       async (_ending, method) => {
         const { test, listener, turnId, stopChild } = await outlived()
         for (const [childSessionId, status] of [
@@ -1302,6 +1302,14 @@ describe("operator ACP listener", () => {
         await test.recorder.wait(
           (entry) => JSON.stringify(entry.params).includes("child-3"),
           "the child that is over"
+        )
+        await vi.waitFor(() =>
+          expect(latestState(test)).toMatchObject({
+            background: [
+              { type: "subagent", sessionId: "child-1" },
+              { type: "subagent", sessionId: "child-2" },
+            ],
+          })
         )
 
         await test.agent.notify(methods.agent.session.cancel, {

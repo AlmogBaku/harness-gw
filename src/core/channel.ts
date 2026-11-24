@@ -618,14 +618,14 @@ function createChannelTable({
     },
 
     /**
-     * The children that outlived their turns and are still at work: the
-     * Session's background work, which closing it stops.
+     * The Session's background work: each child that outlived its turn and is
+     * still at work, which a delete stops.
      */
-    backgroundChildren(scope: ChannelScope) {
+    backgroundWork(scope: ChannelScope): BackgroundWork[] {
       const channel = channels.get(channelKey(scope))
       return [...(channel?.children ?? [])].flatMap(
         ([childSessionId, { report }]) =>
-          atWork(report) ? [childSessionId] : []
+          atWork(report) ? [{ kind: "child" as const, childSessionId }] : []
       )
     },
 
@@ -988,23 +988,21 @@ export function createChannels(options: CreateChannelsOptions) {
   }
 
   /**
-   * Stops each of the Session's background children `includes` takes, as
-   * closing a Session stops its background work beside its turn: every one
-   * is asked, and the first failure is thrown once all were, or the reason
-   * `signal` aborts with first. A runtime that cannot stop a child alone
-   * leaves each running.
+   * Stops each item of `work`, the Session's background work as a close
+   * stops it beside its turn: every one is asked, and the first failure is
+   * thrown once all were, or the reason `signal` aborts with first. A
+   * runtime that cannot stop a child alone leaves each running.
    */
   async function stopBackground(
     scope: SessionScope,
     signal: AbortSignal,
-    includes: (childSessionId: string) => boolean = () => true
+    work: readonly BackgroundWork[]
   ) {
     const stopped = await unlessAborted(
       Promise.allSettled(
-        channels
-          .backgroundChildren(scope)
-          .filter(includes)
-          .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+        work.map(({ childSessionId }) =>
+          coordinator.stopChild(scope, childSessionId)
+        )
       ),
       signal
     )
@@ -1203,7 +1201,7 @@ export function createChannels(options: CreateChannelsOptions) {
         (shownSignal) => everyMemberShown(scope, shownSignal, deleter),
         signal
       )
-      await stopBackground(scope, signal)
+      await stopBackground(scope, signal, channels.backgroundWork(scope))
     },
 
     /** Whether the runtime forks Sessions. */
@@ -1400,7 +1398,7 @@ class Membership {
   /**
    * The Session's background work as this member was shown it, by child id:
    * each child shown at work after its turn ended, until shown otherwise.
-   * Every state it is shown carries this list.
+   * Every state it is shown carries this list, and its close stops it.
    */
   readonly #background = new Map<string, BackgroundWork>()
   /**
