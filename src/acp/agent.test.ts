@@ -4841,7 +4841,7 @@ describe("History pages", () => {
     expect(
       after.flatMap((update) =>
         update.sessionUpdate === "terminal_output_chunk"
-          ? [Buffer.from(update.data, "base64").toString("utf8")]
+          ? [Buffer.from(String(update.data), "base64").toString("utf8")]
           : []
       )
     ).toEqual(["0123456789"])
