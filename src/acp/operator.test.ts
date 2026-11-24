@@ -1022,9 +1022,10 @@ describe("operator ACP listener", () => {
 
     // ACP lists only work announced first: a background report naming a
     // top-level Session, which no connection announces as a child, is none
-    // of this Session's.
-    it("lists no child whose report names a top-level Session", async () => {
-      const { test, listener, turnId } = await outlived()
+    // of this Session's, and the close that stops what the list names stops
+    // none of it.
+    it("lists no child whose report names a top-level Session, and its close stops none", async () => {
+      const { test, listener, turnId, stopChild } = await outlived()
       for (const childSessionId of [SESSION, "child-2"])
         listener.onChild!(turnId, {
           kind: TurnEventKind.ChildSessionUpdated,
@@ -1040,6 +1041,12 @@ describe("operator ACP listener", () => {
           ],
         })
       )
+      await test.agent.request(methods.agent.session.close, {
+        sessionId: CREATED,
+      })
+      expect(
+        stopChild.mock.calls.map(([, childSessionId]) => childSessionId)
+      ).toEqual(["child-1", "child-2"])
       test.close()
     })
 
