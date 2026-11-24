@@ -195,21 +195,21 @@ type StateSnapshot = Extract<SessionUpdate, { sessionUpdate: "state_update" }>
 /**
  * The state last shown, said again with a new background list: ACP's repeated
  * snapshot, which moves nothing. What the turn spent was counted once, so the
- * repeat carries neither its usage nor its cost.
+ * repeat carries neither its usage nor its cost, and a `_meta` the state did
+ * not carry it does not either.
  */
 function repeatedState(
   last: StateSnapshot,
   background: AcpBackgroundWork[]
 ): StateSnapshot {
-  const meta = (last._meta ?? {}) as Record<string, unknown>
-  const hgw = meta[HGW_META_KEY]
+  const meta = last._meta as Record<string, unknown> | null | undefined
+  const hgw = meta?.[HGW_META_KEY]
   const repeated = {
     ...without(last, "usage"),
     background,
-    _meta: {
-      ...meta,
-      [HGW_META_KEY]: without(typeof hgw === "object" ? hgw : null, "cost"),
-    },
+    ...(meta && typeof hgw === "object" && hgw !== null
+      ? { _meta: { ...meta, [HGW_META_KEY]: without(hgw, "cost") } }
+      : {}),
   }
   return repeated as unknown as StateSnapshot
 }
