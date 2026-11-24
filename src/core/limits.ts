@@ -167,6 +167,14 @@ export const RESTATED_TERMINAL_OUTPUT = 16_384
 export const HELD_LIMITS = { events: 4_096, bytes: 8 * 1024 * 1024 }
 
 /**
+ * How long a resume's closing state waits for the member's stream to show
+ * what the turn's journal held when the state was read, which a stream that
+ * reads on writes as fast as its socket takes it: past it, one that fell
+ * silent without ending is stated anyway, well inside the join deadline.
+ */
+export const STATE_WAIT_MS = 5_000
+
+/**
  * Each of a runtime's question words is read whole up to this: it holds a
  * Hermes batch at Hermes' own limits, and neither OpenClaw nor OpenCode bounds
  * a question's text.

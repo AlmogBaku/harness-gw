@@ -26,6 +26,7 @@ import {
   READING_RETRIES,
   RESTATED_TERMINAL_OUTPUT,
   SETUP_READ_MS,
+  STATE_WAIT_MS,
 } from "./limits"
 import { outputTail } from "./credentials-middleware"
 import { persistedCorrections, withoutLiveRows } from "./replay-page"
@@ -280,6 +281,22 @@ function workKey(item: BackgroundWork) {
 /** Whether a piece of work a member follows is in its background list. */
 function listed({ detached, stored, runs: still }: FollowedWork) {
   return (detached || stored) && still
+}
+
+/**
+ * One stream a member follows, how far it has shown its turn, and what waits
+ * for it to reach a point of that turn: each runs there, in the stream's
+ * order, before any later event of it is shown. A stream that ended, or that
+ * another replaced, shows nothing more, so all that waits on it runs then, and
+ * a wait on it after that runs at once.
+ */
+type ShownStream = {
+  turnId: string
+  /** Settles once it has shown all it will, whole. */
+  done: Promise<void>
+  sequence: number
+  ended: boolean
+  waiters: Set<{ through: number; run: () => void }>
 }
 
 /**
@@ -996,6 +1013,8 @@ type CreateChannelsOptions = Omit<
   historyReach?: HistoryReach
   /** Defaults to `HELD_LIMITS`; a small one stands for a long replay. */
   heldLimits?: typeof HELD_LIMITS
+  /** Defaults to `STATE_WAIT_MS`. */
+  stateWaitMs?: number
 }
 
 /** How a transport joins one member to one Session. */
@@ -1016,6 +1035,8 @@ export type MembershipOptions = {
 type MembershipContext = MembershipOptions & {
   /** How much a replay in flight may hold back before the member fell behind. */
   heldLimits: typeof HELD_LIMITS
+  /** How long a closing state waits for the member's stream to reach it. */
+  stateWaitMs: number
   coordinator: SessionCoordinator
   clock: Clock
   /** The history a from-start view replays, the newest page alone if `paged`. */
@@ -1134,6 +1155,7 @@ export function createChannels(options: CreateChannelsOptions) {
   const clock = options.clock ?? defaultClock
   const historyReach = options.historyReach ?? HISTORY_REACH
   const heldLimits = options.heldLimits ?? HELD_LIMITS
+  const stateWaitMs = options.stateWaitMs ?? STATE_WAIT_MS
   const channels = createChannelTable({
     ...options,
     clock,
@@ -1333,6 +1355,7 @@ export function createChannels(options: CreateChannelsOptions) {
           coordinator,
           clock,
           heldLimits,
+          stateWaitMs,
           readReplay,
           readChildHistory,
         },
@@ -1709,18 +1732,7 @@ class Membership {
    */
   readonly #backgroundStreams = new Map<string, TurnStream>()
   /** The last stream this member was shown, settling once it has shown all. */
-  #streamed: { turnId: string; done: Promise<void> } | undefined
-  /**
-   * How far the last stream this member follows has shown it its turn, and
-   * what waits for it to reach a point of that turn: each runs there, in the
-   * stream's order, before any later event of it is shown.
-   */
-  #shownThrough: { turnId: string; sequence: number } | undefined
-  readonly #shownWaiters = new Set<{
-    turnId: string
-    through: number
-    run: () => void
-  }>()
+  #streamed: ShownStream | undefined
   /**
    * The follow or start in flight. Both subscribe this member, so one waits
    * for the other rather than both subscribing it to the same turn.
@@ -3419,50 +3431,68 @@ class Membership {
   }
 
   /**
-   * Notes that this member's stream of `turnId` showed it every event through
-   * `sequence`, and runs what waited for that point.
+   * Notes that `stream` showed this member every event of its turn through
+   * `sequence`, and runs what waited on it for that point.
    */
-  #reachShown(turnId: string, sequence: number) {
-    const shown = this.#shownThrough
-    if (shown?.turnId === turnId && Number.isFinite(sequence))
-      this.#shownThrough = {
-        turnId,
-        sequence: Math.max(shown.sequence, sequence),
-      }
-    for (const waiter of [...this.#shownWaiters])
-      if (waiter.turnId === turnId && waiter.through <= sequence) {
-        this.#shownWaiters.delete(waiter)
+  #reachShown(stream: ShownStream, sequence: number) {
+    stream.sequence = Math.max(stream.sequence, sequence)
+    for (const waiter of [...stream.waiters])
+      if (waiter.through <= sequence) {
+        stream.waiters.delete(waiter)
         waiter.run()
       }
   }
 
+  /** Notes that `stream` shows nothing more, and runs all that waited on it. */
+  #endShown(stream: ShownStream) {
+    stream.ended = true
+    for (const waiter of [...stream.waiters]) {
+      stream.waiters.delete(waiter)
+      waiter.run()
+    }
+  }
+
   /**
    * Runs `run` where this member's stream of `turnId` has shown it every
-   * event through `through`: at once where it has, or where it carries no
-   * such stream, and else right as it gets there, before its next event.
+   * event through `through`: at once where it has, or where no live stream
+   * of that turn will show more, and else right as it gets there, before its
+   * next event. A stream that falls silent short of it, never ending, is let
+   * go of past `stateWaitMs`, and `run` runs then.
    */
   #whenShown(
     turnId: string | undefined,
     through: number | undefined,
     run: () => Promise<void> | undefined
   ): Promise<void> {
-    const shown = this.#shownThrough
+    const stream = this.#streamed
     if (
       turnId === undefined ||
       through === undefined ||
-      this.#streamed?.turnId !== turnId ||
-      shown?.turnId !== turnId ||
-      shown.sequence >= through
+      !stream ||
+      stream.ended ||
+      stream.turnId !== turnId ||
+      stream.sequence >= through
     )
       return run() ?? Promise.resolve()
+    const { clock, logger, stateWaitMs } = this.#options
     return new Promise<void>((resolve, reject) => {
-      this.#shownWaiters.add({
-        turnId,
+      let backstop: unknown
+      const waiter = {
         through,
         run: () => {
+          clock.clearTimeout(backstop)
           ;(run() ?? Promise.resolve()).then(resolve, reject)
         },
-      })
+      }
+      stream.waiters.add(waiter)
+      backstop = clock.setTimeout(() => {
+        if (!stream.waiters.delete(waiter)) return
+        logger.warn(
+          { turnId, through, shown: stream.sequence },
+          "membership.state.wait_passed"
+        )
+        waiter.run()
+      }, stateWaitMs)
     })
   }
 
@@ -3614,21 +3644,30 @@ class Membership {
     this.#send({ type: "followed" })
     let caughtUp = () => {}
     this.#caughtUp = new Promise<void>((resolve) => (caughtUp = resolve))
-    const done = this.#pump(
+    const streamed: ShownStream = {
+      turnId: subscription.turnId,
+      done: Promise.resolve(),
+      sequence: from,
+      ended: false,
+      waiters: new Set(),
+    }
+    // The stream this one replaces shows nothing more, so nothing waits on it.
+    const replaced = this.#streamed
+    this.#streamed = streamed
+    if (replaced) this.#endShown(replaced)
+    streamed.done = this.#pump(
       subscription,
       this.#owner.generation,
       replayedCorrections,
       { restating: this.#restating, caughtUp },
+      streamed,
       shown
     )
       .catch((err: unknown) =>
         this.#options.logger.error({ err }, "membership.stream.failed")
       )
       .finally(caughtUp)
-      // A stream that ended shows nothing more of its turn.
-      .finally(() => this.#reachShown(subscription.turnId, Infinity))
-    this.#streamed = { turnId: subscription.turnId, done }
-    this.#shownThrough = { turnId: subscription.turnId, sequence: from }
+      .finally(() => this.#endShown(streamed))
   }
 
   /**
@@ -3643,6 +3682,7 @@ class Membership {
     generation: number,
     replayedCorrections: number,
     view: { restating: boolean; caughtUp: () => void },
+    streamed: ShownStream,
     shown?: Promise<void>
   ) {
     let buffered = subscription.replayed ?? 0
@@ -3662,7 +3702,7 @@ class Membership {
       for await (const { sequence, event } of subscription.events) {
         if (stream.dropped) break
         // All before this event was shown.
-        this.#reachShown(subscription.turnId, sequence - 1)
+        this.#reachShown(streamed, sequence - 1)
         this.#sequence = sequence
         interrupted = isRedialableFailure(event)
         const replayed = view.restating && buffered > 0
@@ -3695,7 +3735,7 @@ class Membership {
             for (const request of event.requests) this.#offer(request)
         }
         if (--buffered === 0) view.caughtUp()
-        this.#reachShown(subscription.turnId, sequence)
+        this.#reachShown(streamed, sequence)
       }
     } catch (cause) {
       if (cause instanceof FanoutOverflowError) overflow = cause
@@ -3703,6 +3743,9 @@ class Membership {
     } finally {
       if (!this.#owner.stale(generation)) this.#subscription = undefined
     }
+    // It shows nothing more, before what follows here waits on a state: a
+    // rebuild this stream starts is never kept waiting on the stream itself.
+    this.#endShown(streamed)
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
     if (overflow) return this.#fellBehind(subscription.turnId, overflow)

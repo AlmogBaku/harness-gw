@@ -7,6 +7,7 @@ import {
   PendingRequestKind,
   TurnEventKind,
   type ExecutionEvent,
+  type TurnEvent,
   type PendingRequest,
   type RequestReply,
 } from "./events"
@@ -31,7 +32,8 @@ import {
   type ChannelTurn,
 } from "./channel"
 import { providerSessionId, sessionId } from "./ids"
-import { CLOSE_DEADLINE_MS, DELETE_SHOWN_MS } from "./limits"
+import { CLOSE_DEADLINE_MS, DELETE_SHOWN_MS, STATE_WAIT_MS } from "./limits"
+import { FanoutOverflowError } from "./subscriber-fanout"
 import type {
   SequencedTurnEvent,
   SessionCoordinator,
@@ -1124,3 +1126,297 @@ function chunkAt(sequence: number, text: string): SequencedTurnEvent {
     event: { kind: TurnEventKind.MessageChunk, messageId: "reply", text },
   }
 }
+
+/**
+ * A turn subscription the test feeds: what `push` adds is read in order, a
+ * `fail` ends it with its cause, and `close`, as the fanout's, ends it.
+ */
+function controlledSubscription(turnId: string, replayed = 0) {
+  const queue: SequencedTurnEvent[] = []
+  let ended = false
+  let failure: unknown
+  let wake: (() => void) | undefined
+  const poke = () => {
+    const woken = wake
+    wake = undefined
+    woken?.()
+  }
+  return {
+    subscription: {
+      turnId,
+      replayed,
+      close: () => {
+        ended = true
+        poke()
+      },
+      events: {
+        async *[Symbol.asyncIterator]() {
+          for (;;) {
+            while (queue.length === 0 && !ended && failure === undefined)
+              await new Promise<void>((resolve) => (wake = resolve))
+            const next = queue.shift()
+            if (next) yield next
+            else if (failure !== undefined) throw failure
+            else return
+          }
+        },
+      },
+    },
+    push(...values: SequencedTurnEvent[]) {
+      queue.push(...values)
+      poke()
+    },
+    fail(cause: unknown) {
+      failure = cause
+      poke()
+    },
+  }
+}
+
+/**
+ * A member of one Session whose coordinator the test drives: its turn's
+ * state and how far its journal reached, the subscriptions its follows get
+ * in order, and a history read it may hold. What the member is shown is
+ * recorded as `history`, `replay-complete`, `state <state>` and
+ * `<kind> <sequence>`; a send of a turn event `slowSequence` names waits
+ * for `slow`.
+ */
+function drivenMember() {
+  const turn = {
+    state: "running",
+    turnId: "turn-1",
+    through: 1,
+    replayStart: undefined as { turnId: string; ids: Set<string> } | undefined,
+  }
+  const follows: ReturnType<typeof controlledSubscription>[] = []
+  let read: Promise<void> | undefined
+  const coordinator = {
+    snapshot: () => ({
+      state: turn.state,
+      turnId: turn.turnId,
+      requests: [],
+    }),
+    state: () => turn.state,
+    nextCursor: () => turn.through,
+    streamed: () => undefined,
+    replayStart: () => turn.replayStart,
+    holds: () => true,
+    answeredHistory: (_scope: SessionScope, page: unknown) => page,
+    subscribeScope: () => () => undefined,
+    subscribeReadings: () => () => undefined,
+    childReports: () => [],
+    workReports: () => ({ terminals: [], finished: [] }),
+    recover: async () => {
+      const next = follows.shift()
+      if (!next) throw new Error("No subscription was armed")
+      return next.subscription
+    },
+    endIfGone: () => false,
+    ...HOLDING,
+  } as unknown as SessionCoordinator
+  const shown: string[] = []
+  const slow = Promise.withResolvers<void>()
+  let slowSequence: number | undefined
+  let slowSends = 0
+  const logs = captureLogs()
+  const { logger } = logs
+  const membership = createChannels({
+    coordinator,
+    runtime: {
+      history: async () => {
+        await read
+        return {
+          sessionId: "session-1",
+          messages: [],
+          total: 0,
+          limit: 500,
+          offset: 0,
+          nextOffset: 0,
+        }
+      },
+    },
+    logger,
+  }).join(
+    {
+      principal: { id: GUEST, role: "guest" },
+      middleware: [],
+      connection: {
+        send: async (event) => {
+          if (event.kind === "turn") {
+            shown.push(`${event.event.kind} ${event.sequence}`)
+            if (event.sequence === slowSequence && slowSends++ === 0)
+              await slow.promise
+          } else if (event.kind === "execution")
+            shown.push(`state ${event.state}`)
+          else shown.push(event.kind)
+        },
+        live: () => true,
+        fellBehind: () => undefined,
+      },
+    },
+    SCOPE,
+    {
+      membershipId: "subscriber-1",
+      logger,
+      describe: () => ({ code: "failed", message: "failed" }),
+      subscribeRow: () => () => undefined,
+    }
+  )
+  return {
+    turn,
+    membership,
+    shown,
+    logs,
+    /** Arms the subscription the next follow gets. */
+    follow(replayed = 0) {
+      const next = controlledSubscription(turn.turnId, replayed)
+      follows.push(next)
+      return next
+    },
+    /** Holds the next history read until the returned release. */
+    holdRead() {
+      const held = Promise.withResolvers<void>()
+      read = held.promise
+      return () => held.resolve()
+    },
+    /** Holds the first send of the turn event at `sequence` until `release`. */
+    slowAt(sequence: number) {
+      slowSequence = sequence
+      return () => slow.resolve()
+    },
+  }
+}
+
+const turnEvent = (sequence: number, event: TurnEvent): SequencedTurnEvent => ({
+  sequence,
+  event,
+})
+
+/** Settles once `promise` does, or reports that it did not in time. */
+async function settledWithin(
+  advance: (ms: number) => Promise<void>,
+  promise: Promise<unknown>
+) {
+  let settled = false
+  promise.then(
+    () => (settled = true),
+    () => (settled = true)
+  )
+  await advance(100)
+  return settled
+}
+
+// A resume's closing state waits for the member's stream to reach it, and
+// never for a stream that will show nothing more: one that fell behind, one
+// a rebuild dropped, or one another replaced, which may not release a wait
+// meant for its replacement.
+describe("a membership's closing state", () => {
+  it("closes a view rebuilt for falling behind when its turn ends during the rebuild's read", async () => {
+    const clock = useFakeClock()
+    const member = drivenMember()
+    const first = member.follow()
+    first.push(turnEvent(1, { kind: TurnEventKind.TurnStarted }))
+    await member.membership.resume({ turnId: "turn-1", after: 0 })
+    const release = member.holdRead()
+
+    first.fail(new FanoutOverflowError(4, 400))
+    await clock.advance(0)
+    // The turn ends while the rebuild reads history; its journal holds more
+    // than the dropped stream showed.
+    member.turn.state = "idle"
+    member.turn.through = 5
+    release()
+    await clock.advance(100)
+
+    expect(member.shown.slice(member.shown.lastIndexOf("history"))).toEqual([
+      "history",
+      "state idle",
+    ])
+  })
+
+  it("answers a from-start resume on the connection that holds the Session when its turn ends during the read", async () => {
+    const clock = useFakeClock()
+    const member = drivenMember()
+    const first = member.follow()
+    first.push(turnEvent(1, { kind: TurnEventKind.TurnStarted }))
+    await member.membership.resume({ turnId: "turn-1", after: 0 })
+    const release = member.holdRead()
+
+    const resumed = member.membership.resume(
+      {},
+      { fromStart: true, positioned: false, paged: false }
+    )
+    await clock.advance(0)
+    member.turn.state = "idle"
+    member.turn.through = 5
+    release()
+
+    expect(await settledWithin(clock.advance, resumed)).toBe(true)
+    expect(member.shown.slice(member.shown.lastIndexOf("history"))).toEqual([
+      "history",
+      "replay-complete",
+      "state idle",
+    ])
+  })
+
+  // A stream that falls silent short of what the journal held, never
+  // ending, holds a resume's answer no longer than the wait's bound.
+  it("states a resume past its wait when its stream falls silent short of the journal", async () => {
+    const clock = useFakeClock()
+    const member = drivenMember()
+    const first = member.follow()
+    first.push(chunkAt(1, "One"))
+    member.turn.through = 3
+
+    const resumed = member.membership.resume({ turnId: "turn-1", after: 0 })
+    await clock.advance(STATE_WAIT_MS - 1)
+    expect(member.shown).not.toContain("state running")
+    await clock.advance(1)
+    await resumed
+
+    expect(member.shown.at(-1)).toBe("state running")
+    expect(
+      member.logs
+        .records()
+        .filter(({ message }) => message === "membership.state.wait_passed")
+    ).toHaveLength(1)
+  })
+
+  it("keeps a stream a resume replaced from releasing the state its replacement owes", async () => {
+    const clock = useFakeClock()
+    const member = drivenMember()
+    const first = member.follow()
+    first.push(turnEvent(1, { kind: TurnEventKind.TurnStarted }))
+    await member.membership.resume({ turnId: "turn-1", after: 0 })
+    // The first stream is still writing its next event as the resume
+    // replaces it.
+    const unblock = member.slowAt(2)
+    first.push(turnEvent(2, chunkAt(2, "One").event))
+    await clock.advance(0)
+    member.turn.replayStart = { turnId: "turn-1", ids: new Set() }
+    const second = member.follow(2)
+    second.push(
+      turnEvent(1, { kind: TurnEventKind.TurnStarted }),
+      turnEvent(2, chunkAt(2, "One").event)
+    )
+    // The journal holds one event more than the replacement replays.
+    member.turn.through = 3
+    const resumed = member.membership.resume(
+      {},
+      { fromStart: true, positioned: false, paged: false }
+    )
+    await clock.advance(0)
+    // The replaced stream ends only once the resume waits for its state.
+    unblock()
+    await clock.advance(0)
+    second.push(turnEvent(3, chunkAt(3, "Two").event))
+
+    expect(await settledWithin(clock.advance, resumed)).toBe(true)
+    const tail = member.shown.slice(member.shown.lastIndexOf("history"))
+    expect(tail.slice(tail.indexOf("replay-complete"))).toEqual([
+      "replay-complete",
+      `${TurnEventKind.MessageChunk} 3`,
+      "state running",
+    ])
+  })
+})

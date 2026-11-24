@@ -491,7 +491,9 @@ current `state_update`, then the answer. That state is read with how far the
 live turn's journal reached, and sent where the resuming view's stream of the
 turn has shown it that far, so it never precedes an event of the turn the
 stream still owes the view, such as the last chunks and the end of a turn that
-ended as the view resumed it. A failure's `_hgw/error` and a
+ended as the view resumed it. A stream that ended, fell behind, or that another
+replaced owes nothing more and is waited on no longer, and no stream is waited
+on longer than 5 s (`STATE_WAIT_MS`), past which the state goes all the same. A failure's `_hgw/error` and a
 request's withdrawal are not held. Each child Session the replay announces
 gets its own `replay_complete` on the child's id, after its announcement and
 its transcript, and one first announced after the replay completed and before
