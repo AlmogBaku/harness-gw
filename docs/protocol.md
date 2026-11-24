@@ -643,7 +643,11 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   child transcript's (each child's tagged on the child's id), and then the
   Session's current `state_update` and, as ACP has current session info
   follow a replay, its `session_info_update` with the row the gateway holds,
-  both untagged, before the response. Until the
+  both untagged, before the response. That state is the one this
+  connection's stream of the Session last showed it, said again as a
+  repeated snapshot with the list as it stands and without the turn's usage
+  or cost, so no update the page held back, such as the end of a turn that
+  ended during the read, is overtaken by a newer state. Until the
   page's `replay_complete` the gateway holds the Session's other updates, as
   a resume's replay does, and sends them after it. The client hands the page
   its tagged updates, the `replay_complete` among them, and its live

@@ -2127,15 +2127,18 @@ class Membership {
 
   /**
    * Closes a view with the Session's state, once the member was shown what
-   * the journal buffered: stated unless its stream already said it, or
-   * whatever it said when `restate` asks, with the requests a wait still
-   * holds asked again.
+   * the journal buffered: stated unless its stream already said it, with the
+   * requests a wait still holds asked again. A view that `restate`s, an older
+   * page's, is told again the state its stream last showed it, which no event
+   * held back for its replay can overtake, as ACP has a state "delivered in
+   * order, without replacing a newer state with a stale snapshot".
    */
   async #reportView(restate = false) {
     await this.#caughtUp
     const { state, awaitingStop } = this.#coordinator.snapshot(this.#scope)
     const stated = viewState(state, awaitingStop)
-    if (restate || this.#stated !== stated) {
+    if (restate) await this.reportExecution(true)
+    else if (this.#stated !== stated) {
       this.#stated = stated
       await this.reportExecution()
     }
@@ -2710,9 +2713,10 @@ class Membership {
 
   /**
    * Reports the Session's execution outside a turn stream: what a resume or
-   * an acknowledged Stop owes the member.
+   * an acknowledged Stop owes the member, or, where it `repeats`, the state
+   * its stream last showed it, said again.
    */
-  reportExecution() {
+  reportExecution(repeats = false) {
     const { state, turnId, awaitingStop, startedAt } =
       this.#coordinator.snapshot(this.#scope)
     return this.emit({
@@ -2722,6 +2726,7 @@ class Membership {
       ...(awaitingStop ? { awaitingStop } : {}),
       ...(startedAt === undefined ? {} : { startedAt }),
       sequence: this.#sequence,
+      ...(repeats ? { repeats } : {}),
     })
   }
 

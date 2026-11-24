@@ -4732,6 +4732,45 @@ describe("History pages", () => {
     test.close()
   })
 
+  // ACP: "The snapshot and subsequent live state changes MUST be delivered
+  // in order, without replacing a newer state with a stale snapshot". A turn
+  // that ends while a page is read is held for the page's replay, and the
+  // page's closing state may not tell the view it ended before its last
+  // chunks and its own end do.
+  it("closes a page read during which the turn ended with no idle before the turn's own end", async () => {
+    const pending = gate()
+    let hold = false
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+    })
+    await test.list()
+    await open(test)
+    await liveTurn(test, [test])
+    hold = true
+    const from = test.recorder.entries.length
+
+    const read = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
+    for (const text of ["One", "Two", "Three"]) chunk(test.sources[0], text)
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
+    pending.release()
+    await read
+    await test.recorder.wait(endedTurn, "the turn to end")
+
+    const seen = flow(test.recorder, SESSION, from).filter(
+      (item) => item.startsWith("state") || item.startsWith("chunk")
+    )
+    expect(seen.slice(seen.indexOf("chunk Three"))).toEqual([
+      "chunk Three",
+      "state idle",
+    ])
+    expect(seen.filter((item) => item === "state idle")).toHaveLength(1)
+    test.close()
+  })
+
   it("cuts a turn streamed from its start off every older page it reaches", async () => {
     const watchers: ServerTurnListener[] = []
     const background = new EventSource()

@@ -205,6 +205,12 @@ export type SessionEvent =
       /** When the live turn began, as its stream's first state dated it. */
       startedAt?: string
       background?: readonly BackgroundWork[]
+      /**
+       * Says again the state the member's stream last showed it, where it
+       * was shown one, rather than this one, which the stream may not have
+       * reached yet: a close no event it holds back may overtake.
+       */
+      repeats?: true
     }
   /**
    * The Session's background work changed: the state the member was last

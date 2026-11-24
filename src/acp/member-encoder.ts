@@ -193,20 +193,20 @@ function executionUpdate({
 type StateSnapshot = Extract<SessionUpdate, { sessionUpdate: "state_update" }>
 
 /**
- * The state last shown, said again with a new background list: ACP's repeated
- * snapshot, which moves nothing. What the turn spent was counted once, so the
- * repeat carries neither its usage nor its cost, and a `_meta` the state did
- * not carry it does not either.
+ * The state last shown, said again with a new background list where one is
+ * given: ACP's repeated snapshot, which moves nothing. What the turn spent
+ * was counted once, so the repeat carries neither its usage nor its cost,
+ * and a `_meta` the state did not carry it does not either.
  */
 function repeatedState(
   last: StateSnapshot,
-  background: AcpBackgroundWork[]
+  background: AcpBackgroundWork[] | undefined
 ): StateSnapshot {
   const meta = last._meta as Record<string, unknown> | null | undefined
   const hgw = meta?.[HGW_META_KEY]
   const repeated = {
     ...without(last, "usage"),
-    background,
+    ...(background === undefined ? {} : { background }),
     ...(meta && typeof hgw === "object" && hgw !== null
       ? { _meta: { ...meta, [HGW_META_KEY]: without(hgw, "cost") } }
       : {}),
@@ -773,8 +773,18 @@ export function createMemberEncoder({
         if (record) await send(sessionId, record, 0)
         return
       }
-      case "execution":
-        return state(sessionId, executionUpdate(event), event.background)
+      case "execution": {
+        // The last state shown here, in stream order, where one was.
+        const last = event.repeats ? shownStates.get(sessionId) : undefined
+        if (!last)
+          return state(sessionId, executionUpdate(event), event.background)
+        const repeated = repeatedState(
+          last,
+          event.background && backgroundOf(sessionId, event.background)
+        )
+        shownStates.set(sessionId, repeated)
+        return update(sessionId, repeated)
+      }
       // A Session not yet stated here takes the list with its first state.
       case "background": {
         const last = shownStates.get(sessionId)
