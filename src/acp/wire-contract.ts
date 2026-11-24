@@ -1550,7 +1550,7 @@ export function runWireContract(
 
       row(
         "backgroundListedOnEveryState",
-        "lists a child still at work after its turn on every state of its Session, announced before the first that lists it and over before the one that drops it, says the state again as it starts and ends, and restates it before a resume's state",
+        "lists a child still at work once the call that spawned it returned, on every state of its Session through the turn's end, announced before the first that lists it and over before the one that drops it, says the state again as it starts and ends, and restates it before a resume's state",
         async (harness) => {
           const { clock, turn } = harness
           const { plain, sessionId } = await operatorSession(harness)
@@ -1606,15 +1606,17 @@ export function runWireContract(
               childStates.map(() => [])
             )
           }
-          // The live view is told the list as the work starts, in a state
-          // said again with the list it now carries.
+          // The live view is told the list as the work starts, while the
+          // turn still runs, in a state said again with the list it now
+          // carries.
           const live = childTrail(plain.addressed, sessionId, childId).filter(
             (step) => step.includes("listed")
           )
           const started = live.findIndex((step) => step.startsWith("listed"))
-          expect(live[started - 1]?.replace("unlisted", "listed")).toBe(
-            live[started]
-          )
+          expect(live.slice(started - 1, started + 1)).toEqual([
+            "unlisted running",
+            "listed running",
+          ])
           // A resume restates the child before the state it closes with,
           // which lists it.
           const resumed = childTrail(

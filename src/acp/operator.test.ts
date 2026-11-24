@@ -811,6 +811,54 @@ describe("operator ACP listener", () => {
     test.close()
   })
 
+  // ACP lists only work foreground work does not wait on: a child the turn
+  // waits on through the call that spawned it is foreground, and one still at
+  // work once that call returned is the Session's background work.
+  it("lists a child once the call that spawned it returned while it runs, and none its call waited on", async () => {
+    const test = await harness()
+    const { source } = await runningTurn(test, "Review it")
+    const spawned = (childSessionId: string, toolCallId: string) =>
+      source.emit({
+        kind: TurnEventKind.ChildSessionUpdated,
+        childSessionId,
+        toolCallId,
+        status: ChildSessionStatus.Running,
+      })
+    const returned = (toolCallId: string) =>
+      source.emit({
+        kind: TurnEventKind.ToolCallFinished,
+        toolCallId,
+        output: "{}",
+        failed: false,
+      })
+    source.emit(turnStarted())
+    spawned("joined", "call-joined")
+    source.emit({
+      kind: TurnEventKind.ChildSessionUpdated,
+      childSessionId: "joined",
+      status: ChildSessionStatus.Idle,
+    })
+    returned("call-joined")
+    spawned("detached", "call-detached")
+    returned("call-detached")
+    source.emit({ kind: TurnEventKind.TurnEnded })
+    source.finish()
+
+    const lists = () =>
+      updates(test.recorder).flatMap(({ sessionId, update }) =>
+        sessionId === CREATED && update.sessionUpdate === "state_update"
+          ? [[update.state, update.background]]
+          : []
+      )
+    await vi.waitFor(() => expect(lists()).toHaveLength(3))
+    expect(lists()).toEqual([
+      ["running", []],
+      ["running", [{ type: "subagent", sessionId: "detached" }]],
+      ["idle", [{ type: "subagent", sessionId: "detached" }]],
+    ])
+    test.close()
+  })
+
   // ACP's parent goes idle while background work goes on: a child still at
   // work after its turn ended reports under its own id, between turns, and
   // its requests and its cancel reach the runtime without any turn.

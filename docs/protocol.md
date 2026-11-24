@@ -705,10 +705,12 @@ that cannot report usage sends none, and the last reading stands.
 
 Every `state_update` an operator is shown on a Session carries its
 `background` list, as ACP's background work has it: `[]` when nothing runs
-past its turn, and never omitted. The gateway lists a child still at work
-after the turn that spawned it ended, as `{ "type": "subagent", "sessionId" }`
-(see [Child Sessions](#child-sessions)); a child of a live turn is that turn's
-foreground work. A child stays listed while its state is not idle, as ACP
+past its turn, and never omitted. The gateway lists a child, as
+`{ "type": "subagent", "sessionId" }` (see [Child Sessions](#child-sessions)),
+once no foreground work waits on it: the tool call that spawned it returned
+while it still runs, during the turn, or the turn that spawned it ended. A
+child its call waits on is that turn's foreground work, and one that ends
+before its call returns is never listed. A child stays listed while its state is not idle, as ACP
 lists a detached child: at work, waiting on input, or `unknown`, which nothing
 follows any more and may still run, so it stays listed until a report says
 how it ended; a close stops an `unknown` one only where its runtime still can

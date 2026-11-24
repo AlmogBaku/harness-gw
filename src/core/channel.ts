@@ -185,6 +185,19 @@ type Channel = {
 
 type ChildReport = TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>
 
+/**
+ * One piece of a Session's work a member follows, with what lists it: it
+ * still runs, and no foreground work waits on it, because the tool call that
+ * started it finished or the turn that started it ended.
+ */
+type FollowedWork = {
+  item: BackgroundWork
+  /** The tool call that started it, once a report named it. */
+  toolCallId?: string
+  detached: boolean
+  runs: boolean
+}
+
 type BackgroundChild = {
   turnId: string
   report: ChildReport
@@ -193,6 +206,11 @@ type BackgroundChild = {
 }
 
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
+
+/** One item of background work as a list names it, its kind and its id. */
+function workKey(item: BackgroundWork) {
+  return `${item.kind}\u0000${item.childSessionId}`
+}
 
 /** The statuses that say how a child's work ended. */
 const OVER: ReadonlySet<string> = new Set([
@@ -1404,12 +1422,12 @@ class Membership {
   /** Background child events held, as notices are, while the view rebuilds. */
   #heldChildren: { turnId: string; event: ChildTurnEvent }[] = []
   /**
-   * The Session's background work as this member was shown it, by child id:
-   * each child shown still running after its turn ended, at work or
-   * `unknown`, until shown over. Every state it is shown carries this list,
-   * and its close stops it.
+   * The work this member was shown each child of its Session doing, by child
+   * id. The Session's background work is each that still runs, at work or
+   * `unknown`, detached from foreground work; every state the member is
+   * shown carries that list, and its close stops it.
    */
-  readonly #background = new Map<string, BackgroundWork>()
+  readonly #followed = new Map<string, FollowedWork>()
   /**
    * The stream a background child event names, one per turn that spawned
    * it, so a transport keys the child's state the same across its events.
@@ -1619,7 +1637,9 @@ class Membership {
 
   /** The Session's background work as this member was shown it. */
   backgroundWork(): BackgroundWork[] {
-    return [...this.#background.values()]
+    return [...this.#followed.values()].flatMap(({ item, detached, runs }) =>
+      detached && runs ? [item] : []
+    )
   }
 
   /** `event` with the background list, where it reports the Session's state. */
@@ -1631,26 +1651,44 @@ class Membership {
   }
 
   /**
-   * Notes a child `shown` reports still running after its turn ended, or
-   * over, returning whether the list moved. A report that leaves its status
-   * as it was moves nothing.
+   * Notes what `shown` tells of the Session's work, returning whether the
+   * list moved: a child's report, which names the call that spawned it and
+   * whether it still runs, and outlived its turn when shown between turns;
+   * and a call's finish, which detaches the work it started from the
+   * foreground, since no foreground work waits on that call any longer.
    */
   #noteBackground(shown: MemberEvent) {
-    if (shown.kind !== "child") return false
-    const report = shown.event
-    if (
-      report.kind !== TurnEventKind.ChildSessionUpdated ||
-      report.status === undefined
+    const before = this.backgroundWork().length
+    const listed = new Set(this.backgroundWork().map(workKey))
+    if (shown.kind === "child") {
+      const report = shown.event
+      // A child's own child is announced in its stream, not the Session's.
+      if (report.kind !== TurnEventKind.ChildSessionUpdated) return false
+      const { childSessionId, toolCallId, status } = report
+      const followed = this.#followed.get(childSessionId) ?? {
+        item: { kind: "child", childSessionId },
+        detached: false,
+        runs: false,
+      }
+      this.#followed.set(childSessionId, {
+        ...followed,
+        ...(toolCallId === undefined ? {} : { toolCallId }),
+        detached: followed.detached || shown.background === true,
+        runs: status === undefined ? followed.runs : runs(report),
+      })
+    } else if (
+      shown.kind === "turn" &&
+      shown.event.kind === TurnEventKind.ToolCallFinished
+    ) {
+      const { toolCallId } = shown.event
+      for (const followed of this.#followed.values())
+        if (followed.toolCallId === toolCallId) followed.detached = true
+    } else return false
+    const after = this.backgroundWork()
+    return (
+      after.length !== before ||
+      after.some((item) => !listed.has(workKey(item)))
     )
-      return false
-    const { childSessionId } = report
-    const listed = this.#background.has(childSessionId)
-    const working = runs(report)
-    // Only a child that outlived its turn is background work.
-    if (working === listed || (working && !shown.background)) return false
-    if (listed) this.#background.delete(childSessionId)
-    else this.#background.set(childSessionId, { kind: "child", childSessionId })
-    return true
   }
 
   /** Shows this member its state again, with the list as it stands now. */
