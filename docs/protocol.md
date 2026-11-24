@@ -708,16 +708,19 @@ Every `state_update` an operator is shown on a Session carries its
 past its turn, and never omitted. The gateway lists a child still at work
 after the turn that spawned it ended, as `{ "type": "subagent", "sessionId" }`
 (see [Child Sessions](#child-sessions)); a child of a live turn is that turn's
-foreground work, and a child reported `unknown`, which nothing follows or can
-stop any longer, is not listed. No adapter follows a terminal or a tool call
+foreground work. A child stays listed while its state is not idle, as ACP
+lists a detached child: at work, waiting on input, or `unknown`, which nothing
+follows any more and may still run, so it stays listed until a report says
+how it ended; a close stops an `unknown` one only where its runtime still can
+(see each runtime's page). No adapter follows a terminal or a tool call
 past its turn yet, and an item listed must be ended before it is dropped, so
 neither is listed; each runtime's page under `docs/runtimes/` says what it
 reports of such work.
 
 - An item is announced before the first list that names it: a child's
   `subagent_update` at work comes first, and a child this connection could not
-  announce is never listed. A child's report that leaves it no longer at work
-  comes before the list that drops it.
+  announce is never listed. A child's report that it is over (idle, cancelled
+  or failed) comes before the list that drops it.
 - When the list changes, the Session's state is said again with the new list:
   the state this connection was last shown, a repeated snapshot that moves
   nothing. It carries that state's stop reason, but not the turn's `usage` or

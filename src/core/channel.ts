@@ -194,12 +194,20 @@ type BackgroundChild = {
 
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
 
-/** Whether a child's report leaves it at work. */
-function atWork(report: ChildReport) {
-  return (
-    report.status === ChildSessionStatus.Running ||
-    report.status === ChildSessionStatus.WaitingForInput
-  )
+/** The statuses that say how a child's work ended. */
+const OVER: ReadonlySet<string> = new Set([
+  ChildSessionStatus.Idle,
+  ChildSessionStatus.Failed,
+  ChildSessionStatus.Cancelled,
+])
+
+/**
+ * Whether a child's report leaves it running, as ACP lists a detached child
+ * while its state is not idle: at work, waiting on input, or `unknown`, which
+ * nothing follows any more and may still run.
+ */
+function runs(report: ChildReport) {
+  return report.status !== undefined && !OVER.has(report.status)
 }
 
 /**
@@ -542,7 +550,7 @@ function createChannelTable({
     channel.children.set(report.childSessionId, {
       turnId,
       report: merged,
-      ...(atWork(merged) ? {} : { endedAt: known?.endedAt ?? clock.now() }),
+      ...(runs(merged) ? {} : { endedAt: known?.endedAt ?? clock.now() }),
     })
   }
 
@@ -618,14 +626,14 @@ function createChannelTable({
     },
 
     /**
-     * The Session's background work: each child that outlived its turn and is
-     * still at work, which a delete stops.
+     * The Session's background work: each child that outlived its turn and
+     * still runs, which a delete stops.
      */
     backgroundWork(scope: ChannelScope): BackgroundWork[] {
       const channel = channels.get(channelKey(scope))
       return [...(channel?.children ?? [])].flatMap(
         ([childSessionId, { report }]) =>
-          atWork(report) ? [{ kind: "child" as const, childSessionId }] : []
+          runs(report) ? [{ kind: "child" as const, childSessionId }] : []
       )
     },
 
@@ -1397,8 +1405,9 @@ class Membership {
   #heldChildren: { turnId: string; event: ChildTurnEvent }[] = []
   /**
    * The Session's background work as this member was shown it, by child id:
-   * each child shown at work after its turn ended, until shown otherwise.
-   * Every state it is shown carries this list, and its close stops it.
+   * each child shown still running after its turn ended, at work or
+   * `unknown`, until shown over. Every state it is shown carries this list,
+   * and its close stops it.
    */
   readonly #background = new Map<string, BackgroundWork>()
   /**
@@ -1622,9 +1631,9 @@ class Membership {
   }
 
   /**
-   * Notes a child `shown` reports at work after its turn ended, or no longer
-   * at work, returning whether the list moved. A report that leaves its
-   * status as it was moves nothing.
+   * Notes a child `shown` reports still running after its turn ended, or
+   * over, returning whether the list moved. A report that leaves its status
+   * as it was moves nothing.
    */
   #noteBackground(shown: MemberEvent) {
     if (shown.kind !== "child") return false
@@ -1636,7 +1645,7 @@ class Membership {
       return false
     const { childSessionId } = report
     const listed = this.#background.has(childSessionId)
-    const working = atWork(report)
+    const working = runs(report)
     // Only a child that outlived its turn is background work.
     if (working === listed || (working && !shown.background)) return false
     if (listed) this.#background.delete(childSessionId)

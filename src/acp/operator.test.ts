@@ -1282,7 +1282,8 @@ describe("operator ACP listener", () => {
 
     // ACP's cancel stops the foreground alone; its close, and a delete, which
     // closes first, stop the background work too: everything in the latest
-    // list, each child still at work, and nothing already over.
+    // list, each child still at work or `unknown`, which is no idle, and
+    // nothing already over.
     it.each([
       ["closes", methods.agent.session.close],
       ["is deleted", methods.agent.session.delete],
@@ -1293,6 +1294,7 @@ describe("operator ACP listener", () => {
         for (const [childSessionId, status] of [
           ["child-2", ChildSessionStatus.Running],
           ["child-3", ChildSessionStatus.Idle],
+          ["child-4", ChildSessionStatus.Unknown],
         ] as const)
           listener.onChild!(turnId, {
             kind: TurnEventKind.ChildSessionUpdated,
@@ -1308,6 +1310,7 @@ describe("operator ACP listener", () => {
             background: [
               { type: "subagent", sessionId: "child-1" },
               { type: "subagent", sessionId: "child-2" },
+              { type: "subagent", sessionId: "child-4" },
             ],
           })
         )
@@ -1318,7 +1321,7 @@ describe("operator ACP listener", () => {
         await test.agent.request(method, { sessionId: CREATED })
 
         expect(stopChild.mock.calls).toEqual(
-          ["child-1", "child-2"].map((childSessionId) => [
+          ["child-1", "child-2", "child-4"].map((childSessionId) => [
             expect.objectContaining({ sessionId: sessionId(CREATED) }),
             childSessionId,
           ])
