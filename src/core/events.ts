@@ -353,7 +353,8 @@ export const OwnTurnEventSchema = z.discriminatedUnion("kind", [
   }),
   /**
    * One step of a terminal a tool call runs, after that call started: the
-   * first names the command, `data` appends plain text, `exit` ends it.
+   * first names the command, `data` appends plain text, `output` replaces
+   * all shown with the latest output its reporter holds, `exit` ends it.
    */
   turnEvent(TurnEventKind.TerminalOutput, {
     terminalId: z.string().min(1),
@@ -362,6 +363,7 @@ export const OwnTurnEventSchema = z.discriminatedUnion("kind", [
     /** Absolute working directory. */
     cwd: z.string().min(1).optional(),
     data: z.string().optional(),
+    output: z.string().optional(),
     /** Present once the process exited, even when neither value is known. */
     exit: z
       .strictObject({
@@ -434,6 +436,17 @@ export type ChildTurnEvent = TurnEventOf<
   | typeof TurnEventKind.ChildSessionUpdated
   | typeof TurnEventKind.ChildSessionEvent
 >
+
+/** One step of a terminal a tool call runs. */
+export type TerminalTurnEvent = TurnEventOf<typeof TurnEventKind.TerminalOutput>
+
+/** A terminal's step as a restatement keeps it: all of it but its output. */
+export function withoutOutput(event: TerminalTurnEvent): TerminalTurnEvent {
+  const step = { ...event }
+  delete step.data
+  delete step.output
+  return step
+}
 
 export function isChildTurnEvent(event: TurnEvent): event is ChildTurnEvent {
   return (

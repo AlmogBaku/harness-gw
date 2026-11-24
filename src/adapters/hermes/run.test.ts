@@ -28,17 +28,20 @@ import type {
 } from "./attachment-registry"
 import {
   HermesTurnEngine,
+  PROCESS_POLL_MS,
   HermesTurnRewindConflictError,
   hermesRecoveryToken,
   type HermesRecovery,
   type HermesTurnScope,
 } from "./run"
+import { HermesSessionGoneError } from "./attachment-registry"
 import { HermesUnavailableError, type HermesLog } from "./gateway"
 import { HermesInteractionPublicError } from "./interactions"
 import { HermesPublishedArtifacts } from "./published-artifacts"
 import { HermesChildSessions } from "./child-sessions"
 import type {
   HermesNativeStatus,
+  HermesProcess,
   HermesTurnNative,
   HermesSubmitPrompt,
 } from "./run-native"
@@ -100,6 +103,9 @@ function runtime(overrides: Partial<HermesTurnNative> = {}): HermesTurnNative {
     answering: () => false,
     watchChild: async () => () => undefined,
     interruptChild: async () => undefined,
+    // Hermes holds no process until a test says it does.
+    processes: async () => [],
+    killProcess: async () => undefined,
     ...overrides,
     // Hermes answers `session.events.since` with -32602 unless the cursor is an
     // integer, so no replay may ever be issued without one.
@@ -5510,7 +5516,9 @@ describe("Hermes native provider facts", () => {
     ])
   })
 
-  it("streams a background process as the terminal of its call", async () => {
+  // `terminal.close` closes a desktop tab and leaves the process running
+  // (`request_close_terminal`, `tools/process_registry.py`).
+  it("streams a background process as the terminal of its call, which a closed tab does not end", async () => {
     const events = await turnEvents((t) => [
       t.messageStart("m1"),
       t.toolStart("run-1", "terminal", {
@@ -5546,7 +5554,6 @@ describe("Hermes native provider facts", () => {
         command: "npm run dev",
       },
       { kind: TurnEventKind.TerminalOutput, ...terminal, data: "ready\n" },
-      { kind: TurnEventKind.TerminalOutput, ...terminal, exit: {} },
     ])
     const kinds = events.map((event) => (event as { kind: string }).kind)
     expect(kinds.indexOf(TurnEventKind.TerminalOutput)).toBeLessThan(
@@ -6071,6 +6078,304 @@ describe("Hermes child Sessions", () => {
         childSessionId: CHILD,
         status: ChildSessionStatus.Idle,
       })
+    )
+  })
+
+  describe("a process that outlives its call", () => {
+    /**
+     * A turn on a Session someone holds, whose `terminal` call starts
+     * `npm run dev` as Hermes' background process `proc_1` and returns; the
+     * turn ends `afterStart` unless that holds it. `listed` is what Hermes'
+     * `process.list` answers at each read.
+     */
+    async function backgroundProcess(
+      afterStart: (t: NativeTurnBuilder) => readonly NativeFrame[] = (t) => [
+        t.complete("m1", "Started."),
+      ],
+      native: Partial<HermesTurnNative> = {},
+      options: ConstructorParameters<typeof HermesTurnEngine>[1] = {}
+    ) {
+      const observers = new Map<string, Set<AttachmentObserver>>()
+      let latestSeq = 0
+      const publish = (event: NativeFrame) => {
+        latestSeq = Math.max(latestSeq, event.seq)
+        for (const observer of observers.get("live-secret") ?? [])
+          observer({ kind: "event", event })
+      }
+      const listed: HermesProcess[] = [{ processId: "proc_1", exited: false }]
+      const processes = vi.fn(async () => [...listed])
+      const killProcess = vi.fn<HermesTurnNative["killProcess"]>(
+        async () => undefined
+      )
+      const engine = new HermesTurnEngine(
+        runtime({
+          cursor: async () => ({ epoch: "epoch-1", latestSeq }),
+          subscribeLive: async (liveSessionId, observer) => {
+            const live = observers.get(liveSessionId) ?? new Set()
+            observers.set(liveSessionId, live.add(observer))
+            return () => {
+              live.delete(observer)
+            }
+          },
+          processes,
+          killProcess,
+          ...native,
+        }),
+        options
+      )
+      const listener = {
+        onTurn: vi.fn(),
+        onError: vi.fn(),
+        onTerminal: vi.fn<NonNullable<ServerTurnListener["onTerminal"]>>(),
+      }
+      const unsubscribe = engine.subscribeTurns(scope, listener)
+      const turnInput = input()
+      const handle = await engine.start(scope, turnInput)
+      const t = nativeTurn("live-secret", 1)
+      const args = { command: "npm run dev", background: true }
+      publish(t.messageStart("m1"))
+      publish(t.toolStart("run-1", "terminal", args))
+      publish(
+        t.frame("tool.complete", {
+          tool_id: "run-1",
+          name: "terminal",
+          args,
+          result: JSON.stringify({
+            output: "Background process started",
+            session_id: "proc_1",
+            pid: 7,
+            exit_code: 0,
+          }),
+        })
+      )
+      for (const frame of afterStart(t)) publish(frame)
+      return {
+        engine,
+        handle,
+        publish,
+        t,
+        listed,
+        processes,
+        killProcess,
+        listener,
+        unsubscribe,
+        turnId: turnInput.turnId,
+      }
+    }
+
+    const PROCESS_TERMINAL = {
+      kind: TurnEventKind.TerminalOutput,
+      terminalId: "run-1:terminal",
+      toolCallId: "run-1",
+    } as const
+
+    // Hermes streams a backgrounded process's output on its Session after the
+    // turn, and says it exited only in `process.list`, which Hermes' own
+    // desktop reads every five seconds.
+    it("follows a process that outlives its turn until Hermes lists it exited, reading its list every five seconds", async () => {
+      const clock = useFakeClock()
+      const { publish, t, listed, processes, listener, handle, turnId } =
+        await backgroundProcess()
+      await collect(handle)
+      publish(
+        t.frame("agent.terminal.output", {
+          process_id: "proc_1",
+          chunk: "ready\n",
+        })
+      )
+      await clock.advance(PROCESS_POLL_MS - 1)
+      expect(processes).not.toHaveBeenCalled()
+      await clock.advance(1)
+      listed[0] = { processId: "proc_1", exited: true, exitCode: 3 }
+      await clock.advance(PROCESS_POLL_MS)
+      await clock.advance(PROCESS_POLL_MS * 3)
+
+      expect(listener.onTerminal.mock.calls).toEqual([
+        [turnId, { ...PROCESS_TERMINAL, command: "npm run dev" }],
+        [turnId, { ...PROCESS_TERMINAL, data: "ready\n" }],
+        [turnId, { ...PROCESS_TERMINAL, exit: { exitCode: 3 } }],
+      ])
+      // Read while it ran, and once to see it exited; nothing is read after.
+      expect(processes).toHaveBeenCalledTimes(2)
+    })
+
+    it("ends a live turn's terminal in its own stream once Hermes lists the process exited", async () => {
+      const clock = useFakeClock()
+      const { publish, t, listed, handle, listener } = await backgroundProcess(
+        () => []
+      )
+      listed.length = 0
+      await clock.advance(PROCESS_POLL_MS)
+      publish(t.complete("m1", "Started."))
+      const events = await collect(handle)
+
+      const terminal = ofKind(events, TurnEventKind.TerminalOutput)
+      expect(terminal.at(-1)).toEqual({ ...PROCESS_TERMINAL, exit: {} })
+      expect(events.indexOf(terminal.at(-1)!)).toBeLessThan(
+        events.findIndex((event) => event.kind === TurnEventKind.TurnEnded)
+      )
+      expect(listener.onTerminal).not.toHaveBeenCalled()
+    })
+
+    // Nobody holds the Session: nothing reads its processes. A resume reads
+    // them once, and is told how each stands before its state, with the
+    // latest output Hermes holds, ACP's replacement snapshot.
+    it.each([
+      {
+        stands: "still running",
+        listed: [
+          {
+            processId: "proc_1",
+            exited: false,
+            output: "\u001b[32mready\u001b[0m\n",
+          },
+        ],
+        exit: undefined,
+        output: "ready\n",
+      },
+      {
+        stands: "exited",
+        listed: [
+          {
+            processId: "proc_1",
+            exited: true,
+            exitCode: 1,
+            output: "failed\n",
+          },
+        ],
+        exit: { exitCode: 1 },
+        output: "failed\n",
+      },
+      { stands: "pruned", listed: [], exit: {}, output: undefined },
+    ])(
+      "reads no process while nobody holds its Session, and restates one $stands on a resume's read",
+      async ({ listed: now, exit, output }) => {
+        const clock = useFakeClock()
+        const { engine, listed, processes, unsubscribe, handle, turnId } =
+          await backgroundProcess()
+        await collect(handle)
+        unsubscribe()
+        await clock.advance(PROCESS_POLL_MS * 4)
+        expect(processes).not.toHaveBeenCalled()
+        listed.splice(0, listed.length, ...now)
+        const back = {
+          onTurn: vi.fn(),
+          onError: vi.fn(),
+          onTerminal: vi.fn<NonNullable<ServerTurnListener["onTerminal"]>>(),
+        }
+        engine.subscribeTurns(scope, back)
+
+        await engine.readTerminals(scope)
+
+        expect(processes).toHaveBeenCalledTimes(1)
+        expect(back.onTerminal.mock.calls).toEqual([
+          [
+            turnId,
+            {
+              ...PROCESS_TERMINAL,
+              command: "npm run dev",
+              ...(output === undefined ? {} : { output }),
+              ...(exit ? { exit } : {}),
+            },
+          ],
+        ])
+      }
+    )
+
+    // The processes one Session's turns leave running are followed up to a
+    // bound: past it the oldest is no longer read, and its terminal ends with
+    // no known status rather than listed for good.
+    it("follows a bounded number of a Session's processes, ending the oldest past it with no known status", async () => {
+      const { listener, handle, turnId } = await backgroundProcess(
+        (t) => {
+          const args = { command: "npm run worker", background: true }
+          return [
+            t.toolStart("run-2", "terminal", args),
+            t.frame("tool.complete", {
+              tool_id: "run-2",
+              name: "terminal",
+              args,
+              result: JSON.stringify({ session_id: "proc_2", exit_code: 0 }),
+            }),
+            t.complete("m1", "Started."),
+          ]
+        },
+        {},
+        { maxFollowedProcesses: 1 }
+      )
+      await collect(handle)
+
+      expect(listener.onTerminal.mock.calls).toEqual([
+        [turnId, { ...PROCESS_TERMINAL, command: "npm run dev" }],
+        [
+          turnId,
+          {
+            ...PROCESS_TERMINAL,
+            terminalId: "run-2:terminal",
+            toolCallId: "run-2",
+            command: "npm run worker",
+          },
+        ],
+        [turnId, { ...PROCESS_TERMINAL, exit: {} }],
+      ])
+    })
+
+    // A Session deleted, or one Hermes holds no more, runs no process the
+    // gateway still has to read: neither its poll nor a later resume asks
+    // Hermes of it again, once the one read that found it gone did.
+    it.each([
+      {
+        ends: "is deleted",
+        end: (engine: HermesTurnEngine) => engine.forgetSession(scope),
+        reads: 0,
+      },
+      { ends: "is gone at Hermes", end: () => undefined, reads: 1 },
+    ])(
+      "reads a Session's processes no more once it $ends",
+      async ({ end, reads }) => {
+        const clock = useFakeClock()
+        let gone = false
+        const resume = vi.fn(async () => {
+          if (gone) throw new HermesSessionGoneError()
+          return { liveSessionId: "live-secret", running: false }
+        })
+        const { engine, handle, processes } = await backgroundProcess(
+          undefined,
+          { resume }
+        )
+        await collect(handle)
+        await clock.advance(PROCESS_POLL_MS)
+        expect(processes).toHaveBeenCalledTimes(1)
+
+        gone = true
+        const before = resume.mock.calls.length
+        end(engine)
+        await clock.advance(PROCESS_POLL_MS * 4)
+        await engine.readTerminals(scope)
+
+        expect(resume.mock.calls.length - before).toBe(reads)
+        expect(processes).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    // ACP's close stops each listed terminal's process, whether its turn
+    // still runs or the process outlived it; one the Session never ran is
+    // left alone.
+    it.each([
+      { when: "during its turn", ended: false },
+      { when: "after it", ended: true },
+    ])(
+      "stops a terminal's process through process.kill $when",
+      async ({ ended }) => {
+        const { engine, handle, killProcess } = await backgroundProcess((t) =>
+          ended ? [t.complete("m1", "Started.")] : []
+        )
+        if (ended) await collect(handle)
+        await engine.stopTerminal(scope, "run-1:terminal")
+        await engine.stopTerminal(scope, "run-2:terminal")
+
+        expect(killProcess.mock.calls).toEqual([["live-secret", "proc_1"]])
+      }
     )
   })
 

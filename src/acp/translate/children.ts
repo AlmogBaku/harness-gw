@@ -37,7 +37,8 @@ function shown(text: string, maxChars: number) {
  * on its parent: a patch, which the first report of an id makes the child's
  * announcement. ACP replaces a child's capabilities whole and permits nothing
  * where they are unset, so `cancel` is offered only where the runtime stops
- * the child alone.
+ * the child alone. Its state mirrors the child's own, which reports no
+ * background work: the gateway follows none of a child's past its turn.
  */
 export function translateChildUpdate(
   event: TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>,
@@ -65,7 +66,9 @@ export function translateChildUpdate(
     ...(cancellable === undefined
       ? {}
       : { capabilities: cancellable ? { cancel: {} } : {} }),
-    ...(status === undefined ? {} : { state: CHILD_STATES[status] }),
+    ...(status === undefined
+      ? {}
+      : { state: { ...CHILD_STATES[status], background: [] } }),
     _meta: { [HGW_META_KEY]: meta },
   }
 }

@@ -108,7 +108,7 @@ Close codes the gateway sends:
 | `1008` | Policy violation (expired credential, rate or frame size exceeded, or another protocol limit the ACP SDK enforces)                                 | No reconnect; ends connection |
 | `1013` | Gateway at capacity                                                                                                                                | Backs off 30–60 s with jitter |
 | `4408` | Handshake unfinished: `initialize` (and a guest's sign-in) not done within 15 s, or the oldest such socket closed past the listener's budget of 32 | Normal reconnect              |
-| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, its waiting requests passed that buffer, or a Session left it behind | Normal reconnect; within 60 s of a rejoin, the backoff grows |
+| `4409` | Reader fell behind: the client read none of a full output buffer (8 MiB) for 60 s, its waiting requests passed that buffer, a Session left it behind, or a replay held back more than it may | Normal reconnect; within 60 s of a rejoin, the backoff grows |
 
 Any other code triggers a normal reconnect.
 
@@ -120,7 +120,17 @@ member through a queue of `limits.subscriberEvents` events and
 history in standard updates, once per turn. One that overflows the same turn
 again, or whose view cannot be rebuilt, is not kept on the Session: the
 gateway closes its connection with `4409`, which ends every Session's activity
-on it, and the client reconnects and resumes each one.
+on it, and the client reconnects and resumes each one. So it does when a
+replay of a member's view, or a rebuild of it from history, which holds the
+Session's background events and notices until its page is shown, holds back
+more than 4,096 events or 8 MiB of their JSON (`HELD_LIMITS`) before it
+completes: what a replay holds reaches no
+socket, so no socket bound sees it, and a replay held open while the Session
+streams on would hold without end. What it holds is folded where a later event
+says all an earlier one did: a process's steps held one after another become
+one, its output appended, or past 16,384 characters the snapshot of its tail,
+and a reading of the Session's usage, model, commands or row replaces the held
+one of its kind, so a process printing on through a long replay holds one event.
 
 A frame over `HGW_MAX_FRAME_BYTES` (1 100 000 bytes) is closed by the server
 itself before the gateway reads it, so the client never sends one: it refuses
@@ -229,7 +239,7 @@ invited conversation by its reference alone; any other Session id is
 | `session/prompt`                                                                                                                             | Sends, once the guest resumed the invited conversation; the first Send creates the invited Session. Edit and Retry (`rewindSourceId`) may name only a user message this connection was shown, and a Retry, which resends its source as written, may not name one whose text the guest could not send. They rewind as an operator's do. |
 | `_hgw/session/steer`                                                                                                                         | Steers the invited conversation's active turn.                                                                                               |
 | `session/cancel`                                                                                                                             | Stops a turn in the invited conversation only.                                                                                               |
-| `session/close`                                                                                                                              | Stops the invited conversation's turn for every member, then detaches. Unlike an operator's close, it stops no background child: a guest is told of none, and can neither see nor stop the operator's background work. |
+| `session/close`                                                                                                                              | Stops the invited conversation's turn for every member, then detaches. Unlike an operator's close, it stops no background work: a guest is told no `background` list, and can neither see nor stop the operator's background work. |
 | `_hgw/session/focus`                                                                                                                         | Accepted, answered `{}`, and ignored: read state is the operator's.                                                                          |
 | `auth/logout` | Leaves the invited conversation and keeps the connection open for another `auth/login`; see [Guest listener](#guest-listener). |
 | `session/new`, `session/list`, `session/delete`, `session/fork`, `session/set_config_option`, `_hgw/session/update`, `_hgw/sessions/search`, `_hgw/agents/*` | `-32601` method not found, refused before its params are decoded: ACP's code for a method that "does not exist or is not available", which these are to a guest, though the session capability promises `session/new` and `session/list`. |
@@ -319,8 +329,8 @@ search, create, or resume, active or not.
 
 `session/close` stops the Session's active work for every member and then
 detaches this connection: its turn, as `session/cancel` does, and then its
-background work, each child still at work after its turn that this connection
-was told of (see [Child Sessions](#child-sessions)). The closer is shown how a
+background work, everything in the latest `background` list this connection
+was shown (see [Background work](#background-work)). The closer is shown how a
 turn it stopped ended, its final updates and its idle `state_update` with
 `stopReason: "cancelled"`, before the answer; closing an idle Session sends no
 idle of its own. The whole close, its Stop, the wait for the turn's end, and
@@ -338,8 +348,10 @@ connection; the Session's work and all other members continue.
 
 `session/delete` closes the Session first, as a close on every connection
 would: it stops the turn and waits, as a close does, until each member was
-shown how it ended, and stops every background child still at work; then the
-runtime deletes the Session, and once it holds it no longer, deleted or
+shown how it ended, and stops its background work, each process still running
+and each child still at work, but none whose report names the Session itself,
+another top-level Session the gateway knows, or a child announced here under
+another Session, as no list names one; then the runtime deletes the Session, and once it holds it no longer, deleted or
 already gone, this connection is detached, as its close would detach it, and
 every other member is told it is gone with an `_hgw/error` `not_found` and
 detached. The whole delete, its close and the runtime's delete, shares one
@@ -473,6 +485,36 @@ rejects every other `replayFrom` type, and an `_hgw/before` without a string
 `cursor`, with `-32602` invalid params rather than guessing where to replay
 from.
 
+A resume with a `start` or `_hgw/position` cursor ends its replay with ACP's
+`replay_complete` update before its answer, once, also when it replays
+nothing; a resume with no cursor sends none. Only replayed history precedes
+it: the stored messages, and a running turn's events up to the replay's cut,
+which is what the turn's journal held when the resume followed the turn. From
+the request on, the gateway holds everything else for the Session (the turn's
+later events, a notice, a reading, the Session's row, a request it asks) and
+sends it after `replay_complete`, in the order it came, then the Session's
+current `state_update`, then the answer. That state is read with how far the
+live turn's journal reached, and sent where the resuming view's stream of the
+turn has shown it that far, so it never precedes an event of the turn the
+stream still owes the view, such as the last chunks and the end of a turn that
+ended as the view resumed it. A stream that ended, fell behind, or that another
+replaced owes nothing more and is waited on no longer, and no stream is waited
+on longer than 5 s (`STATE_WAIT_MS`), past which the state goes all the same. A failure's `_hgw/error` and a
+request's withdrawal are not held. Each child Session the replay announces
+gets its own `replay_complete` on the child's id, after its announcement and
+its transcript, and one first announced after the replay completed and before
+the answer gets one right after its announcement. A replay that cannot finish
+sends no `replay_complete`, and its resume answers an error. An `_hgw/before`
+page read is a resume with a cursor too, and closes the same way (see
+[Older history pages](#older-history-pages)). A connection resumes one view
+of a Session at a time: a resume, or a page read, of a Session whose resume
+is still in flight on that connection is invalid params, and a resume sent
+while one of its pages is read waits for that page, then runs, counting as in
+flight while it waits. So it waits for a rebuild of the view the gateway runs
+itself, as for a reader that fell behind, and such a rebuild waits for a
+resume in flight. The wait counts toward the resume's 30 s join deadline, so
+a resume always answers within it, before the browser's own deadline.
+
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
 the user message an Edit or Retry replaces; a Session offers it only where its
@@ -490,7 +532,13 @@ as a prompt never inserted, the answer waits for the runtime's storage receipt
 and names the id it stored the prompt under. A prompt the runtime may have
 stored without proving it, because its receipt outlasted the admission
 deadline, its turn ended first, or its start went unanswered, is answered
-under the id the gateway minted. An unanswered start then reports the
+under the id the gateway minted. As ACP has a replayed prompt keep the id its
+answer returned, a receipt that lands after that answer makes every later
+replay and older page name the prompt by the minted id, and a rewind naming
+it reach the runtime by the runtime's own; the gateway keeps that in memory,
+so a restart forgets it, and a prompt whose turn ended, or whose start went
+unanswered, before any receipt replays under whatever id the runtime stored.
+An unanswered start then reports the
 `unknown` state until a recover confirms the turn or its deadline ends it.
 Only a turn its adapter knows stored nothing is answered with an error.
 A `$/cancel_request` for the prompt answers `-32800` only while the start has
@@ -561,8 +609,12 @@ events after the answer, never before it; `session/fork` answers the same way.
 the setup above, and `{ position?, history? }` beside the capabilities in
 `_meta.hgw`. `position` is
 the turn and sequence the joined Session stands at; a later resume continues
-from it. Session info (`session_info_update`), execution state (`state_update`),
-and usage arrive as events after the answer. When the journal cannot answer `from`
+from it. As ACP has a resume synchronize current state before its answer, the
+Session's current `state_update` and then the row the gateway holds of it
+(`session_info_update`) arrive before the answer, after any replay. The row is
+the one the gateway already holds, so a rejoin still asks the provider nothing
+first: a row it does not hold yet, and a change the read after the join
+finds, arrive after the answer, and so does usage. When the journal cannot answer `from`
 (`ReplayCursorLostError`, `core/channel.ts`), the gateway rebuilds the Session
 from history as a `start` resume does: the retained messages arrive as standard
 `session/update`s before the answer, the live turn follows them, and the answer
@@ -600,8 +652,7 @@ still carries `truncated: true` when the reading stopped at a reach bound.
 - The page's messages arrive as `session/update`s before the response, each
   tagged `_meta.hgw.historyPage: { cursor }` (`HgwHistoryPageTagSchema`). The
   client keeps them out of the turn position and every live listener. A page
-  never carries `plan_update`; the Todo plan and a restored failed turn come
-  only with the newest page.
+  never carries `plan_update`: the Todo plan comes only with the newest page.
 - The response carries `_meta.hgw.history`
   (`HgwHistoryPageResponseMetaSchema`) beside the Session's setup, as every
   resume answer does (see [Response `_meta.hgw` shapes](#response-_metahgw-shapes)). A missing `nextCursor` means the
@@ -609,9 +660,24 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   the reading, or the runtime's own reach did, and the thread says earlier
   messages can't be loaded.
 - A page is read only for a Session this connection has resumed, whether by
-  a resume, `session/new`, or a prompt, one at a time per Session. It never
-  resumes, restates usage, or reports execution. A cursor that does not decode, or points past the
+  a resume, `session/new`, or a prompt, one at a time per Session, and none
+  while a resume of it is in flight here (invalid params). It never
+  resumes or restates usage. A cursor that does not decode, or points past the
   history, is invalid params.
+- As ACP closes every resume with a cursor, a page ends with its own
+  `replay_complete`, tagged as the page's, after the page's updates and each
+  child transcript's (each child's tagged on the child's id), and then the
+  Session's current `state_update` and, as ACP has current session info
+  follow a replay, its `session_info_update` with the row the gateway holds,
+  both untagged, before the response. That state is the one this
+  connection's stream of the Session last showed it, said again as a
+  repeated snapshot with the list as it stands and without the turn's usage
+  or cost, so no update the page held back, such as the end of a turn that
+  ended during the read, is overtaken by a newer state. Until the
+  page's `replay_complete` the gateway holds the Session's other updates, as
+  a resume's replay does, and sends them after it. The client hands the page
+  its tagged updates, the `replay_complete` among them, and its live
+  listeners the state, which a reader applies as any current state.
 - An accepted rewind deletes the newest rows, so it marks the client's cursor
   stale and drops a page still loading; the next load resumes from `start`
   first. A resume rebuilt from history likewise returns the thread to the
@@ -626,8 +692,10 @@ stop signal to the runtime; the turn continues until the runtime confirms it
 ended.
 
 On reconnect (session/resume with replay) a client with a pending prompt
-receives history first, then buffered live events, then the current state, then
-the stored prompt answer (if it arrived before the storage deadline).
+receives history first, then the live turn's buffered events up to the
+replay's cut, then `replay_complete`, then what was held meanwhile and the
+current state, then the stored prompt answer (if it arrived before the storage
+deadline).
 Catch-up uses only standard ACP session updates; no `_hgw/session_invalidated`
 or `_hgw/steer_accepted` is sent.
 
@@ -645,7 +713,7 @@ history passes the plan alone.
 | `agent_message_chunk`       | Streaming assistant prose                                                                                         |
 | `agent_thought_chunk`       | Streaming reasoning                                                                                               |
 | `tool_call_update`          | Tool lifecycle and argument deltas                                                                                |
-| `state_update`              | Run state transitions                                                                                             |
+| `state_update`              | Run state transitions, each with the Session's `background` list                                                  |
 | `plan_update`               | Session Todos in `_meta.hgw.todos`                                                                                |
 | `compaction_update`         | The provider compacted the conversation's context, with its summary once completed where the provider keeps one  |
 | `usage_update`              | Context window usage                                                                                              |
@@ -665,6 +733,77 @@ and after a `session/set_config_option` that changes the model, because the
 window grows with the conversation and its size belongs to the model. A provider
 that cannot report usage sends none, and the last reading stands.
 
+### Background work
+
+Every `state_update` an operator is shown on a Session carries its
+`background` list, as ACP's background work has it: `[]` when nothing runs
+past its turn, and never omitted. The gateway lists a child, as
+`{ "type": "subagent", "sessionId" }` (see [Child Sessions](#child-sessions)),
+once no foreground work waits on it: the tool call that spawned it returned
+while it still runs, during the turn, or the turn that spawned it ended. A
+child its call waits on is that turn's foreground work, and one that ends
+before its call returns is never listed. A child stays listed while its state is not idle, as ACP
+lists a detached child: at work, waiting on input, or `unknown`, which nothing
+follows any more and may still run, so it stays listed until a report says
+how it ended; a close stops an `unknown` one only where its runtime still can
+(see each runtime's page). A child known only from a stored row, which a
+from-start resume or an older page replays, is listed by the state the row
+names, under the same rule: a row at work, waiting or `unknown` lists it once
+the row announced it, and it stays listed until a report of its runtime says
+it is over, while a close asks it stopped where the runtime still can; a row
+that is over, or that names no state, lists nothing. A report of the live
+Session's always outranks a stored row. A view positioned in a turn replays no
+row, so it lists only what the Session's reports name.
+
+A process a tool call leaves running is listed as its terminal,
+`{ "type": "terminal", "terminalId" }`, from the call's return, during the turn,
+until its `terminal_update` reports `exitStatus`: with the exit code where the
+runtime knows it, and as `{}`, exited with no known status, where the runtime
+no longer holds the process. Its call is never listed, since a listed
+terminal is all the work it has. Its output keeps arriving after the turn, as
+`terminal_output_chunk` on the Session, with the `_meta.hgw` of the turn that
+started it and `background: true`; the call already carries the terminal, so
+nothing is added to its content. No runtime here reports a tool call that
+outlives its turn without a process, so none is listed; each runtime's page
+under `docs/runtimes/` says what it reports of such work.
+
+- An item is announced before the first list that names it: a child's
+  `subagent_update` at work, or a terminal's `terminal_update`, comes first,
+  whatever its runtime first reports of it, output alone included, and a child
+  this connection could not announce is never listed. A child's
+  report that it is over (idle, cancelled or failed), or a terminal's
+  `exitStatus`, comes before the list that drops it.
+- When the list changes, the Session's state is said again with the new list:
+  the state this connection was last shown, a repeated snapshot that moves
+  nothing. It carries that state's stop reason, but not the turn's `usage` or
+  its `_meta.hgw.cost`, which a client counts once.
+- Every resume, from any cursor and on a connection that holds the Session
+  already too, rebuilds the list from where the work is kept: the Session's
+  channel for work that outlived its turns, the live turn's journal for work
+  its calls left running before the replay's cut, and what the replay then
+  shows. It restates each listed child and terminal the replay did not show
+  before the state that closes it, which carries the list, so no list
+  reaches a resuming view ahead of the state its resume closes with, or
+  names work it was not told of. A terminal is restated as its command
+  and folder, its exit where it has one, and the latest of its output the
+  gateway holds as ACP's replacement `output` snapshot: what it printed after
+  its turn, its last 16,384 characters (`RESTATED_TERMINAL_OUTPUT`), what its
+  runtime's read gives, or, for one its live turn left running before the
+  replay's cut, what that turn's journal holds of it, masked as its live
+  output is. A Session nobody
+  held is first asked of its runtime how each process its turns left running
+  stands, which the resume's state waits for up to 2 s (`SETUP_READ_MS`); a
+  read slower than that lands as updates after it.
+- A child's own `state_update`s, and the state its parent's `subagent_update`
+  mirrors, carry `background: []`: the gateway follows no background work of a
+  child's own, so a child shown idle is over.
+- `session/cancel` leaves listed work running; `session/close` stops
+  everything in the latest list its connection was shown, each child through
+  the runtime's own stop of one and each terminal by stopping its process,
+  whose exit the terminal then reports. A guest is told no list on any state,
+  not even `[]`, is shown no terminal, during its turn or after it, and its
+  close stops nothing in the background.
+
 ### Turn stream `_meta.hgw`
 
 Every event emitted from a turn carries a base of
@@ -678,11 +817,28 @@ Every event emitted from a turn carries a base of
 | `plan_update`                         | `sequence`, `turnId?`, `todos` ()                                 |
 | `usage_update`                        | `source`, `estimated?`, `breakdown?` (); no sequence/turnId       |
 
-A failed turn ends with ACP's `state_update { state: "idle", stopReason:
+A failed turn ends live with ACP's `state_update { state: "idle", stopReason:
 "error" }`. Its `error` is the public error: `-32603` and, as its `message`,
-the failure's machine code (`internal_error` for a stored failure that kept
-none). The provider's own words travel only as `_meta.hgw.message`, beside the
-same `code`.
+the failure's machine code (`internal_error` when it has none). The provider's
+own words travel only as `_meta.hgw.message`, beside the same `code`.
+
+A replay sends no past `state_update`, as ACP asks, so a turn the provider
+stored as failed replays its failure on the message it ended: after that
+message's own parts, one `agent_message` upsert for the same `messageId`
+carries `_meta.hgw.failure: { message, code?, at? }`
+(`HgwMessageFailureMetaSchema`, `protocol/acp.ts`). It leaves the content the
+parts streamed; a turn that failed before any output replays as this upsert
+alone, with `content: []`. `message` is what the reader is shown of the
+failure, masked as its live form is: the provider's words for an operator, the
+public description of the failure's class for a guest. `code` is the
+normalized code the runtime stored, which a guest is never sent. `at` is when
+the turn failed. The same form arrives on the newest page and on every older
+one, and a live failure never takes it. Both forms reach a reader for one turn
+only when the turn fails while that reader resumes, its row stored before the
+replay read it and its live end following the replay: the upsert names the
+message, under `turnId: "history"`, and the live `state_update` names the
+turn's own `turnId`, so a reader marks the message failed from the one and
+ends the turn from the other, and the failure reads once.
 
 Two refusals end a prompt before anything is stored, so `session/prompt` itself
 answers `-32602` with the refusal's code as the error's `data.code`, for the
@@ -828,12 +984,18 @@ or `{`, such as `$TOKEN`) stay. One masker (`maskCredentials` in
 
 | Where                                                                 | Masked                                                                                                                                               |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, and its terminal's command and output                                                        |
+| A tool call, live and replayed, on both listeners, for every runtime  | its title, arguments, result, content, streamed output, and its terminal's command and output, during its turn and after it                        |
 | A child Session, live and replayed                                    | its title, description and summary, and its own tool calls and failures as a turn's are                                                              |
 | A failed turn, live and replayed                                      | its message                                                                                                                                          |
+| A runtime's `notice`, on the operator listener (a guest is shown none) | its title and description, which a background process's completion names its command in                                                            |
 | A question a guest is shown                                           | its prompt, header, and choices; a guest's answer reaches the runtime as the choice it wrote, and an answer echoed back to a guest is masked        |
 | `requestText` in `_hgw/activity`, and every Web Push text             | the one line it shows                                                                                                                                |
 | An MCP App view                                                       | its tool input and result                                                                                                                            |
+
+A `background` list names ids alone, so it passes unmasked; every event kind
+the middleware passes as it is, it names, so a kind added later fails to
+compile until its masking is decided, and one that arrives anyway is not
+shown.
 
 The ask card is not masked: a question and a permission reach the operator as
 the runtime wrote them, since the one asked must read exactly what they answer
@@ -898,9 +1060,12 @@ twice leaves one placeholder per credential.
 Tool data is JSON-aware: a JSON value, and text that parses as one, is masked
 by key and by value, a secret-named key keeping its name and losing any value
 but a boolean or `null`; JSON with nothing to mask is sent as written, and
-streamed output is masked as plain text, never re-encoded. A terminal's output
-keeps its last 262,144 UTF-16 units, the most a browser keeps of one, without
-the word the cut lands in; nothing else is cut. Each turn event is masked
+streamed output is masked as plain text, never re-encoded. A terminal's output,
+a chunk or a restated `output` snapshot, keeps its last 262,144 UTF-16 units,
+the most a browser keeps of one, from the first line the cut leaves whole, and
+so does every shorter tail the gateway or a runtime keeps of it: a name masks
+the value on its line, so a cut inside that line drops the line, and a cut tail
+with no line break is not sent at all. Nothing else is cut. Each turn event is masked
 once, however many members are shown it. An MCP App view's files are served from
 the stored call, never from its masked input.
 
@@ -1000,12 +1165,13 @@ Later reports patch it.
   `background: true`, so no reader takes it as a position in that turn's
   stream; its requests are answered, and its `cancel` honored, without any
   turn. The parent first reports each child that outlives its turn as
-  `running`. As ACP has it, `session/cancel` of the parent asks nothing of
-  such a child (a runtime may still end it with the turn, as Hermes does),
-  and `session/close` of the parent stops each one still at work that the
-  closing connection was told of, through the runtime's own stop of a child,
-  as a `cancel` of the child would; a child the runtime cannot stop alone
-  runs on. A guest's close stops none, whatever its connection was told: a
+  `running`. Each one still at work is in the parent's `background` list
+  (see [Background work](#background-work)). As ACP has it, `session/cancel`
+  of the parent asks nothing of such a child (a runtime may still end it with
+  the turn, as Hermes does), and `session/close` of the parent stops each one
+  in the latest list the closing connection was shown, through the runtime's
+  own stop of a child, as a `cancel` of the child would; a child the runtime
+  cannot stop alone runs on. A guest's close stops none, whatever its connection was told: a
   guest is told of no child, and its stack's close asks no background work
   stopped. A Session nobody watches any longer still follows its children
   for a minute, so a reload or a reconnect comes back to them followed: a
@@ -1046,6 +1212,10 @@ cursor. History stores a child as an `{ role: "activity", activityType:
 final state, then sends the child's whole transcript under its id, where the
 runtime keeps one (`ServerRuntime.childHistory`); a child's transcript is never
 paged. A resume while the turn runs leaves its children to the turn's replay.
+Whichever way a resume's replay announces a child, it ends the child's replay
+with `replay_complete` on the child's id, as ACP has each announced child's
+(see [Request `_meta.hgw` shapes](#request-_metahgw-shapes)); a guest, told of
+no child, is sent none.
 
 A guest is shown nothing of a child: no announcement, event, question,
 approval, stored row or transcript. A child's approval or question in a turn

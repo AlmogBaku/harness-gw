@@ -70,12 +70,15 @@ export function createPermissionsMiddleware({
             : undefined
         }
         case "child":
+        case "terminal":
         case "child-history":
         case "prompt":
         case "history":
+        case "replay-complete":
         case "request-withdrawn":
         case "question-answered":
         case "execution":
+        case "background":
         case "usage":
         case "model":
         case "session-info":

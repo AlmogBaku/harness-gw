@@ -202,16 +202,21 @@ export function createTurnsMiddleware({
             ? event
             : { ...event, request }
         }
-        // A child Session is never a guest's: no announcement, event or
-        // transcript of one reaches it.
+        // A child Session is never a guest's: no announcement, event,
+        // transcript or end of replay of one reaches it; nor is a terminal,
+        // during its turn or after it.
         case "child":
         case "child-history":
+        case "terminal":
           return undefined
+        case "replay-complete":
+          return event.child ? undefined : event
         // What is not a turn's passes: the feeds layer chose the readings and
         // the commands layer projects the command list.
         case "history":
         case "request-withdrawn":
         case "execution":
+        case "background":
         case "usage":
         case "model":
         case "error":

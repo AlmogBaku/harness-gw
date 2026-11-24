@@ -10,7 +10,7 @@
  */
 import { z } from "zod"
 
-import { defaultClock, type Logger } from "../../../lifecycle"
+import { defaultClock, type Clock, type Logger } from "../../../lifecycle"
 import { createLink, retryBudget, type LinkOptions } from "../../core/link"
 import { RETRY_BUDGET } from "../../core/limits"
 import {
@@ -23,6 +23,7 @@ import {
   TurnInputSchema,
   type PendingRequest,
   type RequestReply,
+  type TerminalTurnEvent,
   type TurnEvent,
 } from "../../core/events"
 import {
@@ -34,7 +35,10 @@ import {
 } from "../../core/runtime"
 import { isBlankText } from "../../core/member"
 import { storageReceipt } from "../../core/storage-receipt"
-import type { AttachmentSignal } from "./attachment-registry"
+import {
+  HermesSessionGoneError,
+  type AttachmentSignal,
+} from "./attachment-registry"
 import { projectTodos, TODO_STATUS_ALIASES, type Todo } from "../todos"
 import type { McpToolNames } from "../../mcp-apps/tool-names"
 import {
@@ -104,6 +108,7 @@ import {
   safelyUnsubscribe,
   type ActiveTurn,
   type HermesTurnScope,
+  type ProcessTerminal,
   type TurnEnding,
   type TurnEngineHost,
   type SettlingWatcher,
@@ -113,6 +118,7 @@ import { HermesUnavailableError, type HermesLog } from "./gateway"
 import { interactionReason } from "./interactions"
 import type {
   HermesCorrectionLocator,
+  HermesProcess,
   HermesTurnNative,
   HermesSubmitPrompt,
   HermesSubmitRejection,
@@ -157,6 +163,58 @@ const MAX_REWIND_SOURCE_LENGTH = 256
 /** The steered corrections a rewind can still find, oldest forgotten first. */
 const MAX_REMEMBERED_CORRECTIONS = 256
 
+/**
+ * The processes one Session's turns left running the gateway follows; past
+ * it the oldest is followed no more, and its terminal ends with no known
+ * status.
+ */
+const MAX_FOLLOWED_PROCESSES = 64
+
+/**
+ * How often the processes a Session's terminals run are read while someone
+ * holds it: Hermes streams a process's output but sends nothing as it exits,
+ * so `process.list` is the only word of an exit. Hermes' own desktop reads
+ * it this often for its background process list (`BACKGROUND_POLL_MS`,
+ * `apps/desktop/src/app/chat/composer/status-stack/index.tsx`).
+ */
+export const PROCESS_POLL_MS = 5_000
+
+/** A terminal whose process outlived the turn that started it. */
+type OutlivedTerminal = ProcessTerminal & { turnId: string }
+
+/**
+ * How a process Hermes lists has ended, or `undefined` while it runs: its
+ * exit code where Hermes knows it, and an exit with no known status for one
+ * Hermes lists no longer, which it prunes once it ended.
+ */
+function endOf(
+  processes: ReadonlyMap<string, HermesProcess>,
+  processId: string
+) {
+  const listed = processes.get(processId)
+  if (!listed) return {}
+  if (!listed.exited) return undefined
+  return listed.exitCode === undefined ? {} : { exitCode: listed.exitCode }
+}
+
+/** One step of the terminal a process runs as, as the gateway carries it. */
+function terminalStep(
+  { terminalId, toolCallId, command }: ProcessTerminal,
+  step: Pick<TerminalTurnEvent, "data" | "output" | "exit"> & {
+    restates?: boolean
+  }
+): TerminalTurnEvent {
+  return {
+    kind: TurnEventKind.TerminalOutput,
+    terminalId,
+    toolCallId,
+    ...(step.restates && command ? { command } : {}),
+    ...(step.data === undefined ? {} : { data: step.data }),
+    ...(step.output === undefined ? {} : { output: step.output }),
+    ...(step.exit === undefined ? {} : { exit: step.exit }),
+  }
+}
+
 /** Where a recovery continues a Hermes stream: its epoch and last frame seen. */
 const HermesPositionSchema = z.object({
   epoch: z.string(),
@@ -200,6 +258,18 @@ export class HermesTurnEngine {
   /** Each Session's ended turns whose children still work in the background. */
   readonly #backgroundTurns = new Map<string, Set<ActiveTurn>>()
   /**
+   * Each Session's terminals whose process outlived the turn that started
+   * it, by Hermes' process id, until the process is seen to end. They are
+   * kept while nobody holds the Session too, so a later resume reads how
+   * each stands.
+   */
+  readonly #terminals = new Map<string, Map<string, OutlivedTerminal>>()
+  /** Each Session's next read of the processes its terminals run. */
+  readonly #processPolls = new Map<string, unknown>()
+  readonly #processPollMs: number
+  readonly #maxFollowedProcesses: number
+  readonly #clock: Clock
+  /**
    * Each Session's children that outlived their turns and are over since, by
    * `subagent_id`, while someone watches it: Hermes may still report one, to
    * every observer of the Session, and no later turn may take it for its own.
@@ -238,9 +308,19 @@ export class HermesTurnEngine {
       media?: HermesMediaOptions
       /** Without it, a watch retries every failure and logs nothing. */
       watch?: Partial<HermesWatchOptions>
+      /** How often a held Session's processes are read; `PROCESS_POLL_MS`. */
+      processPollMs?: number
+      /** How many of a Session's processes it follows; `MAX_FOLLOWED_PROCESSES`. */
+      maxFollowedProcesses?: number
+      /** The clock those reads are timed on. */
+      clock?: Clock
     } = {}
   ) {
     this.#native = native
+    this.#processPollMs = options.processPollMs ?? PROCESS_POLL_MS
+    this.#maxFollowedProcesses =
+      options.maxFollowedProcesses ?? MAX_FOLLOWED_PROCESSES
+    this.#clock = options.clock ?? defaultClock
     this.#mcpToolNames = options.mcpToolNames
     this.#publishedArtifacts = options.publishedArtifacts
     this.#childSessions = options.childSessions
@@ -554,6 +634,10 @@ export class HermesTurnEngine {
         )
           // A child that outlived its turn reports on the parent's Session.
           this.#acceptSubagent(undefined, event.type, payloadOf(event), key)
+        // So does a process that outlived its turn, which this watch's own
+        // listener hears.
+        else if (event.type === "agent.terminal.output")
+          this.#acceptOutlivedOutput(key, listener, payloadOf(event))
         else if (event.type === "message.start") announce(this.#active.has(key))
         else if (
           event.type === "message.complete" ||
@@ -579,11 +663,15 @@ export class HermesTurnEngine {
       clock: defaultClock,
       bindings,
     })
+    this.#pollProcesses(scope)
     return () => {
       link.dispose()
       listeners.delete(listener)
       if (listeners.size > 0) return
       this.#turnListeners.delete(key)
+      // Nobody holds the Session: its processes are read again on a resume.
+      this.#clock.clearTimeout(this.#processPolls.get(key))
+      this.#processPolls.delete(key)
       // Nobody watches the Session any longer, so nothing follows its
       // children past their turns.
       for (const turn of this.#backgroundTurns.get(key) ?? []) {
@@ -977,8 +1065,10 @@ export class HermesTurnEngine {
       case "tool.complete":
         return this.#acceptToolComplete(active, payload)
       case "agent.terminal.output":
-      case "terminal.close":
-        return this.#acceptTerminal(active, event.type, payload)
+        return this.#acceptTerminal(active, payload)
+      // `terminal.close` closes a desktop terminal tab and leaves its process
+      // running (`request_close_terminal`, `tools/process_registry.py`), so
+      // the terminal runs on until Hermes lists its process as ended.
       case "status.update":
         return this.#acceptStatus(active, payload)
       case "subagent.start":
@@ -1049,41 +1139,218 @@ export class HermesTurnEngine {
     const processId = backgroundProcessId(payload.result)
     if (!processId) return
     const terminalId = `${toolCallId}:terminal`
-    active.terminals.set(processId, { toolCallId, terminalId })
     const command = projectHermesToolCall("terminal", payload.args).args.command
-    this.#emit(active, {
-      kind: TurnEventKind.TerminalOutput,
-      terminalId,
+    const terminal = {
       toolCallId,
+      terminalId,
       ...(typeof command === "string" && command ? { command } : {}),
-    })
+    }
+    active.terminals.set(processId, terminal)
+    this.#emit(active, terminalStep(terminal, { restates: true }))
+    // Hermes sends nothing as the process exits: its list says.
+    this.#pollProcesses(active.scope)
   }
 
-  #acceptTerminal(
-    active: ActiveTurn,
-    type: string,
-    payload: Record<string, unknown>
-  ) {
+  #acceptTerminal(active: ActiveTurn, payload: Record<string, unknown>) {
     const processId = stableNativeId(payload.process_id)
     const terminal = processId && active.terminals.get(processId)
     if (!terminal) return
-    if (type === "terminal.close") {
-      active.terminals.delete(processId)
-      this.#emit(active, {
-        kind: TurnEventKind.TerminalOutput,
-        ...terminal,
-        exit: {},
-      })
-      return
-    }
+    const chunk = boundedText(payload.chunk)
+    const data = chunk && terminalText(chunk)
+    if (data) this.#emit(active, terminalStep(terminal, { data }))
+  }
+
+  /** Output of a process that outlived its turn, for `listener` to hear. */
+  #acceptOutlivedOutput(
+    key: string,
+    listener: ServerTurnListener,
+    payload: Record<string, unknown>
+  ) {
+    const processId = stableNativeId(payload.process_id)
+    const terminal = processId && this.#terminals.get(key)?.get(processId)
+    if (!terminal) return
     const chunk = boundedText(payload.chunk)
     const data = chunk && terminalText(chunk)
     if (data)
-      this.#emit(active, {
-        kind: TurnEventKind.TerminalOutput,
-        ...terminal,
-        data,
-      })
+      listener.onTerminal?.(terminal.turnId, terminalStep(terminal, { data }))
+  }
+
+  /**
+   * The run's terminals whose process still runs go on as the Session's,
+   * each reported first with its command to whoever listens. With nobody
+   * listening they are kept, for a later resume to read.
+   */
+  #outliveTerminals(active: ActiveTurn) {
+    if (active.terminals.size === 0) return
+    const key = sessionKey(active.scope)
+    const kept = this.#terminals.get(key) ?? new Map<string, OutlivedTerminal>()
+    this.#terminals.set(key, kept)
+    for (const [processId, terminal] of active.terminals) {
+      kept.set(processId, { ...terminal, turnId: active.turnId })
+      this.#reportTerminal(
+        active.scope,
+        active.turnId,
+        terminalStep(terminal, { restates: true })
+      )
+    }
+    active.terminals.clear()
+    for (const [processId, oldest] of kept) {
+      if (kept.size <= this.#maxFollowedProcesses) break
+      kept.delete(processId)
+      this.#reportTerminal(
+        active.scope,
+        oldest.turnId,
+        terminalStep(oldest, { exit: {} })
+      )
+    }
+    this.#pollProcesses(active.scope)
+  }
+
+  /**
+   * Forgets the processes a Session's turns left running, and stops reading
+   * them: the Session was deleted, or Hermes holds it no more.
+   */
+  forgetSession(scope: { agentId: string; providerSessionId: string }) {
+    const key = sessionKey(scope)
+    this.#terminals.delete(key)
+    this.#clock.clearTimeout(this.#processPolls.get(key))
+    this.#processPolls.delete(key)
+  }
+
+  /** Tells each of the Session's listeners one step of an outlived terminal. */
+  #reportTerminal(
+    scope: HermesTurnScope,
+    turnId: string,
+    step: TerminalTurnEvent
+  ) {
+    for (const listener of this.#listenersOf(scope))
+      listener.onTerminal?.(turnId, step)
+  }
+
+  /**
+   * Reads the processes the Session's terminals run once `PROCESS_POLL_MS`
+   * passed, and again after each read, while someone holds the Session and a
+   * terminal still runs; one read is pending at a time.
+   */
+  #pollProcesses(scope: HermesTurnScope) {
+    const key = sessionKey(scope)
+    const following =
+      (this.#terminals.get(key)?.size ?? 0) > 0 ||
+      (this.#active.get(key)?.terminals.size ?? 0) > 0
+    if (
+      !following ||
+      this.#processPolls.has(key) ||
+      this.#listenersOf(scope).size === 0
+    )
+      return
+    const timer = this.#clock.setTimeout(() => {
+      this.#readProcesses(scope)
+        .then((ended) => ended())
+        .catch((err: unknown) => {
+          // A Session Hermes holds no more runs no process to read.
+          if (err instanceof HermesSessionGoneError) this.forgetSession(scope)
+          else this.#log.warn({ err }, "hermes.run.process_poll_failed")
+        })
+        .finally(() => {
+          if (this.#processPolls.get(key) !== timer) return
+          this.#processPolls.delete(key)
+          this.#pollProcesses(scope)
+        })
+    }, this.#processPollMs)
+    this.#processPolls.set(key, timer)
+  }
+
+  /**
+   * Reads the processes Hermes holds for the Session, and resolves with what
+   * ends each terminal whose process it lists as exited, or no longer: the
+   * live run's in its stream, an outlived one to the Session's listeners. A
+   * terminal that started after the read is left to the next.
+   */
+  async #readProcesses(scope: HermesTurnScope) {
+    const key = sessionKey(scope)
+    const judged = new Set([
+      ...(this.#terminals.get(key)?.keys() ?? []),
+      ...(this.#active.get(key)?.terminals.keys() ?? []),
+    ])
+    const { liveSessionId } = await this.#native.resume(scope)
+    const listed = new Map(
+      (await this.#native.processes(liveSessionId)).map(
+        (process) => [process.processId, process] as const
+      )
+    )
+    return (restate = false) => {
+      const active = this.#active.get(key)
+      // A run paused on a request streams nothing until it continues.
+      if (active && !active.terminal && !active.waitingOn)
+        for (const [processId, terminal] of active.terminals) {
+          const exit = judged.has(processId) && endOf(listed, processId)
+          if (!exit) continue
+          active.terminals.delete(processId)
+          this.#emit(active, terminalStep(terminal, { exit }))
+        }
+      const kept = this.#terminals.get(key)
+      for (const [processId, terminal] of kept ?? []) {
+        if (!judged.has(processId)) continue
+        const exit = endOf(listed, processId)
+        if (exit) kept?.delete(processId)
+        // A restatement carries the latest output Hermes holds, whole.
+        const tail = restate ? listed.get(processId)?.output : undefined
+        if (exit || restate)
+          this.#reportTerminal(
+            scope,
+            terminal.turnId,
+            terminalStep(terminal, {
+              restates: restate,
+              exit,
+              ...(tail === undefined ? {} : { output: terminalText(tail) }),
+            })
+          )
+      }
+      if (kept?.size === 0) this.#terminals.delete(key)
+    }
+  }
+
+  /**
+   * Reads how each terminal the Session's turns left running stands, and
+   * restates each to its listeners: one still running with its command and
+   * the latest output Hermes holds, one that ended with its exit too. One
+   * Hermes cannot be asked about now is restated as last known, and the poll
+   * that follows ends it.
+   */
+  async readTerminals(scope: HermesTurnScope) {
+    const kept = this.#terminals.get(sessionKey(scope))
+    if (!kept?.size) return
+    try {
+      const ended = await this.#readProcesses(scope)
+      ended(true)
+    } catch (err) {
+      if (err instanceof HermesSessionGoneError)
+        return this.forgetSession(scope)
+      this.#log.warn({ err }, "hermes.run.process_read_failed")
+      for (const terminal of kept.values())
+        this.#reportTerminal(
+          scope,
+          terminal.turnId,
+          terminalStep(terminal, { restates: true })
+        )
+    }
+    this.#pollProcesses(scope)
+  }
+
+  /**
+   * Stops the process a terminal of the Session runs, during its turn or
+   * after it, through `process.kill`; the next read of the Session's
+   * processes reports its exit.
+   */
+  async stopTerminal(scope: HermesTurnScope, terminalId: string) {
+    const key = sessionKey(scope)
+    const held = [
+      ...(this.#terminals.get(key) ?? []),
+      ...(this.#active.get(key)?.terminals ?? []),
+    ].find(([, terminal]) => terminal.terminalId === terminalId)
+    if (!held) return
+    const { liveSessionId } = await this.#native.resume(scope)
+    await this.#native.killProcess(liveSessionId, held[0])
   }
 
   /**
@@ -1542,6 +1809,7 @@ export class HermesTurnEngine {
     if (this.#settling.get(sessionKey(active.scope))?.active !== active)
       safelyUnsubscribe(active.unsubscribe)
     if (!active.outlives) releaseChildren(active)
+    this.#outliveTerminals(active)
     active.queue.close()
     active.resolveSettled()
     const key = sessionKey(active.scope)

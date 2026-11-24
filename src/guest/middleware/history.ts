@@ -216,11 +216,14 @@ export function createHistoryMiddleware({
             show(event.event.requestId, [event.event.text])
           return event
         case "child":
+        case "terminal":
         case "child-history":
+        case "replay-complete":
         case "request-asked":
         case "request-withdrawn":
         case "question-answered":
         case "execution":
+        case "background":
         case "usage":
         case "model":
         case "session-info":

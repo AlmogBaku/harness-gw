@@ -462,6 +462,30 @@ export const HgwMessageMetaSchema = readObject({
 })
 export type HgwMessageMeta = z.infer<typeof HgwMessageMetaSchema>
 
+/**
+ * `_meta.hgw` of a replayed `agent_message` upsert whose message the provider
+ * stored as failed. ACP replays no past `state_update`, so the failure that
+ * ended the turn travels on the message it ended: what the live turn's idle
+ * `error` update said of it in `_meta.hgw` (`HgwStateMetaSchema`). The upsert
+ * follows the message's own parts and leaves their content as it stands; one
+ * that streamed nothing starts from `content: []`. Live, a failure is that
+ * idle update alone, never this.
+ */
+export const HgwMessageFailureMetaSchema = readObject({
+  failure: readObject({
+    /**
+     * The failure as the reader is shown it: the provider's words masked of
+     * credentials, or a guest's public description of the failure.
+     */
+    message: z.string().min(1).max(4096),
+    /** The failure's normalized code, where the runtime stored one. */
+    code: z.string().min(1).max(128).optional(),
+    /** When the turn failed, as the live update's `at` dated it. */
+    at: z.iso.datetime().optional(),
+  }),
+})
+export type HgwMessageFailureMeta = z.infer<typeof HgwMessageFailureMetaSchema>
+
 const CountSchema = z.number().int().nonnegative()
 
 /** What a turn cost, as the provider priced it; ISO 4217 currency. */

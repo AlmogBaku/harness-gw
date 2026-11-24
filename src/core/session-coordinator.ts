@@ -18,6 +18,7 @@ import {
   isRedialableFailure,
   OUTCOME_UNKNOWN_CODE,
   pendingRequestsOf,
+  withoutOutput,
   type ExecutionEvent,
   type PendingRequest,
   type PromptTurnInput,
@@ -25,6 +26,7 @@ import {
   type RequestReply,
   type TurnEvent,
   type ChildTurnEvent,
+  type TerminalTurnEvent,
   type TurnEventOf,
 } from "./events"
 
@@ -52,6 +54,7 @@ import {
   SessionWorkspaceCapabilitiesResponseSchema,
   type Session,
   type SessionContextResponse,
+  type SessionHistoryResponse,
   type SessionModelsResponse,
   type SessionModelUpdateRequest,
   type TurnSteerRequest,
@@ -71,6 +74,8 @@ import {
 import * as ids from "./ids"
 import { coreFailure } from "./failures"
 import { retryBudget } from "./link"
+import { AnsweredPrompts } from "./answered-prompts"
+import { foldedOutput } from "./terminal-output"
 import { SessionReporter, type ReadingListener } from "./session-reporter"
 import { SubscriberFanout } from "./subscriber-fanout"
 
@@ -1037,6 +1042,8 @@ export class SessionCoordinator {
   #workspace: Pick<ServerRuntime, "workspaceCapabilities"> | undefined
   /** Each send's landing alone: a repeat subscribes on its own. */
   readonly #sends: ClientAdmissions<void>
+  /** The prompts answered before their provider proved it stored them. */
+  readonly #answeredPrompts = new AnsweredPrompts()
   readonly #creates: ClientAdmissions<unknown>
   /**
    * The Sessions a create here made and no prompt has reached, by session
@@ -1329,6 +1336,7 @@ export class SessionCoordinator {
     }
     const { agentId, sessionId } = scope
     this.#logger.warn({ err: cause, agentId, sessionId }, "session.gone")
+    this.#answeredPrompts.forget(key)
     // All taken first, so a listener that finds the Session gone again tells
     // nobody twice.
     const heard = [...this.#gone].filter((each) => each.key === key)
@@ -1465,6 +1473,40 @@ export class SessionCoordinator {
               event: report,
             },
     }))
+  }
+
+  /**
+   * What the live turn `turnId` reported of its work at or before sequence
+   * `upTo`, which a view positioned there rebuilds its background list from:
+   * each terminal's steps merged into one, with the latest of its output the
+   * journal holds as its snapshot (`foldedOutput`), and each tool call that
+   * finished, which no foreground work waits on any longer.
+   */
+  workReports(
+    scope: Pick<SessionScope, "agentId" | "providerSessionId">,
+    turnId: string,
+    upTo: number
+  ): { terminals: TerminalTurnEvent[]; finished: string[] } {
+    const segment = this.#executions.get(scopeKey(scope))?.segment
+    if (!segment?.journal || segment.turnId !== turnId)
+      return { terminals: [], finished: [] }
+    const terminals = new Map<string, TerminalTurnEvent>()
+    const finished: string[] = []
+    for (const { value } of segment.journal.entries) {
+      if (value.sequence > upTo) break
+      const { event } = value
+      if (event.kind === TurnEventKind.TerminalOutput) {
+        const known = terminals.get(event.terminalId)
+        const output = foldedOutput(known?.output, event)
+        terminals.set(event.terminalId, {
+          ...(known && withoutOutput(known)),
+          ...withoutOutput(event),
+          ...(output === undefined ? {} : { output }),
+        })
+      } else if (event.kind === TurnEventKind.ToolCallFinished)
+        finished.push(event.toolCallId)
+    }
+    return { terminals: [...terminals.values()], finished }
   }
 
   /**
@@ -1885,19 +1927,27 @@ export class SessionCoordinator {
       // the repeat's reader follows the Session from its history.
       return { turnId: ids.turnId, events: ENDED, close: () => undefined }
     })
-    const subscription: CoordinatedTurnSubscription =
-      "segment" in admitted ? await this.#atStorage(admitted, access) : admitted
     // An answer always names its prompt: as its provider stored it, or as the
     // gateway minted it where nothing proves how.
-    return {
-      ...subscription,
-      messageId:
-        subscription.messageId ??
-        ("clientId" in input
-          ? clientTurnIds(access.principalId, scope.sessionId, input.clientId)
-              .messageId
-          : input.messageId),
-    }
+    const minted =
+      "clientId" in input
+        ? clientTurnIds(access.principalId, scope.sessionId, input.clientId)
+            .messageId
+        : input.messageId
+    const subscription: CoordinatedTurnSubscription =
+      "segment" in admitted
+        ? await this.#atStorage(admitted, access, minted)
+        : admitted
+    return { ...subscription, messageId: subscription.messageId ?? minted }
+  }
+
+  /**
+   * A history page as members are shown it: each prompt answered before its
+   * provider proved it stored it, under the id its answer named, as ACP has
+   * a replayed prompt keep its answer's id (`AnsweredPrompts`).
+   */
+  answeredHistory(scope: SessionScope, page: SessionHistoryResponse) {
+    return this.#answeredPrompts.page(scopeKey(scope), page)
   }
 
   /**
@@ -1906,11 +1956,15 @@ export class SessionCoordinator {
    * Stop or a steer meanwhile is not held. ACP reads a refusal as a prompt
    * never inserted, so a turn that ended first is refused only when its
    * adapter knows the provider stored nothing; that one, and one whose receipt
-   * the admission deadline outran, may stand, and name no stored id.
+   * the admission deadline outran, may stand, and name no stored id: its
+   * answer names it `minted`. A receipt that lands after its answer names the
+   * stored id a replay shows `minted` in its place, as ACP has a replayed
+   * prompt keep its answer's id.
    */
   async #atStorage(
     execution: Execution,
-    access: CoordinatorAccess
+    access: CoordinatorAccess,
+    minted: string
   ): Promise<CoordinatedTurnSubscription> {
     const { stored } = execution.segment.handle
     if (!stored) return this.#repeat(execution, access)
@@ -1929,6 +1983,15 @@ export class SessionCoordinator {
       this.#logger.warn(
         { agentId, sessionId, turnId: execution.segment.turnId },
         "turn.receipt.deadline_passed"
+      )
+      stored.then(
+        (storedId) =>
+          this.#answeredPrompts.remember(
+            scopeKey(execution.scope),
+            storedId,
+            minted
+          ),
+        () => undefined
       )
       return this.#repeat(execution, access)
     }
@@ -2405,6 +2468,14 @@ export class SessionCoordinator {
   }
 
   /**
+   * Stops the process of one terminal a turn of the Session started, where
+   * the runtime stops one alone; one it does not hold is left as it is.
+   */
+  async stopTerminal(scope: SessionScope, terminalId: string) {
+    await this.options.engine.stopTerminal?.(scope, terminalId)
+  }
+
+  /**
    * Answers a request a child asked while no turn of its parent ran, which
    * continues no turn. A runtime that reports no such child has none to
    * answer.
@@ -2688,10 +2759,22 @@ export class SessionCoordinator {
     stage: ServerAttachmentStage | undefined,
     deadline: Deadline
   ) {
+    // A rewind names its prompt as members are shown it; the provider knows
+    // it by its own id.
+    const native =
+      "rewindSourceId" in input && input.rewindSourceId !== undefined
+        ? {
+            ...input,
+            rewindSourceId: this.#answeredPrompts.storedId(
+              scopeKey(scope),
+              input.rewindSourceId
+            ),
+          }
+        : input
     return deadline.run(async (signal) => {
       const handle = await this.options.engine.start(
         scope,
-        input,
+        native,
         stage,
         signal
       )

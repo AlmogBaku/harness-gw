@@ -35,6 +35,7 @@ import {
 import {
   ADMISSION_DEADLINE_MS,
   CLOSE_DEADLINE_MS,
+  JOIN_DEADLINE_MS,
   READING_BACKOFF,
   SETUP_READ_MS,
   UNCERTAINTY_DEADLINE_MS,
@@ -725,8 +726,16 @@ describe("AOS ACP agent", () => {
       replayFrom: { type: "start" },
     })
 
-    // The answer carries the setup and where the replay ended; the row
-    // follows it as an update.
+    // The answer carries the setup and where the replay ended; the row came
+    // before it, as ACP has current session info precede a resume's answer.
+    const rows = rowsSince(test.recorder, 0)
+    expect(rows).toMatchObject([
+      {
+        update: {
+          _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "running" } },
+        },
+      },
+    ])
     expect(resumed).toEqual({
       ...ANSWERED_SETUP,
       _meta: {
@@ -752,19 +761,13 @@ describe("AOS ACP agent", () => {
         _meta: { [HGW_META_KEY]: { turnId: "run-live" } },
       },
     })
-    const row = await test.recorder.wait(
-      (entry) => JSON.stringify(entry.params).includes("session_info_update"),
-      "the Session's row"
-    )
-    expect(row.params).toMatchObject({
-      update: {
-        _meta: { [HGW_META_KEY]: { agentId: AGENT, status: "running" } },
-      },
-    })
     await test.recorder.wait(
       (entry) => JSON.stringify(entry.params).includes('"configId":"model"'),
       "the Session's model options"
     )
+    // The readings the join starts with do not show the same row again.
+    await settled()
+    expect(rowsSince(test.recorder, 0)).toEqual(rows)
     test.sources[0]?.emit({
       kind: TurnEventKind.MessageChunk,
       messageId: "assistant-1",
@@ -2573,10 +2576,11 @@ describe("Session rooms", () => {
     )
 
     const seen = flow(other.recorder)
-    expect(seen.slice(0, 4)).toEqual([
+    expect(seen.slice(0, 5)).toEqual([
       "history message-1",
       `prompt ${messageId}`,
       "chunk Live",
+      "replay complete",
       "state running",
     ])
     expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
@@ -2585,15 +2589,79 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("shows a live turn history already stored once, after its prompt", async () => {
+  // ACP has only replayed history precede `replay_complete`: what the
+  // runtime announces while the replay reads history follows it.
+  it("holds a notice announced while a resume replays until its replay is complete", async () => {
+    const watchers: ServerTurnListener[] = []
+    const reading = gate()
+    const page = gate()
+    let holding = false
+    const test = await harness({
+      providerIds: true,
+      subscribeTurns: (_scope, watcher) => {
+        watchers.push(watcher)
+        return () => undefined
+      },
+      beforeHistory: () => {
+        if (!holding) return Promise.resolve()
+        reading.release()
+        return page.held
+      },
+    })
+    await test.list()
+    await open(test)
+    const messageId = await liveTurn(test, [test])
+
+    holding = true
+    const from = test.recorder.entries.length
+    const reopened = open(test, { replayFrom: { type: "start" } })
+    await reading.held
+    watchers[0]!.onNotice?.({ severity: "info", title: "Heartbeat" })
+    await settled()
+    page.release()
+    await reopened
+
+    expect(flow(test.recorder, SESSION, from)).toEqual([
+      "history message-1",
+      `prompt ${messageId}`,
+      "chunk Live",
+      "replay complete",
+      "notice Heartbeat",
+      "state running",
+    ])
+    test.close()
+  })
+
+  // ACP: a replayed prompt "MUST use the ID returned in that prompt
+  // response". One whose receipt outran its answer is stored under the
+  // provider's own id, which the page names by the answer's.
+  it("shows a live turn history already stored once, after its prompt, under the id its answer named", async () => {
     const history: StoredMessages = []
-    const test = await harness({ providerIds: true, history })
+    let store!: (storedId: string) => void
+    const test = await harness({
+      providerIds: true,
+      history,
+      onStart: (source) => {
+        Object.assign(source, {
+          stored: new Promise<string>((resolve) => (store = resolve)),
+        })
+      },
+    })
     await test.list()
     await open(test)
     const other = await test.connect("connection-2")
     await other.list()
-    const messageId = await liveTurn(test, [test])
-    history.push(...storedLiveTurn({ promptId: messageId }))
+    const clock = useFakeClock()
+    const answered = prompt(test, "Summarize")
+    await clock.advance(ADMISSION_DEADLINE_MS)
+    const messageId = await answered
+    test.sources[0]?.emit(turnStarted())
+    chunk(test.sources[0], "Live")
+    await clock.advance(10)
+    await test.recorder.wait(said("Live"), "an update carrying Live")
+    store("stored-prompt")
+    history.push(...storedLiveTurn({ promptId: "stored-prompt" }))
+    await clock.advance(0)
 
     await open(other, { replayFrom: { type: "start" } })
     chunk(test.sources[0], "More")
@@ -2905,6 +2973,7 @@ describe("Session rooms", () => {
     expect(flow(test.recorder, SESSION, from)).toEqual([
       `history ${messageId}`,
       "history assistant-1",
+      "replay complete",
       "state idle",
     ])
     test.close()
@@ -3044,7 +3113,11 @@ describe("Session rooms", () => {
     await replyWhileWatched(test.sources[0], "Done", [other])
 
     const seen = flow(other.recorder)
-    expect(seen.slice(0, 2)).toEqual([`prompt ${messageId}`, "state running"])
+    expect(seen.slice(0, 3)).toEqual([
+      `prompt ${messageId}`,
+      "replay complete",
+      "state running",
+    ])
     expect(seen.filter((item) => item.startsWith("prompt"))).toHaveLength(1)
     expect(seen).toContain("chunk Done")
     test.close()
@@ -3397,10 +3470,11 @@ describe("Session rooms", () => {
       await reopening.recorder.wait(endedTurn, "the turn to end")
 
       const seen = flow(reopening.recorder, SESSION, from)
-      expect(seen.slice(0, 4)).toEqual([
+      expect(seen.slice(0, 5)).toEqual([
         "history message-1",
         `prompt ${messageId}`,
         "chunk Live",
+        "replay complete",
         "state running",
       ])
       expect(seen.filter(isPromptOrChunk)).toEqual([
@@ -3548,7 +3622,11 @@ describe("Session rooms", () => {
     await other.list()
     await open(other, { replayFrom: { type: "start" } })
 
-    expect(flow(other.recorder)).toEqual(["history message-1", "state idle"])
+    expect(flow(other.recorder)).toEqual([
+      "history message-1",
+      "replay complete",
+      "state idle",
+    ])
     test.close()
     other.close()
   })
@@ -3597,7 +3675,9 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("streams each event once to a browser that follows twice at once", async () => {
+  // A view resumes one at a time: the second of two at once is refused,
+  // and the first streams the turn once.
+  it("streams each event once to a browser that resumes twice at once, refusing the second", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     await open(test)
@@ -3607,7 +3687,11 @@ describe("Session rooms", () => {
 
     const other = await test.connect("connection-2")
     await other.list()
-    await Promise.all([open(other), open(other)])
+    const opened = await Promise.allSettled([open(other), open(other)])
+    expect(opened).toMatchObject([
+      { status: "fulfilled" },
+      { status: "rejected", reason: INVALID_PARAMS },
+    ])
     await replyWhileWatched(test.sources[0], "Done", [other, test])
 
     const seen = flow(other.recorder)
@@ -4142,15 +4226,26 @@ function pageUpdates(recorder: Recorder, from: number) {
     .map(({ params }) => (params as { update: SentUpdate }).update)
 }
 
-/** The messages a resume replayed since `from`, before the state it closes with. */
+/**
+ * The messages a resume replayed since `from`, without the end of its replay
+ * and the Session's row and state it closes with.
+ */
 const replayedIds = (recorder: Recorder, from: number) =>
-  pageUpdates(recorder, from).flatMap(({ sessionUpdate, messageId }) =>
-    sessionUpdate === "state_update" ? [] : [messageId]
+  pageUpdates(recorder, from).flatMap(({ messageId }) =>
+    messageId === undefined ? [] : [messageId]
   )
 
 const pageTag = (update: SentUpdate) =>
   (update._meta?.[HGW_META_KEY] as { historyPage?: unknown } | undefined)
     ?.historyPage
+
+/** A page's own updates since `from`: those tagged as a page's, its end aside. */
+const pagedUpdates = (recorder: Recorder, from: number) =>
+  pageUpdates(recorder, from).filter(
+    (update) =>
+      pageTag(update) !== undefined &&
+      update.sessionUpdate !== "replay_complete"
+  )
 
 const INVALID_PARAMS = { code: invalidParams().code }
 
@@ -4250,7 +4345,7 @@ describe("History pages", () => {
 
     const page = await older(test, cursorOf(5))
 
-    const sent = pageUpdates(test.recorder, from)
+    const sent = pagedUpdates(test.recorder, from)
     expect(historyOf(page)).toEqual({ nextCursor: cursorOf(10) })
     // A page read is a resume, whose answer restates the setup.
     expect(page).toMatchObject(ANSWERED_SETUP)
@@ -4277,7 +4372,7 @@ describe("History pages", () => {
     const oldest = await older(test, cursorOf(10))
 
     expect(historyOf(oldest)).toEqual({})
-    expect(pageUpdates(test.recorder, last)).toHaveLength(2)
+    expect(pagedUpdates(test.recorder, last)).toHaveLength(2)
     test.close()
   })
 
@@ -4333,7 +4428,10 @@ describe("History pages", () => {
     test.close()
   })
 
-  it("reads a page without rejoining, following, or reporting the Session", async () => {
+  // ACP closes every resume with `replay_complete` after its replay and the
+  // Session's current state after that: a page read's too, the state apart
+  // from the page, for its live listeners.
+  it("reads a page without rejoining or following the Session, then ends its replay and states the Session and its row", async () => {
     const test = await harness({
       historyReach: REACH,
       transcript: conversation(12),
@@ -4346,8 +4444,20 @@ describe("History pages", () => {
     await older(test, cursorOf(5))
     await settled()
 
-    expect(test.recorder.entries.slice(from)).toHaveLength(5)
-    expect(pageUpdates(test.recorder, from).every(pageTag)).toBe(true)
+    const sent = pageUpdates(test.recorder, from)
+    expect(test.recorder.entries.slice(from)).toHaveLength(8)
+    expect(sent.slice(0, 5).every(pageTag)).toBe(true)
+    expect(sent.slice(5)).toEqual([
+      {
+        sessionUpdate: "replay_complete",
+        _meta: { [HGW_META_KEY]: { historyPage: { cursor: cursorOf(5) } } },
+      },
+      { sessionUpdate: "state_update", state: "idle", background: [] },
+      expect.objectContaining({
+        sessionUpdate: "session_info_update",
+        title: "Notes",
+      }),
+    ])
     await liveTurn(test, [test])
     const live = await test.recorder.wait(
       said("Live"),
@@ -4417,7 +4527,7 @@ describe("History pages", () => {
         ? [outbound.update]
         : []
     )
-    const sent = pageUpdates(test.recorder, from)
+    const sent = pagedUpdates(test.recorder, from)
     expect(sent).toEqual(
       expected.map((update) => {
         const meta = update._meta as Record<string, unknown> | undefined
@@ -4435,6 +4545,8 @@ describe("History pages", () => {
     )
     expect(JSON.stringify(sent)).toContain("Provider failed")
     expect(JSON.stringify(sent)).not.toContain("plan_update")
+    // Its failure rides on its message: a page replays no state of its own.
+    expect(JSON.stringify(sent)).not.toContain("state_update")
     test.close()
   })
 
@@ -4627,6 +4739,293 @@ describe("History pages", () => {
     test.close()
   })
 
+  // Everything but history waits for a replay's end, and nothing reaches the
+  // socket meanwhile, so no socket bound sees it: a replay held open while
+  // the Session streams on holds no more than its bound, past which its
+  // reader fell behind and its connection closes, as a slow socket's does.
+  it.each([
+    { past: "events", heldLimits: { events: 2, bytes: 1_000_000 } },
+    { past: "bytes", heldLimits: { events: 1_000, bytes: 200 } },
+  ])(
+    "closes the connection of a reader whose replay held more $past than it may",
+    async ({ heldLimits }) => {
+      const pending = gate()
+      let hold = false
+      let watcher: ServerTurnListener | undefined
+      const test = await harness({
+        historyReach: REACH,
+        transcript: conversation(12),
+        heldLimits,
+        beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+        subscribeTurns: (_scope, listener) => {
+          watcher = listener
+          return () => undefined
+        },
+      })
+      await test.list()
+      await open(test)
+      hold = true
+
+      const read = older(test, cursorOf(5))
+      await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
+      for (let count = 1; count <= 10; count += 1)
+        watcher!.onNotice!({ severity: "info", title: `Notice ${count}` })
+      pending.release()
+      await read
+      await settled()
+
+      expect(test.fellBehind).toHaveBeenCalledTimes(1)
+      const shown = flow(test.recorder).filter((item) =>
+        item.startsWith("notice")
+      )
+      expect(shown.length).toBeLessThan(3)
+      test.close()
+    }
+  )
+
+  // What a replay holds back is folded where a later event says all the
+  // earlier one did: a process printing on through the replay holds one
+  // step, and each reading only its latest value, so neither alone closes a
+  // reader past what it may hold.
+  it("holds a process's burst as one step and a reading's latest value alone while a page is read", async () => {
+    const pending = gate()
+    let hold = false
+    let watcher: ServerTurnListener | undefined
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      heldLimits: { events: 3, bytes: 1_000_000 },
+      beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+      subscribeTurns: (_scope, listener) => {
+        watcher = listener
+        return () => undefined
+      },
+    })
+    await test.list()
+    await open(test)
+    const other = await test.connect("connection-2")
+    await other.list()
+    await open(other)
+    const terminal = {
+      kind: TurnEventKind.TerminalOutput,
+      terminalId: "run-1:terminal",
+      toolCallId: "run-1",
+    } as const
+    watcher!.onTerminal!("turn-before", { ...terminal, command: "npm run dev" })
+    await settled()
+    hold = true
+    const from = updates(test.recorder).length
+
+    const read = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalled())
+    for (let count = 0; count < 10; count += 1)
+      watcher!.onTerminal!("turn-before", { ...terminal, data: `${count}` })
+    for (const value of ["opus", "sonnet", "opus"])
+      await other.agent.request(methods.agent.session.setConfigOption, {
+        sessionId: SESSION,
+        configId: "model",
+        type: "id",
+        value,
+      })
+    // Each switch's readings reach this member after its answer.
+    await settled()
+    pending.release()
+    await read
+    await settled()
+
+    expect(test.fellBehind).not.toHaveBeenCalled()
+    const after = updates(test.recorder)
+      .slice(from)
+      .filter(({ sessionId }) => sessionId === SESSION)
+      .map(({ update }) => update)
+    expect(
+      after.flatMap((update) =>
+        update.sessionUpdate === "terminal_output_chunk"
+          ? [Buffer.from(String(update.data), "base64").toString("utf8")]
+          : []
+      )
+    ).toEqual(["0123456789"])
+    expect(
+      after.filter(
+        ({ sessionUpdate }) => sessionUpdate === "config_option_update"
+      )
+    ).toMatchObject([
+      {
+        configOptions: [
+          expect.objectContaining({ configId: "model", currentValue: "opus" }),
+        ],
+      },
+    ])
+    other.close()
+    test.close()
+  })
+
+  // ACP: "The snapshot and subsequent live state changes MUST be delivered
+  // in order, without replacing a newer state with a stale snapshot". A turn
+  // that ends while a page is read is held for the page's replay, and the
+  // page's closing state may not tell the view it ended before its last
+  // chunks and its own end do.
+  it("closes a page read during which the turn ended with no idle before the turn's own end", async () => {
+    const pending = gate()
+    let hold = false
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+    })
+    await test.list()
+    await open(test)
+    await liveTurn(test, [test])
+    hold = true
+    const from = test.recorder.entries.length
+
+    const read = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalledTimes(1))
+    for (const text of ["One", "Two", "Three"]) chunk(test.sources[0], text)
+    test.sources[0]?.emit({ kind: TurnEventKind.TurnEnded })
+    await waitFor(() => expect(test.coordinator.state(test.scope)).toBe("idle"))
+    pending.release()
+    await read
+    await test.recorder.wait(endedTurn, "the turn to end")
+
+    const seen = flow(test.recorder, SESSION, from).filter(
+      (item) => item.startsWith("state") || item.startsWith("chunk")
+    )
+    expect(seen.slice(seen.indexOf("chunk Three"))).toEqual([
+      "chunk Three",
+      "state idle",
+    ])
+    expect(seen.filter((item) => item === "state idle")).toHaveLength(1)
+    test.close()
+  })
+
+  // Two replays of one view at once would hold its updates back for as long
+  // as a client kept one going: a member resumes one at a time, a resume
+  // waiting for a page counting, and reads no page meanwhile.
+  it("refuses a resume, or a page, while a resume of the Session is in flight here, one waiting for a page included", async () => {
+    const gates: ReturnType<typeof gate>[] = []
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      beforeHistory: () => gates.shift()?.held ?? Promise.resolve(),
+    })
+    await test.list()
+    await open(test)
+    const resume = (replayFrom?: ResumeSessionRequest["replayFrom"]) =>
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        ...(replayFrom ? { replayFrom } : {}),
+      })
+    const pageRead = gate()
+    const replayRead = gate()
+    gates.push(pageRead, replayRead)
+    const reads = test.history.mock.calls.length
+
+    const page = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalledTimes(reads + 1))
+    const replayed = resume({ type: "start" })
+    await settled()
+    expect(test.history).toHaveBeenCalledTimes(reads + 1)
+    await expect(resume({ type: HGW_REPLAY_POSITION })).rejects.toMatchObject(
+      INVALID_PARAMS
+    )
+    pageRead.release()
+    await expect(page).resolves.toBeDefined()
+    await waitFor(() => expect(test.history).toHaveBeenCalledTimes(reads + 2))
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject(INVALID_PARAMS)
+    await expect(resume()).rejects.toMatchObject(INVALID_PARAMS)
+    replayRead.release()
+
+    await expect(replayed).resolves.toBeDefined()
+    await expect(older(test, cursorOf(5))).resolves.toBeDefined()
+    test.close()
+  })
+
+  // ACP: "Every `session/update` that the Agent sends for the session
+  // between the request and `replay_complete` MUST be replayed history",
+  // and a child is announced "before the first snapshot that lists it". A
+  // page whose stored row names a child at work moves the list, which only
+  // the page's closing state says, after the row's announcement.
+  it("lists a child an older page names at work in the state that closes the page, not inside its replay", async () => {
+    const transcript: SessionHistoryResponse["messages"] = conversation(12)
+    transcript.splice(4, 0, {
+      id: "child-row",
+      role: "activity",
+      activityType: "CHILD_SESSION",
+      content: { childSessionId: "child-1", status: "running" },
+    })
+    const test = await harness({
+      historyReach: REACH,
+      transcript,
+      translateHistory,
+    })
+    await test.list()
+    await open(test, { replayFrom: { type: "start" } })
+    await settled()
+    const from = updates(test.recorder).length
+
+    await older(test, cursorOf(5))
+
+    const read = updates(test.recorder)
+      .slice(from)
+      .flatMap(({ sessionId, update }) =>
+        sessionId !== SESSION
+          ? []
+          : update.sessionUpdate === "subagent_update" ||
+              update.sessionUpdate === "replay_complete"
+            ? [update.sessionUpdate]
+            : update.sessionUpdate === "state_update"
+              ? [update.background]
+              : []
+      )
+    expect(read).toEqual([
+      "subagent_update",
+      "replay_complete",
+      [{ type: "subagent", sessionId: "child-1" }],
+    ])
+    test.close()
+  })
+
+  // A browser gives a positioned rejoin 45 s, and resends one that outlasts
+  // it, which a resume still in flight refuses for the rest of the
+  // transport: the wait for a page counts toward the resume's 30 s join
+  // deadline, so it answers within it however long the page reads.
+  it("answers a resume that waits for a page by its join deadline", async () => {
+    const pending = gate()
+    let hold = false
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      beforeHistory: () => (hold ? pending.held : Promise.resolve()),
+    })
+    await test.list()
+    await open(test)
+    hold = true
+    const page = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalled())
+    const clock = useFakeClock()
+    let answered = false
+    const resumed = test.agent
+      .request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        replayFrom: { type: HGW_REPLAY_POSITION },
+      })
+      .finally(() => (answered = true))
+    resumed.catch(() => undefined)
+
+    await clock.advance(JOIN_DEADLINE_MS - 1)
+    expect(answered).toBe(false)
+    await clock.advance(1)
+    await clock.advance(0)
+
+    expect(answered).toBe(true)
+    pending.release()
+    await page.catch(() => undefined)
+    test.close()
+  })
+
   it("cuts a turn streamed from its start off every older page it reaches", async () => {
     const watchers: ServerTurnListener[] = []
     const background = new EventSource()
@@ -4664,7 +5063,7 @@ describe("History pages", () => {
     const pageIds = async (offset: number) => {
       const from = test.recorder.entries.length
       await older(test, cursorOf(offset))
-      return pageUpdates(test.recorder, from).map(({ messageId }) => messageId)
+      return pagedUpdates(test.recorder, from).map(({ messageId }) => messageId)
     }
     const ids = (from: number, to: number) =>
       transcript.slice(from, to).map(({ id }) => id)

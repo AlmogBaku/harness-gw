@@ -1,7 +1,7 @@
 import type { Logger } from "../lifecycle"
 import { createOperatorAcpService } from "./acp/operator"
 import { createCatalog, type Catalog } from "./core/catalog"
-import { createChannels } from "./core/channel"
+import { createChannels, type HistoryReach } from "./core/channel"
 import {
   createRuntimeInstance,
   readRuntimeCredentials,
@@ -25,7 +25,7 @@ import {
 } from "./config"
 import type { McpServerOverrides } from "./mcp-apps/client"
 import { OPERATOR_PRINCIPAL } from "./core/principal"
-import type { RuntimeInstance } from "./core/runtime"
+import type { RuntimeInstance, SessionScope } from "./core/runtime"
 import { createSessionRows, type SessionRows } from "./core/session-rows"
 import { createGuestAcpService } from "./guest/acp"
 import { createGuestApp } from "./guest/app"
@@ -54,6 +54,11 @@ export type ConfiguredGatewayDependencies = {
   clock?: () => number
   /** Reaches the configured speech providers; tests hand in a stub. */
   fetch?: typeof fetch
+  /**
+   * How far a resume reads history (`HISTORY_REACH` by default); a small one
+   * stands for a long Session.
+   */
+  historyReach?: HistoryReach
 }
 
 /** The composition's secret readers, each recording what it reads. */
@@ -307,6 +312,9 @@ export async function createConfiguredGateway(
     coordinator: sessions,
     runtime: runtimeInstance.runtime,
     logger: dependencies.logger,
+    ...(dependencies.historyReach
+      ? { historyReach: dependencies.historyReach }
+      : {}),
     // A channel adopts what the runtime starts only where the runtime
     // reports it.
     ...(turns.subscribeTurns
@@ -317,6 +325,12 @@ export async function createConfiguredGateway(
             discover: (scope) => sessions.discover(scope),
             subscribeExecutions: (scope, listener) =>
               sessions.subscribeScope(scope, listener),
+            ...(turns.readTerminals
+              ? {
+                  readTerminals: (scope: SessionScope) =>
+                    turns.readTerminals!(scope),
+                }
+              : {}),
           },
         }
       : {}),

@@ -5,6 +5,7 @@ import {
   HGW_META_KEY,
   HgwArtifactDescriptorSchema,
   HgwMessageMetaSchema,
+  type HgwMessageFailureMeta,
   type HgwMessageMeta,
 } from "../../../protocol/acp"
 import type {
@@ -21,8 +22,6 @@ import {
   diffContent,
   outputContent,
   planUpdate,
-  stateOutbound,
-  turnError,
   toolOutbound,
   turnMeta,
   update,
@@ -40,6 +39,9 @@ const ARTIFACT_PART_NAME = "hgw.artifact"
 
 /** The `data` part name of the notice a stored turn leads with. */
 const NOTICE_PART_NAME = "hgw-notice"
+
+/** The most of a failure's words `HgwMessageFailureMetaSchema` carries. */
+const FAILURE_MESSAGE_MAX = 4_096
 
 /**
  * The turn identity the shared builders ask for, given a replay has no live turn
@@ -155,25 +157,38 @@ function turnOpeningOutbound(message: SessionMessage): AcpOutbound[] {
 }
 
 /**
- * The failure a provider stored on an assistant message, as the live turn
- * reports it. Only a failure replays a state: the browser shows it, and no
- * other stored turn has a state that still stands.
+ * The failure a provider stored on an assistant message, on the message
+ * itself (`HgwMessageFailureMetaSchema`): ACP replays no past `state_update`,
+ * and the live turn's current state follows the replay on its own. The upsert
+ * follows the message's `parts`, whose content it leaves, and starts one that
+ * streamed nothing from empty, so a failure before any output still shows.
+ * Its words are cut to what the schema carries, as the live failure's are:
+ * the member's stack masked them already, which can lengthen them.
  */
 function failureOutbound(
   context: TranslateContext,
-  message: SessionMessage
+  message: SessionMessage,
+  parts: readonly AcpOutbound[]
 ): AcpOutbound[] {
   if (message.status?.type !== "incomplete") return []
+  const failure: HgwMessageFailureMeta["failure"] = {
+    message: message.status.error.slice(0, FAILURE_MESSAGE_MAX),
+    ...(message.turnErrorCode ? { code: message.turnErrorCode } : {}),
+    at: message.completedAt ?? message.createdAt,
+  }
+  const started = parts.some(
+    (item) =>
+      item.kind === "update" &&
+      (item.update.sessionUpdate === "agent_message" ||
+        item.update.sessionUpdate === "agent_message_chunk")
+  )
   return [
-    stateOutbound(
-      context,
-      // A stored failure keeps no machine code, only the provider's words.
-      { state: "idle", stopReason: "error", error: turnError(undefined) },
-      {
-        at: message.completedAt ?? message.createdAt,
-        message: message.status.error,
-      }
-    ),
+    update({
+      sessionUpdate: "agent_message",
+      messageId: message.id,
+      ...(started ? {} : { content: [] }),
+      _meta: { [HGW_META_KEY]: { ...turnMeta(context), failure } },
+    }),
   ]
 }
 
@@ -249,11 +264,6 @@ function fromEmpty(outbound: readonly AcpOutbound[]): AcpOutbound[] {
 }
 
 /**
- * The Session's stored conversation as standard updates: each message once,
- * and no turn state but a stored failure's, since no past state still stands.
- * The live turn's state follows the replay on its own.
- */
-/**
  * A stored activity row as the update its live turn sent: the plan, a
  * compaction that completed, or a child Session's announcement in the state
  * its work ended in.
@@ -278,19 +288,24 @@ function activityUpdate(message: SessionActivityMessage) {
   }
 }
 
+/**
+ * The Session's stored conversation as standard updates: each message once,
+ * and no turn state, since no past state still stands; a stored failure rides
+ * on its message. The live turn's state follows the replay on its own.
+ */
 export const translateHistory = ((history) => {
   const context = HISTORY_CONTEXT
   const outbound: AcpOutbound[] = []
   for (const message of history.messages) {
     if (message.role === "activity")
       outbound.push(update(activityUpdate(message)))
-    else if (message.role === "assistant")
-      outbound.push(
+    else if (message.role === "assistant") {
+      const parts = [
         ...turnOpeningOutbound(message),
         ...partsOutbound(message, context),
-        ...failureOutbound(context, message)
-      )
-    else if (message.role === "system")
+      ]
+      outbound.push(...parts, ...failureOutbound(context, message, parts))
+    } else if (message.role === "system")
       outbound.push(...partsOutbound(message, context))
     else {
       outbound.push(

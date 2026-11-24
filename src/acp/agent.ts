@@ -216,13 +216,22 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
       children: {
         announce: (childSessionId, parentSessionId, cancellable) =>
           sessions.announceChild(childSessionId, parentSessionId, cancellable),
-        owns: (sessionId, childSessionId) =>
-          sessions.child(childSessionId) !== undefined &&
-          sessions.rootOf(childSessionId) === sessionId,
+        owns,
       },
     })
   )
   const app = agent({ name: "harness-gw" })
+
+  /**
+   * Whether `childSessionId` was announced here, at any depth, under the
+   * top-level Session `sessionId`: only that Session lists it or stops it.
+   */
+  function owns(sessionId: string, childSessionId: string) {
+    return (
+      sessions.child(childSessionId) !== undefined &&
+      sessions.rootOf(childSessionId) === sessionId
+    )
+  }
 
   /**
    * The exposure this connection last acknowledged. A foreground browser
@@ -953,15 +962,20 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
         await context.channels.closing(async (signal) => {
           await membership.closeTurn(signal)
           // ACP's close also stops the background work, unlike its cancel:
-          // here each child this connection was told still works after its
-          // turn, where the member's stack lets its close stop any.
+          // everything in the latest list this connection was shown, where
+          // the member's stack lets its close stop any, and nothing that
+          // list left out, as a child never announced here.
           if (command.stopsBackground)
             await context.channels.stopBackground(
               scope,
               signal,
-              (childSessionId) =>
-                sessions.child(childSessionId) !== undefined &&
-                sessions.rootOf(childSessionId) === command.sessionId
+              membership
+                .backgroundWork()
+                .filter(
+                  (item) =>
+                    item.kind === "terminal" ||
+                    owns(command.sessionId, item.childSessionId)
+                )
             )
           sessions.part(command.sessionId)
           // A Session no prompt reached, which nothing else holds, is freed
@@ -1002,6 +1016,13 @@ export const createHgwAcpAgent = ((context: AcpConnectionContext): AgentApp => {
             await context.channels.stopWork(
               scope,
               signal,
+              // A report naming another top-level Session is none of its own.
+              (childSessionId) =>
+                sessions.mayBeChildOf(
+                  command.sessionId,
+                  agentId,
+                  childSessionId
+                ),
               sessions.membership(command.sessionId)
             )
             try {

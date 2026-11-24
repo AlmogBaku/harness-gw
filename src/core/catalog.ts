@@ -76,6 +76,8 @@ export type Catalog = {
     agentId: string | undefined,
     query: string
   ): Promise<CommandResults["search"]>
+  /** The row the catalog holds of one Session, as members are shown it. */
+  row(scope: MemberScope): SessionRow | undefined
   /**
    * One Session's row as a replaying cell: the known row at once, then the
    * row the provider holds now, then each change. `failed` hears why that
@@ -310,6 +312,11 @@ export function createCatalog({
           break
       }
       return { rows: remembered(matches.slice(0, SESSION_PAGE_MAX)) }
+    },
+
+    row(target) {
+      const known = rows.get(target.agentId, target.sessionId)
+      return known && overlaid(known)
     },
 
     subscribe(target, listener, failed) {

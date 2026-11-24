@@ -923,6 +923,21 @@ export function fakeOpenClaw() {
     return child.key
   }
 
+  /**
+   * A child the running turn spawns that is still at work when the turn
+   * ends, as `sessions_spawn` returning at once leaves one; `finish` ends
+   * its run afterwards.
+   */
+  async function spawnBackgroundChild() {
+    const child = spawn(playing())
+    await subscribed(child.key)
+    child.say("Child at work.")
+    return {
+      childId: child.key,
+      finish: async () => child.complete("Child at work."),
+    }
+  }
+
   return {
     scope: {
       agentId: AGENT_ID,
@@ -1064,6 +1079,7 @@ export function fakeOpenClaw() {
         complete(target, text)
       },
       spawnChild,
+      spawnBackgroundChild,
       /**
        * The release has no Session-scoped push for a question (no
        * `question.*` event reaches `sessions.messages.subscribe`), so the

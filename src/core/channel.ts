@@ -20,15 +20,21 @@ import {
   CHILD_FOLLOW_GRACE_MS,
   CLOSE_DEADLINE_MS,
   DELETE_SHOWN_MS,
+  HELD_LIMITS,
   JOIN_DEADLINE_MS,
   READING_BACKOFF,
   READING_RETRIES,
+  RESTATED_TERMINAL_OUTPUT,
+  SETUP_READ_MS,
+  STATE_WAIT_MS,
 } from "./limits"
+import { foldedOutput, outputTail } from "./terminal-output"
 import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
   isAwaitingStopFailure,
   isChildTurnEvent,
   isRedialableFailure,
+  withoutOutput,
   ChildSessionStatus,
   ReplyStatus,
   TurnEventKind,
@@ -36,6 +42,7 @@ import {
   type ExecutionEvent,
   type PendingRequest,
   type RequestReply,
+  type TerminalTurnEvent,
   type TurnEvent,
   type TurnEventOf,
 } from "./events"
@@ -43,8 +50,11 @@ import {
   CommandRefusedError,
   hasSession,
   runEvents,
+  unhandledKind,
+  type BackgroundWork,
   type CommandResults,
   type Member,
+  type MemberEvent,
   type MemberScope,
   type MemberSetup,
   type PromptPart,
@@ -117,6 +127,11 @@ export type MembershipDelivery = {
    * turn that spawned it, `turnId`, ended; live only.
    */
   child(turnId: string, event: ChildTurnEvent): void
+  /**
+   * Show the member one step of a terminal still running after the turn
+   * that started it, `turnId`, ended; live only.
+   */
+  terminal(turnId: string, event: TerminalTurnEvent): void
   /** Offer the member a request such a child asks, or withdraw one. */
   offerChild(request: PendingRequest): void
   withdrawChild(requestId: string): void
@@ -134,6 +149,11 @@ export type ChannelAdoption = {
   subscribeTurns(scope: SessionScope, listener: ServerTurnListener): () => void
   /** Adopts the runtime's running turn, if any. */
   discover(scope: SessionScope): Promise<unknown>
+  /**
+   * Reports how each terminal the Session's turns left running stands now,
+   * through the turn listener, before it settles; never rejects.
+   */
+  readTerminals?(scope: SessionScope): Promise<void>
   /** The Session's execution feed. */
   subscribeExecutions(
     scope: ChannelScope,
@@ -163,6 +183,16 @@ type Channel = {
    * restated to every member who joins later.
    */
   children: Map<string, BackgroundChild>
+  /**
+   * The latest step of each terminal still running after its turn, its output
+   * aside, under that turn, restated to every member who joins later.
+   */
+  terminals: Map<string, BackgroundTerminal>
+  /**
+   * The runtime's read of the terminals its turns left running, which a
+   * resume's state waits for, within `SETUP_READ_MS`.
+   */
+  terminalsRead: Promise<void>
   /** The close of a channel nobody watches, held for its background children. */
   lingering?: unknown
   /** Ends the channel's turn subscription and its execution feed. */
@@ -182,6 +212,52 @@ type Channel = {
 
 type ChildReport = TurnEventOf<typeof TurnEventKind.ChildSessionUpdated>
 
+/**
+ * One piece of a Session's work a member follows, with what lists it: it
+ * still runs, and no foreground work waits on it, because the tool call that
+ * started it finished or the turn that started it ended.
+ */
+type FollowedWork = {
+  item: BackgroundWork
+  /** The turn that reported it, and its reports merged, its output aside. */
+  turnId: string
+  step: ChildReport | TerminalTurnEvent
+  /** The tool call that started it, once a report named it. */
+  toolCallId?: string
+  /**
+   * A terminal's latest output as the journal held it when a resume read
+   * its work back, which restating it shows, until a step of it is shown.
+   */
+  output?: string
+  detached: boolean
+  /**
+   * Known only from a stored row, which holds what its runtime stored of a
+   * call long returned: listed while that row says it is not over, until a
+   * report of the live Session says how it stands.
+   */
+  stored: boolean
+  runs: boolean
+  /** The resume of this member's view a step of it was last shown in. */
+  shownIn?: number
+}
+
+/** What one step of a piece of work tells, as a membership notes it. */
+type WorkStep = {
+  turnId: string
+  step: ChildReport | TerminalTurnEvent
+  toolCallId: string | undefined
+  /** It came between turns, which detaches it. */
+  betweenTurns: boolean
+  /** Whether it still runs, where the step says. */
+  stillRuns: boolean | undefined
+  /** It was shown to the member, rather than read back for a resume. */
+  shown: boolean
+  /** It is a stored row's, not a report of the live Session's. */
+  stored?: boolean
+  /** A terminal's output as a read of the journal holds it. */
+  output?: string
+}
+
 type BackgroundChild = {
   turnId: string
   report: ChildReport
@@ -189,14 +265,67 @@ type BackgroundChild = {
   endedAt?: number
 }
 
+type BackgroundTerminal = {
+  turnId: string
+  /** Its command, folder and exit as last reported, without its output. */
+  report: TerminalTurnEvent
+  /**
+   * The latest of its output the channel was shown, its last
+   * `RESTATED_TERMINAL_OUTPUT` units, unmasked: each member's stack masks it.
+   */
+  output?: string
+  /** When its exit was reported, on the channels' clock. */
+  endedAt?: number
+}
+
 const DEFAULT_BACKSTOP_MS = 60 * 60 * 1000
 
-/** Whether a child's report leaves it at work. */
-function atWork(report: ChildReport) {
-  return (
-    report.status === ChildSessionStatus.Running ||
-    report.status === ChildSessionStatus.WaitingForInput
-  )
+/** One item of background work as a list names it, its kind and its id. */
+function workKey(item: BackgroundWork) {
+  return `${item.kind}\u0000${item.kind === "child" ? item.childSessionId : item.terminalId}`
+}
+
+/** Whether a piece of work a member follows is in its background list. */
+function listed({ detached, stored, runs: still }: FollowedWork) {
+  return (detached || stored) && still
+}
+
+/**
+ * One stream a member follows, how far it has shown its turn, and what waits
+ * for it to reach a point of that turn: each runs there, in the stream's
+ * order, before any later event of it is shown. A stream that ended, or that
+ * another replaced, shows nothing more, so all that waits on it runs then, and
+ * a wait on it after that runs at once.
+ */
+type ShownStream = {
+  turnId: string
+  /** Settles once it has shown all it will, whole. */
+  done: Promise<void>
+  sequence: number
+  ended: boolean
+  waiters: Set<{ through: number; run: () => void }>
+}
+
+/**
+ * The turn a stored row is restated under, as replayed history names one:
+ * it has no live turn of its own.
+ */
+const HISTORY_TURN_ID = "history"
+
+/** The statuses that say how a child's work ended. */
+const OVER: ReadonlySet<string> = new Set([
+  ChildSessionStatus.Idle,
+  ChildSessionStatus.Failed,
+  ChildSessionStatus.Cancelled,
+])
+
+/**
+ * Whether a child's report leaves it running, as ACP lists a detached child
+ * while its state is not idle: at work, waiting on input, or `unknown`, which
+ * nothing follows any more and may still run.
+ */
+function runs(report: ChildReport) {
+  return report.status !== undefined && !OVER.has(report.status)
 }
 
 /**
@@ -539,7 +668,7 @@ function createChannelTable({
     channel.children.set(report.childSessionId, {
       turnId,
       report: merged,
-      ...(atWork(merged) ? {} : { endedAt: known?.endedAt ?? clock.now() }),
+      ...(runs(merged) ? {} : { endedAt: known?.endedAt ?? clock.now() }),
     })
   }
 
@@ -554,6 +683,55 @@ function createChannelTable({
       if (endedAt !== undefined && now - endedAt >= CHILD_FOLLOW_GRACE_MS)
         channel.children.delete(childSessionId)
     return [...channel.children.values()]
+  }
+
+  /**
+   * Folds a background terminal's step into its restatement: its command,
+   * folder and exit, and its output, which a snapshot replaces and a chunk
+   * appends to, as far as `RESTATED_TERMINAL_OUTPUT` reaches back.
+   */
+  function noteTerminal(
+    channel: Channel,
+    turnId: string,
+    event: TerminalTurnEvent
+  ) {
+    const step = withoutOutput(event)
+    const known = channel.terminals.get(step.terminalId)
+    const merged = known ? { ...known.report, ...step } : step
+    const held = foldedOutput(known?.output, event)
+    channel.terminals.set(step.terminalId, {
+      turnId,
+      report: merged,
+      ...(held === undefined ? {} : { output: held }),
+      ...(merged.exit ? { endedAt: known?.endedAt ?? clock.now() } : {}),
+    })
+  }
+
+  /**
+   * The background terminals a member who joins now is told of: each still
+   * running, and each that exited within the grace, which a reload or a
+   * reconnect may have missed. Each is restated whole, with the latest of
+   * its output the channel holds as its snapshot.
+   */
+  function currentTerminals(channel: Channel) {
+    const now = clock.now()
+    for (const [terminalId, { endedAt }] of channel.terminals)
+      if (endedAt !== undefined && now - endedAt >= CHILD_FOLLOW_GRACE_MS)
+        channel.terminals.delete(terminalId)
+    return [...channel.terminals.values()].map(
+      ({ turnId, report, output }) => ({
+        turnId,
+        report: output === undefined ? report : { ...report, output },
+      })
+    )
+  }
+
+  /** Tells `member` each child and terminal that outlived its turn. */
+  function restateWork(channel: Channel, member: MembershipDelivery) {
+    for (const { turnId, report } of currentChildren(channel))
+      member.child(turnId, report)
+    for (const { turnId, report } of currentTerminals(channel))
+      member.terminal(turnId, report)
   }
 
   /**
@@ -597,7 +775,19 @@ function createChannelTable({
           member.offerChild(request)
       },
       onChildRequestEnded: (requestId) => endChildRequest(channel, requestId),
+      onTerminal: (turnId, event) => {
+        noteTerminal(channel, turnId, event)
+        for (const member of channel.memberships.keys())
+          member.terminal(turnId, event)
+      },
     })
+    // Read once the listener is in place, which hears what the read finds.
+    channel.terminalsRead =
+      adoption
+        .readTerminals?.(scope)
+        .catch((err: unknown) =>
+          logger.warn({ err }, "channel.terminals.read_failed")
+        ) ?? Promise.resolve()
     channel.unsubscribe = () => {
       unsubscribeTurns()
       unsubscribeExecutions()
@@ -615,15 +805,37 @@ function createChannelTable({
     },
 
     /**
-     * The children that outlived their turns and are still at work: the
-     * Session's background work, which closing it stops.
+     * The Session's background work: each child that outlived its turn and
+     * still runs, which a delete stops.
      */
-    backgroundChildren(scope: ChannelScope) {
+    backgroundWork(scope: ChannelScope): BackgroundWork[] {
       const channel = channels.get(channelKey(scope))
-      return [...(channel?.children ?? [])].flatMap(
-        ([childSessionId, { report }]) =>
-          atWork(report) ? [childSessionId] : []
+      const children = [...(channel?.children ?? [])].flatMap(
+        ([childSessionId, { report }]): BackgroundWork[] =>
+          runs(report) ? [{ kind: "child", childSessionId }] : []
       )
+      const terminals = [...(channel?.terminals ?? [])].flatMap(
+        ([terminalId, { report }]): BackgroundWork[] =>
+          report.exit ? [] : [{ kind: "terminal", terminalId }]
+      )
+      return [...children, ...terminals]
+    },
+
+    /**
+     * Settles once the runtime's read of the terminals the Session's turns
+     * left running was reported, or `SETUP_READ_MS` passed: a state stated
+     * before it lands lists what the gateway holds, and the read still lands
+     * as an update.
+     */
+    async terminalsRead(scope: ChannelScope) {
+      const read = channels.get(channelKey(scope))?.terminalsRead
+      if (!read) return
+      const deadline = new Deadline(SETUP_READ_MS, clock)
+      try {
+        await unlessAborted(read, deadline.signal).catch(() => undefined)
+      } finally {
+        deadline.clear()
+      }
     },
 
     /** A request a child that outlived its turn asks, while it is open. */
@@ -650,6 +862,8 @@ function createChannelTable({
           memberships: new Map(),
           childRequests: new Map(),
           children: new Map(),
+          terminals: new Map(),
+          terminalsRead: Promise.resolve(),
           failures: 0,
           generation: 0,
         }
@@ -669,14 +883,23 @@ function createChannelTable({
       // A turn the runtime started while nobody watched found no member to
       // adopt it as.
       if (lingered) adoptLater(joined)
-      for (const { turnId, report } of currentChildren(joined))
-        member.child(turnId, report)
+      restateWork(joined, member)
       for (const request of joined.childRequests.values())
         member.offerChild(request)
       // Subscribed once the first member joins, so a turn already running
       // has someone to adopt it as.
       if (created) subscribe(scope, joined)
       return remove
+    },
+
+    /**
+     * Tells a member already joined each child and terminal that outlived
+     * its turn as it stands, as a joiner is told: a resume rebuilds its
+     * background list from them.
+     */
+    restate(scope: ChannelScope, member: MembershipDelivery) {
+      const channel = channels.get(channelKey(scope))
+      if (channel?.memberships.has(member)) restateWork(channel, member)
     },
 
     /**
@@ -791,6 +1014,10 @@ type CreateChannelsOptions = Omit<
   clock?: Clock
   /** Defaults to `HISTORY_REACH`; a small one stands for a long Session. */
   historyReach?: HistoryReach
+  /** Defaults to `HELD_LIMITS`; a small one stands for a long replay. */
+  heldLimits?: typeof HELD_LIMITS
+  /** Defaults to `STATE_WAIT_MS`. */
+  stateWaitMs?: number
 }
 
 /** How a transport joins one member to one Session. */
@@ -803,10 +1030,16 @@ export type MembershipOptions = {
   describe: (cause: unknown) => { code: string; message: string }
   /** The Session's row as a replaying cell: the known row, then each change. */
   subscribeRow: (listener: (row: SessionRow) => void) => () => void
+  /** The row the gateway holds of the Session now, read from no provider. */
+  knownRow?: () => SessionRow | undefined
 }
 
 /** A membership's options, with the coordinator and clock its channels share. */
 type MembershipContext = MembershipOptions & {
+  /** How much a replay in flight may hold back before the member fell behind. */
+  heldLimits: typeof HELD_LIMITS
+  /** How long a closing state waits for the member's stream to reach it. */
+  stateWaitMs: number
   coordinator: SessionCoordinator
   clock: Clock
   /** The history a from-start view replays, the newest page alone if `paged`. */
@@ -924,23 +1157,38 @@ export function createChannels(options: CreateChannelsOptions) {
   const { coordinator, runtime, logger } = options
   const clock = options.clock ?? defaultClock
   const historyReach = options.historyReach ?? HISTORY_REACH
+  const heldLimits = options.heldLimits ?? HELD_LIMITS
+  const stateWaitMs = options.stateWaitMs ?? STATE_WAIT_MS
   const channels = createChannelTable({
     ...options,
     clock,
     snapshot: (scope) => coordinator.snapshot(scope),
   })
   const machine = membershipMachine(logger, clock)
-  /** The memberships reading an older page: one page at a time each. */
-  const paging = new WeakSet<Membership>()
+  /**
+   * The older page each membership reads, one at a time, which a resume
+   * that comes meanwhile waits for.
+   */
+  const paging = new WeakMap<Membership, Promise<unknown>>()
+  /**
+   * The memberships a resume is in flight on, one at a time each, from its
+   * request on, a wait for a page included: two replays of one view at once
+   * would hold its updates back for as long as a client kept one going.
+   */
+  const resuming = new WeakSet<Membership>()
 
-  /** One history page, `offset` rows back from the newest. */
-  function readHistory(scope: SessionScope, offset = 0) {
-    return runtime.history(
+  /**
+   * One history page, `offset` rows back from the newest, each prompt under
+   * the id its answer named.
+   */
+  async function readHistory(scope: SessionScope, offset = 0) {
+    const page = await runtime.history(
       scope.agentId,
       scope.providerSessionId,
       historyReach.pageSize,
       offset
     )
+    return coordinator.answeredHistory(scope, page)
   }
 
   /**
@@ -979,23 +1227,23 @@ export function createChannels(options: CreateChannelsOptions) {
   }
 
   /**
-   * Stops each of the Session's background children `includes` takes, as
-   * closing a Session stops its background work beside its turn: every one
-   * is asked, and the first failure is thrown once all were, or the reason
-   * `signal` aborts with first. A runtime that cannot stop a child alone
-   * leaves each running.
+   * Stops each item of `work`, the Session's background work as a close
+   * stops it beside its turn: every one is asked, and the first failure is
+   * thrown once all were, or the reason `signal` aborts with first. A
+   * runtime that cannot stop a child alone leaves each running.
    */
   async function stopBackground(
     scope: SessionScope,
     signal: AbortSignal,
-    includes: (childSessionId: string) => boolean = () => true
+    work: readonly BackgroundWork[]
   ) {
     const stopped = await unlessAborted(
       Promise.allSettled(
-        channels
-          .backgroundChildren(scope)
-          .filter(includes)
-          .map((childSessionId) => coordinator.stopChild(scope, childSessionId))
+        work.map((item) =>
+          item.kind === "child"
+            ? coordinator.stopChild(scope, item.childSessionId)
+            : coordinator.stopTerminal(scope, item.terminalId)
+        )
       ),
       signal
     )
@@ -1032,6 +1280,63 @@ export function createChannels(options: CreateChannelsOptions) {
     ])
   }
 
+  /** Resumes one member's view, as `resume` describes. */
+  async function resumeView(
+    membership: Membership,
+    position: ResumePosition,
+    view: ResumeView | undefined,
+    page: Promise<unknown> | undefined
+  ): Promise<CommandResults["resume"]> {
+    try {
+      // The setup is read beside the replay, and told after it.
+      const [resumed, readings] = await Promise.all([
+        membership.resume(position, view, page),
+        membership.readSetup(),
+      ])
+      await membership.showRow()
+      const setup = await membership.setup(readings)
+      membership.joined()
+      if (
+        !membership.pending &&
+        coordinator.state(membership.scope) === "waiting-for-input"
+      )
+        channels
+          .recheck(membership.scope)
+          .catch((err: unknown) =>
+            logger.error({ err }, "channel.adopt.failed")
+          )
+      return { ...resumed, setup }
+    } finally {
+      membership.answered()
+    }
+  }
+
+  /** Shows one member an older page, as `olderPage` describes. */
+  async function readOlderPage(
+    membership: Membership,
+    older: { cursor: string; offset: number }
+  ): Promise<CommandResults["older-page"]> {
+    try {
+      const page = await membership.showOlderPage(async () => {
+        const page = await readHistory(membership.scope, older.offset)
+        // A cursor past this Session's history was never issued for it. One
+        // at its end was: a runtime that estimates `total` learns the start
+        // only by reading an empty page there.
+        if (older.offset > page.total) throw new CommandRefusedError("invalid")
+        return page
+      }, older)
+      // ACP's current session info follows a replay, a page's as well.
+      await membership.showRow()
+      // Every resume answer restates the setup, a page read's as well.
+      return { page, setup: await membership.setup() }
+    } catch (cause) {
+      membership.endIfGone(cause)
+      throw cause
+    } finally {
+      membership.answered()
+    }
+  }
+
   return {
     ...channels,
     historyReach,
@@ -1049,7 +1354,15 @@ export function createChannels(options: CreateChannelsOptions) {
         channels,
         member,
         scope,
-        { ...membership, coordinator, clock, readReplay, readChildHistory },
+        {
+          ...membership,
+          coordinator,
+          clock,
+          heldLimits,
+          stateWaitMs,
+          readReplay,
+          readChildHistory,
+        },
         owner
       )
     },
@@ -1058,63 +1371,56 @@ export function createChannels(options: CreateChannelsOptions) {
      * Resumes one member's view of its Session, rebuilt from its history
      * first when `view` asks `fromStart` or its position cannot be followed:
      * the newest page alone for a member that `paged` older history itself.
-     * The view reads the history, then the
-     * live events the journal buffered, then the Session's state, before the
-     * answer; the setup it tells is read beside all that, and built from
-     * after it. The join lands once the answer is written, and the Session's
+     * The view reads the history, then the live events the journal buffered,
+     * then, for a resume with a cursor, `replay_complete` and what it held,
+     * then the Session's state and the row the gateway holds, before the
+     * answer; the setup it tells is read beside all that, and built from after
+     * it. The join lands once the answer is written, and the Session's
      * readings and row reach the member as events after it. A Session waiting
      * on input asks its runtime whether the wait still stands, which the
      * answer does not wait for. A resume the journal serves asks the provider
      * nothing first: the reads its join starts, and the turn subscription,
      * find a Session gone meanwhile and end it, which spares every rejoin a
-     * round trip.
+     * round trip. A member resumes one view at a time: one that asks again
+     * while its resume is in flight is refused, and one that resumes while
+     * it reads an older page waits for the page, as a browser asking for its
+     * Session from the start meanwhile does.
      */
     async resume(
       membership: Membership,
       position: ResumePosition,
       view?: ResumeView
     ): Promise<CommandResults["resume"]> {
-      // The setup is read beside the replay, and told after it.
-      const [resumed, readings] = await Promise.all([
-        membership.resume(position, view),
-        membership.readSetup(),
-      ])
-      const setup = await membership.setup(readings)
-      membership.joined()
-      if (
-        !membership.pending &&
-        coordinator.state(membership.scope) === "waiting-for-input"
-      )
-        channels
-          .recheck(membership.scope)
-          .catch((err: unknown) =>
-            logger.error({ err }, "channel.adopt.failed")
-          )
-      return { ...resumed, setup }
+      if (resuming.has(membership)) throw new CommandRefusedError("invalid")
+      resuming.add(membership)
+      try {
+        return await resumeView(
+          membership,
+          position,
+          view,
+          paging.get(membership)
+        )
+      } finally {
+        resuming.delete(membership)
+      }
     },
 
     /**
      * Shows one member an older page of its Session, as tagged updates ahead
-     * of the answer. A member reads one page at a time.
+     * of the answer, its `replay_complete`, the Session's current state and
+     * the row the gateway holds after them, as a resume shows them. A member
+     * reads one page at a time, and none while its view resumes.
      */
     async olderPage(
       membership: Membership,
       older: { cursor: string; offset: number }
     ): Promise<CommandResults["older-page"]> {
-      if (paging.has(membership)) throw new CommandRefusedError("invalid")
-      paging.add(membership)
+      if (paging.has(membership) || resuming.has(membership))
+        throw new CommandRefusedError("invalid")
+      const read = readOlderPage(membership, older)
+      paging.set(membership, read)
       try {
-        const page = await readHistory(membership.scope, older.offset)
-        // A cursor past this Session's history was never issued for it. One
-        // at its end was: a runtime that estimates `total` learns the start
-        // only by reading an empty page there.
-        if (older.offset > page.total) throw new CommandRefusedError("invalid")
-        await membership.showOlderPage(page, older)
-        // Every resume answer restates the setup, a page read's as well.
-        return { page, setup: await membership.setup() }
-      } catch (cause) {
-        membership.endIfGone(cause)
-        throw cause
+        return await read
       } finally {
         paging.delete(membership)
       }
@@ -1168,12 +1474,14 @@ export function createChannels(options: CreateChannelsOptions) {
      * Stops all of a Session's work as `session/delete` asks, as a close on
      * every connection would: its turn, settling once the `deleter`, if a
      * member, was shown how it ended, and each member was or
-     * `DELETE_SHOWN_MS` passed, then every background child. Throws as
-     * `stopAndSettle` and `stopBackground` do.
+     * `DELETE_SHOWN_MS` passed, then its background work: each terminal,
+     * and each child its runtime reported that `isChild` takes for the
+     * Session's own. Throws as `stopAndSettle` and `stopBackground` do.
      */
     async stopWork(
       scope: SessionScope,
       signal: AbortSignal,
+      isChild: (childSessionId: string) => boolean,
       deleter?: ShownMember
     ) {
       await stopAndSettle(
@@ -1183,7 +1491,15 @@ export function createChannels(options: CreateChannelsOptions) {
         (shownSignal) => everyMemberShown(scope, shownSignal, deleter),
         signal
       )
-      await stopBackground(scope, signal)
+      await stopBackground(
+        scope,
+        signal,
+        channels
+          .backgroundWork(scope)
+          .filter(
+            (item) => item.kind === "terminal" || isChild(item.childSessionId)
+          )
+      )
     },
 
     /** Whether the runtime forks Sessions. */
@@ -1223,6 +1539,160 @@ export function createChannels(options: CreateChannelsOptions) {
   }
 }
 
+/** An older page one member asked for by its cursor. */
+type OlderPage = { cursor: string; offset: number }
+
+/**
+ * One replay a member is shown, a resume's from its cursor or an older
+ * page's, with each child Session it announced: ACP owes the Session one
+ * `replay_complete`, and each child one of its own.
+ */
+type Replay = { children: Set<string>; older?: OlderPage }
+
+/** A notice, or a background event, a rebuild of the view holds back. */
+type RebuildHeld =
+  | { kind: "notice"; event: SessionNotice }
+  | {
+      kind: "background"
+      turnId: string
+      event: ChildTurnEvent | TerminalTurnEvent
+    }
+
+/**
+ * One event a replay held back, or what builds the events it stands for as
+ * they go out, and what learns once they are shown.
+ */
+type HeldEvent = {
+  event: SessionEvent | (() => SessionEvent[])
+  /** Its JSON bytes, which count against the member's `HELD_LIMITS`. */
+  bytes: number
+  shown: PromiseWithResolvers<void>
+}
+
+/** The readings a later one of the same kind supersedes whole. */
+const READING_KINDS: ReadonlySet<string> = new Set([
+  "usage",
+  "model",
+  "session-info",
+  "commands",
+])
+
+/**
+ * Two steps of one terminal as the one a member is shown in their place,
+ * folded as the channel folds a restatement: the later command, folder and
+ * exit, and the output, which a snapshot replaces and a chunk appends to, as
+ * far as `RESTATED_TERMINAL_OUTPUT` reaches back, past which the appended
+ * output goes as the snapshot of its tail. A step that shows no output, as
+ * an announcement, takes none: `undefined`.
+ */
+function mergedTerminal(
+  held: TerminalTurnEvent,
+  next: TerminalTurnEvent
+): TerminalTurnEvent | undefined {
+  if (held.data === undefined && held.output === undefined) return undefined
+  const step = { ...withoutOutput(held), ...withoutOutput(next) }
+  const snapshot = (output: string | undefined) =>
+    output === undefined ? step : { ...step, output }
+  if (held.output !== undefined || next.output !== undefined)
+    return snapshot(foldedOutput(held.output, next))
+  const appended = `${held.data ?? ""}${next.data ?? ""}`
+  return appended.length <= RESTATED_TERMINAL_OUTPUT
+    ? { ...step, data: appended }
+    : snapshot(outputTail(appended, RESTATED_TERMINAL_OUTPUT))
+}
+
+/**
+ * Where a terminal's step `next` folds among `queue`, held in order: into the
+ * latest step of the same terminal, under the same `key`, among the terminal
+ * steps that close the queue, with the step they fold to, as
+ * `mergedTerminal` folds them; `undefined` where it is held on its own.
+ * `read` names an entry's terminal step and its key, or none.
+ */
+function terminalFold<Entry>(
+  queue: readonly Entry[],
+  next: TerminalTurnEvent,
+  key: unknown,
+  read: (entry: Entry) => { key: unknown; step: TerminalTurnEvent } | undefined
+): { index: number; merged: TerminalTurnEvent } | undefined {
+  for (let index = queue.length - 1; index >= 0; index -= 1) {
+    const held = read(queue[index]!)
+    if (!held) return undefined
+    if (held.key !== key || held.step.terminalId !== next.terminalId) continue
+    const merged = mergedTerminal(held.step, next)
+    return merged ? { index, merged } : undefined
+  }
+  return undefined
+}
+
+/** An event's JSON bytes, or more than any limit when it has no JSON. */
+function heldBytes(event: unknown) {
+  try {
+    return Buffer.byteLength(JSON.stringify(event) ?? "")
+  } catch {
+    return Number.POSITIVE_INFINITY
+  }
+}
+
+/**
+ * Whether `event` reaches a member at once while a replay is in flight: the
+ * history it replays, as a page, a stream's buffer up to its cut, the prompt
+ * of the turn that buffer replays while a resume is `restating` the view, and
+ * a replay's end; and what is neither a `session/update` nor a request, a
+ * failure's report and a withdrawal of a request already asked. ACP has
+ * nothing else precede `replay_complete`.
+ */
+function showsInReplay(event: SessionEvent, restating: boolean) {
+  switch (event.kind) {
+    case "history":
+    case "child-history":
+    case "replay-complete":
+    case "request-withdrawn":
+    case "error":
+      return true
+    case "turn":
+    case "child":
+      return event.replayed === true
+    // No journal keeps a terminal's steps between turns.
+    case "terminal":
+      return false
+    case "prompt":
+      return restating
+    case "request-asked":
+    case "question-answered":
+    case "execution":
+    case "background":
+    case "usage":
+    case "model":
+    case "session-info":
+    case "commands":
+    case "notice":
+      return false
+  }
+  return unhandledKind(event) ?? false
+}
+
+/**
+ * The child Sessions `event` announces, as a member's transport announces
+ * them: each a page's row names, and each a report names, a child's child's
+ * included.
+ */
+function announcedChildren(event: SessionEvent): string[] {
+  if (event.kind === "history" || event.kind === "child-history")
+    return event.page.messages.flatMap((message) =>
+      message.role === "activity" && message.activityType === "CHILD_SESSION"
+        ? [message.content.childSessionId]
+        : []
+    )
+  if (event.kind !== "child") return []
+  const reported =
+    event.event.kind === TurnEventKind.ChildSessionEvent
+      ? event.event.event
+      : event.event
+  return reported.kind === TurnEventKind.ChildSessionUpdated
+    ? [reported.childSessionId]
+    : []
+}
+
 /**
  * One Session as one member observes it: at most one coordinator
  * subscription, the cursor it has reached, and the requests it was asked.
@@ -1248,6 +1718,8 @@ class Membership {
   readonly #offered = new Set<string>()
   readonly #delivered = new Set<string>()
   #sequence = 0
+  /** Counts the resumes of this member's view, which rebuild its work. */
+  #resumes = 0
   #stopRequested = false
   /** The turnId the latest subscription carried, which outlives its stream. */
   #followedTurn: string | undefined
@@ -1258,6 +1730,11 @@ class Membership {
    * that follows the switch shows it no more.
    */
   #switched: SessionModelsResponse | undefined
+  /**
+   * The row a resume showed this member before its answer, which the row
+   * its join's readings start with shows it no more.
+   */
+  #rowShown: SessionRow | undefined
   /** Whether this member's view pages older history itself. */
   #paged = false
   /** Settles once the member was shown what the journal buffered. */
@@ -1278,21 +1755,55 @@ class Membership {
    * once its coordinator settles whether it still runs.
    */
   #interrupted: string | undefined
+  /** The build of this member's view in flight, which the next waits for. */
+  #viewing: Promise<unknown> | undefined
   /**
    * Set while a from-start replay rebuilds the view: the channel waits for it.
    */
   #rebuilding = false
-  /** The notices that arrived while the view was rebuilt, shown after its page. */
-  #heldNotices: SessionNotice[] = []
-  /** Background child events held, as notices are, while the view rebuilds. */
-  #heldChildren: { turnId: string; event: ChildTurnEvent }[] = []
+  /**
+   * The replays in flight on this member's view. Until each completes, the
+   * member is shown only replayed history, and every other event waits in
+   * `#held`, in the order it came.
+   */
+  readonly #replays = new Set<Replay>()
+  #held: HeldEvent[] = []
+  #heldBytes = 0
+  /**
+   * Set once what a replay held outgrew `HELD_LIMITS`: the connection is
+   * closing, and nothing more is held for it.
+   */
+  #overHeld = false
+  /** Set while the held events go out, which later ones queue behind. */
+  #releasing = false
+  /**
+   * The children a completed replay accounted for, until its answer is
+   * written: one first announced in between is owed its own
+   * `replay_complete` at once, as ACP has every child announced between a
+   * resume and its answer get one.
+   */
+  #answering: Replay | undefined
+  /**
+   * The notices and background child and terminal events that arrived while
+   * the view was rebuilt, in order, shown after its page, and their JSON
+   * bytes, which count against `HELD_LIMITS`.
+   */
+  #heldBackground: RebuildHeld[] = []
+  #rebuildBytes = 0
+  /**
+   * The work this member was shown each child of its Session doing, by child
+   * id. The Session's background work is each that still runs, at work or
+   * `unknown`, detached from foreground work; every state the member is
+   * shown carries that list, and its close stops it.
+   */
+  readonly #followed = new Map<string, FollowedWork>()
   /**
    * The stream a background child event names, one per turn that spawned
    * it, so a transport keys the child's state the same across its events.
    */
   readonly #backgroundStreams = new Map<string, TurnStream>()
   /** The last stream this member was shown, settling once it has shown all. */
-  #streamed: { turnId: string; done: Promise<void> } | undefined
+  #streamed: ShownStream | undefined
   /**
    * The follow or start in flight. Both subscribe this member, so one waits
    * for the other rather than both subscribing it to the same turn.
@@ -1327,6 +1838,10 @@ class Membership {
       this.#releaseCells()
       this.#subscription?.close()
       this.#subscription = undefined
+      // A member that detached is shown nothing more, so nothing waits on it.
+      this.#replays.clear()
+      for (const { shown } of this.#held.splice(0)) shown.resolve()
+      this.#heldBytes = 0
     })
     // A Session a member is on, joining or joined, is never discarded.
     if (hasSession(scope)) owner.stack.defer(options.coordinator.hold(scope))
@@ -1356,12 +1871,19 @@ class Membership {
         )
       },
       notice: (notice) => {
-        if (this.#rebuilding) this.#heldNotices.push(notice)
+        if (this.#rebuilding)
+          this.#holdForRebuild({ kind: "notice", event: notice })
         else this.#showNotice(notice)
       },
       child: (turnId, event) => {
-        if (this.#rebuilding) this.#heldChildren.push({ turnId, event })
+        if (this.#rebuilding)
+          this.#holdForRebuild({ kind: "background", turnId, event })
         else this.#showBackgroundChild(turnId, event)
+      },
+      terminal: (turnId, event) => {
+        if (this.#rebuilding)
+          this.#holdForRebuild({ kind: "background", turnId, event })
+        else this.#showBackgroundTerminal(turnId, event)
       },
       offerChild: (request) => this.#offerChild(request),
       withdrawChild: (requestId) => this.#withdraw(requestId),
@@ -1400,14 +1922,157 @@ class Membership {
    * resolved promise rather than `undefined`, because callers chain on what
    * this returns, and never an extra await, because a turn's delivery order
    * rides on the send starting now. What the stack declines runs once the
-   * event is delivered.
+   * event is delivered. While a replay is in flight an event it does not
+   * replay waits, and settles once shown after the replay's end; one that
+   * comes while held events go out waits behind them.
    */
   emit(event: SessionEvent): Promise<void> {
     if (this.detached) return Promise.resolve()
+    const holds =
+      this.#replays.size > 0
+        ? !showsInReplay(event, this.#restating)
+        : this.#held.length > 0
+    if (!holds) return this.#write(event)
+    return this.#hold(event, heldBytes(event))
+  }
+
+  /**
+   * Holds `event` behind what a replay already holds, unless that outgrows
+   * the member's `HELD_LIMITS`: a replay held open while its Session streams
+   * on would otherwise hold without end, and no socket bound sees what never
+   * reaches it. Past them the member fell behind, its connection closes, and
+   * nothing more is held.
+   */
+  #hold(event: HeldEvent["event"], bytes: number): Promise<void> {
+    if (this.#overHeld) return Promise.resolve()
+    const folded = typeof event === "function" ? undefined : this.#fold(event)
+    if (folded) return folded
+    const { events, bytes: most } = this.#options.heldLimits
+    if (this.#held.length >= events || this.#heldBytes + bytes > most) {
+      this.#overHeld = true
+      this.#options.logger.warn(
+        { events: this.#held.length, bytes: this.#heldBytes },
+        "membership.held.overflow"
+      )
+      this.#cannotCatchUp()
+      return Promise.resolve()
+    }
+    const shown = Promise.withResolvers<void>()
+    this.#heldBytes += bytes
+    this.#held.push({ event, bytes, shown })
+    return shown.promise
+  }
+
+  /**
+   * Folds `event` into what is held already, where it says no more than
+   * what it joins: a terminal's step into the step of it held last among
+   * the terminal steps that close the queue, which shows the same output,
+   * so a process printing on through a long replay holds one event; and a
+   * reading in place of the held one of its kind, which it supersedes.
+   * Returns what learns once the folded event is shown, or `undefined`
+   * where `event` is held on its own.
+   */
+  #fold(event: SessionEvent): Promise<void> | undefined {
+    if (READING_KINDS.has(event.kind)) {
+      const index = this.#held.findIndex(
+        (held) =>
+          typeof held.event !== "function" && held.event.kind === event.kind
+      )
+      const [superseded] = index === -1 ? [] : this.#held.splice(index, 1)
+      if (superseded) {
+        this.#heldBytes -= superseded.bytes
+        superseded.shown.resolve()
+      }
+      return undefined
+    }
+    if (event.kind !== "terminal") return undefined
+    const fold = terminalFold(this.#held, event.event, event.stream, (held) =>
+      typeof held.event === "function" || held.event.kind !== "terminal"
+        ? undefined
+        : { key: held.event.stream, step: held.event.event }
+    )
+    if (!fold) return undefined
+    const held = this.#held[fold.index]!
+    const folded = held.event as Extract<SessionEvent, { kind: "terminal" }>
+    held.event = { ...folded, event: fold.merged }
+    const bytes = heldBytes(held.event)
+    this.#heldBytes += bytes - held.bytes
+    held.bytes = bytes
+    return held.shown.promise
+  }
+
+  /**
+   * Holds one background event, or a notice, while the view is rebuilt from
+   * history, as a replay holds what it does not replay: a terminal's step
+   * folds into the one of it held last, and past `HELD_LIMITS` the member
+   * fell behind, its connection closes, and nothing more is held. No reading
+   * waits here: readings go through `emit`, whose hold folds them.
+   */
+  #holdForRebuild(held: RebuildHeld) {
+    if (this.#overHeld) return
+    if (
+      held.kind === "background" &&
+      held.event.kind === TurnEventKind.TerminalOutput
+    ) {
+      const fold = terminalFold(
+        this.#heldBackground,
+        held.event,
+        held.turnId,
+        (entry) =>
+          entry.kind === "background" &&
+          entry.event.kind === TurnEventKind.TerminalOutput
+            ? { key: entry.turnId, step: entry.event }
+            : undefined
+      )
+      if (fold) {
+        const entry = this.#heldBackground[fold.index]! as RebuildHeld & {
+          kind: "background"
+        }
+        const before = heldBytes(entry.event)
+        entry.event = fold.merged
+        this.#rebuildBytes += heldBytes(fold.merged) - before
+        return
+      }
+    }
+    const bytes = heldBytes(held.event)
+    const { events, bytes: most } = this.#options.heldLimits
+    if (
+      this.#heldBackground.length >= events ||
+      this.#rebuildBytes + bytes > most
+    ) {
+      this.#overHeld = true
+      this.#options.logger.warn(
+        {
+          events: this.#heldBackground.length,
+          bytes: this.#rebuildBytes,
+        },
+        "membership.held.overflow"
+      )
+      this.#cannotCatchUp()
+      return
+    }
+    this.#rebuildBytes += bytes
+    this.#heldBackground.push(held)
+  }
+
+  /**
+   * Writes one event now, as `emit` describes, then the `replay_complete`
+   * each child it announces is owed at once.
+   */
+  #write(event: SessionEvent): Promise<void> {
+    if (this.detached) return Promise.resolve()
+    // A request held while a replay ran, and settled meanwhile, is not asked.
+    if (
+      event.kind === "request-asked" &&
+      !this.#offered.has(event.request.requestId)
+    )
+      return Promise.resolve()
     const declines = new Set<string>()
     let shown: ReturnType<typeof runEvents>
     try {
-      shown = this.#shown(event, (requestId) => declines.add(requestId))
+      shown = this.#shown(this.#listing(event), (requestId) =>
+        declines.add(requestId)
+      )
     } catch (cause) {
       // A stack that throws costs this event alone, through the caller's own
       // handling of a failed send, never the members or events after it.
@@ -1416,6 +2081,14 @@ class Membership {
     if (shown?.kind === "request-asked")
       this.#delivered.add(shown.request.requestId)
     const sent = shown ? this.#member.connection.send(shown) : Promise.resolve()
+    // Said at once after the report that moved it, as ACP has a list follow
+    // what it announces or ends; a view not stated yet since its resume, or
+    // one a replay of is in flight, as an older page's, whose updates until
+    // its `replay_complete` are history alone, takes the list with the state
+    // that closes it.
+    const moved = shown !== undefined && this.#noteBackground(shown)
+    if (moved && this.#stated !== undefined && this.#replays.size === 0)
+      this.#restateBackground()
     // The caller learns whether the event was sent; the declines run either
     // way.
     const decline = () =>
@@ -1429,7 +2102,281 @@ class Membership {
             "membership.request.decline.failed"
           )
         )
-    return sent
+    const owed = this.#announced(event)
+    return owed.length === 0
+      ? sent
+      : sent.then(() => this.#completeChildren(owed, this.#answering?.older))
+  }
+
+  /**
+   * Records the children `event` announces. A replay in flight owes each its
+   * own `replay_complete` once it completes; a completed one whose answer is
+   * not written yet owes one at once to each it did not account for, which
+   * this returns.
+   */
+  #announced(event: SessionEvent): string[] {
+    const announced = announcedChildren(event)
+    if (announced.length === 0) return []
+    const older =
+      event.kind === "history" || event.kind === "child-history"
+        ? event.older
+        : undefined
+    for (const replay of this.#replays)
+      if (replay.older?.cursor === older?.cursor)
+        for (const childSessionId of announced)
+          replay.children.add(childSessionId)
+    const answering = this.#answering
+    if (this.#replays.size > 0 || !answering) return []
+    const owed = announced.filter((id) => !answering.children.has(id))
+    for (const childSessionId of owed) answering.children.add(childSessionId)
+    return owed
+  }
+
+  /** The Session's background work as this member was shown it. */
+  backgroundWork(): BackgroundWork[] {
+    return [...this.#followed.values()].flatMap((followed) =>
+      listed(followed) ? [followed.item] : []
+    )
+  }
+
+  /** `event` with the background list, where it reports the Session's state. */
+  #listing(event: SessionEvent): SessionEvent {
+    const states =
+      event.kind === "execution" ||
+      (event.kind === "turn" && statedBy(event.event) !== undefined)
+    return states ? { ...event, background: this.backgroundWork() } : event
+  }
+
+  /**
+   * Notes what `shown` tells of the Session's work, returning whether the
+   * list moved: a child's report, which names the call that spawned it and
+   * whether it still runs, and outlived its turn when shown between turns;
+   * a terminal's step, likewise; a stored child row, which names the state
+   * its runtime stored; a call's finish, which detaches the work it started
+   * from the foreground, since no foreground work waits on that call any
+   * longer; and a turn's end. A step read back for a resume, not `written`,
+   * counts as shown in no resume.
+   */
+  #noteBackground(shown: MemberEvent, written = true) {
+    const before = this.backgroundWork().length
+    const listedBefore = new Set(this.backgroundWork().map(workKey))
+    if (shown.kind === "child") {
+      const report = shown.event
+      // A child's own child is announced in its stream, not the Session's.
+      if (report.kind !== TurnEventKind.ChildSessionUpdated) return false
+      const { childSessionId, toolCallId, status } = report
+      this.#track(
+        { kind: "child", childSessionId },
+        {
+          turnId: shown.stream.turnId,
+          step: report,
+          toolCallId,
+          betweenTurns: shown.background === true,
+          stillRuns: status === undefined ? undefined : runs(report),
+          shown: written,
+        }
+      )
+    } else if (
+      shown.kind === "terminal" ||
+      (shown.kind === "turn" &&
+        shown.event.kind === TurnEventKind.TerminalOutput)
+    ) {
+      // A process outlives its call where the call returned before its exit.
+      const { output } = shown.event as TerminalTurnEvent
+      const step = withoutOutput(shown.event as TerminalTurnEvent)
+      this.#track(
+        { kind: "terminal", terminalId: step.terminalId },
+        {
+          turnId: shown.stream.turnId,
+          step,
+          ...(written || output === undefined ? {} : { output }),
+          toolCallId: step.toolCallId,
+          betweenTurns: shown.kind === "terminal",
+          stillRuns: step.exit === undefined,
+          shown: written,
+        }
+      )
+    } else if (
+      shown.kind === "turn" &&
+      shown.event.kind === TurnEventKind.ToolCallFinished
+    ) {
+      const { toolCallId } = shown.event
+      for (const followed of this.#followed.values())
+        if (followed.toolCallId === toolCallId) followed.detached = true
+    } else if (shown.kind === "history") {
+      // ACP lists a detached child "while its state is not `idle`": a
+      // stored row names the state its runtime stored, and one that names
+      // none, or a final one, is over.
+      for (const message of shown.page.messages) {
+        if (message.role !== "activity") continue
+        if (message.activityType !== "CHILD_SESSION") continue
+        const report: ChildReport = {
+          kind: TurnEventKind.ChildSessionUpdated,
+          ...message.content,
+        }
+        this.#track(
+          { kind: "child", childSessionId: report.childSessionId },
+          {
+            turnId: HISTORY_TURN_ID,
+            step: report,
+            toolCallId: report.toolCallId,
+            betweenTurns: true,
+            stillRuns: runs(report),
+            shown: written,
+            stored: true,
+          }
+        )
+      }
+    } else if (shown.kind === "turn" && statedBy(shown.event) === "idle") {
+      // Past its turn, work shown over has no call left to detach it from.
+      for (const [key, { runs: still }] of this.#followed)
+        if (!still) this.#followed.delete(key)
+      return false
+    } else return false
+    const after = this.backgroundWork()
+    return (
+      after.length !== before ||
+      after.some((item) => !listedBefore.has(workKey(item)))
+    )
+  }
+
+  /**
+   * Notes one step of `item`, as `WorkStep` tells it. Work shown over
+   * between turns is forgotten at once, and work shown over in a turn once
+   * that turn ends.
+   */
+  #track(item: BackgroundWork, noted: WorkStep) {
+    const key = workKey(item)
+    const followed = this.#followed.get(key)
+    // A stored row tells nothing a report of the live Session has not.
+    if (noted.stored && followed && !followed.stored) return
+    if (noted.betweenTurns && noted.stillRuns === false) {
+      this.#followed.delete(key)
+      return
+    }
+    const toolCallId = noted.toolCallId ?? followed?.toolCallId
+    const shownIn = noted.shown ? this.#resumes : followed?.shownIn
+    // A step shown since says the output the member holds.
+    const output = noted.shown ? undefined : (noted.output ?? followed?.output)
+    this.#followed.set(key, {
+      item,
+      turnId: noted.turnId,
+      step: (followed
+        ? { ...followed.step, ...noted.step }
+        : noted.step) as FollowedWork["step"],
+      ...(toolCallId === undefined ? {} : { toolCallId }),
+      ...(output === undefined ? {} : { output }),
+      detached: noted.stored
+        ? false
+        : (followed?.detached ?? false) || noted.betweenTurns,
+      stored: noted.stored === true,
+      runs: noted.stillRuns ?? followed?.runs ?? false,
+      ...(shownIn === undefined ? {} : { shownIn }),
+    })
+  }
+
+  /**
+   * Notes the work the live turn `turnId` reported up to `cursor`, which
+   * the stream this view follows from there does not show it again: each
+   * child and terminal, through the member's stack, and each call that
+   * returned, which detaches the work it started. A stream this member
+   * already follows that turn on goes on from where it is, so that far.
+   */
+  #noteLiveWork(turnId: string, cursor: number) {
+    const scope = this.#scope
+    if (this.#coordinator.snapshot(scope).state === "idle") return
+    const upTo = this.#subscription?.turnId === turnId ? this.#sequence : cursor
+    const stream: TurnStream = {
+      turnId,
+      replayedCorrections: 0,
+      dropped: false,
+    }
+    const note = (event: SessionEvent) => {
+      let shown: MemberEvent | undefined
+      try {
+        shown = this.#shown(event, () => undefined)
+      } catch {
+        // As a stack that throws on an event costs it that event alone.
+        return
+      }
+      if (shown) this.#noteBackground(shown, false)
+    }
+    for (const { sequence, event } of this.#coordinator.childReports(
+      scope,
+      turnId,
+      upTo
+    ))
+      note({
+        kind: "child",
+        parentSessionId: this.#addressed.sessionId,
+        stream,
+        sequence,
+        event,
+        replayed: true,
+      })
+    const { terminals, finished } = this.#coordinator.workReports(
+      scope,
+      turnId,
+      upTo
+    )
+    for (const event of terminals)
+      note({
+        kind: "turn",
+        stream,
+        sequence: 0,
+        event,
+        stopping: false,
+        replayed: true,
+      })
+    for (const toolCallId of finished)
+      for (const followed of this.#followed.values())
+        if (followed.toolCallId === toolCallId) followed.detached = true
+  }
+
+  /**
+   * Restates each listed item this resume showed no step of, as it last
+   * stood, before the state that closes the resume: ACP has a current
+   * update of each listed item the replay did not deliver precede that
+   * state. Built as it goes out, behind what was held, so no restatement is
+   * older than a step shown before it.
+   */
+  #restateWork() {
+    return this.#emitBuilt(() =>
+      [...this.#followed.values()].flatMap((followed) => {
+        const { item, turnId, step, output, shownIn } = followed
+        if (!listed(followed) || shownIn === this.#resumes) return []
+        const stream = this.#backgroundStream(turnId)
+        return [
+          item.kind === "child"
+            ? {
+                kind: "child" as const,
+                parentSessionId: this.#addressed.sessionId,
+                stream,
+                sequence: 0,
+                event: step as ChildReport,
+                background: true as const,
+              }
+            : {
+                kind: "terminal" as const,
+                stream,
+                event: {
+                  ...(step as TerminalTurnEvent),
+                  ...(output === undefined ? {} : { output }),
+                },
+              },
+        ]
+      })
+    )
+  }
+
+  /** Shows this member its state again, with the list as it stands now. */
+  #restateBackground() {
+    this.#write({
+      kind: "background",
+      background: this.backgroundWork(),
+    }).catch((err: unknown) =>
+      this.#options.logger.warn({ err }, "membership.background.failed")
+    )
   }
 
   /** One event as this member's stack shows it, or `undefined` when hidden. */
@@ -1443,11 +2390,115 @@ class Membership {
             ? event.event.childSessionId
             : event.kind === "child-history"
               ? event.childSessionId
-              : this.#addressed.sessionId,
+              : event.kind === "replay-complete" && event.child
+                ? event.child.childSessionId
+                : this.#addressed.sessionId,
         ...event,
       },
       { decline }
     )
+  }
+
+  /**
+   * Starts one replay of this member's view, which holds every event it
+   * does not replay until `#completeReplay` or `#endReplay` ends it.
+   */
+  #openReplay(older?: OlderPage): Replay {
+    const replay: Replay = { children: new Set(), ...(older ? { older } : {}) }
+    this.#replays.add(replay)
+    return replay
+  }
+
+  /**
+   * Completes one replay as ACP asks, once all it replayed was shown: a
+   * `replay_complete` on each child it announced, then on the Session, and
+   * then what it held goes out. Until the answer is written, a child first
+   * announced is owed its own at once.
+   */
+  async #completeReplay(replay: Replay) {
+    const { older } = replay
+    await this.#completeChildren([...replay.children], older)
+    await this.#write({ kind: "replay-complete", ...(older ? { older } : {}) })
+    this.#answering = replay
+    this.#endReplay(replay)
+  }
+
+  /** Shows each child's `replay_complete`, under the Session that owns it. */
+  async #completeChildren(
+    childSessionIds: readonly string[],
+    older?: OlderPage
+  ) {
+    const parentSessionId = this.#addressed.sessionId
+    for (const childSessionId of childSessionIds)
+      await this.#write({
+        kind: "replay-complete",
+        child: { parentSessionId, childSessionId },
+        ...(older ? { older } : {}),
+      })
+  }
+
+  /**
+   * Ends one replay, completed or not: once none is in flight, the events
+   * the replays held go out in order. A replay that never completed sends no
+   * `replay_complete`, as ACP has a replay that cannot finish send none.
+   */
+  #endReplay(replay: Replay) {
+    if (!this.#replays.delete(replay) || this.#replays.size > 0) return
+    this.#release().catch((err: unknown) =>
+      this.#options.logger.error({ err }, "membership.release.failed")
+    )
+  }
+
+  /** Writes one held event, or each a held builder builds as it goes out. */
+  async #writeHeld(held: HeldEvent["event"]) {
+    if (typeof held !== "function") return this.#write(held)
+    for (const event of held()) await this.#write(event)
+  }
+
+  /**
+   * Shows the events `build` builds once nothing held is ahead of them, and
+   * only then builds them, so they say what stands after all shown before:
+   * a replay in flight holds them as it holds any event it does not replay.
+   */
+  #emitBuilt(build: () => SessionEvent[]): Promise<void> {
+    if (this.detached) return Promise.resolve()
+    if (this.#replays.size === 0 && this.#held.length === 0)
+      return this.#writeHeld(build)
+    return this.#hold(build, 0)
+  }
+
+  /**
+   * Shows the held events in order, each settling as it goes out, until none
+   * is left or another replay holds them again.
+   */
+  async #release() {
+    if (this.#releasing) return
+    this.#releasing = true
+    try {
+      while (this.#replays.size === 0) {
+        const next = this.#held.shift()
+        if (!next) break
+        this.#heldBytes -= next.bytes
+        await this.#writeHeld(next.event).then(
+          next.shown.resolve,
+          next.shown.reject
+        )
+      }
+    } finally {
+      this.#releasing = false
+    }
+  }
+
+  /**
+   * Ends what a completed replay owes the children first announced before
+   * its answer, once the answer to the request that asked for it is
+   * written. Call it as `afterResponse` asks.
+   */
+  answered() {
+    const answering = this.#answering
+    this.afterResponse(async () => {
+      if (this.#answering === answering) this.#answering = undefined
+    })
   }
 
   /**
@@ -1499,9 +2550,11 @@ class Membership {
    * The view keeps whether it pages older history, for each rebuild after.
    * Either way the
    * member joins the channel, reads the live events the journal buffered and
-   * then the Session's state. Returns the page it replayed. A join that has
-   * not landed by its deadline detaches the membership, and the resume
-   * rejects then; one that finds its Session gone ends it.
+   * then the Session's state. A resume with a cursor replays: from the
+   * request on, the member is shown only the history it replays until its
+   * `replay_complete`, and the rest after it. Returns the page it replayed. A
+   * join that has not landed by its deadline detaches the membership, and the
+   * resume rejects then; one that finds its Session gone ends it.
    */
   resume(
     position: ResumePosition,
@@ -1509,7 +2562,8 @@ class Membership {
       fromStart: false,
       positioned: true,
       paged: this.#paged,
-    }
+    },
+    page?: Promise<unknown>
   ) {
     this.#releaseCells()
     // The resume answers before its join lands; a Session found gone between
@@ -1522,8 +2576,25 @@ class Membership {
       )
     this.#send({ type: "join" })
     this.#paged = view.paged
-    return unlessAborted(this.#resume(position, view), this.#detaching).catch(
-      (cause: unknown) => {
+    let replay: Replay | undefined
+    // An older page this member reads, and a build of its view in flight,
+    // finish first, inside the join's deadline, so the resume answers within
+    // it whatever they take, and they show all they owe before this replay
+    // holds anything back.
+    const start = () => {
+      if (this.detached) throw new MembershipDetachedError()
+      // A resume with a cursor replays, and holds from here on all it does
+      // not replay, as ACP has only history precede `replay_complete`.
+      replay =
+        view.fromStart || view.positioned ? this.#openReplay() : undefined
+      return this.#resume(position, view, replay)
+    }
+    // With nothing to wait for it starts at once, as its request came.
+    const resumed = this.#afterView(() =>
+      page ? page.catch(() => undefined).then(start) : start()
+    )
+    return unlessAborted(resumed, this.#detaching)
+      .catch((cause: unknown) => {
         // A join its deadline cut short; the membership's log names its Session.
         if (cause instanceof MembershipDetachedError && !this.#parted)
           this.#options.logger.warn(
@@ -1532,19 +2603,39 @@ class Membership {
           )
         this.endIfGone(cause)
         throw cause
-      }
-    )
+      })
+      .finally(() => {
+        if (replay) this.#endReplay(replay)
+      })
   }
 
+  /**
+   * Builds the view as `resume` describes. A `replay` completes once the
+   * history and what the view's own streams buffered were shown, before the
+   * Session's state; a stream the view already followed streams on behind it.
+   */
   async #resume(
     position: ResumePosition,
-    { fromStart, positioned }: ResumeView
+    { fromStart, positioned }: ResumeView,
+    replay?: Replay
   ): Promise<{ history?: SessionHistoryResponse }> {
-    // A fresh invitation has no history to replay and no turn to follow.
-    if (this.pending) return {}
+    // A fresh invitation has no history to replay and no turn to follow, and
+    // its empty history completes all the same.
+    if (this.pending) {
+      if (replay) await this.#completeReplay(replay)
+      return {}
+    }
     this.#options.coordinator.refuseDiscarded(this.#scope)
     this.#stated = undefined
+    // The view's background list is rebuilt from where the work is kept:
+    // the channel holds what outlived its turns, the journal what the live
+    // turn reported, and the streams this resume follows show the rest.
+    this.#resumes += 1
+    this.#followed.clear()
+    this.#channels.restate(this.#scope, this.#delivery)
     this.#restating = true
+    const followed = this.#caughtUp
+    if (replay) this.#caughtUp = Promise.resolve()
     try {
       this.#resuming = "follow"
       let history: SessionHistoryResponse | undefined
@@ -1553,6 +2644,17 @@ class Membership {
       else if (!(await this.#followPositioned(position)))
         history = await this.#replay()
       this.#resuming = "report"
+      if (replay) {
+        await this.#caughtUp
+        await this.#completeReplay(replay)
+        await followed
+      }
+      // ACP has each listed item's current update precede the state that
+      // closes a resume: what the runtime reads of the terminals its turns
+      // left running reaches the view first, then each item no step of
+      // which this resume showed.
+      await this.#channels.terminalsRead(this.#scope)
+      await this.#restateWork()
       await this.#reportView()
       return history === undefined ? {} : { history }
     } finally {
@@ -1564,16 +2666,30 @@ class Membership {
   /**
    * Closes a view with the Session's state, once the member was shown what
    * the journal buffered: stated unless its stream already said it, with the
-   * requests a wait still holds asked again.
+   * requests a wait still holds asked again. A view that `restate`s, an older
+   * page's, is told again the state its stream last showed it, which no event
+   * held back for its replay can overtake, as ACP has a state "delivered in
+   * order, without replacing a newer state with a stale snapshot".
    */
-  async #reportView() {
+  async #reportView(restate = false) {
     await this.#caughtUp
-    const { state, awaitingStop } = this.#coordinator.snapshot(this.#scope)
-    const stated = viewState(state, awaitingStop)
-    if (this.#stated !== stated) {
-      this.#stated = stated
-      await this.reportExecution()
-    }
+    const snapshot = this.#coordinator.snapshot(this.#scope)
+    const { state, awaitingStop } = snapshot
+    if (restate) await this.reportExecution(true)
+    // The Session's state as of its journal's last event: stated where this
+    // member's stream has shown it that far, so it never runs ahead of the
+    // events of its turn the stream still owes the view.
+    else
+      await this.#whenShown(
+        snapshot.turnId,
+        this.#coordinator.nextCursor(this.#scope),
+        () => {
+          const stated = viewState(state, awaitingStop)
+          if (this.#stated === stated) return undefined
+          this.#stated = stated
+          return this.reportExecution(false, snapshot)
+        }
+      )
     if (state === "waiting-for-input") this.reissuePending()
   }
 
@@ -1611,18 +2727,45 @@ class Membership {
   async #rebuild() {
     if (this.detached || this.pending) return
     try {
-      await this.#resume(
-        {},
-        {
-          fromStart: true,
-          positioned: false,
-          paged: this.#paged,
-        }
-      )
+      await this.#afterView(async () => {
+        if (this.detached) return
+        return this.#resume(
+          {},
+          {
+            fromStart: true,
+            positioned: false,
+            paged: this.#paged,
+          }
+        )
+      })
     } catch (cause) {
       await this.report(cause)
       this.#cannotCatchUp()
     }
+  }
+
+  /**
+   * Runs one build of this member's view, a resume's or a rebuild's, once
+   * the one in flight has settled: two at once would each clear and rebuild
+   * the same view. Neither waits on the other while it holds anything the
+   * other needs: a stream marks itself caught up and ended before the
+   * rebuild it starts waits here, so a resume in flight finishes without it.
+   */
+  #afterView<T>(task: () => Promise<T>): Promise<T> {
+    const before = this.#viewing
+    let run: Promise<T>
+    try {
+      // One with nothing in flight starts at once.
+      run = before ? before.catch(() => undefined).then(task) : task()
+    } catch (cause) {
+      run = Promise.reject(cause as Error)
+    }
+    this.#viewing = run
+    const settle = () => {
+      if (this.#viewing === run) this.#viewing = undefined
+    }
+    run.then(settle, settle)
+    return run
   }
 
   /**
@@ -1670,18 +2813,30 @@ class Membership {
   }
 
   /**
-   * Shows this member one older page of its Session. A page resumes
-   * nothing: the view keeps its channel, follow, and reports, and learns
-   * only where the next page starts. A turn longer than the newest page
-   * leaves its first rows on older pages too, and the live turn's replay owns
-   * those, so the page drops them as the newest page does.
+   * Shows this member the older page `read` reads, as ACP has a resume with
+   * a cursor replay: from the request on, the member is shown only the page,
+   * then the page's `replay_complete`, then what it held and the Session's
+   * current state. A page resumes nothing else: the view keeps its channel,
+   * follow, and reports, and learns only where the next page starts. A turn
+   * longer than the newest page leaves its first rows on older pages too,
+   * and the live turn's replay owns those, so the page drops them as the
+   * newest page does. Returns the page read.
    */
-  showOlderPage(
-    page: SessionHistoryResponse,
-    older: { cursor: string; offset: number }
+  async showOlderPage(
+    read: () => Promise<SessionHistoryResponse>,
+    older: OlderPage
   ) {
-    const live = this.#coordinator.replayStart(this.#scope)?.ids
-    return this.#showHistory(live ? withoutLiveRows(page, live) : page, older)
+    const replay = this.#openReplay(older)
+    try {
+      const page = await read()
+      const live = this.#coordinator.replayStart(this.#scope)?.ids
+      await this.#showHistory(live ? withoutLiveRows(page, live) : page, older)
+      await this.#completeReplay(replay)
+      await this.#reportView(true)
+      return page
+    } finally {
+      this.#endReplay(replay)
+    }
   }
 
   /**
@@ -1805,8 +2960,8 @@ class Membership {
    */
   async #recoverReplay(needsFollow: boolean) {
     // A view that was not rebuilt shows nothing it held for after its page.
-    this.#heldNotices = []
-    this.#heldChildren = []
+    this.#heldBackground = []
+    this.#rebuildBytes = 0
     this.#rebuilding = false
     if (needsFollow) {
       this.joinChannel(false, true)
@@ -1848,6 +3003,8 @@ class Membership {
     const { corrections, streamed } = replay
     const { turnId } = this.#coordinator.snapshot(this.#scope)
     if (streamed && streamed.turnId === turnId) {
+      // The page holds the turn that far, its work among it.
+      this.#noteLiveWork(turnId, streamed.after)
       const followed = await this.#follow(
         true,
         streamed.after,
@@ -1878,13 +3035,17 @@ class Membership {
     if (after === undefined) {
       if (state === "idle" || turnId === undefined) return true
       if (!this.#coordinator.replayStart(this.#scope)) return false
+      this.#noteLiveWork(turnId, 0)
       await this.#follow(true)
       return true
     }
     // A settled turn streams nothing more: the view holds it once its cursor
     // reached the turn's last event.
     if (state === "idle") return this.#coordinator.holds(this.#scope, after)
-    if (turnId !== undefined) await this.#reannounceChildren(turnId, after)
+    if (turnId !== undefined) {
+      this.#noteLiveWork(turnId, after)
+      await this.#reannounceChildren(turnId, after)
+    }
     return this.#follow(true, after).then(
       () => true,
       (cause: unknown) => {
@@ -1902,6 +3063,10 @@ class Membership {
    */
   async #followNext() {
     this.joinChannel(true)
+    const { turnId } = this.#coordinator.snapshot(this.#scope)
+    const next = this.#coordinator.nextCursor(this.#scope)
+    if (turnId !== undefined && next !== undefined)
+      this.#noteLiveWork(turnId, next)
     await this.#follow(true, "next")
   }
 
@@ -2049,15 +3214,16 @@ class Membership {
    */
   joinChannel(hasPrompt = false, replayed = false) {
     this.#rebuilding = false
-    // The notices held while the view was rebuilt follow its page.
-    const held = this.#heldNotices
-    this.#heldNotices = []
-    const children = this.#heldChildren
-    this.#heldChildren = []
+    // What was held while the view was rebuilt follows its page.
+    const held = this.#heldBackground
+    this.#heldBackground = []
+    this.#rebuildBytes = 0
     if (this.detached) return
-    for (const notice of held) this.#showNotice(notice)
-    for (const { turnId, event } of children)
-      this.#showBackgroundChild(turnId, event)
+    for (const entry of held)
+      if (entry.kind === "notice") this.#showNotice(entry.event)
+      else if (entry.event.kind === TurnEventKind.TerminalOutput)
+        this.#showBackgroundTerminal(entry.turnId, entry.event)
+      else this.#showBackgroundChild(entry.turnId, entry.event)
     if (!this.#partChannel) {
       const part = this.#channels.add(this.#scope, this.#delivery, {
         hasPrompt,
@@ -2130,12 +3296,17 @@ class Membership {
   }
 
   /**
-   * Reports the Session's execution outside a turn stream: what a resume or
-   * an acknowledged Stop owes the member.
+   * Reports the Session's execution outside a turn stream, as the
+   * coordinator holds it now or as `snapshot` read it: what a resume or an
+   * acknowledged Stop owes the member, or, where it `repeats`, the state its
+   * stream last showed it, said again.
    */
-  reportExecution() {
-    const { state, turnId, awaitingStop, startedAt } =
-      this.#coordinator.snapshot(this.#scope)
+  reportExecution(
+    repeats = false,
+    { state, turnId, awaitingStop, startedAt } = this.#coordinator.snapshot(
+      this.#scope
+    )
+  ) {
     return this.emit({
       kind: "execution",
       state,
@@ -2143,6 +3314,7 @@ class Membership {
       ...(awaitingStop ? { awaitingStop } : {}),
       ...(startedAt === undefined ? {} : { startedAt }),
       sequence: this.#sequence,
+      ...(repeats ? { repeats } : {}),
     })
   }
 
@@ -2174,6 +3346,9 @@ class Membership {
     })
     const capabilities = subscribeCapabilities()
     const row = this.#options.subscribeRow((row) => {
+      const shown = this.#rowShown
+      this.#rowShown = undefined
+      if (shown && isDeepStrictEqual(shown, row)) return
       this.#deliver({ kind: "session-info", row }).catch((err: unknown) =>
         this.#options.logger.error({ err }, "membership.row.failed")
       )
@@ -2183,6 +3358,20 @@ class Membership {
       capabilities()
       row()
     }
+  }
+
+  /**
+   * Shows this member the row the gateway holds of its Session, ahead of a
+   * resume's answer, as ACP has current session info precede it. It reads
+   * no provider, so a rejoin the journal serves still asks none first: a row
+   * the gateway does not hold yet, or one the read after the join changes,
+   * follows the answer as an update.
+   */
+  async showRow() {
+    const row = this.pending ? undefined : this.#options.knownRow?.()
+    if (!row) return
+    this.#rowShown = row
+    await this.#deliver({ kind: "session-info", row })
   }
 
   /**
@@ -2429,10 +3618,19 @@ class Membership {
       } catch (cause) {
         if (after !== undefined || !(cause instanceof ReplayCursorLostError))
           throw cause
-        await this.#reportView()
+        // A replay in flight holds the state this states until it completes,
+        // which a follow inside its resume must not wait for.
+        const stated = this.#reportView()
+        if (this.#replays.size === 0) await stated
+        else stated.catch((err: unknown) => this.report(err))
         return undefined
       }
-      this.#consume(subscription, replayedCorrections)
+      this.#consume(
+        subscription,
+        replayedCorrections,
+        undefined,
+        typeof cursor === "number" ? cursor : 0
+      )
       return turnId
     })
   }
@@ -2449,6 +3647,71 @@ class Membership {
     return !refollow && continues?.turnId === this.#followedTurn
       ? continues?.after
       : undefined
+  }
+
+  /**
+   * Notes that `stream` showed this member every event of its turn through
+   * `sequence`, and runs what waited on it for that point.
+   */
+  #reachShown(stream: ShownStream, sequence: number) {
+    stream.sequence = Math.max(stream.sequence, sequence)
+    for (const waiter of [...stream.waiters])
+      if (waiter.through <= sequence) {
+        stream.waiters.delete(waiter)
+        waiter.run()
+      }
+  }
+
+  /** Notes that `stream` shows nothing more, and runs all that waited on it. */
+  #endShown(stream: ShownStream) {
+    stream.ended = true
+    for (const waiter of [...stream.waiters]) {
+      stream.waiters.delete(waiter)
+      waiter.run()
+    }
+  }
+
+  /**
+   * Runs `run` where this member's stream of `turnId` has shown it every
+   * event through `through`: at once where it has, or where no live stream
+   * of that turn will show more, and else right as it gets there, before its
+   * next event. A stream that falls silent short of it, never ending, is let
+   * go of past `stateWaitMs`, and `run` runs then.
+   */
+  #whenShown(
+    turnId: string | undefined,
+    through: number | undefined,
+    run: () => Promise<void> | undefined
+  ): Promise<void> {
+    const stream = this.#streamed
+    if (
+      turnId === undefined ||
+      through === undefined ||
+      !stream ||
+      stream.ended ||
+      stream.turnId !== turnId ||
+      stream.sequence >= through
+    )
+      return run() ?? Promise.resolve()
+    const { clock, logger, stateWaitMs } = this.#options
+    return new Promise<void>((resolve, reject) => {
+      const waiter = {
+        through,
+        run: () => {
+          clock.clearTimeout(backstop)
+          ;(run() ?? Promise.resolve()).then(resolve, reject)
+        },
+      }
+      const backstop = clock.setTimeout(() => {
+        if (!stream.waiters.delete(waiter)) return
+        logger.warn(
+          { turnId, through, shown: stream.sequence },
+          "membership.state.wait_passed"
+        )
+        waiter.run()
+      }, stateWaitMs)
+      stream.waiters.add(waiter)
+    })
   }
 
   /** Runs one subscribing task once every earlier one has settled. */
@@ -2483,19 +3746,50 @@ class Membership {
   }
 
   /**
-   * Shows one event of a child that outlived its turn: the child's own, under
-   * its id, at no position in the turn that spawned it.
+   * Shows one step of a terminal still running after its turn: the
+   * Session's own, at no position in the turn that started it. One this
+   * member follows no step of yet is restated first, as ACP announces an
+   * item before any list names it, should output be the first it hears.
    */
-  #showBackgroundChild(turnId: string, event: ChildTurnEvent) {
+  #showBackgroundTerminal(turnId: string, event: TerminalTurnEvent) {
+    const { terminalId, toolCallId } = event
+    const known = this.#followed.has(workKey({ kind: "terminal", terminalId }))
+    const steps: TerminalTurnEvent[] =
+      known || event.data === undefined
+        ? [event]
+        : [
+            { kind: TurnEventKind.TerminalOutput, terminalId, toolCallId },
+            event,
+          ]
+    for (const step of steps)
+      this.#deliver({
+        kind: "terminal",
+        stream: this.#backgroundStream(turnId),
+        event: step,
+      }).catch((err: unknown) =>
+        this.#options.logger.error({ err }, "membership.terminal.failed")
+      )
+  }
+
+  /** The stream a background event of `turnId`'s names, one per turn. */
+  #backgroundStream(turnId: string) {
     let stream = this.#backgroundStreams.get(turnId)
     if (!stream) {
       stream = { turnId, replayedCorrections: 0, dropped: false }
       this.#backgroundStreams.set(turnId, stream)
     }
+    return stream
+  }
+
+  /**
+   * Shows one event of a child that outlived its turn: the child's own, under
+   * its id, at no position in the turn that spawned it.
+   */
+  #showBackgroundChild(turnId: string, event: ChildTurnEvent) {
     this.#deliver({
       kind: "child",
       parentSessionId: this.#addressed.sessionId,
-      stream,
+      stream: this.#backgroundStream(turnId),
       sequence: 0,
       event,
       background: true,
@@ -2545,11 +3839,15 @@ class Membership {
     }
   }
 
-  /** Follows one subscription, whose stream waits for `shown` when given. */
+  /**
+   * Follows one subscription, whose stream waits for `shown` when given and
+   * reads its turn from after sequence `from`.
+   */
   #consume(
     subscription: CoordinatedTurnSubscription,
     replayedCorrections: number,
-    shown?: Promise<void>
+    shown?: Promise<void>,
+    from = 0
   ) {
     // A member that detached while its subscription was admitted keeps none.
     if (this.detached) {
@@ -2564,18 +3862,30 @@ class Membership {
     this.#send({ type: "followed" })
     let caughtUp = () => {}
     this.#caughtUp = new Promise<void>((resolve) => (caughtUp = resolve))
-    const done = this.#pump(
+    const streamed: ShownStream = {
+      turnId: subscription.turnId,
+      done: Promise.resolve(),
+      sequence: from,
+      ended: false,
+      waiters: new Set(),
+    }
+    // The stream this one replaces shows nothing more, so nothing waits on it.
+    const replaced = this.#streamed
+    this.#streamed = streamed
+    if (replaced) this.#endShown(replaced)
+    streamed.done = this.#pump(
       subscription,
       this.#owner.generation,
       replayedCorrections,
       { restating: this.#restating, caughtUp },
+      streamed,
       shown
     )
       .catch((err: unknown) =>
         this.#options.logger.error({ err }, "membership.stream.failed")
       )
       .finally(caughtUp)
-    this.#streamed = { turnId: subscription.turnId, done }
+      .finally(() => this.#endShown(streamed))
   }
 
   /**
@@ -2590,6 +3900,7 @@ class Membership {
     generation: number,
     replayedCorrections: number,
     view: { restating: boolean; caughtUp: () => void },
+    streamed: ShownStream,
     shown?: Promise<void>
   ) {
     let buffered = subscription.replayed ?? 0
@@ -2608,6 +3919,8 @@ class Membership {
       await shown
       for await (const { sequence, event } of subscription.events) {
         if (stream.dropped) break
+        // All before this event was shown.
+        this.#reachShown(streamed, sequence - 1)
         this.#sequence = sequence
         interrupted = isRedialableFailure(event)
         const replayed = view.restating && buffered > 0
@@ -2640,6 +3953,7 @@ class Membership {
             for (const request of event.requests) this.#offer(request)
         }
         if (--buffered === 0) view.caughtUp()
+        this.#reachShown(streamed, sequence)
       }
     } catch (cause) {
       if (cause instanceof FanoutOverflowError) overflow = cause
@@ -2647,6 +3961,11 @@ class Membership {
     } finally {
       if (!this.#owner.stale(generation)) this.#subscription = undefined
     }
+    // It shows nothing more, before what follows here waits on a view: a
+    // rebuild this stream starts, or the resume in flight that rebuild waits
+    // for, is never kept waiting on the stream itself.
+    view.caughtUp()
+    this.#endShown(streamed)
     // The stream that replaced a dropped one settles the segment instead.
     if (stream.dropped) return
     if (overflow) return this.#fellBehind(subscription.turnId, overflow)
@@ -2657,8 +3976,12 @@ class Membership {
       return
     }
     // A stream that could not carry the wait it ended on, such as the reset of
-    // a discovered turn no journal replays, still leaves its requests open.
-    if (this.#coordinator.state(this.#scope) === "waiting-for-input")
+    // a discovered turn no journal replays, still leaves its requests open. A
+    // replay in flight asks them after the state it closes with.
+    if (
+      this.#replays.size === 0 &&
+      this.#coordinator.state(this.#scope) === "waiting-for-input"
+    )
       this.reissuePending()
   }
 

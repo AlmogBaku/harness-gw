@@ -27,6 +27,7 @@ import {
   RequestError,
   SessionConfigOption,
   SessionUpdate,
+  type BackgroundWork,
   type ContentBlock,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable"
 import { createWebSocketStream } from "@agentclientprotocol/sdk/experimental/ws-client"
@@ -47,11 +48,15 @@ import {
   HGW_JSONRPC_ERRORS,
   HGW_META_KEY,
   HGW_METHODS,
+  HGW_REPLAY_BEFORE,
   HGW_REPLAY_POSITION,
+  HgwHistoryPageTagSchema,
+  HgwSessionResumeResponseMetaSchema,
   hgwAcpAgentPath,
 } from "../../protocol/acp"
 import type { RuntimeFactory } from "../adapters/create-runtime"
 import { createConfiguredGateway } from "../composition"
+import type { HistoryReach } from "../core/channel"
 import { stubUnreachableTransports, until } from "../core/runtime-contract"
 import { CredentialValues } from "../redaction"
 
@@ -83,10 +88,16 @@ export type WireContractRow =
   | "unpromptedSessionFreed"
   | "promptedSessionKept"
   | "childAnnouncedBeforeItsEvents"
+  | "backgroundListedOnEveryState"
+  | "terminalListedUntilExit"
+  | "backgroundTerminalMasked"
   | "compactionReplaysAsLive"
   | "rewindReplacesTurn"
   | "guestRetryOfSlashRefused"
   | "childHiddenFromGuest"
+  | "replayCompleteAfterHistory"
+  | "replayCompletePerChild"
+  | "olderPageClosesAsResume"
 
 /**
  * The native side of the turn a row prompted, played and stored as the
@@ -123,6 +134,28 @@ export type WireTurn = Readonly<{
    * with the id the child is reported under. Absent when its row is a gap.
    */
   spawnChild?(): Promise<string>
+  /**
+   * Inside the running turn, after the first response: the turn spawns one
+   * child Session still at work when the turn ends; resolves with the id the
+   * child is reported under and `finish`, which ends the child's work once
+   * called, after the turn. Absent when its row is a gap.
+   */
+  spawnBackgroundChild?(): Promise<{
+    childId: string
+    finish(): Promise<void>
+  }>
+  /**
+   * Inside the running turn, after the first response: a call runs `command`
+   * as a process that keeps running after the call returns. Resolves with the
+   * terminal it is shown as, `write`, which prints `text` from the process,
+   * and `exit`, which ends it with `code`, after the turn too. Absent when its
+   * row is a gap.
+   */
+  startProcess?(command: string): Promise<{
+    terminalId: string
+    write(text: string): Promise<void>
+    exit(code: number): Promise<void>
+  }>
   /**
    * Inside the running turn, after the first response: the turn compacts its
    * context and completes, stored; resolves with the compaction's id. Absent
@@ -249,6 +282,11 @@ type WireHarness = Readonly<{
 type ClientOptions = {
   /** Whether the client declares it answers form elicitations; it does. */
   elicits?: boolean
+  /**
+   * Whether the client declares it reads older pages itself, an extra
+   * (`_meta.hgw.historyPages`); a plain client does not.
+   */
+  pagesHistory?: boolean
 }
 
 /**
@@ -257,7 +295,11 @@ type ClientOptions = {
  * Awaited directly, not on the fake clock: composing reads that key from
  * disk, and real I/O takes no fixed count of clock steps.
  */
-async function composeGateway(runtime: WireRuntime, limits: SubscriberLimits) {
+async function composeGateway(
+  runtime: WireRuntime,
+  limits: SubscriberLimits,
+  historyReach?: HistoryReach
+) {
   const directory = await mkdtemp(join(tmpdir(), "aos-wire-contract-"))
   const invitationKey = join(directory, "invitation-key")
   await writeFile(
@@ -294,6 +336,7 @@ async function composeGateway(runtime: WireRuntime, limits: SubscriberLimits) {
         runtimeFactory: runtime.runtimeFactory,
         logger: captureLogs().logger,
         credentials: new CredentialValues(),
+        ...(historyReach ? { historyReach } : {}),
       }
     )
     return { gateway, release }
@@ -309,7 +352,7 @@ function connectClient(
   origin: string,
   path: string,
   folder: string,
-  { elicits = true }: ClientOptions = {}
+  { elicits = true, pagesHistory = false }: ClientOptions = {}
 ) {
   const bridge = acpBridge(service)
   const updates: SessionUpdate[] = []
@@ -415,7 +458,12 @@ function connectClient(
       connection.agent.request(methods.agent.initialize, {
         protocolVersion: 2,
         info: { name: "wire-contract", version: "1.0.0" },
-        capabilities: elicits ? { elicitation: { form: {} } } : {},
+        capabilities: {
+          ...(elicits ? { elicitation: { form: {} } } : {}),
+          ...(pagesHistory
+            ? { _meta: { [HGW_META_KEY]: { historyPages: true } } }
+            : {}),
+        },
       }),
   }
 }
@@ -613,7 +661,7 @@ async function invitedGuest({ gateway, agentId, clock, connect }: WireHarness) {
 /** One frame the gateway sent a client, as JSON-RPC shapes it. */
 type WireFrame = {
   method?: string
-  params?: { update?: SessionUpdate }
+  params?: { sessionId?: string; update?: SessionUpdate }
   result?: unknown
   error?: { code?: unknown }
 }
@@ -632,9 +680,9 @@ function errorCodes(client: WireClient) {
 
 /**
  * Each update `client` read off the wire before the first answer `answers`
- * picks out, or every one when none does.
+ * picks out, or every one when none does, with the Session it names.
  */
-function updatesBefore(
+function addressedBefore(
   client: WireClient,
   answers: (result: unknown) => boolean
 ) {
@@ -646,9 +694,145 @@ function updatesBefore(
     .slice(0, answer < 0 ? undefined : answer)
     .flatMap(({ method, params }) =>
       method === methods.client.session.update && params?.update
-        ? [params.update]
+        ? [{ sessionId: params.sessionId, update: params.update }]
         : []
     )
+}
+
+/** As `addressedBefore`, the updates alone. */
+function updatesBefore(
+  client: WireClient,
+  answers: (result: unknown) => boolean
+) {
+  return addressedBefore(client, answers).map(({ update }) => update)
+}
+
+/** Whether `result` answers a `session/resume`, not the handshake. */
+function resumeAnswer(result: unknown) {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    !("protocolVersion" in result)
+  )
+}
+
+/** The updates ACP counts as replayed history (session-setup, Replay contents). */
+const HISTORY_UPDATES = new Set<string>([
+  "user_message",
+  "user_message_chunk",
+  "agent_message",
+  "agent_message_chunk",
+  "agent_thought",
+  "agent_thought_chunk",
+  "tool_call_update",
+  "tool_call_content_chunk",
+  "terminal_update",
+  "terminal_output_chunk",
+  "plan_update",
+  "compaction_update",
+  "subagent_update",
+])
+
+/**
+ * What a fresh reader read of `sessionId` before its resume's answer, each
+ * run of history read as one `history` step and anything else by its kind.
+ */
+function resumeShape(reader: WireClient, sessionId: string) {
+  return shapeOf(addressedBefore(reader, resumeAnswer), sessionId)
+}
+
+/**
+ * The updates of `sessionId` as `resumeShape` reads them, one an older page
+ * tagged as its own read with `page` before it.
+ */
+function shapeOf(
+  addressed: ReturnType<typeof addressedBefore>,
+  sessionId: string
+) {
+  const shape: string[] = []
+  for (const { sessionId: target, update } of addressed) {
+    if (target !== sessionId) continue
+    const meta = update._meta as Record<string, unknown> | null | undefined
+    const paged = HgwHistoryPageTagSchema.safeParse(meta?.[HGW_META_KEY]).data
+      ?.historyPage
+    const kind = HISTORY_UPDATES.has(update.sessionUpdate)
+      ? "history"
+      : update.sessionUpdate
+    const step = paged ? `page ${kind}` : kind
+    if (!step.endsWith("history") || shape.at(-1) !== step) shape.push(step)
+  }
+  return shape
+}
+
+/**
+ * What `client` read on `sessionId` of the work `id` names, a child or a
+ * terminal, and the Session's background list, in order: each report of a
+ * child, or update of a terminal, as `at work` or `over`, output a terminal
+ * printed as `output`, and each state as whether its list names the work, or
+ * `unreported` where it carries none.
+ */
+function workTrail(
+  addressed: readonly { sessionId?: string; update: SessionUpdate }[],
+  sessionId: string,
+  id: string
+) {
+  return addressed.flatMap(({ sessionId: target, update }) => {
+    if (target !== sessionId) return []
+    if (SessionUpdate.isSubagentUpdate(update) && update.sessionId === id)
+      return update.state?.state === "running" ? ["at work"] : ["over"]
+    if (SessionUpdate.isTerminalUpdate(update) && update.terminalId === id)
+      return update.exitStatus ? ["over"] : ["at work"]
+    if (SessionUpdate.isTerminalOutputChunk(update) && update.terminalId === id)
+      return ["output"]
+    if (!SessionUpdate.isStateUpdate(update)) return []
+    const listed = backgroundOf(update)
+    if (listed === undefined) return ["unreported"]
+    return [`${listed.includes(id) ? "listed" : "unlisted"} ${update.state}`]
+  })
+}
+
+/**
+ * The ids a state's background list names, each item by its own id, a
+ * subagent by its Session's; or `undefined` where the state reports none.
+ */
+function backgroundOf(update: object) {
+  const { background } = update as { background?: unknown }
+  if (!Array.isArray(background)) return undefined
+  return (background as BackgroundWork[]).map((item) =>
+    String(
+      item.type === "subagent"
+        ? item.sessionId
+        : item.type === "terminal"
+          ? item.terminalId
+          : item.type === "tool_call"
+            ? item.toolCallId
+            : item.type
+    )
+  )
+}
+
+/**
+ * ACP's rules for one item a trail follows: announced at work before the
+ * first state that lists it, and over before the state that drops it, which
+ * says the state the last list carried again, and no state left unreported.
+ */
+function expectListedFromAnnouncementToEnd(trail: readonly string[]) {
+  expect(trail).not.toContain("unreported")
+  const first = trail.findIndex((step) => step.startsWith("listed"))
+  const last = trail.findLastIndex((step) => step.startsWith("listed"))
+  expect(first).toBeGreaterThanOrEqual(0)
+  expect(trail.slice(0, first)).toContain("at work")
+  const removal = trail.findIndex(
+    (step, index) => index > last && step.startsWith("unlisted")
+  )
+  expect(trail.slice(last + 1, removal)).toContain("over")
+  expect(trail[removal]?.replace("unlisted", "listed")).toBe(trail[last])
+}
+/** A guard for a state that does or does not list the child `childId`. */
+function listing(childId: string, listed: boolean) {
+  return (update: SessionUpdate): update is SessionUpdate =>
+    SessionUpdate.isStateUpdate(update) &&
+    backgroundOf(update)?.includes(childId) === listed
 }
 
 /** Every frame the gateway sent `client` that names `id` anywhere in it. */
@@ -895,12 +1079,17 @@ function questionsOf(turn: WireTurn): WireQuestions {
 function wireCase(
   createRuntime: () => WireRuntime,
   body: (harness: WireHarness) => Promise<void>,
-  limits = SUBSCRIBER_LIMITS
+  limits = SUBSCRIBER_LIMITS,
+  historyReach?: HistoryReach
 ) {
   return async () => {
     const clock = useFakeClock()
     const runtime = createRuntime()
-    const { gateway, release } = await composeGateway(runtime, limits)
+    const { gateway, release } = await composeGateway(
+      runtime,
+      limits,
+      historyReach
+    )
     const clients: WireClient[] = []
     const connect: WireHarness["connect"] = (
       service,
@@ -987,9 +1176,12 @@ export function runWireContract(
     body: (harness: WireHarness) => Promise<void>,
     {
       limits,
+      historyReach,
       gapCheck,
     }: {
       limits?: SubscriberLimits
+      /** How far the gateway reads history, a small one for a long Session. */
+      historyReach?: HistoryReach
       gapCheck?: Readonly<{
         title: string
         body: (harness: WireHarness) => Promise<void>
@@ -997,11 +1189,12 @@ export function runWireContract(
     } = {}
   ) {
     const gap = gaps[id]
-    if (gap === undefined) it(title, wireCase(createRuntime, body, limits))
+    if (gap === undefined)
+      it(title, wireCase(createRuntime, body, limits, historyReach))
     else if (gapCheck)
       it(
         `${gapCheck.title} (gap: ${gap})`,
-        wireCase(createRuntime, gapCheck.body, limits)
+        wireCase(createRuntime, gapCheck.body, limits, historyReach)
       )
     else it.skip(`${title} (gap: ${gap})`)
   }
@@ -1398,6 +1591,343 @@ export function runWireContract(
       )
 
       row(
+        "backgroundListedOnEveryState",
+        "lists a child still at work once the call that spawned it returned, on every state of its Session through the turn's end, announced before the first that lists it and over before the one that drops it, says the state again as it starts and ends, and restates it before a resume's state",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const { childId, finish } = await until(
+            clock,
+            turn.spawnBackgroundChild!()
+          )
+          const shown = plain.next(listing(childId, true))
+          await until(clock, turn.secondResponse())
+          await until(clock, Promise.all([idle, shown]))
+          const reader = await reload(harness, sessionId)
+          const dropped = [plain, reader].map((client) =>
+            client.next(listing(childId, false))
+          )
+          await until(clock, finish())
+          await until(clock, Promise.all(dropped))
+
+          for (const client of [plain, reader]) {
+            expectListedFromAnnouncementToEnd(
+              workTrail(client.addressed, sessionId, childId)
+            )
+            // The child reports no background work of its own, in its state
+            // and in the one its parent mirrors, so it is over once idle.
+            const childStates = client.addressed.flatMap(
+              ({ sessionId: target, update }) =>
+                SessionUpdate.isSubagentUpdate(update) &&
+                update.sessionId === childId &&
+                update.state
+                  ? [update.state]
+                  : target === childId && SessionUpdate.isStateUpdate(update)
+                    ? [update]
+                    : []
+            )
+            expect(childStates).not.toEqual([])
+            expect(childStates.map(backgroundOf)).toEqual(
+              childStates.map(() => [])
+            )
+          }
+          // The live view is told the list as the work starts, while the
+          // turn still runs, in a state said again with the list it now
+          // carries.
+          const live = workTrail(plain.addressed, sessionId, childId).filter(
+            (step) => step.includes("listed")
+          )
+          const started = live.findIndex((step) => step.startsWith("listed"))
+          expect(live.slice(started - 1, started + 1)).toEqual([
+            "unlisted running",
+            "listed running",
+          ])
+          // A resume restates the child before the state it closes with,
+          // which lists it.
+          const resumed = workTrail(
+            addressedBefore(reader, resumeAnswer),
+            sessionId,
+            childId
+          )
+          expect(resumed.at(-1)).toBe("listed idle")
+          expect(resumed.slice(0, -1)).toContain("at work")
+        }
+      )
+
+      row(
+        "terminalListedUntilExit",
+        "lists a process the turn leaves running from its call's return until it exits, its terminal announced before the first state that lists it and its exit before the one that drops it, never its call, shows what it prints after the turn, and restates it before a resume's state",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "start the dev server"))
+          await until(clock, turn.firstResponse())
+          const server = await until(clock, turn.startProcess!("npm run dev"))
+          const { terminalId } = server
+          const listed = plain.next(listing(terminalId, true))
+          await until(clock, turn.secondResponse())
+          await until(clock, Promise.all([idle, listed]))
+          const printed = plain.next(
+            (update): update is SessionUpdate =>
+              SessionUpdate.isTerminalOutputChunk(update) &&
+              update.terminalId === terminalId
+          )
+          await until(clock, server.write("ready on :3000\n"))
+          await until(clock, printed)
+          const reader = await reload(harness, sessionId)
+          const dropped = [plain, reader].map((client) =>
+            client.next(listing(terminalId, false))
+          )
+          await until(clock, server.exit(0))
+          await until(clock, Promise.all(dropped))
+
+          for (const client of [plain, reader]) {
+            const trail = workTrail(client.addressed, sessionId, terminalId)
+            expectListedFromAnnouncementToEnd(trail)
+            // Its exit names the code the process ended with.
+            expect(
+              client.updates.filter(
+                (update) =>
+                  SessionUpdate.isTerminalUpdate(update) &&
+                  update.terminalId === terminalId &&
+                  update.exitStatus
+              )
+            ).toMatchObject([{ exitStatus: { exitCode: 0 } }])
+            // Process-backed work is listed as its terminal alone.
+            const items = client.updates.flatMap((update) =>
+              SessionUpdate.isStateUpdate(update)
+                ? (backgroundOf(update) ?? [])
+                : []
+            )
+            expect(items.filter((item) => item !== terminalId)).toEqual([])
+          }
+          // The live view is shown what the process printed after its turn.
+          const live = workTrail(plain.addressed, sessionId, terminalId)
+          expect(live.indexOf("output")).toBeGreaterThan(
+            live.indexOf("listed idle")
+          )
+          // A resume restates the terminal before the state it closes with,
+          // which lists it.
+          const resumed = workTrail(
+            addressedBefore(reader, resumeAnswer),
+            sessionId,
+            terminalId
+          )
+          expect(resumed.at(-1)).toBe("listed idle")
+          expect(resumed.slice(0, -1)).toContain("at work")
+        }
+      )
+
+      row(
+        "backgroundTerminalMasked",
+        "masks a credential in the command and output of a process that outlives its turn for an operator, live and in the output a resume restates it with, and shows a guest nothing of it",
+        async (harness) => {
+          const { clock, turn, invite } = harness
+          const operatorId = await until(clock, invite(GUEST_REF))
+          const guest = await invitedGuest(harness)
+          await until(clock, resumeFromStart(guest, GUEST_REF))
+          const plain = harness.connectPlain()
+          await until(clock, plain.initialize())
+          await until(clock, resumeFromStart(plain, operatorId))
+          const idle = guest.nextIdle()
+          await until(clock, prompt(guest, GUEST_REF, "deploy it"))
+          await until(clock, turn.firstResponse())
+          const secret = ["wire", "credential", "0001"].join("-")
+          const server = await until(
+            clock,
+            turn.startProcess!(`deploy --token=${secret}`)
+          )
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const printed = plain.next(
+            (update): update is SessionUpdate =>
+              SessionUpdate.isTerminalOutputChunk(update) &&
+              update.terminalId === server.terminalId
+          )
+          await until(clock, server.write(`password: ${secret}\n`))
+          await until(clock, printed)
+          const reader = await reload(harness, operatorId)
+          await until(clock, server.exit(0))
+
+          const decoded = (data: string) =>
+            Buffer.from(data, "base64").toString("utf8")
+          const shown = (client: WireClient) =>
+            client.updates.flatMap((update) =>
+              SessionUpdate.isTerminalUpdate(update) &&
+              update.terminalId === server.terminalId
+                ? [
+                    update.command ?? "",
+                    ...(update.output ? [decoded(update.output.data)] : []),
+                  ]
+                : SessionUpdate.isTerminalOutputChunk(update) &&
+                    update.terminalId === server.terminalId
+                  ? [decoded(update.data)]
+                  : []
+            )
+          for (const client of [plain, reader]) {
+            const words = shown(client).join("\n")
+            expect(words).toContain("deploy --token=")
+            // What it printed after its turn, live and as the snapshot a
+            // resume restates it with.
+            expect(words).toContain("password: ")
+            expect(words).not.toContain(secret)
+            expect(JSON.stringify(framesOf(client))).not.toContain(secret)
+          }
+          // A guest is shown no terminal, during its turn or after it.
+          expect(framesNaming(guest, server.terminalId)).toEqual([])
+          expect(JSON.stringify(framesOf(guest))).not.toContain(secret)
+        }
+      )
+
+      row(
+        "replayCompleteAfterHistory",
+        "ends a replay from the start or a position with replay_complete after its history alone, then states the Session and its row, all before the answer, and ends none without a cursor",
+        async (harness) => {
+          const { clock, turn, connectPlain } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          // A turn still running is split at the replay's cut.
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "and their sizes"))
+          await until(clock, turn.firstResponse())
+          const cursors = {
+            start: { type: "start" },
+            position: { type: HGW_REPLAY_POSITION },
+            none: undefined,
+          } as const
+          const read: Record<string, string[]> = {}
+          for (const [name, replayFrom] of Object.entries(cursors)) {
+            const reader = connectPlain()
+            await until(clock, reader.initialize())
+            await until(
+              clock,
+              reader.connection.agent.request(methods.agent.session.resume, {
+                sessionId,
+                cwd: reader.folder,
+                ...(replayFrom ? { replayFrom } : {}),
+              })
+            )
+            read[name] = resumeShape(reader, sessionId)
+          }
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+
+          // ACP has the current state, and session info, follow any replay
+          // before the answer.
+          const current = ["state_update", "session_info_update"]
+          const replayed = ["history", "replay_complete", ...current]
+          expect(read).toEqual({
+            start: replayed,
+            position: replayed,
+            none: current,
+          })
+        }
+      )
+
+      row(
+        "replayCompletePerChild",
+        "ends the replay of each child Session a reload announces on the child, after its own history, before the answer",
+        async (harness) => {
+          const { clock, turn } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          const idle = plain.nextIdle()
+          await until(clock, prompt(plain, sessionId, "list the files"))
+          await until(clock, turn.firstResponse())
+          const child = await until(clock, turn.spawnChild!())
+          await until(clock, turn.secondResponse())
+          await until(clock, idle)
+          const reader = await reload(harness, sessionId)
+
+          const before = addressedBefore(reader, resumeAnswer)
+          const announced = new Set(
+            before.flatMap(({ update }) =>
+              SessionUpdate.isSubagentUpdate(update) ? [update.sessionId] : []
+            )
+          )
+          expect([...announced]).toContain(child)
+          for (const id of announced) {
+            const own = before.flatMap(({ sessionId: target, update }) =>
+              target === id ? [update.sessionUpdate] : []
+            )
+            expect(own.filter((kind) => kind === "replay_complete")).toEqual([
+              "replay_complete",
+            ])
+            expect(own.at(-1)).toBe("replay_complete")
+          }
+          // The child's history came before its end, after its announcement.
+          const kinds = before.map(({ sessionId: target, update }) =>
+            target === child
+              ? `child ${update.sessionUpdate}`
+              : SessionUpdate.isSubagentUpdate(update) &&
+                  update.sessionId === child
+                ? "announced"
+                : "parent"
+          )
+          expect(kinds.indexOf("announced")).toBeLessThan(
+            kinds.findIndex((kind) => kind.startsWith("child "))
+          )
+          expect(
+            kinds.filter(
+              (kind) =>
+                kind.startsWith("child ") && kind !== "child replay_complete"
+            )
+          ).not.toEqual([])
+        }
+      )
+
+      row(
+        "olderPageClosesAsResume",
+        "ends an older page with its own replay_complete, then states the Session and its row apart from the page, before the page's answer",
+        async (harness) => {
+          const { clock, turn, connectPlain } = harness
+          const { plain, sessionId } = await operatorSession(harness)
+          await playTurn(clock, plain, sessionId, turn, "list the files")
+          await playTurn(clock, plain, sessionId, turn, "and their sizes")
+          const reader = connectPlain({ pagesHistory: true })
+          await until(clock, reader.initialize())
+          const resumed = await until(clock, resumeFromStart(reader, sessionId))
+          const { history } = HgwSessionResumeResponseMetaSchema.parse(
+            resumed._meta?.[HGW_META_KEY]
+          )
+          const from = framesOf(reader).length
+
+          await until(
+            clock,
+            reader.connection.agent.request(methods.agent.session.resume, {
+              sessionId,
+              cwd: reader.folder,
+              replayFrom: {
+                type: HGW_REPLAY_BEFORE,
+                cursor: history?.nextCursor ?? "",
+              },
+            })
+          )
+
+          const frames = framesOf(reader).slice(from)
+          const answer = frames.findIndex((frame) => "result" in frame)
+          const read = frames
+            .slice(0, answer)
+            .flatMap(({ method, params }) =>
+              method === methods.client.session.update && params?.update
+                ? [{ sessionId: params.sessionId, update: params.update }]
+                : []
+            )
+          expect(history?.nextCursor).toEqual(expect.any(String))
+          expect(shapeOf(read, sessionId)).toEqual([
+            "page history",
+            "page replay_complete",
+            "state_update",
+            "session_info_update",
+          ])
+        },
+        { historyReach: { pageSize: 1, maxOffset: 1_000 } }
+      )
+
+      row(
         "compactionReplaysAsLive",
         "replays a compaction as the completed divider the live turn showed",
         async (harness) => {
@@ -1547,6 +2077,8 @@ export function runWireContract(
           await until(clock, prompt(guest, GUEST_REF, "list the files"))
           await until(clock, turn.firstResponse())
           const child = await until(clock, turn.spawnChild!())
+          // One that outlives the turn is the Session's background work.
+          const background = await until(clock, turn.spawnBackgroundChild!())
           await until(clock, turn.secondResponse())
           await until(clock, idle)
           const readBefore = childReads(child)
@@ -1554,15 +2086,30 @@ export function runWireContract(
           await until(clock, resumeFromStart(reloaded, GUEST_REF))
           const guestReads = childReads(child) - readBefore
           // An operator's reload reads the child's transcript, so the count
-          // is one a reload moves.
+          // is one a reload moves, and its state lists the work at hand.
           const operator = await reload(harness, operatorId)
+          await until(clock, background.finish())
 
           for (const client of [guest, reloaded]) {
             expect(
               client.updates.filter(SessionUpdate.isSubagentUpdate)
             ).toEqual([])
-            expect(framesNaming(client, child)).toEqual([])
+            for (const id of [child, background.childId])
+              expect(framesNaming(client, id)).toEqual([])
+            // A guest is told no background list, not even an empty one.
+            const stated = client.updates.filter(SessionUpdate.isStateUpdate)
+            expect(stated).not.toEqual([])
+            expect(stated.filter((update) => "background" in update)).toEqual(
+              []
+            )
           }
+          expect(
+            workTrail(
+              addressedBefore(operator, resumeAnswer),
+              operatorId,
+              background.childId
+            ).at(-1)
+          ).toBe("listed idle")
           // The guest read its own turn, the parent's side of it.
           expect(
             agentSide(guest.updates)

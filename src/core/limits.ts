@@ -151,6 +151,30 @@ export const LINK_WAIT_MS = 10_000
 export const CHILD_FOLLOW_GRACE_MS = 60_000
 
 /**
+ * The most of a terminal's output, in UTF-16 units, its Session's channel
+ * keeps after the turn that started it, to restate it to a member who joins
+ * later: Hermes' own process list gives the last 4,000 characters, and a
+ * reader keeps its view current from there.
+ */
+export const RESTATED_TERMINAL_OUTPUT = 16_384
+
+/**
+ * The most a member's view holds back while a replay of it is in flight, in
+ * events and in their JSON bytes: past either, the member is a reader that
+ * fell behind, and its connection closes (4409), as no replay that outlasts
+ * it is one its client still waits on.
+ */
+export const HELD_LIMITS = { events: 4_096, bytes: 8 * 1024 * 1024 }
+
+/**
+ * How long a resume's closing state waits for the member's stream to show
+ * what the turn's journal held when the state was read, which a stream that
+ * reads on writes as fast as its socket takes it: past it, one that fell
+ * silent without ending is stated anyway, well inside the join deadline.
+ */
+export const STATE_WAIT_MS = 5_000
+
+/**
  * Each of a runtime's question words is read whole up to this: it holds a
  * Hermes batch at Hermes' own limits, and neither OpenClaw nor OpenCode bounds
  * a question's text.

@@ -54,6 +54,16 @@ runWireContract(
         "pending: whether gateway turns spawn children needs the live OpenCode check",
       childHiddenFromGuest:
         "pending: whether gateway turns spawn children needs the live OpenCode check",
+      backgroundListedOnEveryState:
+        "pending: whether gateway turns spawn children needs the live OpenCode check",
+      // OpenCode's only terminal is an operator's shell, which ends with its
+      // call: no process outlives one.
+      terminalListedUntilExit:
+        "OpenCode leaves no process running past its call",
+      backgroundTerminalMasked:
+        "OpenCode leaves no process running past its call",
+      replayCompletePerChild:
+        "pending: whether gateway turns spawn children needs the live OpenCode check",
       // The Session reports rewind unavailable (`native-rewind-unproven`),
       // which the row checks in its place.
       rewindReplacesTurn:

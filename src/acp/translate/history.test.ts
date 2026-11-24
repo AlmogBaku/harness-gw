@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest"
 import type { SessionHistoryResponse } from "../../../protocol"
 import {
   HGW_META_KEY,
+  HgwMessageFailureMetaSchema,
   HgwPlanMetaSchema,
-  HgwStateMetaSchema,
   HgwToolCallMetaSchema,
 } from "../../../protocol/acp"
 import { persistedCorrections, withoutLiveRows } from "../../core/replay-page"
@@ -376,7 +376,7 @@ describe("translateHistory", () => {
         sessionUpdate: "subagent_update",
         sessionId: "child-1",
         title: "Review the notes",
-        state: { state: "idle", stopReason: "end_turn" },
+        state: { state: "idle", stopReason: "end_turn", background: [] },
         _meta: {
           [HGW_META_KEY]: {
             sequence: 0,
@@ -389,7 +389,74 @@ describe("translateHistory", () => {
     ])
   })
 
-  it("replays a failed turn that streamed nothing, carrying its failure", () => {
+  // ACP replays no past state, so a stored failure rides on the message it
+  // ended, after whatever the message streamed, and leaves that content.
+  it.each([
+    {
+      streamed: "nothing",
+      content: [],
+      parts: [],
+      upsert: { content: [] },
+    },
+    {
+      streamed: "text",
+      content: [{ type: "text" as const, text: "Reading the" }],
+      parts: ["agent_message", "agent_message_chunk"],
+      upsert: {},
+    },
+  ])(
+    "replays a failed turn that streamed $streamed as its message, carrying its failure",
+    ({ content, parts, upsert }) => {
+      const updates = updatesOf(
+        translateHistory({
+          ...history,
+          messages: [
+            {
+              id: "a3",
+              role: "assistant",
+              content,
+              createdAt: "2026-09-19T09:00:04.000Z",
+              status: {
+                type: "incomplete",
+                reason: "error",
+                error: "The model provider rejected this turn.",
+              },
+              turnErrorCode: "provider_rejected",
+            },
+          ],
+        })
+      )
+
+      expect(updates.map(({ sessionUpdate }) => sessionUpdate)).toEqual([
+        ...parts,
+        "agent_message",
+      ])
+      expect(updates.at(-1)).toEqual({
+        sessionUpdate: "agent_message",
+        messageId: "a3",
+        ...upsert,
+        _meta: {
+          [HGW_META_KEY]: {
+            sequence: 0,
+            turnId: "history",
+            failure: {
+              message: "The model provider rejected this turn.",
+              code: "provider_rejected",
+              at: "2026-09-19T09:00:04.000Z",
+            },
+          },
+        },
+      })
+      expect(
+        HgwMessageFailureMetaSchema.parse(aosMeta(updates.at(-1)!)).failure
+      ).toMatchObject({ message: "The model provider rejected this turn." })
+    }
+  )
+
+  // The words a member's stack masked can outgrow what the schema carries,
+  // and a browser drops a failure it cannot read whole: they are cut, as the
+  // live failure's are.
+  it("cuts a replayed failure's words to what its schema carries", () => {
     const updates = updatesOf(
       translateHistory({
         ...history,
@@ -402,27 +469,17 @@ describe("translateHistory", () => {
             status: {
               type: "incomplete",
               reason: "error",
-              error: "The model provider rejected this turn.",
+              error: "x".repeat(5_000),
             },
           },
         ],
       })
     )
 
-    // A failed turn replays the way a live run reports failure: the turn's
-    // idle state update carries the error stop reason and the stored error.
-    const idle = updates.at(-1)
-    expect(idle).toMatchObject({
-      sessionUpdate: "state_update",
-      state: "idle",
-      stopReason: "error",
-      error: { code: -32603, message: "internal_error" },
-    })
-    expect(
-      HgwStateMetaSchema.parse(
-        (idle as { _meta: Record<string, unknown> })._meta[HGW_META_KEY]
-      ).message
-    ).toBe("The model provider rejected this turn.")
+    const { failure } = HgwMessageFailureMetaSchema.parse(
+      aosMeta(updates.at(-1)!)
+    )
+    expect(failure.message).toBe("x".repeat(4_096))
   })
 
   it("replays a message with no renderable content and no artifact as nothing", () => {

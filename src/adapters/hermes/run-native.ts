@@ -10,6 +10,7 @@
  * part of that vocabulary: when one fails Hermes never saw the user's text, so
  * the failure is an outage and the caller must not present it as a refusal.
  */
+import { outputTail } from "../../core/terminal-output"
 import type { PendingRequest, RequestReply } from "../../core/events"
 
 import {
@@ -151,6 +152,27 @@ export type HermesInteractionSnapshot = {
   requests?: PendingRequest[]
 }
 
+/**
+ * One background process Hermes holds for a live Session (`process.list`),
+ * running or ended; `exitCode` is known once it exited, where Hermes knows it.
+ */
+export type HermesProcess = {
+  processId: string
+  exited: boolean
+  exitCode?: number
+  /** The latest of its output Hermes holds, as `process.list` gives it. */
+  output?: string
+}
+
+/** Hermes' answer for a process the live Session does not hold. */
+const PROCESS_NOT_FOUND = 4044
+
+/**
+ * The most of a process's output `process.list` gives: the last 4,000
+ * characters of its buffer (`_session_processes`, `tui_gateway/server.py`).
+ */
+const PROCESS_OUTPUT_TAIL = 4_000
+
 /** A live binding, with the latest `session.info` the server retains for it. */
 export type HermesResumed = {
   liveSessionId: string
@@ -195,6 +217,17 @@ export interface HermesTurnNative {
     text: string
   ): Promise<"redirected" | "queued">
   status(liveSessionId: string): Promise<HermesNativeStatus>
+  /**
+   * The background processes the live Session's Hermes Session holds,
+   * running and recently ended (`process.list`); one it pruned, or never
+   * held, is absent.
+   */
+  processes(liveSessionId: string): Promise<readonly HermesProcess[]>
+  /**
+   * Kills one background process the live Session holds (`process.kill`);
+   * one already ended, or not held, is left as it is.
+   */
+  killProcess(liveSessionId: string, processId: string): Promise<void>
   retain(scope: HermesTurnScope, reason: string): Promise<() => void>
   inspectExecution(
     scope: HermesTurnScope & { turnId: string }
@@ -873,6 +906,68 @@ export class HermesNativeRuntime implements HermesTurnNative {
     )
       return status
     throw new HermesUnavailableError()
+  }
+
+  async processes(liveSessionId: string): Promise<readonly HermesProcess[]> {
+    let payload: unknown
+    try {
+      payload = await this.#transport.request("process.list", {
+        session_id: liveSessionId,
+      })
+    } catch (error) {
+      throwUnavailable(error)
+    }
+    if (!isRecord(payload) || !Array.isArray(payload.processes))
+      throw new HermesUnavailableError()
+    return payload.processes.flatMap((row): HermesProcess[] => {
+      const processId = isRecord(row)
+        ? nativeId(row.session_id, 256)
+        : undefined
+      if (!isRecord(row) || !processId) return []
+      const exitCode = row.exit_code
+      // A tail as long as Hermes gives may begin inside a line its cut
+      // split, which is dropped, and one with no line break is none.
+      const tail =
+        typeof row.output_tail === "string"
+          ? outputTail(row.output_tail, PROCESS_OUTPUT_TAIL - 1)
+          : undefined
+      return [
+        {
+          processId,
+          exited: row.status === "exited",
+          ...(Number.isSafeInteger(exitCode)
+            ? { exitCode: exitCode as number }
+            : {}),
+          ...(tail === undefined ? {} : { output: tail }),
+        },
+      ]
+    })
+  }
+
+  async killProcess(liveSessionId: string, processId: string) {
+    let payload: unknown
+    try {
+      payload = await this.#transport.request("process.kill", {
+        session_id: liveSessionId,
+        process_id: processId,
+      })
+    } catch (error) {
+      // A process the Session no longer holds has nothing left to stop.
+      if (
+        error instanceof HermesRpcRejectedError &&
+        error.code === PROCESS_NOT_FOUND
+      )
+        return
+      if (error instanceof HermesRpcRejectedError) {
+        this.#logRejection("process.kill", error)
+        throw new HermesUnavailableError({ cause: error })
+      }
+      if (error instanceof HermesRpcUncertainError) throw error
+      throwUnavailable(error)
+    }
+    // Hermes answers a kill it could not make with `status: "error"`.
+    if (isRecord(payload) && payload.status === "error")
+      throw new HermesUnavailableError()
   }
 
   retain(scope: HermesTurnScope, reason: string) {

@@ -15,6 +15,7 @@ import type {
   ChildTurnEvent,
   PendingRequest,
   RequestReply,
+  TerminalTurnEvent,
   TurnEvent,
 } from "./events"
 import type { ProviderSessionId } from "./ids"
@@ -95,8 +96,19 @@ export type SessionNotice = {
 }
 
 /**
+ * One piece of a Session's background work, as ACP lists it: a child Session
+ * still running, or the terminal of a process still running, once no
+ * foreground work waits on it.
+ */
+export type BackgroundWork =
+  | { kind: "child"; childSessionId: string }
+  | { kind: "terminal"; terminalId: string }
+
+/**
  * Everything a member is shown of one Session. Every consumer switches over
- * `kind` exhaustively.
+ * `kind` exhaustively. A `background` list is the Session's background work as
+ * this member was shown it, each item announced first: every state the event
+ * reports carries it, and a member that is not told the list gets none.
  */
 export type SessionEvent =
   | {
@@ -111,6 +123,7 @@ export type SessionEvent =
        * longer the turn's, which the view is told once caught up.
        */
       replayed?: true
+      background?: readonly BackgroundWork[]
     }
   /**
    * One report or event of a child Session a turn spawned, addressed to the
@@ -132,6 +145,11 @@ export type SessionEvent =
        */
       background?: true
     }
+  /**
+   * One step of a terminal still running after the turn that started it,
+   * which `stream` names, ended: no position in that turn's stream.
+   */
+  | { kind: "terminal"; stream: TurnStream; event: TerminalTurnEvent }
   /**
    * The whole transcript of a child Session a history page named, addressed
    * to the child's own id as its live events are. It follows the page whose
@@ -161,6 +179,17 @@ export type SessionEvent =
       sequence: number
       older?: { cursor: string; offset: number }
     }
+  /**
+   * The replay a resume asked for is complete, as ACP's `replay_complete`
+   * says: of the Session, or of one `child` the replay announced, addressed
+   * to the child's own id as its events are. Only replayed history comes
+   * before it, and an `older` page's is part of that page.
+   */
+  | {
+      kind: "replay-complete"
+      child?: { parentSessionId: string; childSessionId: string }
+      older?: { cursor: string; offset: number }
+    }
   | { kind: "request-asked"; request: PendingRequest; startedBy?: string }
   | { kind: "request-withdrawn"; requestId: string }
   /** The answers this member just gave, as the member was shown them. */
@@ -175,7 +204,19 @@ export type SessionEvent =
       awaitingStop?: true
       /** When the live turn began, as its stream's first state dated it. */
       startedAt?: string
+      background?: readonly BackgroundWork[]
+      /**
+       * Says again the state the member's stream last showed it, where it
+       * was shown one, rather than this one, which the stream may not have
+       * reached yet: a close no event it holds back may overtake.
+       */
+      repeats?: true
     }
+  /**
+   * The Session's background work changed: the state the member was last
+   * shown, said again with this list, which is no move of its own.
+   */
+  | { kind: "background"; background: readonly BackgroundWork[] }
   | { kind: "usage"; usage: SessionContextResponse }
   | { kind: "model"; models: SessionModelsResponse }
   /** The Session's row, whose status is the one its live execution overlays. */

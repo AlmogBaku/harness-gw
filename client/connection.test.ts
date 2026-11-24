@@ -116,6 +116,11 @@ function createGatewayAgent(
         | readonly [SessionUpdate, Record<string, unknown>]
         | readonly [SessionUpdate, Record<string, unknown>, string]
       )[]
+      /**
+       * The Session's current state, sent after the page untagged, as a
+       * resume closes with it before its answer.
+       */
+      current?: readonly [SessionUpdate, Record<string, unknown>]
       history?: HgwHistoryCursor
     }
     /**
@@ -248,6 +253,12 @@ function createGatewayAgent(
                 [HGW_META_KEY]: { ...meta, historyPage: { cursor } },
               },
             },
+          })
+        const current = options.page?.current
+        if (current)
+          await peer?.notify(methods.client.session.update, {
+            sessionId: params.sessionId,
+            update: { ...current[0], _meta: { [HGW_META_KEY]: current[1] } },
           })
         const history = options.page?.history
         if (options.slowResume)
@@ -1315,6 +1326,8 @@ describe("ACP connection", () => {
   })
 
   describe("older history pages", () => {
+    // A page ends with its `replay_complete`; the Session's current state
+    // follows it, outside the page, as the gateway closes every resume.
     const olderPage = {
       updates: [
         [
@@ -1325,18 +1338,15 @@ describe("ACP connection", () => {
           },
           { sequence: 1, turnId: "run-0" },
         ],
-        [
-          {
-            sessionUpdate: "state_update",
-            state: "idle",
-            stopReason: "end_turn",
-          },
-          { sequence: 2, turnId: "run-0" },
-        ],
+        [{ sessionUpdate: "replay_complete" }, {}],
       ] as const satisfies readonly (readonly [
         SessionUpdate,
         Record<string, unknown>,
       ])[],
+      current: [
+        { sessionUpdate: "state_update", state: "running" },
+        { sequence: 4, turnId: "run-1" },
+      ] as const satisfies readonly [SessionUpdate, Record<string, unknown>],
       history: { nextCursor: "cursor-older" },
     }
 
@@ -1360,7 +1370,7 @@ describe("ACP connection", () => {
       connection.close()
     })
 
-    it("reads a page as tagged updates that reach no live listener or position", async () => {
+    it("reads a page as tagged updates that reach no live listener or position, and the current state after it as live", async () => {
       const gateway = createGatewayAgent({ page: olderPage })
       const connection = connectInProcess(gateway)
       await connection.initialized
@@ -1386,15 +1396,18 @@ describe("ACP connection", () => {
       expect(page.history).toEqual({ nextCursor: "cursor-older" })
       expect(page.updates.map(({ update }) => update.sessionUpdate)).toEqual([
         "user_message",
-        "state_update",
+        "replay_complete",
       ])
-      expect(page.updates[1]?.meta).toMatchObject({
-        sequence: 2,
+      expect(page.updates[0]?.meta).toMatchObject({
+        sequence: 1,
         turnId: "run-0",
       })
-      // The page's idle marker belongs to an old turn: the running turn's
-      // listeners never see it.
-      expect(live).toHaveLength(1)
+      // The page belongs to an old turn: the running turn's listeners never
+      // see it, and see the current state that closes the read.
+      expect(live.map(({ sessionUpdate }) => sessionUpdate)).toEqual([
+        "state_update",
+        "state_update",
+      ])
       // A page read is not a resume, so the resume cursor is untouched.
       expect(connection.history(SESSION_ID)).toBeUndefined()
 
@@ -1403,7 +1416,7 @@ describe("ACP connection", () => {
         { sessionUpdate: "state_update", state: "idle" },
         { sequence: 5, turnId: "run-1" }
       )
-      await vi.waitFor(() => expect(live).toHaveLength(2))
+      await vi.waitFor(() => expect(live).toHaveLength(3))
       connection.close()
     })
 
@@ -1597,7 +1610,7 @@ describe("ACP connection", () => {
       const { updates } = await page
       expect(updates.map(({ update }) => update.sessionUpdate)).toEqual([
         "user_message",
-        "state_update",
+        "replay_complete",
       ])
       const pageReads = gateway
         .callsOf(methods.agent.session.resume)

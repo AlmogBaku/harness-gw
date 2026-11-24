@@ -228,6 +228,15 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
   /** The child Sessions waiting for a watch, each told its live id once open. */
   const watchers = new Map<string, (liveId: string) => void>()
   let nextChild = 1
+  /**
+   * The background processes the Session owns in Hermes' process registry,
+   * by process id: running until a test ends one, or a kill does.
+   */
+  const processes = new Map<
+    string,
+    { command: string; exited: boolean; exitCode?: number; output: string }
+  >()
+  let nextProcess = 1
 
   const socket = () => sockets.at(-1)
   /** Each live Session numbers its own frames (`event_replay._stamp_event`). */
@@ -534,6 +543,30 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         open = undefined
         answered.settle()
         return { result: { status: "ok" } }
+      }
+      // `_session_processes`: the registry's rows the live Session's key owns,
+      // running and recently ended (`tui_gateway/server.py:1884`).
+      case "process.list":
+        return {
+          result: {
+            processes: [...processes].map(([id, entry]) => ({
+              session_id: id,
+              command: entry.command,
+              status: entry.exited ? "exited" : "running",
+              ...(entry.exitCode === undefined
+                ? {}
+                : { exit_code: entry.exitCode }),
+              output_tail: entry.output.slice(-4000),
+            })),
+          },
+        }
+      // One process the caller's Session owns, killed; `kill_process` marks
+      // it exited by SIGTERM (`tools/process_registry.py:2200`).
+      case "process.kill": {
+        const entry = processes.get(String(params.process_id))
+        if (!entry) return { error: { code: 4044, message: "no such process" } }
+        Object.assign(entry, { exited: true, exitCode: -15 })
+        return { result: { status: "killed", exit_code: -15 } }
       }
       case "session.interrupt":
         // `_interrupt_session_turn` withdraws the open requests at once; the
@@ -1057,6 +1090,140 @@ export function fakeHermes({ stored = true }: { stored?: boolean } = {}) {
         content: JSON.stringify(result),
       })
       return childId
+    },
+
+    /**
+     * A background `delegate_task` call inside the running turn: the call
+     * returns at once, and its one child is still at work when the turn
+     * ends. `finish` completes the child afterwards, on its parent's live
+     * Session, as Hermes reports a child that outlived its turn
+     * (`tools/delegate_tool.py`). Resolves with the child's stored id.
+     */
+    async spawnBackgroundChild() {
+      startStreaming()
+      const n = nextChild++
+      const childId = `20261013_120000_c${String(n).padStart(5, "0")}`
+      const callId = `call-delegate-${n}`
+      const goal = "Watch the notes"
+      emit(turn.toolStart(callId, "delegate_task", { goal, background: true }))
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: callId,
+            type: "function",
+            function: {
+              name: "delegate_task",
+              arguments: JSON.stringify({ goal, background: true }),
+            },
+          },
+        ],
+      })
+      others.set(childId, {
+        rows: [],
+        title: goal,
+        parent: STORED_ID,
+        source: "subagent",
+      })
+      const identity = {
+        subagent_id: `sa-0-${n}`,
+        child_session_id: childId,
+        goal,
+        depth: 0,
+        task_index: 0,
+        task_count: 1,
+        model: "contract-model",
+      }
+      emit(turn.frame("subagent.start", identity))
+      const result = { status: "started", delegation_id: `delegation-${n}` }
+      emit(turn.toolComplete(callId, "delegate_task", result))
+      store({
+        role: "tool",
+        tool_call_id: callId,
+        tool_name: "delegate_task",
+        content: JSON.stringify(result),
+      })
+      return {
+        childId,
+        finish: async () =>
+          emit(
+            turn.frame("subagent.complete", {
+              ...identity,
+              status: "completed",
+              summary: "Notes watched.",
+              duration_seconds: 3,
+            })
+          ),
+      }
+    },
+
+    /**
+     * A `terminal` call inside the running turn that starts `command` as a
+     * background process (`background: true`) and returns at once, as
+     * `tools/terminal_tool.py` does; the process streams what it `write`s on
+     * the Session through the registry's output sink, and its `exit` is told
+     * only by `process.list`.
+     */
+    async startProcess(command: string) {
+      startStreaming()
+      const n = nextProcess++
+      const callId = `call-terminal-${n}`
+      const processId = `proc_${n}`
+      const args = { command, background: true }
+      emit(turn.toolStart(callId, "terminal", args))
+      store({
+        role: "assistant",
+        content: "",
+        finish_reason: "tool_calls",
+        tool_calls: [
+          {
+            id: callId,
+            type: "function",
+            function: { name: "terminal", arguments: JSON.stringify(args) },
+          },
+        ],
+      })
+      processes.set(processId, { command, exited: false, output: "" })
+      const result = JSON.stringify({
+        output: "Background process started",
+        session_id: processId,
+        pid: 100 + n,
+        exit_code: 0,
+      })
+      emit(
+        turn.frame("tool.complete", {
+          tool_id: callId,
+          name: "terminal",
+          args,
+          result,
+        })
+      )
+      store({
+        role: "tool",
+        tool_call_id: callId,
+        tool_name: "terminal",
+        content: result,
+      })
+      return {
+        terminalId: `${callId}:terminal`,
+        // The registry's output sink streams what it buffers.
+        write: async (text: string) => {
+          const entry = processes.get(processId)
+          if (entry) entry.output += text
+          emit(
+            turn.frame("agent.terminal.output", {
+              process_id: processId,
+              chunk: text,
+            })
+          )
+        },
+        exit: async (code: number) => {
+          const entry = processes.get(processId)
+          if (entry) Object.assign(entry, { exited: true, exitCode: code })
+        },
+      }
     },
 
     /**

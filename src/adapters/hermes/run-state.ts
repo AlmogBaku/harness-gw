@@ -57,6 +57,13 @@ export type SettlingWatcher = {
   settle(): void
 }
 
+/** The terminal a background process is shown as, and its command. */
+export type ProcessTerminal = {
+  toolCallId: string
+  terminalId: string
+  command?: string
+}
+
 export type ActiveTurn = {
   scope: HermesTurnScope
   turnId: string
@@ -145,8 +152,12 @@ export type ActiveTurn = {
   model?: SessionModelChoice
   /** The Todo list this run last published; an unchanged one is not sent again. */
   plan?: Todo[]
-  /** The call each background process Hermes streams output for belongs to. */
-  terminals: Map<string, { toolCallId: string; terminalId: string }>
+  /**
+   * The terminal each background process the run started is shown as, by
+   * Hermes' process id, until the process is seen to end: its output streams
+   * apart from the call that started it.
+   */
+  terminals: Map<string, ProcessTerminal>
   /** Each child Session the run announced, by Hermes' subagent id. */
   children: Map<string, ChildRun>
   /** The compaction Hermes is running, and how many this run has seen. */

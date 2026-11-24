@@ -2053,8 +2053,10 @@ describe("Hermes server adapter", () => {
       }
     )
 
-    it("deletes on the dashboard socket once the gateway's own idle binding is closed", async () => {
+    // The processes its turns left running go with it: none is read again.
+    it("deletes on the dashboard socket once the gateway's own idle binding is closed, and forgets its processes", async () => {
       const { router, adapter } = refusing()
+      const forget = vi.spyOn(adapter.turns, "forgetSession")
       await adapter.slashCommands("researcher", "stored")
 
       await adapter.deleteSession("researcher", "stored")
@@ -2064,6 +2066,9 @@ describe("Hermes server adapter", () => {
       )
       expect(socketWrites(router)).toEqual([
         ["session.delete", { session_id: "stored", profile: "researcher" }],
+      ])
+      expect(forget.mock.calls).toEqual([
+        [{ agentId: "researcher", providerSessionId: "stored" }],
       ])
     })
 
@@ -3584,10 +3589,12 @@ describe("Hermes server adapter", () => {
         : {}
     )
     const adapter = new HermesServerAdapter({ ...router, http })
+    const forget = vi.spyOn(adapter.turns, "forgetSession")
 
     await expect(adapter.discardSession("researcher", "draft")).resolves.toBe(
       outcome !== "kept"
     )
+    expect(forget).toHaveBeenCalledTimes(outcome === "kept" ? 0 : 1)
     expect(router.calls("session.close").map(({ params }) => params)).toEqual(
       outcome === "kept" ? [] : [{ session_id: "live-draft" }]
     )
