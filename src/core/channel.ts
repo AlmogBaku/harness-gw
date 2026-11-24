@@ -1140,8 +1140,17 @@ export function createChannels(options: CreateChannelsOptions) {
     snapshot: (scope) => coordinator.snapshot(scope),
   })
   const machine = membershipMachine(logger, clock)
-  /** The memberships reading an older page: one page at a time each. */
-  const paging = new WeakSet<Membership>()
+  /**
+   * The older page each membership reads, one at a time, which a resume
+   * that comes meanwhile waits for.
+   */
+  const paging = new WeakMap<Membership, Promise<unknown>>()
+  /**
+   * The memberships a resume is in flight on, one at a time each, from its
+   * request on, a wait for a page included: two replays of one view at once
+   * would hold its updates back for as long as a client kept one going.
+   */
+  const resuming = new WeakSet<Membership>()
 
   /**
    * One history page, `offset` rows back from the newest, each prompt under
@@ -1246,6 +1255,62 @@ export function createChannels(options: CreateChannelsOptions) {
     ])
   }
 
+  /** Resumes one member's view, as `resume` describes. */
+  async function resumeView(
+    membership: Membership,
+    position: ResumePosition,
+    view?: ResumeView
+  ): Promise<CommandResults["resume"]> {
+    try {
+      // The setup is read beside the replay, and told after it.
+      const [resumed, readings] = await Promise.all([
+        membership.resume(position, view),
+        membership.readSetup(),
+      ])
+      await membership.showRow()
+      const setup = await membership.setup(readings)
+      membership.joined()
+      if (
+        !membership.pending &&
+        coordinator.state(membership.scope) === "waiting-for-input"
+      )
+        channels
+          .recheck(membership.scope)
+          .catch((err: unknown) =>
+            logger.error({ err }, "channel.adopt.failed")
+          )
+      return { ...resumed, setup }
+    } finally {
+      membership.answered()
+    }
+  }
+
+  /** Shows one member an older page, as `olderPage` describes. */
+  async function readOlderPage(
+    membership: Membership,
+    older: { cursor: string; offset: number }
+  ): Promise<CommandResults["older-page"]> {
+    try {
+      const page = await membership.showOlderPage(async () => {
+        const page = await readHistory(membership.scope, older.offset)
+        // A cursor past this Session's history was never issued for it. One
+        // at its end was: a runtime that estimates `total` learns the start
+        // only by reading an empty page there.
+        if (older.offset > page.total) throw new CommandRefusedError("invalid")
+        return page
+      }, older)
+      // ACP's current session info follows a replay, a page's as well.
+      await membership.showRow()
+      // Every resume answer restates the setup, a page read's as well.
+      return { page, setup: await membership.setup() }
+    } catch (cause) {
+      membership.endIfGone(cause)
+      throw cause
+    } finally {
+      membership.answered()
+    }
+  }
+
   return {
     ...channels,
     historyReach,
@@ -1289,34 +1354,23 @@ export function createChannels(options: CreateChannelsOptions) {
      * answer does not wait for. A resume the journal serves asks the provider
      * nothing first: the reads its join starts, and the turn subscription,
      * find a Session gone meanwhile and end it, which spares every rejoin a
-     * round trip.
+     * round trip. A member resumes one view at a time: one that asks again
+     * while its resume is in flight is refused, and one that resumes while
+     * it reads an older page waits for the page, as a browser asking for its
+     * Session from the start meanwhile does.
      */
     async resume(
       membership: Membership,
       position: ResumePosition,
       view?: ResumeView
     ): Promise<CommandResults["resume"]> {
+      if (resuming.has(membership)) throw new CommandRefusedError("invalid")
+      resuming.add(membership)
       try {
-        // The setup is read beside the replay, and told after it.
-        const [resumed, readings] = await Promise.all([
-          membership.resume(position, view),
-          membership.readSetup(),
-        ])
-        await membership.showRow()
-        const setup = await membership.setup(readings)
-        membership.joined()
-        if (
-          !membership.pending &&
-          coordinator.state(membership.scope) === "waiting-for-input"
-        )
-          channels
-            .recheck(membership.scope)
-            .catch((err: unknown) =>
-              logger.error({ err }, "channel.adopt.failed")
-            )
-        return { ...resumed, setup }
+        await paging.get(membership)?.catch(() => undefined)
+        return await resumeView(membership, position, view)
       } finally {
-        membership.answered()
+        resuming.delete(membership)
       }
     },
 
@@ -1324,34 +1378,20 @@ export function createChannels(options: CreateChannelsOptions) {
      * Shows one member an older page of its Session, as tagged updates ahead
      * of the answer, its `replay_complete`, the Session's current state and
      * the row the gateway holds after them, as a resume shows them. A member
-     * reads one page at a time.
+     * reads one page at a time, and none while its view resumes.
      */
     async olderPage(
       membership: Membership,
       older: { cursor: string; offset: number }
     ): Promise<CommandResults["older-page"]> {
-      if (paging.has(membership)) throw new CommandRefusedError("invalid")
-      paging.add(membership)
+      if (paging.has(membership) || resuming.has(membership))
+        throw new CommandRefusedError("invalid")
+      const read = readOlderPage(membership, older)
+      paging.set(membership, read)
       try {
-        const page = await membership.showOlderPage(async () => {
-          const page = await readHistory(membership.scope, older.offset)
-          // A cursor past this Session's history was never issued for it. One
-          // at its end was: a runtime that estimates `total` learns the start
-          // only by reading an empty page there.
-          if (older.offset > page.total)
-            throw new CommandRefusedError("invalid")
-          return page
-        }, older)
-        // ACP's current session info follows a replay, a page's as well.
-        await membership.showRow()
-        // Every resume answer restates the setup, a page read's as well.
-        return { page, setup: await membership.setup() }
-      } catch (cause) {
-        membership.endIfGone(cause)
-        throw cause
+        return await read
       } finally {
         paging.delete(membership)
-        membership.answered()
       }
     },
 

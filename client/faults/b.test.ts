@@ -268,4 +268,52 @@ describe("browser connection faults", () => {
     expect(focusFrames).toHaveLength(1)
     expect(focusFrames[0]?.params).toMatchObject({ sessionId: SESSION })
   })
+
+  // A browser asks its Session from the start again, as aos-ui does once a
+  // turn failed before its reply, while it reads an older page of it: the
+  // gateway refuses a second resume of a view, but this one waits for the
+  // page, and the Session stays joined.
+  it("joins a Session replayed from the start while one of its older pages is read", async () => {
+    const clock = useFakeClock()
+    let page: PromiseWithResolvers<void> | undefined
+    const test = await harness({
+      historyReach: { pageSize: 5, maxOffset: 20 },
+      transcript: Array.from({ length: 12 }, (_, index) => ({
+        id: `message-${index}`,
+        role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+        content: [{ type: "text" as const, text: `Message ${index}` }],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      })),
+      beforeHistory: () => page?.promise,
+    })
+    const { connection } = connectBrowser(test)
+    const frames = sentFrames()
+    connection.subscribe(SESSION, { agentId: AGENT })
+    await connection.joined(SESSION)
+    const cursor = connection.history(SESSION)?.nextCursor
+    expect(cursor).toEqual(expect.any(String))
+
+    page = Promise.withResolvers()
+    const read = connection.resumePage(SESSION, cursor!)
+    await clock.advance(0)
+    const replayed = connection.replay(SESSION)
+    await clock.advance(0)
+    // Sent before the page is answered, and read only once the page was.
+    expect(methodsOf(frames, SESSION)).toEqual([
+      "session/resume",
+      "session/resume",
+      "session/resume",
+    ])
+    expect(test.history).toHaveBeenCalledTimes(2)
+    const held = page
+    page = undefined
+    held.resolve()
+
+    await expect(read).resolves.toMatchObject({
+      history: { nextCursor: expect.any(String) },
+    })
+    await replayed
+    expect(test.history).toHaveBeenCalledTimes(3)
+    expect(connection.sessionState(SESSION)).toBe("joined")
+  })
 })

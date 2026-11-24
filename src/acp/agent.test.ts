@@ -3674,7 +3674,9 @@ describe("Session rooms", () => {
     other.close()
   })
 
-  it("streams each event once to a browser that follows twice at once", async () => {
+  // A view resumes one at a time: the second of two at once is refused,
+  // and the first streams the turn once.
+  it("streams each event once to a browser that resumes twice at once, refusing the second", async () => {
     const test = await harness({ providerIds: true })
     await test.list()
     await open(test)
@@ -3684,7 +3686,11 @@ describe("Session rooms", () => {
 
     const other = await test.connect("connection-2")
     await other.list()
-    await Promise.all([open(other), open(other)])
+    const opened = await Promise.allSettled([open(other), open(other)])
+    expect(opened).toMatchObject([
+      { status: "fulfilled" },
+      { status: "rejected", reason: INVALID_PARAMS },
+    ])
     await replyWhileWatched(test.sources[0], "Done", [other, test])
 
     const seen = flow(other.recorder)
@@ -4812,6 +4818,49 @@ describe("History pages", () => {
       "state idle",
     ])
     expect(seen.filter((item) => item === "state idle")).toHaveLength(1)
+    test.close()
+  })
+
+  // Two replays of one view at once would hold its updates back for as long
+  // as a client kept one going: a member resumes one at a time, a resume
+  // waiting for a page counting, and reads no page meanwhile.
+  it("refuses a resume, or a page, while a resume of the Session is in flight here, one waiting for a page included", async () => {
+    const gates: ReturnType<typeof gate>[] = []
+    const test = await harness({
+      historyReach: REACH,
+      transcript: conversation(12),
+      beforeHistory: () => gates.shift()?.held,
+    })
+    await test.list()
+    await open(test)
+    const resume = (replayFrom?: ResumeSessionRequest["replayFrom"]) =>
+      test.agent.request(methods.agent.session.resume, {
+        sessionId: SESSION,
+        cwd: "/",
+        ...(replayFrom ? { replayFrom } : {}),
+      })
+    const pageRead = gate()
+    const replayRead = gate()
+    gates.push(pageRead, replayRead)
+    const reads = test.history.mock.calls.length
+
+    const page = older(test, cursorOf(5))
+    await waitFor(() => expect(test.history).toHaveBeenCalledTimes(reads + 1))
+    const replayed = resume({ type: "start" })
+    await settled()
+    expect(test.history).toHaveBeenCalledTimes(reads + 1)
+    await expect(resume({ type: HGW_REPLAY_POSITION })).rejects.toMatchObject(
+      INVALID_PARAMS
+    )
+    pageRead.release()
+    await expect(page).resolves.toBeDefined()
+    await waitFor(() => expect(test.history).toHaveBeenCalledTimes(reads + 2))
+    await expect(older(test, cursorOf(5))).rejects.toMatchObject(INVALID_PARAMS)
+    await expect(resume()).rejects.toMatchObject(INVALID_PARAMS)
+    replayRead.release()
+
+    await expect(replayed).resolves.toBeDefined()
+    await expect(older(test, cursorOf(5))).resolves.toBeDefined()
     test.close()
   })
 

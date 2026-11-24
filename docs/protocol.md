@@ -492,7 +492,11 @@ its transcript, and one first announced after the replay completed and before
 the answer gets one right after its announcement. A replay that cannot finish
 sends no `replay_complete`, and its resume answers an error. An `_hgw/before`
 page read is a resume with a cursor too, and closes the same way (see
-[Older history pages](#older-history-pages)).
+[Older history pages](#older-history-pages)). A connection resumes one view
+of a Session at a time: a resume, or a page read, of a Session whose resume
+is still in flight on that connection is invalid params, and a resume sent
+while one of its pages is read waits for that page, then runs, counting as in
+flight while it waits.
 
 **`session/prompt`** request (`HgwPromptMetaSchema`, `protocol/acp.ts`):
 `{ rewindSourceId?, attachmentStageId?, clientId? }`. `rewindSourceId` names
@@ -639,7 +643,8 @@ still carries `truncated: true` when the reading stopped at a reach bound.
   the reading, or the runtime's own reach did, and the thread says earlier
   messages can't be loaded.
 - A page is read only for a Session this connection has resumed, whether by
-  a resume, `session/new`, or a prompt, one at a time per Session. It never
+  a resume, `session/new`, or a prompt, one at a time per Session, and none
+  while a resume of it is in flight here (invalid params). It never
   resumes or restates usage. A cursor that does not decode, or points past the
   history, is invalid params.
 - As ACP closes every resume with a cursor, a page ends with its own
