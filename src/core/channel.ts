@@ -32,8 +32,8 @@ import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
   isAwaitingStopFailure,
   isChildTurnEvent,
-  withoutOutput,
   isRedialableFailure,
+  withoutOutput,
   ChildSessionStatus,
   ReplyStatus,
   TurnEventKind,
@@ -1907,12 +1907,15 @@ class Membership {
    * Notes what `shown` tells of the Session's work, returning whether the
    * list moved: a child's report, which names the call that spawned it and
    * whether it still runs, and outlived its turn when shown between turns;
-   * and a call's finish, which detaches the work it started from the
-   * foreground, since no foreground work waits on that call any longer.
+   * a terminal's step, likewise; a stored child row, which names the state
+   * its runtime stored; a call's finish, which detaches the work it started
+   * from the foreground, since no foreground work waits on that call any
+   * longer; and a turn's end. A step read back for a resume, not `written`,
+   * counts as shown in no resume.
    */
   #noteBackground(shown: MemberEvent, written = true) {
     const before = this.backgroundWork().length
-    const listed = new Set(this.backgroundWork().map(workKey))
+    const listedBefore = new Set(this.backgroundWork().map(workKey))
     if (shown.kind === "child") {
       const report = shown.event
       // A child's own child is announced in its stream, not the Session's.
@@ -1987,7 +1990,7 @@ class Membership {
     const after = this.backgroundWork()
     return (
       after.length !== before ||
-      after.some((item) => !listed.has(workKey(item)))
+      after.some((item) => !listedBefore.has(workKey(item)))
     )
   }
 
