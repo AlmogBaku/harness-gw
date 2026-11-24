@@ -10,7 +10,7 @@
  * part of that vocabulary: when one fails Hermes never saw the user's text, so
  * the failure is an outage and the caller must not present it as a refusal.
  */
-import { outputTail } from "../../core/credentials-middleware"
+import { outputTail } from "../../core/terminal-output"
 import type { PendingRequest, RequestReply } from "../../core/events"
 
 import {

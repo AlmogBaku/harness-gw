@@ -26,6 +26,7 @@ import {
   type SessionNotice,
 } from "./member"
 import { answeredChoice, askText, distinctChoices } from "./request-text"
+import { outputTail } from "./terminal-output"
 
 /**
  * The one place the gateway masks credentials in what a member is shown: every
@@ -45,19 +46,6 @@ const QUESTION_CALLS_PER_SESSION = 10
 
 /** The most of a terminal's output a browser keeps: its last 256 KiB. */
 const TERMINAL_TAIL = 262_144
-
-/**
- * The last `max` units of a terminal's output, from the start of a line: a
- * cut drops the line it lands in, since a credential is masked by the name
- * or the word before it on its line, which a cut inside that line may take
- * off. A tail with no line break is none: `undefined`.
- */
-export function outputTail(data: string, max: number) {
-  if (data.length <= max) return data
-  const tail = data.slice(-max)
-  const lineEnd = tail.indexOf("\n")
-  return lineEnd === -1 ? undefined : tail.slice(lineEnd + 1)
-}
 
 /** The last `TERMINAL_TAIL` units of a terminal's output, masked, if any. */
 function maskedTerminalData(data: string) {

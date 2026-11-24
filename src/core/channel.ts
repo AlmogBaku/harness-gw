@@ -28,7 +28,7 @@ import {
   SETUP_READ_MS,
   STATE_WAIT_MS,
 } from "./limits"
-import { outputTail } from "./credentials-middleware"
+import { foldedOutput, outputTail } from "./terminal-output"
 import { persistedCorrections, withoutLiveRows } from "./replay-page"
 import {
   isAwaitingStopFailure,
@@ -688,16 +688,10 @@ function createChannelTable({
     turnId: string,
     event: TerminalTurnEvent
   ) {
-    const { data, output, ...step } = event
+    const step = withoutOutput(event)
     const known = channel.terminals.get(step.terminalId)
     const merged = known ? { ...known.report, ...step } : step
-    const read =
-      output ??
-      (data === undefined ? known?.output : `${known?.output ?? ""}${data}`)
-    const held =
-      read === undefined
-        ? undefined
-        : outputTail(read, RESTATED_TERMINAL_OUTPUT)
+    const held = foldedOutput(known?.output, event)
     channel.terminals.set(step.terminalId, {
       turnId,
       report: merged,
@@ -1580,21 +1574,15 @@ function mergedTerminal(
   next: TerminalTurnEvent
 ): TerminalTurnEvent | undefined {
   if (held.data === undefined && held.output === undefined) return undefined
-  const { data, output, ...step } = { ...withoutOutput(held), ...next }
-  const shown = (text: string | undefined) =>
-    text === undefined ? {} : { output: text }
-  if (output !== undefined) return { ...step, output }
-  if (held.output !== undefined)
-    return {
-      ...step,
-      ...shown(
-        outputTail(`${held.output}${data ?? ""}`, RESTATED_TERMINAL_OUTPUT)
-      ),
-    }
-  const appended = `${held.data ?? ""}${data ?? ""}`
+  const step = { ...withoutOutput(held), ...withoutOutput(next) }
+  const snapshot = (output: string | undefined) =>
+    output === undefined ? step : { ...step, output }
+  if (held.output !== undefined || next.output !== undefined)
+    return snapshot(foldedOutput(held.output, next))
+  const appended = `${held.data ?? ""}${next.data ?? ""}`
   return appended.length <= RESTATED_TERMINAL_OUTPUT
     ? { ...step, data: appended }
-    : { ...step, ...shown(outputTail(appended, RESTATED_TERMINAL_OUTPUT)) }
+    : snapshot(outputTail(appended, RESTATED_TERMINAL_OUTPUT))
 }
 
 /** An event's JSON bytes, or more than any limit when it has no JSON. */
